@@ -30,6 +30,11 @@ pub enum Commands {
         #[arg(value_name = "SESSION_ID")]
         id: Option<String>,
     },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -42,4 +47,12 @@ pub enum SessionCommands {
         #[arg(value_name = "SESSION_ID")]
         id: String,
     },
+}
+
+#[derive(Subcommand)]
+pub enum ConfigCommands {
+    /// Show the path to the config file
+    Path,
+    /// Initialize a default config file (if not present)
+    Init,
 }
