@@ -4,15 +4,20 @@ mod cli;
 mod config;
 mod paths;
 mod providers;
+mod session;
 
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
+use session::SessionOptions;
 
 fn main() {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Exec { prompt } => {
+        Commands::Exec {
+            prompt,
+            session_args,
+        } => {
             let config = match config::Config::load() {
                 Ok(c) => c,
                 Err(e) => {
@@ -21,8 +26,17 @@ fn main() {
                 }
             };
 
+            let session_opts: SessionOptions = (&session_args).into();
+            let session = match session_opts.resolve() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            match rt.block_on(agent::execute_prompt(&prompt, &config)) {
+            match rt.block_on(agent::execute_prompt(&prompt, &config, session.as_ref())) {
                 Ok(response) => {
                     println!("{}", response);
                 }
@@ -32,7 +46,7 @@ fn main() {
                 }
             }
         }
-        Commands::Chat => {
+        Commands::Chat { session_args } => {
             let config = match config::Config::load() {
                 Ok(c) => c,
                 Err(e) => {
@@ -41,8 +55,17 @@ fn main() {
                 }
             };
 
+            let session_opts: SessionOptions = (&session_args).into();
+            let session = match session_opts.resolve() {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config)) {
+            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session)) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
