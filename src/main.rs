@@ -117,7 +117,6 @@ fn main() {
                 }
             },
         },
-        // TODO: Add exec mode support for resume (e.g., `zdx resume -p "prompt"`)
         Commands::Resume { id } => {
             let config = match config::Config::load() {
                 Ok(c) => c,
