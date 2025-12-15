@@ -3,6 +3,7 @@
 //! This module provides a registry of tools that the agent can use,
 //! along with schema definitions for the Anthropic API.
 
+pub mod bash;
 pub mod read;
 
 use anyhow::Result;
@@ -42,7 +43,7 @@ impl ToolContext {
 
 /// Returns all available tool definitions.
 pub fn all_tools() -> Vec<ToolDefinition> {
-    vec![read::definition()]
+    vec![bash::definition(), read::definition()]
 }
 
 /// Executes a tool by name with the given input.
@@ -53,6 +54,7 @@ pub fn execute_tool(
     ctx: &ToolContext,
 ) -> Result<ToolResult> {
     let content = match name {
+        "bash" => bash::execute(input, ctx),
         "read" => read::execute(input, ctx),
         _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
     };
