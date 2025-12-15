@@ -42,5 +42,5 @@ Run a single integration test file: `cargo test --test config_path`.
 
 ## Security & Configuration Tips
 
-- `ZDX_HOME` controls where config/data are stored; default is `~/.zdx`.
+- `ZDX_HOME` controls where config/data are stored; default is `~/.config/zdx`.
 - Don’t commit secrets or local configs; use env vars and keep test fixtures synthetic.

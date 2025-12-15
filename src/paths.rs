@@ -2,20 +2,20 @@
 //!
 //! ZDX_HOME resolution order:
 //! 1. ZDX_HOME environment variable (if set)
-//! 2. ~/.zdx (default)
+//! 2. ~/.config/zdx (default)
 
 use std::path::PathBuf;
 
 /// Returns the ZDX home directory.
 ///
-/// Checks ZDX_HOME env var first, falls back to ~/.zdx
+/// Checks ZDX_HOME env var first, falls back to ~/.config/zdx
 pub fn zdx_home() -> PathBuf {
     if let Ok(home) = std::env::var("ZDX_HOME") {
         return PathBuf::from(home);
     }
 
     dirs::home_dir()
-        .map(|h| h.join(".zdx"))
+        .map(|h| h.join(".config").join("zdx"))
         .expect("Could not determine home directory")
 }
 
