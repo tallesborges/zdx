@@ -57,7 +57,7 @@ fn main() {
                 }
             }
         }
-        Commands::Chat { session_args } => {
+        Commands::Chat { root, session_args } => {
             let config = match config::Config::load() {
                 Ok(c) => c,
                 Err(e) => {
@@ -75,8 +75,9 @@ fn main() {
                 }
             };
 
+            let root_path = std::path::PathBuf::from(root);
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session)) {
+            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session, root_path)) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);
             }
@@ -160,11 +161,13 @@ fn main() {
                 }
             };
 
+            let root_path = std::path::PathBuf::from(".");
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
             if let Err(e) = rt.block_on(chat::run_interactive_chat_with_history(
                 &config,
                 Some(session),
                 history,
+                root_path,
             )) {
                 eprintln!("Error: {}", e);
                 std::process::exit(1);

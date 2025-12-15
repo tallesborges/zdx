@@ -55,6 +55,10 @@ pub enum Commands {
     },
     /// Starts an interactive chat with the agent
     Chat {
+        /// Root directory for file operations (default: current directory)
+        #[arg(long, default_value = ".")]
+        root: String,
+
         #[command(flatten)]
         session_args: SessionArgs,
     },
