@@ -6,10 +6,12 @@ edition = "2024"
 [dependencies]
 anyhow = "1.0.100"
 clap = { version = "4.5.53", features = ["derive"] }
+dirs = "6.0"
 reqwest = "0.12.25"
-serde = "1.0.228"
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tokio = "1.48.0"
+toml = "0.8"
 tracing = "0.1.43"
 
 [dev-dependencies]
