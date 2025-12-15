@@ -1,41 +1,7 @@
-use clap::{Parser, Subcommand};
+mod cli;
 
-#[derive(Parser)]
-#[command(name = "zdx-cli")]
-#[command(version = "0.1")]
-#[command(author = "Talles Borges <talles.borges92@gmail.com>")]
-#[command(about = "ZDX Agentic CLI Tool")]
-struct Cli {
-    #[command(subcommand)]
-    command: Commands,
-}
-
-#[derive(Subcommand)]
-enum Commands {
-    /// Executes a command with a prompt
-    Exec {
-        /// The prompt to send to the agent
-        prompt: String,
-    },
-    /// Starts an interactive chat with the agent
-    Chat,
-    /// Manage saved sessions
-    Sessions {
-        #[command(subcommand)]
-        command: SessionCommands,
-    },
-}
-
-#[derive(Subcommand)]
-enum SessionCommands {
-    /// Lists saved sessions
-    List,
-    /// Shows a specific session
-    Show {
-        /// The ID of the session to show
-        id: String,
-    },
-}
+use clap::Parser;
+use cli::{Cli, Commands, SessionCommands};
 
 fn main() {
     let cli = Cli::parse();
@@ -55,5 +21,11 @@ fn main() {
                 println!("Showing session: {}", id);
             }
         },
+        Commands::Resume { id } => {
+            match id {
+                Some(session_id) => println!("Resuming session: {}", session_id),
+                None => println!("Resuming latest session..."),
+            }
+        }
     }
 }
