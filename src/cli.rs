@@ -1,4 +1,6 @@
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
+
+use crate::session::SessionOptions;
 
 #[derive(Parser)]
 #[command(name = "zdx")]
@@ -10,6 +12,32 @@ pub struct Cli {
     pub command: Commands,
 }
 
+/// Common session arguments for commands that support session persistence.
+#[derive(Args, Debug, Clone, Default)]
+pub struct SessionArgs {
+    /// Append to an existing session by ID
+    #[arg(long, value_name = "ID")]
+    pub session: Option<String>,
+
+    /// Force creation of a new session
+    #[arg(long)]
+    pub new_session: bool,
+
+    /// Do not save the session
+    #[arg(long)]
+    pub no_save: bool,
+}
+
+impl From<&SessionArgs> for SessionOptions {
+    fn from(args: &SessionArgs) -> Self {
+        SessionOptions {
+            session_id: args.session.clone(),
+            new_session: args.new_session,
+            no_save: args.no_save,
+        }
+    }
+}
+
 #[derive(Subcommand)]
 pub enum Commands {
     /// Executes a command with a prompt
@@ -17,9 +45,15 @@ pub enum Commands {
         /// The prompt to send to the agent
         #[arg(short, long)]
         prompt: String,
+
+        #[command(flatten)]
+        session_args: SessionArgs,
     },
     /// Starts an interactive chat with the agent
-    Chat,
+    Chat {
+        #[command(flatten)]
+        session_args: SessionArgs,
+    },
     /// Manage saved sessions
     Sessions {
         #[command(subcommand)]
