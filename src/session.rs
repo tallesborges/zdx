@@ -10,6 +10,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 
 use crate::paths::sessions_dir;
+use std::time::SystemTime;
 
 /// A session event representing a message in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -131,6 +132,88 @@ impl Session {
 /// Generates a unique session ID using UUID v4.
 fn generate_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+/// Information about a saved session.
+#[derive(Debug, Clone)]
+pub struct SessionInfo {
+    pub id: String,
+    pub modified: Option<SystemTime>,
+}
+
+/// Lists all saved sessions.
+///
+/// Returns a vector of SessionInfo sorted by modification time (newest first).
+pub fn list_sessions() -> Result<Vec<SessionInfo>> {
+    let dir = sessions_dir();
+
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut sessions = Vec::new();
+
+    for entry in fs::read_dir(&dir).context("Failed to read sessions directory")? {
+        let entry = entry.context("Failed to read directory entry")?;
+        let path = entry.path();
+
+        // Only process .jsonl files
+        if path.extension().is_some_and(|ext| ext == "jsonl")
+            && let Some(stem) = path.file_stem()
+        {
+            let id = stem.to_string_lossy().to_string();
+            let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
+
+            sessions.push(SessionInfo { id, modified });
+        }
+    }
+
+    // Sort by modification time (newest first)
+    sessions.sort_by(|a, b| b.modified.cmp(&a.modified));
+
+    Ok(sessions)
+}
+
+/// Loads and returns the events from a session by ID.
+pub fn load_session(id: &str) -> Result<Vec<SessionEvent>> {
+    let session = Session::with_id(id.to_string())?;
+    session.read_events()
+}
+
+/// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
+pub fn format_timestamp(time: SystemTime) -> Option<String> {
+    let duration = time.duration_since(std::time::UNIX_EPOCH).ok()?;
+    let secs = duration.as_secs();
+    let days = secs / 86400;
+    let years = days / 365 + 1970;
+    let remaining_days = days % 365;
+    let months = remaining_days / 30 + 1;
+    let day = remaining_days % 30 + 1;
+    let hours = (secs % 86400) / 3600;
+    let mins = (secs % 3600) / 60;
+    Some(format!(
+        "{:04}-{:02}-{:02} {:02}:{:02}",
+        years, months, day, hours, mins
+    ))
+}
+
+/// Formats a session transcript in a human-readable format.
+pub fn format_transcript(events: &[SessionEvent]) -> String {
+    let mut output = String::new();
+
+    for event in events {
+        let role_label = match event.role.as_str() {
+            "user" => "You",
+            "assistant" => "Assistant",
+            _ => &event.role,
+        };
+
+        output.push_str(&format!("### {}\n", role_label));
+        output.push_str(&event.text);
+        output.push_str("\n\n");
+    }
+
+    output.trim_end().to_string()
 }
 
 /// Session options for CLI commands.

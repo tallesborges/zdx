@@ -71,12 +71,39 @@ fn main() {
             }
         }
         Commands::Sessions { command } => match command {
-            SessionCommands::List => {
-                println!("Listing saved sessions...");
-            }
-            SessionCommands::Show { id } => {
-                println!("Showing session: {}", id);
-            }
+            SessionCommands::List => match session::list_sessions() {
+                Ok(sessions) => {
+                    if sessions.is_empty() {
+                        println!("No sessions found.");
+                    } else {
+                        for info in sessions {
+                            let modified_str = info
+                                .modified
+                                .and_then(session::format_timestamp)
+                                .unwrap_or_else(|| "unknown".to_string());
+
+                            println!("{}  {}", info.id, modified_str);
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error listing sessions: {}", e);
+                    std::process::exit(1);
+                }
+            },
+            SessionCommands::Show { id } => match session::load_session(&id) {
+                Ok(events) => {
+                    if events.is_empty() {
+                        println!("Session '{}' is empty or not found.", id);
+                    } else {
+                        println!("{}", session::format_transcript(&events));
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error loading session '{}': {}", id, e);
+                    std::process::exit(1);
+                }
+            },
         },
         Commands::Resume { id } => match id {
             Some(session_id) => println!("Resuming session: {}", session_id),
