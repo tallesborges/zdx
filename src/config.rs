@@ -21,7 +21,7 @@ pub struct Config {
 }
 
 impl Config {
-    const DEFAULT_MODEL: &str = "claude-sonnet-4-20250514";
+    const DEFAULT_MODEL: &str = "claude-haiku-4-5";
     const DEFAULT_MAX_TOKENS: u32 = 1024;
 
     /// Loads configuration from the default config path.

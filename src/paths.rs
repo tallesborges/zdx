@@ -29,5 +29,3 @@ pub fn config_path() -> PathBuf {
 pub fn sessions_dir() -> PathBuf {
     zdx_home().join("sessions")
 }
-
-
