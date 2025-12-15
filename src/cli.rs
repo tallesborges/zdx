@@ -15,6 +15,7 @@ pub enum Commands {
     /// Executes a command with a prompt
     Exec {
         /// The prompt to send to the agent
+        #[arg(short, long)]
         prompt: String,
     },
     /// Starts an interactive chat with the agent

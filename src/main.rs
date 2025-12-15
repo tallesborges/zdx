@@ -1,6 +1,8 @@
+mod agent;
 mod cli;
 mod config;
 mod paths;
+mod providers;
 
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
@@ -10,7 +12,24 @@ fn main() {
 
     match cli.command {
         Commands::Exec { prompt } => {
-            println!("Executing with prompt: {}", prompt);
+            let config = match config::Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error loading config: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            match rt.block_on(agent::execute_prompt(&prompt, &config)) {
+                Ok(response) => {
+                    println!("{}", response);
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
         Commands::Chat => {
             println!("Starting chat...");
