@@ -17,6 +17,7 @@ const ASSISTANT_PREFIX: &str = "assistant> ";
 ///
 /// Reads user input from `input`, writes responses to `output`.
 /// Exits on `:q` command or EOF.
+#[allow(dead_code)] // Useful for testing
 pub async fn run_chat<R, W>(
     input: R,
     mut output: W,
@@ -34,6 +35,7 @@ where
 }
 
 /// Runs the chat loop with a provided client (for testing).
+#[allow(dead_code)] // Useful for testing
 pub async fn run_chat_with_client<R, W>(
     input: R,
     output: &mut W,
@@ -44,7 +46,22 @@ where
     R: BufRead,
     W: Write,
 {
-    let mut history: Vec<ChatMessage> = Vec::new();
+    run_chat_with_history(input, output, client, session, Vec::new()).await
+}
+
+/// Runs the chat loop with pre-loaded history.
+pub async fn run_chat_with_history<R, W>(
+    input: R,
+    output: &mut W,
+    client: &AnthropicClient,
+    session: Option<Session>,
+    initial_history: Vec<ChatMessage>,
+) -> Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let mut history: Vec<ChatMessage> = initial_history;
 
     for line in input.lines() {
         let line = line?;
@@ -103,15 +120,30 @@ where
 
 /// Runs the chat loop with stdin/stdout.
 pub async fn run_interactive_chat(config: &Config, session: Option<Session>) -> Result<()> {
+    run_interactive_chat_with_history(config, session, Vec::new()).await
+}
+
+/// Runs the interactive chat loop with pre-loaded history.
+pub async fn run_interactive_chat_with_history(
+    config: &Config,
+    session: Option<Session>,
+    history: Vec<ChatMessage>,
+) -> Result<()> {
     let stdin = std::io::stdin();
     let mut stdout = std::io::stdout();
+
+    let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
+    let client = AnthropicClient::new(anthropic_config);
 
     writeln!(stdout, "ZDX Chat (type :q to quit)")?;
     if let Some(ref s) = session {
         writeln!(stdout, "Session: {}", s.id)?;
     }
+    if !history.is_empty() {
+        writeln!(stdout, "Loaded {} previous messages", history.len())?;
+    }
     write!(stdout, "{}", PROMPT_PREFIX)?;
     stdout.flush()?;
 
-    run_chat(stdin.lock(), stdout, config, session).await
+    run_chat_with_history(stdin.lock(), &mut stdout, &client, session, history).await
 }

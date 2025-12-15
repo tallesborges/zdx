@@ -105,10 +105,60 @@ fn main() {
                 }
             },
         },
-        Commands::Resume { id } => match id {
-            Some(session_id) => println!("Resuming session: {}", session_id),
-            None => println!("Resuming latest session..."),
-        },
+        // TODO: Add exec mode support for resume (e.g., `zdx resume -p "prompt"`)
+        Commands::Resume { id } => {
+            let config = match config::Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error loading config: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Determine session ID (provided or latest)
+            let session_id = match id {
+                Some(id) => id,
+                None => match session::latest_session_id() {
+                    Ok(Some(id)) => id,
+                    Ok(None) => {
+                        eprintln!("No sessions found to resume.");
+                        std::process::exit(1);
+                    }
+                    Err(e) => {
+                        eprintln!("Error finding latest session: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+            };
+
+            // Load existing messages as history
+            let history = match session::load_session_as_messages(&session_id) {
+                Ok(h) => h,
+                Err(e) => {
+                    eprintln!("Error loading session '{}': {}", session_id, e);
+                    std::process::exit(1);
+                }
+            };
+
+            // Open the session to continue appending
+            let session = match session::Session::with_id(session_id) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("Error opening session: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            if let Err(e) = rt.block_on(chat::run_interactive_chat_with_history(
+                &config,
+                Some(session),
+                history,
+            )) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
+        }
         Commands::Config { command } => match command {
             ConfigCommands::Path => {
                 println!("{}", paths::config_path().display());

@@ -180,6 +180,27 @@ pub fn load_session(id: &str) -> Result<Vec<SessionEvent>> {
     session.read_events()
 }
 
+/// Returns the ID of the most recently modified session.
+///
+/// Returns None if no sessions exist.
+pub fn latest_session_id() -> Result<Option<String>> {
+    let sessions = list_sessions()?;
+    Ok(sessions.into_iter().next().map(|s| s.id))
+}
+
+/// Loads session events and converts them to ChatMessages for API use.
+pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
+    let events = load_session(id)?;
+    Ok(events
+        .into_iter()
+        .filter(|e| e.event_type == "message")
+        .map(|e| crate::providers::anthropic::ChatMessage {
+            role: e.role,
+            content: e.text,
+        })
+        .collect())
+}
+
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
 pub fn format_timestamp(time: SystemTime) -> Option<String> {
     let duration = time.duration_since(std::time::UNIX_EPOCH).ok()?;
