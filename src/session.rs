@@ -190,13 +190,14 @@ pub fn latest_session_id() -> Result<Option<String>> {
 
 /// Loads session events and converts them to ChatMessages for API use.
 pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
+    use crate::providers::anthropic::MessageContent;
     let events = load_session(id)?;
     Ok(events
         .into_iter()
         .filter(|e| e.event_type == "message")
         .map(|e| crate::providers::anthropic::ChatMessage {
             role: e.role,
-            content: e.text,
+            content: MessageContent::Text(e.text),
         })
         .collect())
 }

@@ -5,6 +5,7 @@ mod config;
 mod paths;
 mod providers;
 mod session;
+mod tools;
 
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
@@ -16,6 +17,7 @@ fn main() {
     match cli.command {
         Commands::Exec {
             prompt,
+            root,
             session_args,
         } => {
             let config = match config::Config::load() {
@@ -35,8 +37,17 @@ fn main() {
                 }
             };
 
+            let agent_opts = agent::AgentOptions {
+                root: std::path::PathBuf::from(root),
+            };
+
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            match rt.block_on(agent::execute_prompt(&prompt, &config, session.as_ref())) {
+            match rt.block_on(agent::execute_prompt(
+                &prompt,
+                &config,
+                session.as_ref(),
+                &agent_opts,
+            )) {
                 Ok(response) => {
                     println!("{}", response);
                 }
