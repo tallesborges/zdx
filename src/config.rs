@@ -85,7 +85,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = Config::default();
-        assert_eq!(config.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.model, "claude-haiku-4-5");
         assert_eq!(config.max_tokens, 1024);
     }
 
@@ -95,7 +95,7 @@ mod tests {
         let config_path = dir.path().join("nonexistent.toml");
 
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.model, "claude-sonnet-4-20250514");
+        assert_eq!(config.model, "claude-haiku-4-5");
     }
 
     #[test]
@@ -119,7 +119,7 @@ mod tests {
 
         assert!(config_path.exists());
         let contents = fs::read_to_string(&config_path).unwrap();
-        assert!(contents.contains("claude-sonnet-4-20250514"));
+        assert!(contents.contains("claude-haiku-4-5"));
     }
 
     #[test]

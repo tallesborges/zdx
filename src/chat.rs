@@ -90,19 +90,20 @@ where
             writeln!(output, "Warning: Failed to save session: {}", e)?;
         }
 
-        // Send to API
-        match client.send_messages(&history).await {
+        // Send to API (no tools in interactive chat for now)
+        match client.send_messages(&history, &[]).await {
             Ok(response) => {
-                writeln!(output, "{}{}", ASSISTANT_PREFIX, response)?;
+                let response_text = response.text().unwrap_or_default();
+                writeln!(output, "{}{}", ASSISTANT_PREFIX, response_text)?;
 
                 // Log assistant response to session
                 if let Some(ref s) = session
-                    && let Err(e) = s.append(&SessionEvent::assistant_message(&response))
+                    && let Err(e) = s.append(&SessionEvent::assistant_message(&response_text))
                 {
                     writeln!(output, "Warning: Failed to save session: {}", e)?;
                 }
 
-                history.push(ChatMessage::assistant(response));
+                history.push(ChatMessage::assistant(response_text));
             }
             Err(e) => {
                 writeln!(output, "Error: {}", e)?;

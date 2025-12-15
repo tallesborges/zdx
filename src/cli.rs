@@ -46,6 +46,10 @@ pub enum Commands {
         #[arg(short, long)]
         prompt: String,
 
+        /// Root directory for file operations (default: current directory)
+        #[arg(long, default_value = ".")]
+        root: String,
+
         #[command(flatten)]
         session_args: SessionArgs,
     },
