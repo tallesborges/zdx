@@ -1,4 +1,5 @@
 mod agent;
+mod chat;
 mod cli;
 mod config;
 mod paths;
@@ -32,7 +33,19 @@ fn main() {
             }
         }
         Commands::Chat => {
-            println!("Starting chat...");
+            let config = match config::Config::load() {
+                Ok(c) => c,
+                Err(e) => {
+                    eprintln!("Error loading config: {}", e);
+                    std::process::exit(1);
+                }
+            };
+
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config)) {
+                eprintln!("Error: {}", e);
+                std::process::exit(1);
+            }
         }
         Commands::Sessions { command } => match command {
             SessionCommands::List => {

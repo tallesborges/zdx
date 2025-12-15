@@ -54,13 +54,23 @@ impl AnthropicClient {
 
     /// Sends a message and returns the assistant's text response.
     pub async fn send_message(&self, prompt: &str) -> Result<String> {
+        self.send_messages(&[ChatMessage::user(prompt)]).await
+    }
+
+    /// Sends a conversation history and returns the assistant's text response.
+    pub async fn send_messages(&self, messages: &[ChatMessage]) -> Result<String> {
+        let message_refs: Vec<MessageRef> = messages
+            .iter()
+            .map(|m| MessageRef {
+                role: &m.role,
+                content: &m.content,
+            })
+            .collect();
+
         let request = MessagesRequest {
             model: &self.config.model,
             max_tokens: self.config.max_tokens,
-            messages: vec![Message {
-                role: "user",
-                content: prompt,
-            }],
+            messages: message_refs,
         };
 
         let url = format!("{}/v1/messages", self.config.base_url);
@@ -110,13 +120,36 @@ impl AnthropicClient {
 struct MessagesRequest<'a> {
     model: &'a str,
     max_tokens: u32,
-    messages: Vec<Message<'a>>,
+    messages: Vec<MessageRef<'a>>,
 }
 
 #[derive(Debug, Serialize)]
-struct Message<'a> {
+struct MessageRef<'a> {
     role: &'a str,
     content: &'a str,
+}
+
+/// A chat message with owned data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatMessage {
+    pub role: String,
+    pub content: String,
+}
+
+impl ChatMessage {
+    pub fn user(content: impl Into<String>) -> Self {
+        Self {
+            role: "user".to_string(),
+            content: content.into(),
+        }
+    }
+
+    pub fn assistant(content: impl Into<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            content: content.into(),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
