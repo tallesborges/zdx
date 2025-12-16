@@ -9,7 +9,14 @@ use crate::session::SessionOptions;
 #[command(about = "ZDX Agentic CLI Tool")]
 pub struct Cli {
     #[command(subcommand)]
-    pub command: Commands,
+    pub command: Option<Commands>,
+
+    /// Root directory for file operations (default: current directory)
+    #[arg(long, default_value = ".", global = true)]
+    pub root: String,
+
+    #[command(flatten)]
+    pub session_args: SessionArgs,
 }
 
 /// Common session arguments for commands that support session persistence.
@@ -18,10 +25,6 @@ pub struct SessionArgs {
     /// Append to an existing session by ID
     #[arg(long, value_name = "ID")]
     pub session: Option<String>,
-
-    /// Force creation of a new session
-    #[arg(long)]
-    pub new_session: bool,
 
     /// Do not save the session
     #[arg(long)]
@@ -32,7 +35,6 @@ impl From<&SessionArgs> for SessionOptions {
     fn from(args: &SessionArgs) -> Self {
         SessionOptions {
             session_id: args.session.clone(),
-            new_session: args.new_session,
             no_save: args.no_save,
         }
     }
@@ -45,23 +47,8 @@ pub enum Commands {
         /// The prompt to send to the agent
         #[arg(short, long)]
         prompt: String,
-
-        /// Root directory for file operations (default: current directory)
-        #[arg(long, default_value = ".")]
-        root: String,
-
-        #[command(flatten)]
-        session_args: SessionArgs,
     },
-    /// Starts an interactive chat with the agent
-    Chat {
-        /// Root directory for file operations (default: current directory)
-        #[arg(long, default_value = ".")]
-        root: String,
 
-        #[command(flatten)]
-        session_args: SessionArgs,
-    },
     /// Manage saved sessions
     Sessions {
         #[command(subcommand)]

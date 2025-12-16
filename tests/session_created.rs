@@ -99,7 +99,7 @@ async fn test_exec_no_save_skips_session() {
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["exec", "-p", "hello", "--no-save"])
+        .args(["--no-save", "exec", "-p", "hello"])
         .assert()
         .success();
 
@@ -128,7 +128,7 @@ async fn test_exec_appends_to_existing_session() {
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["exec", "-p", "first message", "--session", "test-session"])
+        .args(["--session", "test-session", "exec", "-p", "first message"])
         .assert()
         .success();
 
@@ -137,7 +137,7 @@ async fn test_exec_appends_to_existing_session() {
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["exec", "-p", "second message", "--session", "test-session"])
+        .args(["--session", "test-session", "exec", "-p", "second message"])
         .assert()
         .success();
 
@@ -164,15 +164,4 @@ async fn test_exec_appends_to_existing_session() {
     assert_eq!(events[2]["role"], "user");
     assert_eq!(events[2]["text"], "second message");
     assert_eq!(events[3]["role"], "assistant");
-}
-
-#[tokio::test]
-async fn test_session_and_new_session_conflict() {
-    cargo_bin_cmd!("zdx-cli")
-        .args(["exec", "-p", "hello", "--session", "test", "--new-session"])
-        .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "Cannot use --session and --new-session together",
-        ));
 }

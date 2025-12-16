@@ -68,12 +68,12 @@ async fn test_bash_executes_command() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
-            "exec",
-            "-p",
-            "Run echo hello",
             "--root",
             temp_dir.path().to_str().unwrap(),
             "--no-save",
+            "exec",
+            "-p",
+            "Run echo hello",
         ])
         .assert()
         .success();
@@ -153,12 +153,12 @@ async fn test_bash_runs_in_root_directory() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
-            "exec",
-            "-p",
-            "List files",
             "--root",
             temp_dir.path().to_str().unwrap(),
             "--no-save",
+            "exec",
+            "-p",
+            "List files",
         ])
         .assert()
         .success();

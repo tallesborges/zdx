@@ -243,8 +243,6 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
 pub struct SessionOptions {
     /// Append to an existing session by ID.
     pub session_id: Option<String>,
-    /// Force creation of a new session.
-    pub new_session: bool,
     /// Do not save the session.
     pub no_save: bool,
 }
@@ -261,9 +259,6 @@ impl SessionOptions {
         }
 
         if let Some(ref id) = self.session_id {
-            if self.new_session {
-                anyhow::bail!("Cannot use --session and --new-session together");
-            }
             return Ok(Some(Session::with_id(id.clone())?));
         }
 
@@ -361,15 +356,5 @@ mod tests {
         };
         let session = opts.resolve().unwrap().unwrap();
         assert_eq!(session.id, id);
-    }
-
-    #[test]
-    fn test_session_options_conflict() {
-        let opts = SessionOptions {
-            session_id: Some("test".to_string()),
-            new_session: true,
-            no_save: false,
-        };
-        assert!(opts.resolve().is_err());
     }
 }

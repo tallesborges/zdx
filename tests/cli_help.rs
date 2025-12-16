@@ -8,7 +8,6 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
-        .stdout(predicate::str::contains("chat"))
         .stdout(predicate::str::contains("sessions"))
         .stdout(predicate::str::contains("resume"));
 }
