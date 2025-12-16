@@ -4,6 +4,7 @@
 //! representing a message event.
 
 use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -204,19 +205,8 @@ pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthro
 
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
 pub fn format_timestamp(time: SystemTime) -> Option<String> {
-    let duration = time.duration_since(std::time::UNIX_EPOCH).ok()?;
-    let secs = duration.as_secs();
-    let days = secs / 86400;
-    let years = days / 365 + 1970;
-    let remaining_days = days % 365;
-    let months = remaining_days / 30 + 1;
-    let day = remaining_days % 30 + 1;
-    let hours = (secs % 86400) / 3600;
-    let mins = (secs % 3600) / 60;
-    Some(format!(
-        "{:04}-{:02}-{:02} {:02}:{:02}",
-        years, months, day, hours, mins
-    ))
+    let datetime: DateTime<Utc> = time.into();
+    Some(datetime.format("%Y-%m-%d %H:%M").to_string())
 }
 
 /// Formats a session transcript in a human-readable format.
