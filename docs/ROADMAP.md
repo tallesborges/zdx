@@ -29,12 +29,6 @@
 - [ ] `AGENTS.md` support
   - Auto-include when present in project root
 - [ ] Extended / structured thinking support
-- [ ] Session discovery
-  - Search and filter by content / metadata
-- [ ] Session export
-  - `session export --format html`
-  - Offline viewer
-  - Optional `--open`
 
 ---
 
@@ -53,7 +47,20 @@
 
 ---
 
-## Later — v0.4.x+ (Extensibility)
+## Later — v0.4.x (Sessions & Inspection)
+
+**Goal:** Inspect, search, and share past work.
+
+- [ ] Session discovery
+  - Search and filter by content / metadata
+- [ ] Session export
+  - `session export --format html`
+  - Offline viewer
+  - Optional `--open`
+
+---
+
+## Later — v0.5.x+ (Extensibility)
 
 **Goal:** Provider flexibility and deeper workflows.
 
