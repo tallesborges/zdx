@@ -1,6 +1,9 @@
 //! Anthropic Claude API client.
 
+use std::pin::Pin;
+
 use anyhow::{Context, Result, bail};
+use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -119,6 +122,63 @@ impl AnthropicClient {
 
         Ok(AssistantResponse::from(raw))
     }
+
+    /// Sends a conversation and returns an async stream of events.
+    ///
+    /// This enables chunk-by-chunk token streaming from the API.
+    pub async fn send_messages_stream(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[ToolDefinition],
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
+
+        let request = if tools.is_empty() {
+            StreamingMessagesRequest {
+                model: &self.config.model,
+                max_tokens: self.config.max_tokens,
+                messages: api_messages,
+                tools: None,
+                stream: true,
+            }
+        } else {
+            let tool_defs: Vec<ApiToolDef> = tools.iter().map(ApiToolDef::from).collect();
+            StreamingMessagesRequest {
+                model: &self.config.model,
+                max_tokens: self.config.max_tokens,
+                messages: api_messages,
+                tools: Some(tool_defs),
+                stream: true,
+            }
+        };
+
+        let url = format!("{}/v1/messages", self.config.base_url);
+
+        let response = self
+            .http
+            .post(&url)
+            .header("x-api-key", &self.config.api_key)
+            .header("anthropic-version", API_VERSION)
+            .header("content-type", "application/json")
+            .json(&request)
+            .send()
+            .await
+            .context("Failed to send streaming request to Anthropic API")?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let error_body = response.text().await.unwrap_or_default();
+            bail!(
+                "Anthropic API streaming request failed with status {}: {}",
+                status,
+                error_body
+            );
+        }
+
+        let byte_stream = response.bytes_stream();
+        let event_stream = SseParser::new(byte_stream);
+        Ok(Box::pin(event_stream))
+    }
 }
 
 /// A content block in the response.
@@ -200,6 +260,266 @@ impl From<MessagesResponse> for AssistantResponse {
     }
 }
 
+// === Streaming Types ===
+
+/// Events emitted during streaming.
+#[derive(Debug, Clone, PartialEq)]
+pub enum StreamEvent {
+    /// Message started, contains model info
+    MessageStart { model: String },
+    /// A content block has started (text or tool_use)
+    ContentBlockStart {
+        index: usize,
+        block_type: String,
+        /// For tool_use blocks: the tool use ID
+        id: Option<String>,
+        /// For tool_use blocks: the tool name
+        name: Option<String>,
+    },
+    /// Text delta within a content block
+    TextDelta { index: usize, text: String },
+    /// Partial JSON delta for tool input
+    InputJsonDelta { index: usize, partial_json: String },
+    /// A content block has ended
+    ContentBlockStop { index: usize },
+    /// Message delta (e.g., stop_reason update)
+    MessageDelta { stop_reason: Option<String> },
+    /// Message completed
+    MessageStop,
+    /// Ping event (keepalive)
+    Ping,
+    /// Error event from API
+    Error { error_type: String, message: String },
+}
+
+/// SSE parser that converts a byte stream into StreamEvents.
+pub struct SseParser<S> {
+    inner: S,
+    buffer: String,
+}
+
+impl<S> SseParser<S> {
+    pub fn new(stream: S) -> Self {
+        Self {
+            inner: stream,
+            buffer: String::new(),
+        }
+    }
+}
+
+impl<S, E> Stream for SseParser<S>
+where
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+    E: std::error::Error + Send + Sync + 'static,
+{
+    type Item = Result<StreamEvent>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        loop {
+            // Check if we have a complete event in the buffer
+            if let Some(event) = self.try_parse_event() {
+                return Poll::Ready(Some(event));
+            }
+
+            // Try to get more data from the underlying stream
+            let inner = Pin::new(&mut self.inner);
+            match inner.poll_next(cx) {
+                Poll::Ready(Some(Ok(bytes))) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    self.buffer.push_str(&text);
+                    // Continue looping to parse
+                }
+                Poll::Ready(Some(Err(e))) => {
+                    return Poll::Ready(Some(Err(anyhow::anyhow!("Stream error: {}", e))));
+                }
+                Poll::Ready(None) => {
+                    // Stream ended - check for any remaining buffered event
+                    if self.buffer.trim().is_empty() {
+                        return Poll::Ready(None);
+                    }
+                    // Try to parse remaining buffer
+                    if let Some(event) = self.try_parse_event() {
+                        return Poll::Ready(Some(event));
+                    }
+                    return Poll::Ready(None);
+                }
+                Poll::Pending => return Poll::Pending,
+            }
+        }
+    }
+}
+
+impl<S> SseParser<S> {
+    /// Tries to parse a complete SSE event from the buffer.
+    /// Returns None if no complete event is available yet.
+    fn try_parse_event(&mut self) -> Option<Result<StreamEvent>> {
+        // SSE events are separated by double newlines
+        let event_end = self.buffer.find("\n\n")?;
+        let event_text = self.buffer[..event_end].to_string();
+        self.buffer = self.buffer[event_end + 2..].to_string();
+
+        Some(parse_sse_event(&event_text))
+    }
+}
+
+/// Parses a single SSE event block into a StreamEvent.
+pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
+    let mut event_type = None;
+    let mut data = None;
+
+    for line in event_text.lines() {
+        if let Some(value) = line.strip_prefix("event: ") {
+            event_type = Some(value.trim());
+        } else if let Some(value) = line.strip_prefix("data: ") {
+            data = Some(value);
+        }
+    }
+
+    let event_type = event_type.unwrap_or("message");
+
+    match event_type {
+        "ping" => Ok(StreamEvent::Ping),
+        "message_start" => {
+            let data = data.context("Missing data for message_start event")?;
+            let parsed: SseMessageStart =
+                serde_json::from_str(data).context("Failed to parse message_start")?;
+            Ok(StreamEvent::MessageStart {
+                model: parsed.message.model,
+            })
+        }
+        "content_block_start" => {
+            let data = data.context("Missing data for content_block_start event")?;
+            let parsed: SseContentBlockStart =
+                serde_json::from_str(data).context("Failed to parse content_block_start")?;
+            Ok(StreamEvent::ContentBlockStart {
+                index: parsed.index,
+                block_type: parsed.content_block.block_type,
+                id: parsed.content_block.id,
+                name: parsed.content_block.name,
+            })
+        }
+        "content_block_delta" => {
+            let data = data.context("Missing data for content_block_delta event")?;
+            let parsed: SseContentBlockDelta =
+                serde_json::from_str(data).context("Failed to parse content_block_delta")?;
+            match parsed.delta.delta_type.as_str() {
+                "text_delta" => Ok(StreamEvent::TextDelta {
+                    index: parsed.index,
+                    text: parsed.delta.text.unwrap_or_default(),
+                }),
+                "input_json_delta" => Ok(StreamEvent::InputJsonDelta {
+                    index: parsed.index,
+                    partial_json: parsed.delta.partial_json.unwrap_or_default(),
+                }),
+                other => bail!("Unknown delta type: {}", other),
+            }
+        }
+        "content_block_stop" => {
+            let data = data.context("Missing data for content_block_stop event")?;
+            let parsed: SseContentBlockStop =
+                serde_json::from_str(data).context("Failed to parse content_block_stop")?;
+            Ok(StreamEvent::ContentBlockStop {
+                index: parsed.index,
+            })
+        }
+        "message_delta" => {
+            let data = data.context("Missing data for message_delta event")?;
+            let parsed: SseMessageDelta =
+                serde_json::from_str(data).context("Failed to parse message_delta")?;
+            Ok(StreamEvent::MessageDelta {
+                stop_reason: parsed.delta.stop_reason.clone(),
+            })
+        }
+        "message_stop" => Ok(StreamEvent::MessageStop),
+        "error" => {
+            let data = data.context("Missing data for error event")?;
+            let parsed: SseError = serde_json::from_str(data).context("Failed to parse error")?;
+            Ok(StreamEvent::Error {
+                error_type: parsed.error.error_type,
+                message: parsed.error.message,
+            })
+        }
+        other => bail!("Unknown SSE event type: {}", other),
+    }
+}
+
+// === SSE Response Structures ===
+
+#[derive(Debug, Deserialize)]
+struct SseMessageStart {
+    message: SseMessageInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseMessageInfo {
+    model: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseContentBlockStart {
+    index: usize,
+    content_block: SseContentBlock,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseContentBlock {
+    #[serde(rename = "type")]
+    block_type: String,
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    name: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseContentBlockDelta {
+    index: usize,
+    delta: SseDelta,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseDelta {
+    #[serde(rename = "type")]
+    delta_type: String,
+    #[serde(default)]
+    text: Option<String>,
+    #[serde(default)]
+    partial_json: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseContentBlockStop {
+    index: usize,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseMessageDelta {
+    delta: SseMessageDeltaInner,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseMessageDeltaInner {
+    #[serde(default)]
+    stop_reason: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseError {
+    error: SseErrorInfo,
+}
+
+#[derive(Debug, Deserialize)]
+struct SseErrorInfo {
+    #[serde(rename = "type")]
+    error_type: String,
+    message: String,
+}
+
 // === API Request Types ===
 
 #[derive(Debug, Serialize)]
@@ -209,6 +529,16 @@ struct MessagesRequest<'a> {
     messages: Vec<ApiMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDef<'a>>>,
+}
+
+#[derive(Debug, Serialize)]
+struct StreamingMessagesRequest<'a> {
+    model: &'a str,
+    max_tokens: u32,
+    messages: Vec<ApiMessage>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ApiToolDef<'a>>>,
+    stream: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -399,5 +729,383 @@ impl ChatMessage {
                 })
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures_util::StreamExt;
+
+    /// SSE fixture simulating a typical Anthropic streaming response
+    const SSE_TEXT_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}
+
+event: ping
+data: {"type":"ping"}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" world"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"!"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    /// SSE fixture simulating a tool use streaming response
+    const SSE_TOOL_USE_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_456","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":20,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc123","name":"get_weather"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"location\": \"San"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":" Francisco\"}"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null},"usage":{"output_tokens":25}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    /// SSE fixture simulating an error mid-stream
+    const SSE_ERROR_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_789","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"API is temporarily overloaded"}}
+
+"#;
+
+    #[test]
+    fn test_parse_message_start() {
+        let event_text = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::MessageStart {
+                model: "claude-sonnet-4-20250514".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_content_block_start_text() {
+        let event_text = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: "text".to_string(),
+                id: None,
+                name: None,
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_content_block_start_tool_use() {
+        let event_text = r#"event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"read_file"}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: "tool_use".to_string(),
+                id: Some("toolu_abc".to_string()),
+                name: Some("read_file".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_text_delta() {
+        let event_text = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::TextDelta {
+                index: 0,
+                text: "Hello".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_input_json_delta() {
+        let event_text = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"key\":"}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: "{\"key\":".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_content_block_stop() {
+        let event_text = r#"event: content_block_stop
+data: {"type":"content_block_stop","index":0}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(result, StreamEvent::ContentBlockStop { index: 0 });
+    }
+
+    #[test]
+    fn test_parse_message_delta() {
+        let event_text = r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::MessageDelta {
+                stop_reason: Some("end_turn".to_string())
+            }
+        );
+    }
+
+    #[test]
+    fn test_parse_message_stop() {
+        let event_text = r#"event: message_stop
+data: {"type":"message_stop"}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(result, StreamEvent::MessageStop);
+    }
+
+    #[test]
+    fn test_parse_ping() {
+        let event_text = "event: ping\ndata: {\"type\":\"ping\"}";
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(result, StreamEvent::Ping);
+    }
+
+    #[test]
+    fn test_parse_error() {
+        let event_text = r#"event: error
+data: {"type":"error","error":{"type":"overloaded_error","message":"API is temporarily overloaded"}}"#;
+
+        let result = parse_sse_event(event_text).unwrap();
+        assert_eq!(
+            result,
+            StreamEvent::Error {
+                error_type: "overloaded_error".to_string(),
+                message: "API is temporarily overloaded".to_string()
+            }
+        );
+    }
+
+    /// Helper to create a mock byte stream from a string
+    fn mock_byte_stream(
+        data: &str,
+    ) -> impl Stream<Item = std::result::Result<bytes::Bytes, std::io::Error>> {
+        let chunks: Vec<_> = data
+            .as_bytes()
+            .chunks(50) // Simulate chunked delivery
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        futures_util::stream::iter(chunks)
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_text_response() {
+        let stream = mock_byte_stream(SSE_TEXT_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // Verify we got all expected events
+        assert_eq!(events.len(), 9);
+
+        // Check specific events
+        assert!(
+            matches!(&events[0], StreamEvent::MessageStart { model } if model == "claude-sonnet-4-20250514")
+        );
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type,
+                ..
+            } if block_type == "text"
+        ));
+        assert_eq!(events[2], StreamEvent::Ping);
+        assert_eq!(
+            events[3],
+            StreamEvent::TextDelta {
+                index: 0,
+                text: "Hello".to_string()
+            }
+        );
+        assert_eq!(
+            events[4],
+            StreamEvent::TextDelta {
+                index: 0,
+                text: " world".to_string()
+            }
+        );
+        assert_eq!(
+            events[5],
+            StreamEvent::TextDelta {
+                index: 0,
+                text: "!".to_string()
+            }
+        );
+        assert_eq!(events[6], StreamEvent::ContentBlockStop { index: 0 });
+        assert!(matches!(
+            &events[7],
+            StreamEvent::MessageDelta {
+                stop_reason: Some(reason)
+            } if reason == "end_turn"
+        ));
+        assert_eq!(events[8], StreamEvent::MessageStop);
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_tool_use_response() {
+        let stream = mock_byte_stream(SSE_TOOL_USE_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // Verify we got all expected events
+        assert_eq!(events.len(), 8);
+
+        // Check tool_use specific events
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type,
+                id: Some(id),
+                name: Some(name),
+            } if block_type == "tool_use" && id == "toolu_abc123" && name == "get_weather"
+        ));
+
+        // Check input_json_delta events
+        assert_eq!(
+            events[2],
+            StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: "{\"".to_string()
+            }
+        );
+        assert_eq!(
+            events[3],
+            StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: "location\": \"San".to_string()
+            }
+        );
+        assert_eq!(
+            events[4],
+            StreamEvent::InputJsonDelta {
+                index: 0,
+                partial_json: " Francisco\"}".to_string()
+            }
+        );
+
+        // Check stop_reason is tool_use
+        assert!(matches!(
+            &events[6],
+            StreamEvent::MessageDelta {
+                stop_reason: Some(reason)
+            } if reason == "tool_use"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_error_response() {
+        let stream = mock_byte_stream(SSE_ERROR_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // Verify we got the error event
+        assert_eq!(events.len(), 2);
+        assert_eq!(
+            events[1],
+            StreamEvent::Error {
+                error_type: "overloaded_error".to_string(),
+                message: "API is temporarily overloaded".to_string()
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_handles_incomplete_chunks() {
+        // Simulate receiving data in very small chunks that split across event boundaries
+        let data = r#"event: ping
+data: {"type":"ping"}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+        let chunks: Vec<std::result::Result<bytes::Bytes, std::io::Error>> = data
+            .as_bytes()
+            .chunks(10) // Very small chunks
+            .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
+            .collect();
+        let stream = futures_util::stream::iter(chunks);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], StreamEvent::Ping);
+        assert_eq!(events[1], StreamEvent::MessageStop);
     }
 }
