@@ -120,7 +120,7 @@ async fn run_resume(id: Option<String>) -> Result<()> {
         Some(id) => id,
         None => session::latest_session_id()
             .context("find latest session id")?
-            .context("no sessions found to resume")?,
+            .context("No sessions found to resume")?,
     };
 
     let history = session::load_session_as_messages(&session_id)

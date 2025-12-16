@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.100"
+chrono = "0.4.42"
 clap = { version = "4.5.53", features = ["derive"] }
 dirs = "6.0"
 reqwest = { version = "0.12.25", features = ["json"] }
