@@ -220,5 +220,13 @@ pub async fn run_interactive_chat_with_history(
     write!(stdout, "{}", PROMPT_PREFIX)?;
     stdout.flush()?;
 
-    run_chat_with_history(stdin.lock(), &mut stdout, &client, session, history, &tool_ctx).await
+    run_chat_with_history(
+        stdin.lock(),
+        &mut stdout,
+        &client,
+        session,
+        history,
+        &tool_ctx,
+    )
+    .await
 }

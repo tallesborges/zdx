@@ -11,15 +11,43 @@ use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
 use session::SessionOptions;
 
+fn run_chat(root: String, session_args: cli::SessionArgs) {
+    let config = match config::Config::load() {
+        Ok(c) => c,
+        Err(e) => {
+            eprintln!("Error loading config: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let session_opts: SessionOptions = (&session_args).into();
+    let session = match session_opts.resolve() {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("Error: {}", e);
+            std::process::exit(1);
+        }
+    };
+
+    let root_path = std::path::PathBuf::from(root);
+    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
+    if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session, root_path)) {
+        eprintln!("Error: {}", e);
+        std::process::exit(1);
+    }
+}
+
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Commands::Exec {
-            prompt,
-            root,
-            session_args,
-        } => {
+    // Default to chat mode if no subcommand provided
+    let Some(command) = cli.command else {
+        run_chat(cli.root, cli.session_args);
+        return;
+    };
+
+    match command {
+        Commands::Exec { prompt } => {
             let config = match config::Config::load() {
                 Ok(c) => c,
                 Err(e) => {
@@ -28,7 +56,7 @@ fn main() {
                 }
             };
 
-            let session_opts: SessionOptions = (&session_args).into();
+            let session_opts: SessionOptions = (&cli.session_args).into();
             let session = match session_opts.resolve() {
                 Ok(s) => s,
                 Err(e) => {
@@ -38,7 +66,7 @@ fn main() {
             };
 
             let agent_opts = agent::AgentOptions {
-                root: std::path::PathBuf::from(root),
+                root: std::path::PathBuf::from(&cli.root),
             };
 
             let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
@@ -55,31 +83,6 @@ fn main() {
                     eprintln!("Error: {}", e);
                     std::process::exit(1);
                 }
-            }
-        }
-        Commands::Chat { root, session_args } => {
-            let config = match config::Config::load() {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error loading config: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            let session_opts: SessionOptions = (&session_args).into();
-            let session = match session_opts.resolve() {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            let root_path = std::path::PathBuf::from(root);
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session, root_path)) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
             }
         }
         Commands::Sessions { command } => match command {

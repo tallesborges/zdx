@@ -43,7 +43,6 @@ async fn test_chat_responds_and_exits_on_quit() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["chat"])
         .write_stdin("hi\n:q\n")
         .assert()
         .success()
@@ -67,7 +66,6 @@ async fn test_chat_maintains_history() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["chat"])
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
@@ -89,7 +87,6 @@ async fn test_chat_handles_empty_input() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["chat"])
         .write_stdin("\n\ntest\n:q\n")
         .assert()
         .success()
@@ -109,7 +106,6 @@ async fn test_chat_shows_welcome_message() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["chat"])
         .write_stdin(":q\n")
         .assert()
         .success()
@@ -139,7 +135,6 @@ async fn test_chat_handles_api_error_gracefully() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["chat"])
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
@@ -151,7 +146,6 @@ async fn test_chat_handles_api_error_gracefully() {
 async fn test_chat_fails_without_api_key() {
     cargo_bin_cmd!("zdx-cli")
         .env_remove("ANTHROPIC_API_KEY")
-        .args(["chat"])
         .write_stdin(":q\n")
         .assert()
         .failure()
@@ -222,12 +216,7 @@ async fn test_chat_tool_use_loop_reads_file() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args([
-            "chat",
-            "--root",
-            temp_dir.path().to_str().unwrap(),
-            "--no-save",
-        ])
+        .args(["--root", temp_dir.path().to_str().unwrap(), "--no-save"])
         .write_stdin("read hello.txt\n:q\n")
         .assert()
         .success()

@@ -85,12 +85,12 @@ async fn test_tool_use_loop_reads_file() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
-            "exec",
-            "-p",
-            "Read test.txt",
             "--root",
             temp_dir.path().to_str().unwrap(),
             "--no-save",
+            "exec",
+            "-p",
+            "Read test.txt",
         ])
         .assert()
         .success()
@@ -164,12 +164,12 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
-            "exec",
-            "-p",
-            "Read data.txt",
             "--root",
             temp_dir.path().to_str().unwrap(),
             "--no-save",
+            "exec",
+            "-p",
+            "Read data.txt",
         ])
         .assert()
         .success();
@@ -256,12 +256,12 @@ async fn test_tool_read_outside_root_allowed() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
-            "exec",
-            "-p",
-            "Read outside file",
             "--root",
             root_dir.path().to_str().unwrap(),
             "--no-save",
+            "exec",
+            "-p",
+            "Read outside file",
         ])
         .assert()
         .success()
