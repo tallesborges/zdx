@@ -1,36 +1,75 @@
 # Roadmap
 
-## Current Status (v0.1.0)
+## Shipped — v0.1.0 (Foundation)
 
-- [x] Basic exec and chat commands
-- [x] Session persistence (JSONL format)
-- [x] Session resume functionality
+**Goal:** A fast, reliable, terminal-first agent with durable sessions.
+
+- [x] Core commands: `exec`, `chat`
+- [x] Session persistence (JSONL event log)
+- [x] Resume existing sessions
 - [x] Configuration management
-- [x] Claude API integration
-- [x] Tool use (read files, bash commands)
+- [x] Anthropic Claude integration
+- [x] Tool execution loop
+  - [x] `read` (filesystem)
+  - [x] `bash` (shell)
 
-## Planned
+---
 
-### Short-term
+## Next — v0.2.x (UX + Interop)
 
-- [ ] Extended thinking support
+**Goal:** Better ergonomics + predictable outputs for automation.
+
+- [ ] Streaming responses (lower latency, better UX)
+- [ ] Stable machine output  
+  - `exec --format json`  
+  - Versioned envelope for other CLIs / scripts
 - [ ] System prompt configuration
-- [ ] AGENTS.md support (auto-include in context)
+  - File-based
+  - Config override
+- [ ] `AGENTS.md` support
+  - Auto-include when present in project root
+- [ ] Extended / structured thinking support
+- [ ] Session discovery
+  - Search and filter by content / metadata
+- [ ] Session export
+  - `session export --format html`
+  - Offline viewer
+  - Optional `--open`
+
+---
+
+## Soon — v0.3.x (Authoring & Context)
+
+**Goal:** Move from “read-only assistant” to “safe code author”.
+
 - [ ] `write` tool
-- [ ] `edit` tool
-- [ ] Basic diff preview for edit/write operations
-- [ ] `exec --format json` (stable envelope for other CLIs)
-- [ ] Streaming responses
-- [ ] Session search/filter by content
+- [ ] `edit` tool (exact replacement)
+- [ ] Diff preview for write/edit
+- [ ] Guardrails (visibility before mutation)
+- [ ] Context attachment
+  - `--file <path>`
+- [ ] Project-aware context
+  - Auto-include relevant files (heuristic-based, not magic)
 
-### Medium-term
+---
 
-- [ ] Evaluate using `language_models` crate from Zed
-- [ ] Multiple provider support (OpenAI, local models)
-- [ ] Context file attachment (`--file <path>`)
-- [ ] Project-aware context (auto-include relevant files)
-- [ ] Custom system prompts
+## Later — v0.4.x+ (Extensibility)
 
-### Long-term
+**Goal:** Provider flexibility and deeper workflows.
+
+- [ ] Multiple providers
+  - OpenAI
+  - Local models
+- [ ] Prompt profiles / templates
+- [ ] Cache support (responses, tool reads)
+- [ ] Chat commands (slash / built-ins)
+- [ ] TUI (only after CLI UX is excellent)
+- [ ] Evaluate Zed’s `language_models` crate
+
+---
+
+## Far Future (Optional)
+
+**Goal:** Visibility, not core workflow.
 
 - [ ] Web UI for session browsing
