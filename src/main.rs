@@ -7,87 +7,36 @@ mod providers;
 mod session;
 mod tools;
 
+use anyhow::{Context, Result};
 use clap::Parser;
 use cli::{Cli, Commands, ConfigCommands, SessionCommands};
 use session::SessionOptions;
 
-fn run_chat(root: String, session_args: cli::SessionArgs) {
-    let config = match config::Config::load() {
-        Ok(c) => c,
-        Err(e) => {
-            eprintln!("Error loading config: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let session_opts: SessionOptions = (&session_args).into();
-    let session = match session_opts.resolve() {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-    };
-
-    let root_path = std::path::PathBuf::from(root);
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-    if let Err(e) = rt.block_on(chat::run_interactive_chat(&config, session, root_path)) {
-        eprintln!("Error: {}", e);
+fn main() {
+    if let Err(e) = main_result() {
+        eprintln!("{:#}", e); // pretty anyhow chain
         std::process::exit(1);
     }
 }
 
-fn main() {
+fn main_result() -> Result<()> {
     let cli = Cli::parse();
 
-    // Default to chat mode if no subcommand provided
-    let Some(command) = cli.command else {
-        run_chat(cli.root, cli.session_args);
-        return;
-    };
+    // one tokio runtime for everything
+    let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
 
-    match command {
-        Commands::Exec { prompt } => {
-            let config = match config::Config::load() {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error loading config: {}", e);
-                    std::process::exit(1);
-                }
-            };
+    rt.block_on(async move {
+        // default to chat mode
+        let Some(command) = cli.command else {
+            return run_chat(&cli.root, &cli.session_args).await;
+        };
 
-            let session_opts: SessionOptions = (&cli.session_args).into();
-            let session = match session_opts.resolve() {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
-            };
+        match command {
+            Commands::Exec { prompt } => run_exec(&cli.root, &cli.session_args, &prompt).await,
 
-            let agent_opts = agent::AgentOptions {
-                root: std::path::PathBuf::from(&cli.root),
-            };
-
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            match rt.block_on(agent::execute_prompt(
-                &prompt,
-                &config,
-                session.as_ref(),
-                &agent_opts,
-            )) {
-                Ok(response) => {
-                    println!("{}", response);
-                }
-                Err(e) => {
-                    eprintln!("Error: {}", e);
-                    std::process::exit(1);
-                }
-            }
-        }
-        Commands::Sessions { command } => match command {
-            SessionCommands::List => match session::list_sessions() {
-                Ok(sessions) => {
+            Commands::Sessions { command } => match command {
+                SessionCommands::List => {
+                    let sessions = session::list_sessions().context("list sessions")?;
                     if sessions.is_empty() {
                         println!("No sessions found.");
                     } else {
@@ -96,99 +45,94 @@ fn main() {
                                 .modified
                                 .and_then(session::format_timestamp)
                                 .unwrap_or_else(|| "unknown".to_string());
-
                             println!("{}  {}", info.id, modified_str);
                         }
                     }
+                    Ok(())
                 }
-                Err(e) => {
-                    eprintln!("Error listing sessions: {}", e);
-                    std::process::exit(1);
-                }
-            },
-            SessionCommands::Show { id } => match session::load_session(&id) {
-                Ok(events) => {
+                SessionCommands::Show { id } => {
+                    let events = session::load_session(&id)
+                        .with_context(|| format!("load session '{id}'"))?;
                     if events.is_empty() {
                         println!("Session '{}' is empty or not found.", id);
                     } else {
                         println!("{}", session::format_transcript(&events));
                     }
-                }
-                Err(e) => {
-                    eprintln!("Error loading session '{}': {}", id, e);
-                    std::process::exit(1);
+                    Ok(())
                 }
             },
-        },
-        Commands::Resume { id } => {
-            let config = match config::Config::load() {
-                Ok(c) => c,
-                Err(e) => {
-                    eprintln!("Error loading config: {}", e);
-                    std::process::exit(1);
+
+            Commands::Resume { id } => run_resume(id).await,
+
+            Commands::Config { command } => match command {
+                ConfigCommands::Path => {
+                    println!("{}", paths::config_path().display());
+                    Ok(())
                 }
-            };
-
-            // Determine session ID (provided or latest)
-            let session_id = match id {
-                Some(id) => id,
-                None => match session::latest_session_id() {
-                    Ok(Some(id)) => id,
-                    Ok(None) => {
-                        eprintln!("No sessions found to resume.");
-                        std::process::exit(1);
-                    }
-                    Err(e) => {
-                        eprintln!("Error finding latest session: {}", e);
-                        std::process::exit(1);
-                    }
-                },
-            };
-
-            // Load existing messages as history
-            let history = match session::load_session_as_messages(&session_id) {
-                Ok(h) => h,
-                Err(e) => {
-                    eprintln!("Error loading session '{}': {}", session_id, e);
-                    std::process::exit(1);
+                ConfigCommands::Init => {
+                    let config_path = paths::config_path();
+                    config::Config::init(&config_path)
+                        .with_context(|| format!("init config at {}", config_path.display()))?;
+                    println!("Created config at {}", config_path.display());
+                    Ok(())
                 }
-            };
-
-            // Open the session to continue appending
-            let session = match session::Session::with_id(session_id) {
-                Ok(s) => s,
-                Err(e) => {
-                    eprintln!("Error opening session: {}", e);
-                    std::process::exit(1);
-                }
-            };
-
-            let root_path = std::path::PathBuf::from(".");
-            let rt = tokio::runtime::Runtime::new().expect("Failed to create runtime");
-            if let Err(e) = rt.block_on(chat::run_interactive_chat_with_history(
-                &config,
-                Some(session),
-                history,
-                root_path,
-            )) {
-                eprintln!("Error: {}", e);
-                std::process::exit(1);
-            }
+            },
         }
-        Commands::Config { command } => match command {
-            ConfigCommands::Path => {
-                println!("{}", paths::config_path().display());
-            }
-            ConfigCommands::Init => {
-                let config_path = paths::config_path();
-                match config::Config::init(&config_path) {
-                    Ok(()) => println!("Created config at {}", config_path.display()),
-                    Err(e) => {
-                        eprintln!("Error: {}", e);
-                        std::process::exit(1);
-                    }
-                }
-            }
-        },
-    }
+    })
+}
+
+async fn run_chat(root: &str, session_args: &cli::SessionArgs) -> Result<()> {
+    let config = config::Config::load().context("load config")?;
+
+    let session_opts: SessionOptions = session_args.into();
+    let session = session_opts.resolve().context("resolve session")?;
+
+    let root_path = std::path::PathBuf::from(root);
+    chat::run_interactive_chat(&config, session, root_path)
+        .await
+        .context("interactive chat failed")?;
+
+    Ok(())
+}
+
+async fn run_exec(root: &str, session_args: &cli::SessionArgs, prompt: &str) -> Result<()> {
+    let config = config::Config::load().context("load config")?;
+
+    let session_opts: SessionOptions = session_args.into();
+    let session = session_opts.resolve().context("resolve session")?;
+
+    let agent_opts = agent::AgentOptions {
+        root: std::path::PathBuf::from(root),
+    };
+
+    let response = agent::execute_prompt(prompt, &config, session.as_ref(), &agent_opts)
+        .await
+        .context("execute prompt")?;
+
+    println!("{response}");
+    Ok(())
+}
+
+async fn run_resume(id: Option<String>) -> Result<()> {
+    let config = config::Config::load().context("load config")?;
+
+    let session_id = match id {
+        Some(id) => id,
+        None => session::latest_session_id()
+            .context("find latest session id")?
+            .context("no sessions found to resume")?,
+    };
+
+    let history = session::load_session_as_messages(&session_id)
+        .with_context(|| format!("load history for '{session_id}'"))?;
+
+    let session = session::Session::with_id(session_id.clone())
+        .with_context(|| format!("open session '{session_id}'"))?;
+
+    let root_path = std::path::PathBuf::from(".");
+    chat::run_interactive_chat_with_history(&config, Some(session), history, root_path)
+        .await
+        .context("resume chat failed")?;
+
+    Ok(())
 }
