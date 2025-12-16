@@ -1,14 +1,16 @@
 //! Interactive chat module for ZDX.
 //!
 //! Provides a REPL-style chat interface that maintains conversation history.
+//! Responses are streamed token-by-token for real-time feedback.
 
-use anyhow::Result;
+use anyhow::{Result, bail};
+use futures_util::StreamExt;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::providers::anthropic::{
-    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ContentBlock,
+    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, StreamEvent,
 };
 use crate::session::{Session, SessionEvent};
 use crate::tools::{self, ToolContext, ToolResult};
@@ -99,27 +101,17 @@ where
             writeln!(output, "Warning: Failed to save session: {}", e)?;
         }
 
-        // Tool loop - keep going until we get a final response
+        // Tool loop with streaming - keep going until we get a final response
         let final_text = loop {
-            match client.send_messages(&history, &tools).await {
-                Ok(response) => {
-                    if response.has_tool_use() {
-                        // Process tool calls
-                        let tool_results = execute_tools(&response, tool_ctx);
-
-                        // Add assistant's response (with tool_use blocks) to history
-                        let assistant_blocks = response_to_blocks(&response);
-                        history.push(ChatMessage::assistant_blocks(assistant_blocks));
-
-                        // Add tool results as user message
-                        history.push(ChatMessage::tool_results(tool_results));
-
-                        // Continue the loop for the next response
-                        continue;
-                    }
-
-                    // No tool use - we have the final response
-                    break response.text().unwrap_or_default();
+            match stream_response(output, client, &history, &tools, tool_ctx).await {
+                Ok(StreamResult::FinalText(text)) => break text,
+                Ok(StreamResult::ToolUse { assistant_blocks, tool_results }) => {
+                    // Add assistant's response (with tool_use blocks) to history
+                    history.push(ChatMessage::assistant_blocks(assistant_blocks));
+                    // Add tool results as user message
+                    history.push(ChatMessage::tool_results(tool_results));
+                    // Continue the loop for the next response
+                    continue;
                 }
                 Err(e) => {
                     writeln!(output, "Error: {}", e)?;
@@ -131,8 +123,6 @@ where
         };
 
         if !final_text.is_empty() {
-            writeln!(output, "{}{}", ASSISTANT_PREFIX, final_text)?;
-
             // Log assistant response to session
             if let Some(ref s) = session
                 && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
@@ -150,41 +140,168 @@ where
     Ok(())
 }
 
-/// Executes all tool calls from a response.
-fn execute_tools(
-    response: &crate::providers::anthropic::AssistantResponse,
-    ctx: &ToolContext,
-) -> Vec<ToolResult> {
-    response
-        .tool_uses()
-        .into_iter()
-        .map(|tu| {
-            tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).unwrap_or_else(|e| ToolResult {
+/// Result of streaming a single response.
+enum StreamResult {
+    /// Final text response (no tool use).
+    FinalText(String),
+    /// Tool use requested - contains blocks for history and results to send.
+    ToolUse {
+        assistant_blocks: Vec<ChatContentBlock>,
+        tool_results: Vec<ToolResult>,
+    },
+}
+
+/// Builder for accumulating tool use data from streaming events.
+#[derive(Debug)]
+struct ToolUseBuilder {
+    index: usize,
+    id: String,
+    name: String,
+    input_json: String,
+}
+
+/// Streams a single response from the API, handling tool use detection.
+async fn stream_response<W: Write>(
+    output: &mut W,
+    client: &AnthropicClient,
+    history: &[ChatMessage],
+    tools: &[crate::tools::ToolDefinition],
+    tool_ctx: &ToolContext,
+) -> Result<StreamResult> {
+    let mut stream = client.send_messages_stream(history, tools).await?;
+
+    // State for accumulating the current response
+    let mut full_text = String::new();
+    let mut tool_uses: Vec<ToolUseBuilder> = Vec::new();
+    let mut stop_reason: Option<String> = None;
+    let mut printed_prefix = false;
+
+    // Process stream events
+    while let Some(event_result) = stream.next().await {
+        let event = event_result?;
+
+        match event {
+            StreamEvent::TextDelta { text, .. } => {
+                if !text.is_empty() {
+                    // Print prefix before first text
+                    if !printed_prefix {
+                        write!(output, "{}", ASSISTANT_PREFIX)?;
+                        printed_prefix = true;
+                    }
+                    write!(output, "{}", text)?;
+                    output.flush()?;
+                    full_text.push_str(&text);
+                }
+            }
+            StreamEvent::ContentBlockStart {
+                index,
+                block_type,
+                id,
+                name,
+            } => {
+                if block_type == "tool_use" {
+                    tool_uses.push(ToolUseBuilder {
+                        index,
+                        id: id.unwrap_or_default(),
+                        name: name.unwrap_or_default(),
+                        input_json: String::new(),
+                    });
+                }
+            }
+            StreamEvent::InputJsonDelta {
+                index,
+                partial_json,
+            } => {
+                if let Some(tu) = tool_uses.iter_mut().find(|t| t.index == index) {
+                    tu.input_json.push_str(&partial_json);
+                }
+            }
+            StreamEvent::MessageDelta {
+                stop_reason: reason,
+            } => {
+                stop_reason = reason;
+            }
+            StreamEvent::Error {
+                error_type,
+                message,
+            } => {
+                bail!("API error ({}): {}", error_type, message);
+            }
+            // Ignore other events (Ping, MessageStart, ContentBlockStop, MessageStop)
+            _ => {}
+        }
+    }
+
+    // Check if we have tool use to process
+    if stop_reason.as_deref() == Some("tool_use") && !tool_uses.is_empty() {
+        // Build the assistant response with tool_use blocks
+        let assistant_blocks = build_assistant_blocks(&full_text, &tool_uses)?;
+
+        // Execute tools and get results
+        let tool_results = execute_tool_uses(&tool_uses, tool_ctx)?;
+
+        return Ok(StreamResult::ToolUse {
+            assistant_blocks,
+            tool_results,
+        });
+    }
+
+    // Final newline after streaming completes
+    if !full_text.is_empty() {
+        writeln!(output)?;
+    }
+
+    Ok(StreamResult::FinalText(full_text))
+}
+
+/// Builds assistant content blocks from accumulated text and tool uses.
+fn build_assistant_blocks(
+    text: &str,
+    tool_uses: &[ToolUseBuilder],
+) -> Result<Vec<ChatContentBlock>> {
+    let mut blocks = Vec::new();
+
+    // Add text block if any
+    if !text.is_empty() {
+        blocks.push(ChatContentBlock::Text(text.to_string()));
+    }
+
+    // Add tool_use blocks
+    for tu in tool_uses {
+        let input: serde_json::Value = serde_json::from_str(&tu.input_json)
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+        blocks.push(ChatContentBlock::ToolUse {
+            id: tu.id.clone(),
+            name: tu.name.clone(),
+            input,
+        });
+    }
+
+    Ok(blocks)
+}
+
+/// Executes tool uses from streaming and returns results.
+fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<Vec<ToolResult>> {
+    let mut results = Vec::new();
+
+    for tu in tool_uses {
+        let input: serde_json::Value = serde_json::from_str(&tu.input_json)
+            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
+
+        let result =
+            tools::execute_tool(&tu.name, &tu.id, &input, ctx).unwrap_or_else(|e| ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: format!("Internal error: {}", e),
                 is_error: true,
-            })
-        })
-        .collect()
+            });
+
+        results.push(result);
+    }
+
+    Ok(results)
 }
 
-/// Converts response content blocks to chat content blocks.
-fn response_to_blocks(
-    response: &crate::providers::anthropic::AssistantResponse,
-) -> Vec<ChatContentBlock> {
-    response
-        .content
-        .iter()
-        .map(|block| match block {
-            ContentBlock::Text(text) => ChatContentBlock::Text(text.clone()),
-            ContentBlock::ToolUse(tu) => ChatContentBlock::ToolUse {
-                id: tu.id.clone(),
-                name: tu.name.clone(),
-                input: tu.input.clone(),
-            },
-        })
-        .collect()
-}
+
 
 /// Runs the chat loop with stdin/stdout.
 pub async fn run_interactive_chat(
