@@ -7,24 +7,33 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn mock_anthropic_response() -> serde_json::Value {
-    serde_json::json!({
-        "id": "msg_123",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "text",
-                "text": "Hello from assistant!"
-            }
-        ],
-        "model": "claude-sonnet-4-20250514",
-        "stop_reason": "end_turn",
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 20
-        }
-    })
+/// Helper to create an SSE streaming response
+fn sse_response(text: &str) -> ResponseTemplate {
+    let events = format!(
+        r#"event: message_start
+data: {{"type":"message_start","message":{{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":1}}}}}}
+
+event: content_block_start
+data: {{"type":"content_block_start","index":0,"content_block":{{"type":"text","text":""}}}}
+
+event: content_block_delta
+data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{}"}}}}
+
+event: content_block_stop
+data: {{"type":"content_block_stop","index":0}}
+
+event: message_delta
+data: {{"type":"message_delta","delta":{{"stop_reason":"end_turn","stop_sequence":null}},"usage":{{"output_tokens":5}}}}
+
+event: message_stop
+data: {{"type":"message_stop"}}
+
+"#,
+        text
+    );
+    ResponseTemplate::new(200)
+        .insert_header("content-type", "text/event-stream")
+        .set_body_string(events)
 }
 
 #[tokio::test]
@@ -34,7 +43,7 @@ async fn test_exec_creates_session_file() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(mock_anthropic_response()))
+        .respond_with(sse_response("Hello from assistant!"))
         .mount(&mock_server)
         .await;
 
@@ -91,7 +100,7 @@ async fn test_exec_no_save_skips_session() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(mock_anthropic_response()))
+        .respond_with(sse_response("Hello!"))
         .mount(&mock_server)
         .await;
 
@@ -118,7 +127,7 @@ async fn test_exec_appends_to_existing_session() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(mock_anthropic_response()))
+        .respond_with(sse_response("Response!"))
         .expect(2)
         .mount(&mock_server)
         .await;

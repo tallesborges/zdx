@@ -9,6 +9,60 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
+/// Creates an SSE streaming response for a tool_use request
+fn tool_use_sse_response(tool_id: &str, tool_name: &str, input_json: &str) -> String {
+    format!(
+        r#"event: message_start
+data: {{"type":"message_start","message":{{"id":"msg_001","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":1}}}}}}
+
+event: content_block_start
+data: {{"type":"content_block_start","index":0,"content_block":{{"type":"tool_use","id":"{}","name":"{}"}}}}
+
+event: content_block_delta
+data: {{"type":"content_block_delta","index":0,"delta":{{"type":"input_json_delta","partial_json":"{}"}}}}
+
+event: content_block_stop
+data: {{"type":"content_block_stop","index":0}}
+
+event: message_delta
+data: {{"type":"message_delta","delta":{{"stop_reason":"tool_use","stop_sequence":null}},"usage":{{"output_tokens":20}}}}
+
+event: message_stop
+data: {{"type":"message_stop"}}
+
+"#,
+        tool_id,
+        tool_name,
+        input_json.replace('"', "\\\"").replace('\n', "\\n")
+    )
+}
+
+/// Creates an SSE streaming response for a final text response
+fn text_sse_response(text: &str) -> String {
+    format!(
+        r#"event: message_start
+data: {{"type":"message_start","message":{{"id":"msg_002","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":30,"output_tokens":1}}}}}}
+
+event: content_block_start
+data: {{"type":"content_block_start","index":0,"content_block":{{"type":"text","text":""}}}}
+
+event: content_block_delta
+data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{}"}}}}
+
+event: content_block_stop
+data: {{"type":"content_block_stop","index":0}}
+
+event: message_delta
+data: {{"type":"message_delta","delta":{{"stop_reason":"end_turn","stop_sequence":null}},"usage":{{"output_tokens":5}}}}
+
+event: message_stop
+data: {{"type":"message_stop"}}
+
+"#,
+        text.replace('"', "\\\"").replace('\n', "\\n")
+    )
+}
+
 #[tokio::test]
 async fn test_bash_executes_command() {
     let temp_dir = TempDir::new().unwrap();
@@ -19,45 +73,30 @@ async fn test_bash_executes_command() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = second_request_body.clone();
 
-    // First response: model requests to run bash command
-    let first_response = serde_json::json!({
-        "id": "msg_001",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "tool_use",
-                "id": "toolu_bash_001",
-                "name": "bash",
-                "input": {"command": "echo hello_from_bash"}
-            }
-        ],
-        "model": "claude-haiku-4-5",
-        "stop_reason": "tool_use",
-        "usage": {"input_tokens": 10, "output_tokens": 20}
-    });
+    // First response: model requests to run bash command (SSE)
+    let first_response = tool_use_sse_response(
+        "toolu_bash_001",
+        "bash",
+        r#"{"command": "echo hello_from_bash"}"#,
+    );
 
-    // Second response: final answer
-    let second_response = serde_json::json!({
-        "id": "msg_002",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Bash executed successfully."}],
-        "model": "claude-haiku-4-5",
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 30, "output_tokens": 5}
-    });
+    // Second response: final answer (SSE)
+    let second_response = text_sse_response("Bash executed successfully.");
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(move |req: &Request| {
             let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
             if count == 0 {
-                ResponseTemplate::new(200).set_body_json(first_response.clone())
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(first_response.clone())
             } else {
                 let body = String::from_utf8_lossy(&req.body).to_string();
                 *second_request_body_clone.lock().unwrap() = body;
-                ResponseTemplate::new(200).set_body_json(second_response.clone())
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(second_response.clone())
             }
         })
         .expect(2)
@@ -104,45 +143,26 @@ async fn test_bash_runs_in_root_directory() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = second_request_body.clone();
 
-    // First response: model lists files
-    let first_response = serde_json::json!({
-        "id": "msg_001",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "tool_use",
-                "id": "toolu_bash_002",
-                "name": "bash",
-                "input": {"command": "ls"}
-            }
-        ],
-        "model": "claude-haiku-4-5",
-        "stop_reason": "tool_use",
-        "usage": {"input_tokens": 10, "output_tokens": 20}
-    });
+    // First response: model lists files (SSE)
+    let first_response = tool_use_sse_response("toolu_bash_002", "bash", r#"{"command": "ls"}"#);
 
-    // Second response
-    let second_response = serde_json::json!({
-        "id": "msg_002",
-        "type": "message",
-        "role": "assistant",
-        "content": [{"type": "text", "text": "Listed files."}],
-        "model": "claude-haiku-4-5",
-        "stop_reason": "end_turn",
-        "usage": {"input_tokens": 30, "output_tokens": 5}
-    });
+    // Second response (SSE)
+    let second_response = text_sse_response("Listed files.");
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .respond_with(move |req: &Request| {
             let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
             if count == 0 {
-                ResponseTemplate::new(200).set_body_json(first_response.clone())
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(first_response.clone())
             } else {
                 let body = String::from_utf8_lossy(&req.body).to_string();
                 *second_request_body_clone.lock().unwrap() = body;
-                ResponseTemplate::new(200).set_body_json(second_response.clone())
+                ResponseTemplate::new(200)
+                    .insert_header("content-type", "text/event-stream")
+                    .set_body_string(second_response.clone())
             }
         })
         .expect(2)
