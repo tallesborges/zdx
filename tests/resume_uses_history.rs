@@ -3,31 +3,18 @@
 //! Verifies that resume loads previous session history and includes it
 //! in API requests.
 
+mod fixtures;
+
 use assert_cmd::cargo::cargo_bin_cmd;
+use fixtures::{sse_response, text_sse};
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
-fn mock_anthropic_response(text: &str) -> serde_json::Value {
-    serde_json::json!({
-        "id": "msg_123",
-        "type": "message",
-        "role": "assistant",
-        "content": [
-            {
-                "type": "text",
-                "text": text
-            }
-        ],
-        "model": "claude-sonnet-4-20250514",
-        "stop_reason": "end_turn",
-        "usage": {
-            "input_tokens": 10,
-            "output_tokens": 20
-        }
-    })
+fn streaming_text_response(text: &str) -> ResponseTemplate {
+    sse_response(&text_sse(text))
 }
 
 fn create_session_file(temp_dir: &TempDir, session_id: &str, events: &[(&str, &str)]) {
@@ -70,9 +57,7 @@ async fn test_resume_loads_history_into_api_request() {
         .and(body_string_contains("What is 2+2?"))
         .and(body_string_contains("The answer is 4."))
         .and(body_string_contains("And what is 3+3?"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(mock_anthropic_response("The answer is 6.")),
-        )
+        .respond_with(streaming_text_response("The answer is 6."))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -115,9 +100,7 @@ async fn test_resume_without_id_uses_latest_session() {
         .and(path("/v1/messages"))
         .and(body_string_contains("new message"))
         .and(body_string_contains("new response"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(mock_anthropic_response("Continuing...")),
-        )
+        .respond_with(streaming_text_response("Continuing..."))
         .expect(1)
         .mount(&mock_server)
         .await;
@@ -147,9 +130,7 @@ async fn test_resume_appends_to_session_file() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(mock_anthropic_response("Second response!")),
-        )
+        .respond_with(streaming_text_response("Second response!"))
         .mount(&mock_server)
         .await;
 
