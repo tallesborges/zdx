@@ -105,11 +105,11 @@ async fn run_exec(root: &str, session_args: &cli::SessionArgs, prompt: &str) -> 
         root: std::path::PathBuf::from(root),
     };
 
-    let response = agent::execute_prompt(prompt, &config, session.as_ref(), &agent_opts)
+    // Use streaming variant - response is printed incrementally, final newline added at end
+    agent::execute_prompt_streaming(prompt, &config, session.as_ref(), &agent_opts)
         .await
         .context("execute prompt")?;
 
-    println!("{response}");
     Ok(())
 }
 
