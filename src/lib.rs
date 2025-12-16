@@ -2,4 +2,5 @@
 //!
 //! This module exports public APIs for testing and extension.
 
+pub mod events;
 pub mod tools;
