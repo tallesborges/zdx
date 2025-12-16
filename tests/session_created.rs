@@ -1,40 +1,14 @@
 //! Integration tests for session persistence.
 
+mod fixtures;
+
 use assert_cmd::cargo::cargo_bin_cmd;
+use fixtures::text_response;
 use predicates::prelude::*;
 use std::fs;
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
-use wiremock::{Mock, MockServer, ResponseTemplate};
-
-/// Helper to create an SSE streaming response
-fn sse_response(text: &str) -> ResponseTemplate {
-    let events = format!(
-        r#"event: message_start
-data: {{"type":"message_start","message":{{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{{"input_tokens":10,"output_tokens":1}}}}}}
-
-event: content_block_start
-data: {{"type":"content_block_start","index":0,"content_block":{{"type":"text","text":""}}}}
-
-event: content_block_delta
-data: {{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"{}"}}}}
-
-event: content_block_stop
-data: {{"type":"content_block_stop","index":0}}
-
-event: message_delta
-data: {{"type":"message_delta","delta":{{"stop_reason":"end_turn","stop_sequence":null}},"usage":{{"output_tokens":5}}}}
-
-event: message_stop
-data: {{"type":"message_stop"}}
-
-"#,
-        text
-    );
-    ResponseTemplate::new(200)
-        .insert_header("content-type", "text/event-stream")
-        .set_body_string(events)
-}
+use wiremock::{Mock, MockServer};
 
 #[tokio::test]
 async fn test_exec_creates_session_file() {
@@ -43,7 +17,7 @@ async fn test_exec_creates_session_file() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(sse_response("Hello from assistant!"))
+        .respond_with(text_response("Hello from assistant!"))
         .mount(&mock_server)
         .await;
 
@@ -100,7 +74,7 @@ async fn test_exec_no_save_skips_session() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(sse_response("Hello!"))
+        .respond_with(text_response("Hello!"))
         .mount(&mock_server)
         .await;
 
@@ -127,7 +101,7 @@ async fn test_exec_appends_to_existing_session() {
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
-        .respond_with(sse_response("Response!"))
+        .respond_with(text_response("Response!"))
         .expect(2)
         .mount(&mock_server)
         .await;
