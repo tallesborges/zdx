@@ -6,6 +6,7 @@ use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 
 use crate::paths;
 
@@ -24,11 +25,15 @@ pub struct Config {
 
     /// Optional path to a file containing the system prompt
     pub system_prompt_file: Option<String>,
+
+    /// Timeout for tool execution in seconds (0 disables)
+    pub tool_timeout_secs: u32,
 }
 
 impl Config {
     const DEFAULT_MODEL: &str = "claude-haiku-4-5";
     const DEFAULT_MAX_TOKENS: u32 = 1024;
+    const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 30;
 
     /// Loads configuration from the default config path.
     pub fn load() -> Result<Self> {
@@ -62,6 +67,14 @@ impl Config {
         Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
     }
 
+    pub fn tool_timeout(&self) -> Option<Duration> {
+        if self.tool_timeout_secs == 0 {
+            None
+        } else {
+            Some(Duration::from_secs(self.tool_timeout_secs as u64))
+        }
+    }
+
     /// Creates a default config file at the given path.
     /// Returns an error if the file already exists.
     pub fn init(path: &Path) -> Result<()> {
@@ -75,9 +88,10 @@ impl Config {
         }
 
         let toml = format!(
-            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n",
+            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\ntool_timeout_secs = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n",
             Self::DEFAULT_MODEL,
-            Self::DEFAULT_MAX_TOKENS
+            Self::DEFAULT_MAX_TOKENS,
+            Self::DEFAULT_TOOL_TIMEOUT_SECS
         );
 
         fs::write(path, toml)
@@ -94,6 +108,7 @@ impl Default for Config {
             max_tokens: Self::DEFAULT_MAX_TOKENS,
             system_prompt: None,
             system_prompt_file: None,
+            tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
         }
     }
 }
@@ -109,6 +124,7 @@ mod tests {
         let config = Config::default();
         assert_eq!(config.model, "claude-haiku-4-5");
         assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.tool_timeout_secs, 30);
     }
 
     #[test]
@@ -205,5 +221,12 @@ mod tests {
     fn test_effective_system_prompt_none() {
         let config = Config::default();
         assert_eq!(config.effective_system_prompt().unwrap(), None);
+    }
+
+    #[test]
+    fn test_tool_timeout_zero_disables() {
+        let mut config = Config::default();
+        config.tool_timeout_secs = 0;
+        assert_eq!(config.tool_timeout(), None);
     }
 }

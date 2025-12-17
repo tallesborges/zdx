@@ -6,7 +6,8 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::process::Command;
+use std::process::Stdio;
+use std::time::Duration;
 
 use super::{ToolContext, ToolDefinition};
 
@@ -54,22 +55,38 @@ impl std::fmt::Display for BashOutput {
 }
 
 /// Executes the bash tool.
-pub fn execute(input: &Value, ctx: &ToolContext) -> Result<String> {
+pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>) -> Result<String> {
     let input: BashInput =
         serde_json::from_value(input.clone()).context("Invalid input for bash tool")?;
 
-    let output = run_command(&input.command, ctx)?;
+    let output = run_command(&input.command, ctx, timeout).await?;
     Ok(output.to_string())
 }
 
 /// Runs a shell command in the context's root directory.
-fn run_command(command: &str, ctx: &ToolContext) -> Result<BashOutput> {
-    let output = Command::new("sh")
+async fn run_command(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> Result<BashOutput> {
+    let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
         .current_dir(&ctx.root)
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
         .with_context(|| format!("Failed to execute command: {}", command))?;
+
+    let output_fut = child.wait_with_output();
+    let output = match timeout {
+        Some(timeout) => match tokio::time::timeout(timeout, output_fut).await {
+            Ok(result) => result,
+            Err(_) => anyhow::bail!(
+                "Tool execution timed out after {} seconds",
+                timeout.as_secs()
+            ),
+        },
+        None => output_fut.await,
+    }
+    .with_context(|| format!("Failed to execute command: {}", command))?;
 
     Ok(BashOutput {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
@@ -83,47 +100,47 @@ mod tests {
     use super::*;
     use tempfile::TempDir;
 
-    #[test]
-    fn test_bash_executes_command() {
+    #[tokio::test]
+    async fn test_bash_executes_command() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "echo hello"});
 
-        let result = execute(&input, &ctx).unwrap();
+        let result = execute(&input, &ctx, None).await.unwrap();
         assert!(result.contains("hello"));
         assert!(result.contains("exit_code: 0"));
     }
 
-    #[test]
-    fn test_bash_captures_stderr() {
+    #[tokio::test]
+    async fn test_bash_captures_stderr() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "echo error >&2"});
 
-        let result = execute(&input, &ctx).unwrap();
+        let result = execute(&input, &ctx, None).await.unwrap();
         assert!(result.contains("error"));
         assert!(result.contains("stderr"));
     }
 
-    #[test]
-    fn test_bash_captures_exit_code() {
+    #[tokio::test]
+    async fn test_bash_captures_exit_code() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "exit 42"});
 
-        let result = execute(&input, &ctx).unwrap();
+        let result = execute(&input, &ctx, None).await.unwrap();
         assert!(result.contains("exit_code: 42"));
     }
 
-    #[test]
-    fn test_bash_runs_in_root_directory() {
+    #[tokio::test]
+    async fn test_bash_runs_in_root_directory() {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("test.txt"), "content").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "ls"});
 
-        let result = execute(&input, &ctx).unwrap();
+        let result = execute(&input, &ctx, None).await.unwrap();
         assert!(result.contains("test.txt"));
     }
 }
