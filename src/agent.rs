@@ -41,7 +41,7 @@ pub async fn execute_prompt(
 ) -> Result<String> {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
-    let system_prompt = config.effective_system_prompt()?;
+    let system_prompt = crate::context::build_effective_system_prompt(config, &options.root)?;
 
     // Log user message to session
     if let Some(s) = session {
@@ -99,7 +99,7 @@ pub async fn execute_prompt_streaming(
 ) -> Result<String> {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
-    let system_prompt = config.effective_system_prompt()?;
+    let system_prompt = crate::context::build_effective_system_prompt(config, &options.root)?;
 
     // Log user message to session
     if let Some(s) = session {
