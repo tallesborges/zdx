@@ -27,6 +27,10 @@ This creates a `config.toml` with defaults:
 ```toml
 model = "claude-haiku-4-5"
 max_tokens = 1024
+tool_timeout_secs = 30
+
+# system_prompt = "You are a helpful assistant."
+# system_prompt_file = "/path/to/system_prompt.md"
 ```
 
 ### 3. Run commands
@@ -40,7 +44,7 @@ zdx exec -p "Explain what this Rust project does"
 **Interactive chat:**
 
 ```bash
-zdx chat
+zdx
 ```
 
 **Resume a previous session:**
@@ -106,6 +110,15 @@ Commands:
 | `--new-session` | Force creation of a new session |
 | `--no-save` | Don't save the session |
 | `--root <DIR>` | Set working directory for file operations |
+| `--system-prompt <TEXT>` | Override system prompt (wins over config) |
+
+## Project Context (AGENTS.md)
+
+If an `AGENTS.md` file exists in the `--root` directory, its contents are appended to the effective system prompt automatically.
+
+## Tool Timeout
+
+Tool execution timeout is controlled by `tool_timeout_secs` in `config.toml` (default: `30`). Set `tool_timeout_secs = 0` to disable timeouts.
 
 ## Development
 
