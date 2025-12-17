@@ -37,9 +37,18 @@ where
 {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
+    let system_prompt = config.effective_system_prompt()?;
 
     let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
-    run_chat_with_client(input, &mut output, &client, session, &tool_ctx).await
+    run_chat_with_client(
+        input,
+        &mut output,
+        &client,
+        session,
+        &tool_ctx,
+        system_prompt.as_deref(),
+    )
+    .await
 }
 
 /// Runs the chat loop with a provided client (for testing).
@@ -50,12 +59,22 @@ pub async fn run_chat_with_client<R, W>(
     client: &AnthropicClient,
     session: Option<Session>,
     tool_ctx: &ToolContext,
+    system_prompt: Option<&str>,
 ) -> Result<()>
 where
     R: BufRead,
     W: Write,
 {
-    run_chat_with_history(input, output, client, session, Vec::new(), tool_ctx).await
+    run_chat_with_history(
+        input,
+        output,
+        client,
+        session,
+        Vec::new(),
+        tool_ctx,
+        system_prompt,
+    )
+    .await
 }
 
 /// Runs the chat loop with pre-loaded history.
@@ -66,6 +85,7 @@ pub async fn run_chat_with_history<R, W>(
     session: Option<Session>,
     initial_history: Vec<ChatMessage>,
     tool_ctx: &ToolContext,
+    system_prompt: Option<&str>,
 ) -> Result<()>
 where
     R: BufRead,
@@ -103,7 +123,7 @@ where
 
         // Tool loop with streaming - keep going until we get a final response
         let final_text = loop {
-            match stream_response(output, client, &history, &tools, tool_ctx).await {
+            match stream_response(output, client, &history, &tools, tool_ctx, system_prompt).await {
                 Ok(StreamResult::FinalText(text)) => break text,
                 Ok(StreamResult::ToolUse { assistant_blocks, tool_results }) => {
                     // Add assistant's response (with tool_use blocks) to history
@@ -167,8 +187,11 @@ async fn stream_response<W: Write>(
     history: &[ChatMessage],
     tools: &[crate::tools::ToolDefinition],
     tool_ctx: &ToolContext,
+    system_prompt: Option<&str>,
 ) -> Result<StreamResult> {
-    let mut stream = client.send_messages_stream(history, tools).await?;
+    let mut stream = client
+        .send_messages_stream(history, tools, system_prompt)
+        .await?;
 
     // State for accumulating the current response
     let mut full_text = String::new();
@@ -328,6 +351,7 @@ pub async fn run_interactive_chat_with_history(
 
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
+    let system_prompt = config.effective_system_prompt()?;
 
     let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
 
@@ -348,6 +372,7 @@ pub async fn run_interactive_chat_with_history(
         session,
         history,
         &tool_ctx,
+        system_prompt.as_deref(),
     )
     .await
 }

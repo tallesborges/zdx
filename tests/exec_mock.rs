@@ -182,3 +182,43 @@ async fn test_exec_handles_ping_events() {
         .success()
         .stdout(predicate::str::contains("Pong!"));
 }
+
+#[tokio::test]
+async fn test_exec_includes_system_prompt_from_config() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        "system_prompt = \"You are a Rust expert.\"",
+    )
+    .unwrap();
+
+    let mock_server = MockServer::start().await;
+    let response = text_response("OK");
+    let request_body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let request_body_clone = request_body.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&req.body).to_string();
+            *request_body_clone.lock().unwrap() = body;
+            response.clone()
+        })
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .success();
+
+    let body = request_body.lock().unwrap().clone();
+    assert!(
+        body.contains("\"system\":\"You are a Rust expert.\""),
+        "Request body should contain system prompt. Got: {}",
+        body
+    );
+}

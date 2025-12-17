@@ -18,6 +18,12 @@ pub struct Config {
 
     /// Maximum tokens for responses
     pub max_tokens: u32,
+
+    /// Optional inline system prompt
+    pub system_prompt: Option<String>,
+
+    /// Optional path to a file containing the system prompt
+    pub system_prompt_file: Option<String>,
 }
 
 impl Config {
@@ -42,6 +48,20 @@ impl Config {
         }
     }
 
+    /// Returns the effective system prompt, preferring the file if both are set.
+    pub fn effective_system_prompt(&self) -> Result<Option<String>> {
+        if let Some(path_str) = &self.system_prompt_file {
+            let path = Path::new(path_str);
+            let content = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read system prompt file: {}", path_str))?;
+            let trimmed = content.trim();
+            return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
+        }
+
+        let trimmed = self.system_prompt.as_deref().unwrap_or("").trim();
+        Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
+    }
+
     /// Creates a default config file at the given path.
     /// Returns an error if the file already exists.
     pub fn init(path: &Path) -> Result<()> {
@@ -55,7 +75,7 @@ impl Config {
         }
 
         let toml = format!(
-            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\n",
+            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n",
             Self::DEFAULT_MODEL,
             Self::DEFAULT_MAX_TOKENS
         );
@@ -72,6 +92,8 @@ impl Default for Config {
         Self {
             model: Self::DEFAULT_MODEL.to_string(),
             max_tokens: Self::DEFAULT_MAX_TOKENS,
+            system_prompt: None,
+            system_prompt_file: None,
         }
     }
 }
@@ -131,5 +153,57 @@ mod tests {
 
         let result = Config::init(&config_path);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_effective_system_prompt_inline() {
+        let mut config = Config::default();
+        config.system_prompt = Some("inline prompt".to_string());
+        assert_eq!(
+            config.effective_system_prompt().unwrap(),
+            Some("inline prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_effective_system_prompt_inline_empty_is_none() {
+        let mut config = Config::default();
+        config.system_prompt = Some("   ".to_string());
+        assert_eq!(config.effective_system_prompt().unwrap(), None);
+    }
+
+    #[test]
+    fn test_effective_system_prompt_file() {
+        let dir = tempdir().unwrap();
+        let prompt_file = dir.path().join("prompt.txt");
+        fs::write(&prompt_file, "file prompt").unwrap();
+
+        let mut config = Config::default();
+        config.system_prompt_file = Some(prompt_file.to_str().unwrap().to_string());
+        config.system_prompt = Some("inline prompt".to_string());
+
+        assert_eq!(
+            config.effective_system_prompt().unwrap(),
+            Some("file prompt".to_string())
+        );
+    }
+
+    #[test]
+    fn test_effective_system_prompt_file_empty_is_none() {
+        let dir = tempdir().unwrap();
+        let prompt_file = dir.path().join("prompt.txt");
+        fs::write(&prompt_file, " \n\t ").unwrap();
+
+        let mut config = Config::default();
+        config.system_prompt_file = Some(prompt_file.to_str().unwrap().to_string());
+        config.system_prompt = Some("inline prompt".to_string());
+
+        assert_eq!(config.effective_system_prompt().unwrap(), None);
+    }
+
+    #[test]
+    fn test_effective_system_prompt_none() {
+        let config = Config::default();
+        assert_eq!(config.effective_system_prompt().unwrap(), None);
     }
 }

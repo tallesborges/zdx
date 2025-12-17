@@ -62,7 +62,7 @@ impl AnthropicClient {
     #[allow(dead_code)] // Useful API for simpler use cases
     pub async fn send_message(&self, prompt: &str) -> Result<String> {
         let response = self
-            .send_messages(&[ChatMessage::user(prompt)], &[])
+            .send_messages(&[ChatMessage::user(prompt)], &[], None)
             .await?;
         response.text().context("No text content in response")
     }
@@ -72,24 +72,22 @@ impl AnthropicClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
+        system: Option<&str>,
     ) -> Result<AssistantResponse> {
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
 
-        let request = if tools.is_empty() {
-            MessagesRequest {
-                model: &self.config.model,
-                max_tokens: self.config.max_tokens,
-                messages: api_messages,
-                tools: None,
-            }
+        let tool_defs = if tools.is_empty() {
+            None
         } else {
-            let tool_defs: Vec<ApiToolDef> = tools.iter().map(ApiToolDef::from).collect();
-            MessagesRequest {
-                model: &self.config.model,
-                max_tokens: self.config.max_tokens,
-                messages: api_messages,
-                tools: Some(tool_defs),
-            }
+            Some(tools.iter().map(ApiToolDef::from).collect::<Vec<_>>())
+        };
+
+        let request = MessagesRequest {
+            model: &self.config.model,
+            max_tokens: self.config.max_tokens,
+            messages: api_messages,
+            tools: tool_defs,
+            system,
         };
 
         let url = format!("{}/v1/messages", self.config.base_url);
@@ -130,26 +128,23 @@ impl AnthropicClient {
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
+        system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
 
-        let request = if tools.is_empty() {
-            StreamingMessagesRequest {
-                model: &self.config.model,
-                max_tokens: self.config.max_tokens,
-                messages: api_messages,
-                tools: None,
-                stream: true,
-            }
+        let tool_defs = if tools.is_empty() {
+            None
         } else {
-            let tool_defs: Vec<ApiToolDef> = tools.iter().map(ApiToolDef::from).collect();
-            StreamingMessagesRequest {
-                model: &self.config.model,
-                max_tokens: self.config.max_tokens,
-                messages: api_messages,
-                tools: Some(tool_defs),
-                stream: true,
-            }
+            Some(tools.iter().map(ApiToolDef::from).collect::<Vec<_>>())
+        };
+
+        let request = StreamingMessagesRequest {
+            model: &self.config.model,
+            max_tokens: self.config.max_tokens,
+            messages: api_messages,
+            tools: tool_defs,
+            system,
+            stream: true,
         };
 
         let url = format!("{}/v1/messages", self.config.base_url);
@@ -529,6 +524,8 @@ struct MessagesRequest<'a> {
     messages: Vec<ApiMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDef<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]
@@ -538,6 +535,8 @@ struct StreamingMessagesRequest<'a> {
     messages: Vec<ApiMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDef<'a>>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<&'a str>,
     stream: bool,
 }
 
