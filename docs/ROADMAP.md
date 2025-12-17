@@ -33,14 +33,18 @@
 
 ---
 
-## Next — v0.2.x (Engine Extraction + Polish)
+## Next — v0.2.x (Engine Extraction + Authoring Tools)
 
-**Goal:** Extract UI-agnostic engine so TUI becomes "just a renderer."
+**Goal:** Extract UI-agnostic engine and add code authoring capabilities.
 
 ### Foundational
 - [ ] UI-agnostic engine module (agent loop emits events, no printing)
 - [ ] `EngineEvent` as communication layer between engine and renderer
 - [ ] Provider testability (base URL override for testing)
+
+### Authoring Tools
+- [ ] `write` tool — create/overwrite files, auto-create parent directories
+- [ ] `edit` tool — exact text replacement (surgical edits)
 
 ### UX Improvements
 - [ ] System prompt profiles (`--profile <name>`)
@@ -48,8 +52,7 @@
 - [ ] Clean error rendering to stderr
 - [ ] Improved transcript formatting
 
-### Optional
-- [ ] Shell completions (`zdx completion <shell>`)
+
 
 ---
 
@@ -66,13 +69,9 @@
 
 ---
 
-## Later — v0.4.x (Authoring & Context)
+## Later — v0.4.x (Context & Safety Options)
 
-**Goal:** Code authoring with visibility-before-mutation.
-
-### New Tools
-- [ ] `write` tool
-- [ ] `edit` tool (exact replacement)
+**Goal:** Enhanced context and optional mutation visibility.
 
 ### UX
 - [ ] Diff preview for write/edit
@@ -111,6 +110,7 @@
 - [ ] Tool/provider response caching
 - [ ] Expanded prompt profiles
 - [ ] Chat slash commands
+- [ ] Shell completions (`zdx completion <shell>`)
 
 ---
 
