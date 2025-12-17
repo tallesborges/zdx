@@ -3,12 +3,9 @@
 use anyhow::Result;
 
 use std::fs;
-use std::io::Read;
 use std::path::Path;
 
 use crate::config::Config;
-
-const AGENTS_MD_MAX_BYTES: usize = 50 * 1024;
 
 /// Loads project context from AGENTS.md in the given root directory.
 pub fn load_project_context(root: &Path) -> Option<String> {
@@ -17,44 +14,11 @@ pub fn load_project_context(root: &Path) -> Option<String> {
         return None;
     }
 
-    let file = match fs::File::open(&agents_md) {
-        Ok(file) => file,
-        Err(e) => {
-            eprintln!(
-                "Warning: Failed to open AGENTS.md in {}: {}",
-                root.display(),
-                e
-            );
-            return None;
-        }
-    };
-
-    let mut bytes = Vec::new();
-    let mut limited = file.take((AGENTS_MD_MAX_BYTES + 1) as u64);
-    if let Err(e) = limited.read_to_end(&mut bytes) {
-        eprintln!(
-            "Warning: Failed to read AGENTS.md in {}: {}",
-            root.display(),
-            e
-        );
-        return None;
-    }
-
-    let was_truncated = bytes.len() > AGENTS_MD_MAX_BYTES;
-    if was_truncated {
-        bytes.truncate(AGENTS_MD_MAX_BYTES);
-        eprintln!(
-            "Warning: AGENTS.md in {} is larger than {} bytes; truncating.",
-            root.display(),
-            AGENTS_MD_MAX_BYTES
-        );
-    }
-
-    let content = match String::from_utf8(bytes) {
+    let content = match fs::read_to_string(&agents_md) {
         Ok(s) => s,
         Err(e) => {
             eprintln!(
-                "Warning: AGENTS.md in {} is not valid UTF-8: {}",
+                "Warning: Failed to read AGENTS.md in {}: {}",
                 root.display(),
                 e
             );
@@ -114,13 +78,4 @@ mod tests {
         assert_eq!(context, None);
     }
 
-    #[test]
-    fn test_load_project_context_truncates_large_files() {
-        let dir = tempdir().unwrap();
-        let agents_md = dir.path().join("AGENTS.md");
-        fs::write(&agents_md, "a".repeat(AGENTS_MD_MAX_BYTES + 10)).unwrap();
-
-        let context = load_project_context(dir.path()).unwrap();
-        assert_eq!(context.len(), AGENTS_MD_MAX_BYTES);
-    }
 }
