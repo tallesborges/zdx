@@ -37,7 +37,7 @@ where
 {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
-    let system_prompt = config.effective_system_prompt()?;
+    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
     let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
     run_chat_with_client(
@@ -351,7 +351,7 @@ pub async fn run_interactive_chat_with_history(
 
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
-    let system_prompt = config.effective_system_prompt()?;
+    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
     let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
 

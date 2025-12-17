@@ -186,6 +186,7 @@ async fn test_exec_handles_ping_events() {
 #[tokio::test]
 async fn test_exec_includes_system_prompt_from_config() {
     let temp_dir = tempfile::TempDir::new().unwrap();
+    let root_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         temp_dir.path().join("config.toml"),
         "system_prompt = \"You are a Rust expert.\"",
@@ -211,7 +212,14 @@ async fn test_exec_includes_system_prompt_from_config() {
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-save", "exec", "-p", "hello"])
+        .args([
+            "--root",
+            root_dir.path().to_str().unwrap(),
+            "--no-save",
+            "exec",
+            "-p",
+            "hello",
+        ])
         .assert()
         .success();
 
@@ -226,6 +234,7 @@ async fn test_exec_includes_system_prompt_from_config() {
 #[tokio::test]
 async fn test_exec_system_prompt_flag_overrides_config() {
     let temp_dir = tempfile::TempDir::new().unwrap();
+    let root_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         temp_dir.path().join("config.toml"),
         "system_prompt = \"From config\"",
@@ -252,6 +261,8 @@ async fn test_exec_system_prompt_flag_overrides_config() {
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
+            "--root",
+            root_dir.path().to_str().unwrap(),
             "--no-save",
             "--system-prompt",
             "From flag",
@@ -278,6 +289,7 @@ async fn test_exec_system_prompt_flag_overrides_config() {
 #[tokio::test]
 async fn test_exec_system_prompt_flag_empty_clears_config() {
     let temp_dir = tempfile::TempDir::new().unwrap();
+    let root_dir = tempfile::TempDir::new().unwrap();
     std::fs::write(
         temp_dir.path().join("config.toml"),
         "system_prompt = \"From config\"",
@@ -303,7 +315,16 @@ async fn test_exec_system_prompt_flag_empty_clears_config() {
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-save", "--system-prompt", "", "exec", "-p", "hello"])
+        .args([
+            "--root",
+            root_dir.path().to_str().unwrap(),
+            "--no-save",
+            "--system-prompt",
+            "",
+            "exec",
+            "-p",
+            "hello",
+        ])
         .assert()
         .success();
 
@@ -311,6 +332,58 @@ async fn test_exec_system_prompt_flag_empty_clears_config() {
     assert!(
         !body.contains("\"system\""),
         "Request body should omit system field when cleared. Got: {}",
+        body
+    );
+}
+
+#[tokio::test]
+async fn test_exec_includes_agents_md_context() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    std::fs::write(
+        temp_dir.path().join("AGENTS.md"),
+        "Use snake_case for all functions.",
+    )
+    .unwrap();
+
+    let mock_server = MockServer::start().await;
+    let response = text_response("OK");
+    let request_body = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let request_body_clone = request_body.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |req: &wiremock::Request| {
+            let body = String::from_utf8_lossy(&req.body).to_string();
+            *request_body_clone.lock().unwrap() = body;
+            response.clone()
+        })
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--root",
+            temp_dir.path().to_str().unwrap(),
+            "--no-save",
+            "exec",
+            "-p",
+            "hello",
+        ])
+        .assert()
+        .success();
+
+    let body = request_body.lock().unwrap().clone();
+    assert!(
+        body.contains("Use snake_case for all functions."),
+        "Request body should contain AGENTS.md content. Got: {}",
+        body
+    );
+    assert!(
+        body.contains("# Project Guidelines"),
+        "Request body should contain Project Guidelines header. Got: {}",
         body
     );
 }

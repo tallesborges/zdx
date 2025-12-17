@@ -2,6 +2,7 @@ mod agent;
 mod chat;
 mod cli;
 mod config;
+mod context;
 mod paths;
 mod providers;
 mod session;
