@@ -3,6 +3,8 @@ mod chat;
 mod cli;
 mod config;
 mod context;
+mod engine;
+mod events;
 mod interrupt;
 mod paths;
 mod providers;

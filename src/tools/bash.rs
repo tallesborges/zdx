@@ -6,11 +6,11 @@
 use std::process::Stdio;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
+use crate::events::ToolOutput;
 
 /// Returns the tool definition for the bash tool.
 pub fn definition() -> ToolDefinition {
@@ -43,29 +43,37 @@ pub struct BashOutput {
     pub stdout: String,
     pub stderr: String,
     pub exit_code: i32,
+    pub timed_out: bool,
 }
 
-impl std::fmt::Display for BashOutput {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "exit_code: {}\n\n--- stdout ---\n{}\n--- stderr ---\n{}",
-            self.exit_code, self.stdout, self.stderr
-        )
+impl BashOutput {
+    /// Converts to structured envelope format.
+    pub fn into_tool_output(self) -> ToolOutput {
+        ToolOutput::success(json!({
+            "stdout": self.stdout,
+            "stderr": self.stderr,
+            "exit_code": self.exit_code,
+            "timed_out": self.timed_out
+        }))
     }
 }
 
-/// Executes the bash tool.
-pub async fn execute(
-    input: &Value,
-    ctx: &ToolContext,
-    timeout: Option<Duration>,
-) -> Result<String> {
-    let input: BashInput =
-        serde_json::from_value(input.clone()).context("Invalid input for bash tool")?;
+/// Executes the bash tool and returns a structured envelope.
+pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
+    let input: BashInput = match serde_json::from_value(input.clone()) {
+        Ok(i) => i,
+        Err(e) => {
+            return ToolOutput::failure(
+                "invalid_input",
+                format!("Invalid input for bash tool: {}", e),
+            );
+        }
+    };
 
-    let output = run_command(&input.command, ctx, timeout).await?;
-    Ok(output.to_string())
+    match run_command(&input.command, ctx, timeout).await {
+        Ok(output) => output.into_tool_output(),
+        Err(e) => e,
+    }
 }
 
 /// Runs a shell command in the context's root directory.
@@ -73,7 +81,7 @@ async fn run_command(
     command: &str,
     ctx: &ToolContext,
     timeout: Option<Duration>,
-) -> Result<BashOutput> {
+) -> Result<BashOutput, ToolOutput> {
     let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
@@ -82,25 +90,40 @@ async fn run_command(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .with_context(|| format!("Failed to execute command: {}", command))?;
+        .map_err(|e| {
+            ToolOutput::failure(
+                "spawn_error",
+                format!("Failed to execute command '{}': {}", command, e),
+            )
+        })?;
 
     let output_fut = child.wait_with_output();
     let output = match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, output_fut).await {
             Ok(result) => result,
-            Err(_) => anyhow::bail!(
-                "Tool execution timed out after {} seconds",
-                timeout.as_secs()
-            ),
+            Err(_) => {
+                return Ok(BashOutput {
+                    stdout: String::new(),
+                    stderr: format!("Command timed out after {} seconds", timeout.as_secs()),
+                    exit_code: -1,
+                    timed_out: true,
+                });
+            }
         },
         None => output_fut.await,
     }
-    .with_context(|| format!("Failed to execute command: {}", command))?;
+    .map_err(|e| {
+        ToolOutput::failure(
+            "exec_error",
+            format!("Failed to execute command '{}': {}", command, e),
+        )
+    })?;
 
     Ok(BashOutput {
         stdout: String::from_utf8_lossy(&output.stdout).to_string(),
         stderr: String::from_utf8_lossy(&output.stderr).to_string(),
         exit_code: output.status.code().unwrap_or(-1),
+        timed_out: false,
     })
 }
 
@@ -116,9 +139,13 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "echo hello"});
 
-        let result = execute(&input, &ctx, None).await.unwrap();
-        assert!(result.contains("hello"));
-        assert!(result.contains("exit_code: 0"));
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""ok":true"#));
+        assert!(json_str.contains(r#""stdout":"hello"#));
+        assert!(json_str.contains(r#""exit_code":0"#));
+        assert!(json_str.contains(r#""timed_out":false"#));
     }
 
     #[tokio::test]
@@ -127,9 +154,10 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "echo error >&2"});
 
-        let result = execute(&input, &ctx, None).await.unwrap();
-        assert!(result.contains("error"));
-        assert!(result.contains("stderr"));
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""stderr":"error"#));
     }
 
     #[tokio::test]
@@ -138,8 +166,10 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "exit 42"});
 
-        let result = execute(&input, &ctx, None).await.unwrap();
-        assert!(result.contains("exit_code: 42"));
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""exit_code":42"#));
     }
 
     #[tokio::test]
@@ -150,7 +180,33 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"command": "ls"});
 
-        let result = execute(&input, &ctx, None).await.unwrap();
-        assert!(result.contains("test.txt"));
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains("test.txt"));
+    }
+
+    #[tokio::test]
+    async fn test_bash_timeout() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let input = json!({"command": "sleep 5"});
+
+        let result = execute(&input, &ctx, Some(Duration::from_millis(100))).await;
+        assert!(result.is_ok()); // timed_out is success with timed_out=true
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""timed_out":true"#));
+    }
+
+    #[tokio::test]
+    async fn test_bash_invalid_input() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let input = json!({"wrong_field": "ls"});
+
+        let result = execute(&input, &ctx, None).await;
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 }
