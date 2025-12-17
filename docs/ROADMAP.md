@@ -46,13 +46,20 @@
 - [ ] `write` tool — create/overwrite files, auto-create parent directories
 - [ ] `edit` tool — exact text replacement (surgical edits)
 
+### Providers
+- [ ] Multiple providers support (provider abstraction)
+- [ ] OpenAI provider
+- [ ] Gemini provider
+- [ ] Thinking/reasoning support (extended thinking, chain-of-thought)
+
+### Performance
+- [ ] Response caching (tool/provider)
+
 ### UX Improvements
 - [ ] System prompt profiles (`--profile <name>`)
 - [ ] `AGENTS.md` auto-inclusion
 - [ ] Clean error rendering to stderr
 - [ ] Improved transcript formatting
-
-
 
 ---
 
@@ -104,10 +111,9 @@
 
 ## Later — v0.7.x+ (Extensibility)
 
-**Goal:** Provider flexibility and deeper workflows.
+**Goal:** Deeper workflows and quality-of-life features.
 
-- [ ] Multiple providers (OpenAI, local models)
-- [ ] Tool/provider response caching
+- [ ] Local model support (Ollama, etc.)
 - [ ] Expanded prompt profiles
 - [ ] Chat slash commands
 - [ ] Shell completions (`zdx completion <shell>`)
