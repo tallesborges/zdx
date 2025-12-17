@@ -15,6 +15,10 @@ pub struct Cli {
     #[arg(long, default_value = ".", global = true)]
     pub root: String,
 
+    /// Override the system prompt from config
+    #[arg(long, global = true)]
+    pub system_prompt: Option<String>,
+
     #[command(flatten)]
     pub session_args: SessionArgs,
 }

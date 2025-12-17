@@ -26,13 +26,26 @@ fn main_result() -> Result<()> {
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
 
     rt.block_on(async move {
+        let mut config = config::Config::load().context("load config")?;
+
+        if let Some(sp) = cli.system_prompt.as_deref() {
+            let trimmed = sp.trim();
+            if trimmed.is_empty() {
+                config.system_prompt = None;
+                config.system_prompt_file = None;
+            } else {
+                config.system_prompt = Some(trimmed.to_string());
+                config.system_prompt_file = None;
+            }
+        }
+
         // default to chat mode
         let Some(command) = cli.command else {
-            return run_chat(&cli.root, &cli.session_args).await;
+            return run_chat(&cli.root, &cli.session_args, &config).await;
         };
 
         match command {
-            Commands::Exec { prompt } => run_exec(&cli.root, &cli.session_args, &prompt).await,
+            Commands::Exec { prompt } => run_exec(&cli.root, &cli.session_args, &prompt, &config).await,
 
             Commands::Sessions { command } => match command {
                 SessionCommands::List => {
@@ -62,7 +75,7 @@ fn main_result() -> Result<()> {
                 }
             },
 
-            Commands::Resume { id } => run_resume(id).await,
+            Commands::Resume { id } => run_resume(id, &config).await,
 
             Commands::Config { command } => match command {
                 ConfigCommands::Path => {
@@ -81,23 +94,24 @@ fn main_result() -> Result<()> {
     })
 }
 
-async fn run_chat(root: &str, session_args: &cli::SessionArgs) -> Result<()> {
-    let config = config::Config::load().context("load config")?;
-
+async fn run_chat(root: &str, session_args: &cli::SessionArgs, config: &config::Config) -> Result<()> {
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
     let root_path = std::path::PathBuf::from(root);
-    chat::run_interactive_chat(&config, session, root_path)
+    chat::run_interactive_chat(config, session, root_path)
         .await
         .context("interactive chat failed")?;
 
     Ok(())
 }
 
-async fn run_exec(root: &str, session_args: &cli::SessionArgs, prompt: &str) -> Result<()> {
-    let config = config::Config::load().context("load config")?;
-
+async fn run_exec(
+    root: &str,
+    session_args: &cli::SessionArgs,
+    prompt: &str,
+    config: &config::Config,
+) -> Result<()> {
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
@@ -106,16 +120,14 @@ async fn run_exec(root: &str, session_args: &cli::SessionArgs, prompt: &str) -> 
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    agent::execute_prompt_streaming(prompt, &config, session.as_ref(), &agent_opts)
+    agent::execute_prompt_streaming(prompt, config, session.as_ref(), &agent_opts)
         .await
         .context("execute prompt")?;
 
     Ok(())
 }
 
-async fn run_resume(id: Option<String>) -> Result<()> {
-    let config = config::Config::load().context("load config")?;
-
+async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
     let session_id = match id {
         Some(id) => id,
         None => session::latest_session_id()
@@ -130,7 +142,7 @@ async fn run_resume(id: Option<String>) -> Result<()> {
         .with_context(|| format!("open session '{session_id}'"))?;
 
     let root_path = std::path::PathBuf::from(".");
-    chat::run_interactive_chat_with_history(&config, Some(session), history, root_path)
+    chat::run_interactive_chat_with_history(config, Some(session), history, root_path)
         .await
         .context("resume chat failed")?;
 
