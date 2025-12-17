@@ -9,9 +9,10 @@ pub mod read;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::events::ToolOutput;
 
 /// Tool definition for the Anthropic API.
 #[derive(Debug, Clone, Serialize)]
@@ -21,13 +22,24 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
-/// Result of executing a tool.
+/// Result of executing a tool (for API compatibility).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_use_id: String,
     pub content: String,
     #[serde(default)]
     pub is_error: bool,
+}
+
+impl ToolResult {
+    /// Creates a ToolResult from a ToolOutput.
+    pub fn from_output(tool_use_id: String, output: &ToolOutput) -> Self {
+        Self {
+            tool_use_id,
+            content: output.to_json_string(),
+            is_error: !output.is_ok(),
+        }
+    }
 }
 
 /// Context for tool execution.
@@ -60,33 +72,24 @@ pub fn all_tools() -> Vec<ToolDefinition> {
 }
 
 /// Executes a tool by name with the given input.
+/// Returns the structured ToolOutput (envelope format).
 pub async fn execute_tool(
     name: &str,
     tool_use_id: &str,
     input: &Value,
     ctx: &ToolContext,
-) -> Result<ToolResult> {
-    let content = match name {
+) -> (ToolOutput, ToolResult) {
+    let output = match name {
         "bash" => bash::execute(input, ctx, ctx.timeout).await,
         "read" => execute_read(input, ctx).await,
-        _ => Err(anyhow::anyhow!("Unknown tool: {}", name)),
+        _ => ToolOutput::failure("unknown_tool", format!("Unknown tool: {}", name)),
     };
 
-    match content {
-        Ok(text) => Ok(ToolResult {
-            tool_use_id: tool_use_id.to_string(),
-            content: text,
-            is_error: false,
-        }),
-        Err(e) => Ok(ToolResult {
-            tool_use_id: tool_use_id.to_string(),
-            content: format!("Error: {}", e),
-            is_error: true,
-        }),
-    }
+    let result = ToolResult::from_output(tool_use_id.to_string(), &output);
+    (output, result)
 }
 
-async fn execute_read(input: &Value, ctx: &ToolContext) -> Result<String> {
+async fn execute_read(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input = input.clone();
     let ctx = ctx.clone();
 
@@ -95,16 +98,23 @@ async fn execute_read(input: &Value, ctx: &ToolContext) -> Result<String> {
 
     match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, &mut handle).await {
-            Ok(joined) => joined.context("tool execution panicked")?,
+            Ok(Ok(output)) => output,
+            Ok(Err(_)) => ToolOutput::failure("panic", "Tool execution panicked"),
             Err(_) => {
                 handle.abort();
-                anyhow::bail!(
-                    "Tool execution timed out after {} seconds",
-                    timeout.as_secs()
-                );
+                ToolOutput::failure(
+                    "timeout",
+                    format!(
+                        "Tool execution timed out after {} seconds",
+                        timeout.as_secs()
+                    ),
+                )
             }
         },
-        None => handle.await.context("tool execution panicked")?,
+        None => match handle.await {
+            Ok(output) => output,
+            Err(_) => ToolOutput::failure("panic", "Tool execution panicked"),
+        },
     }
 }
 
@@ -130,10 +140,21 @@ mod tests {
             ToolContext::with_timeout(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
         let input = json!({"command": "sleep 2"});
 
-        let result = execute_tool("bash", "toolu_timeout", &input, &ctx)
-            .await
-            .unwrap();
+        let (output, result) = execute_tool("bash", "toolu_timeout", &input, &ctx).await;
+        // Timeout is still a success envelope with timed_out=true
+        assert!(output.is_ok());
+        assert!(result.content.contains(r#""timed_out":true"#));
+    }
+
+    #[tokio::test]
+    async fn test_execute_unknown_tool() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let input = json!({});
+
+        let (output, result) = execute_tool("unknown", "toolu_unknown", &input, &ctx).await;
+        assert!(!output.is_ok());
         assert!(result.is_error);
-        assert!(result.content.contains("timed out"));
+        assert!(result.content.contains(r#""code":"unknown_tool""#));
     }
 }

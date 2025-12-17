@@ -5,11 +5,14 @@
 use std::fs;
 use std::path::Path;
 
-use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
+use crate::events::ToolOutput;
+
+/// Maximum file size before truncation (50KB).
+const MAX_BYTES: usize = 50 * 1024;
 
 /// Returns the tool definition for the read tool.
 pub fn definition() -> ToolDefinition {
@@ -34,19 +37,50 @@ struct ReadInput {
     path: String,
 }
 
-/// Executes the read tool.
-pub fn execute(input: &Value, ctx: &ToolContext) -> Result<String> {
-    let input: ReadInput =
-        serde_json::from_value(input.clone()).context("Invalid input for read tool")?;
+/// Executes the read tool and returns a structured envelope.
+pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    let input: ReadInput = match serde_json::from_value(input.clone()) {
+        Ok(i) => i,
+        Err(e) => {
+            return ToolOutput::failure(
+                "invalid_input",
+                format!("Invalid input for read tool: {}", e),
+            );
+        }
+    };
 
-    let file_path = resolve_path(&input.path, &ctx.root)?;
+    let file_path = match resolve_path(&input.path, &ctx.root) {
+        Ok(p) => p,
+        Err(e) => return ToolOutput::failure("path_error", e),
+    };
 
-    fs::read_to_string(&file_path)
-        .with_context(|| format!("Failed to read file: {}", file_path.display()))
+    let content = match fs::read_to_string(&file_path) {
+        Ok(c) => c,
+        Err(e) => {
+            return ToolOutput::failure(
+                "read_error",
+                format!("Failed to read file '{}': {}", file_path.display(), e),
+            );
+        }
+    };
+
+    let bytes = content.len();
+    let (content, truncated) = if bytes > MAX_BYTES {
+        (content[..MAX_BYTES].to_string(), true)
+    } else {
+        (content, false)
+    };
+
+    ToolOutput::success(json!({
+        "path": file_path.display().to_string(),
+        "content": content,
+        "truncated": truncated,
+        "bytes": bytes
+    }))
 }
 
 /// Resolves a path relative to the root directory.
-fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf> {
+fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf, String> {
     let requested = Path::new(path);
 
     // Join with root (handles both absolute and relative paths)
@@ -59,7 +93,7 @@ fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf> {
     // Canonicalize to resolve any .. or symlinks
     let canonical = full_path
         .canonicalize()
-        .with_context(|| format!("Path does not exist: {}", full_path.display()))?;
+        .map_err(|e| format!("Path does not exist '{}': {}", full_path.display(), e))?;
 
     Ok(canonical)
 }
@@ -79,8 +113,13 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"path": "test.txt"});
 
-        let result = execute(&input, &ctx).unwrap();
-        assert_eq!(result, "hello world");
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""ok":true"#));
+        assert!(json_str.contains(r#""content":"hello world""#));
+        assert!(json_str.contains(r#""truncated":false"#));
+        assert!(json_str.contains(r#""bytes":11"#));
     }
 
     #[test]
@@ -93,8 +132,10 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf());
         let input = json!({"path": "subdir/nested.txt"});
 
-        let result = execute(&input, &ctx).unwrap();
-        assert_eq!(result, "nested content");
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""content":"nested content""#));
     }
 
     #[test]
@@ -104,7 +145,10 @@ mod tests {
         let input = json!({"path": "nonexistent.txt"});
 
         let result = execute(&input, &ctx);
-        assert!(result.is_err());
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""ok":false"#));
+        assert!(json_str.contains(r#""code":"path_error""#));
     }
 
     #[test]
@@ -117,7 +161,40 @@ mod tests {
         let ctx = ToolContext::new(root.path().to_path_buf());
         let input = json!({ "path": outside_file.to_str().unwrap() });
 
-        let result = execute(&input, &ctx).unwrap();
-        assert_eq!(result, "external content");
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""content":"external content""#));
+    }
+
+    #[test]
+    fn test_read_large_file_truncated() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("large.txt");
+        // Create a file larger than MAX_BYTES (50KB)
+        let content = "x".repeat(60 * 1024);
+        fs::write(&file_path, &content).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let input = json!({"path": "large.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""truncated":true"#));
+        // bytes should reflect original size
+        assert!(json_str.contains(r#""bytes":61440"#));
+    }
+
+    #[test]
+    fn test_read_invalid_input() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let input = json!({"wrong_field": "test.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 }

@@ -337,13 +337,7 @@ async fn execute_tool_uses(
         let input: serde_json::Value = serde_json::from_str(&tu.input_json)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        let result = tools::execute_tool(&tu.name, &tu.id, &input, ctx)
-            .await
-            .unwrap_or_else(|e| ToolResult {
-                tool_use_id: tu.id.clone(),
-                content: format!("Internal error: {}", e),
-                is_error: true,
-            });
+        let (_output, result) = tools::execute_tool(&tu.name, &tu.id, &input, ctx).await;
 
         eprintln!(" Done.");
         results.push(result);
