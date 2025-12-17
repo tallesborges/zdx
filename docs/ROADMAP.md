@@ -41,9 +41,11 @@
 
 ### v0.2.0 — Engine/renderer separation (SPEC-first)
 - [ ] UI-agnostic engine module (agent loop emits events; no printing/formatting)
-- [ ] Engine emits the required event types (per SPEC §7)
+- [ ] Engine emits the required event types including `ToolRequested` (per SPEC §7)
 - [ ] Renderer strictly enforces stdout/stderr rules (per SPEC §10)
 - [ ] Ctrl+C reliably records an interruption event (per SPEC §11)
+- [ ] Session JSONL includes `meta` (schema version), `tool_use`, `tool_result` events (per SPEC §8)
+- [ ] All tool outputs use structured JSON envelope (per SPEC §6)
 
 ### v0.2.1 — Provider testability (offline)
 - [ ] Provider base URL override (env or config) to enable local/fixture tests (per SPEC §5)
@@ -59,7 +61,12 @@
 - [ ] Deterministic tool result shape (easy to parse; good errors)
 
 ### v0.2.4 — Terminal UX polish
-- [ ] `AGENTS.md` auto-inclusion (repo-local instruction discovery)
+- [ ] `AGENTS.md` auto-inclusion:
+  - Deterministic file name (`AGENTS.md`)
+  - Deterministic search path (`--root` then cwd)
+  - Loaded once at session start
+  - Surfaced to stderr (e.g., "Loaded AGENTS.md from ...")
+  - Optionally disableable via flag/config (without being a "guardrail")
 - [ ] Cleaner, consistent error rendering to stderr (terminal-first)
 - [ ] Improved transcript formatting (readable defaults; pipe-friendly)
 - [ ] Optional system prompt profiles (only if it stays simple)
@@ -98,10 +105,11 @@
 **Goal:** Stable `exec` for scripts and tooling.
 
 ### v0.5.0 — Script-friendly outputs (versioned)
-- [ ] `exec --format json` with a versioned schema
+- [ ] `exec --format json` schema finalized and versioned (stable contract)
 - [ ] `--tool-results=full|summary|omit`
 - [ ] Exit codes locked down (per SPEC §10)
 - [ ] Structured event stream export
+- [ ] Note: `--format` flag exists from v0.2.x but json schema is reserved until v0.5
 
 ---
 
