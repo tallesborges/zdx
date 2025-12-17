@@ -48,7 +48,10 @@ pub async fn execute_prompt(
         s.append(&SessionEvent::user_message(prompt))?;
     }
 
-    let tool_ctx = ToolContext::new(options.root.canonicalize().unwrap_or(options.root.clone()));
+    let tool_ctx = ToolContext::with_timeout(
+        options.root.canonicalize().unwrap_or(options.root.clone()),
+        config.tool_timeout(),
+    );
     let tools = tools::all_tools();
 
     let mut messages = vec![ChatMessage::user(prompt)];
@@ -61,7 +64,7 @@ pub async fn execute_prompt(
 
         if response.has_tool_use() {
             // Process tool calls
-            let tool_results = execute_tools(&response, &tool_ctx);
+            let tool_results = execute_tools(&response, &tool_ctx).await?;
 
             // Add assistant's response (with tool_use blocks) to history
             let assistant_blocks = response_to_blocks(&response);
@@ -106,7 +109,10 @@ pub async fn execute_prompt_streaming(
         s.append(&SessionEvent::user_message(prompt))?;
     }
 
-    let tool_ctx = ToolContext::new(options.root.canonicalize().unwrap_or(options.root.clone()));
+    let tool_ctx = ToolContext::with_timeout(
+        options.root.canonicalize().unwrap_or(options.root.clone()),
+        config.tool_timeout(),
+    );
     let tools = tools::all_tools();
 
     let mut messages = vec![ChatMessage::user(prompt)];
@@ -187,7 +193,7 @@ pub async fn execute_prompt_streaming(
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results
-            let tool_results = execute_tool_uses(&tool_uses, &tool_ctx)?;
+            let tool_results = execute_tool_uses(&tool_uses, &tool_ctx).await?;
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Continue the loop for the next response
@@ -244,7 +250,10 @@ fn build_assistant_blocks(
 }
 
 /// Executes tool uses from streaming and returns results.
-fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<Vec<ToolResult>> {
+async fn execute_tool_uses(
+    tool_uses: &[ToolUseBuilder],
+    ctx: &ToolContext,
+) -> Result<Vec<ToolResult>> {
     let mut results = Vec::new();
 
     for tu in tool_uses {
@@ -257,8 +266,9 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
         let input: serde_json::Value = serde_json::from_str(&tu.input_json)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        let result =
-            tools::execute_tool(&tu.name, &tu.id, &input, ctx).unwrap_or_else(|e| ToolResult {
+        let result = tools::execute_tool(&tu.name, &tu.id, &input, ctx)
+            .await
+            .unwrap_or_else(|e| ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: format!("Internal error: {}", e),
                 is_error: true,
@@ -273,26 +283,26 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
 
 /// Executes all tool calls from a response (non-streaming).
 #[allow(dead_code)] // Used by execute_prompt
-fn execute_tools(response: &AssistantResponse, ctx: &ToolContext) -> Vec<ToolResult> {
+async fn execute_tools(response: &AssistantResponse, ctx: &ToolContext) -> Result<Vec<ToolResult>> {
     let mut results = Vec::new();
 
     for tu in response.tool_uses() {
         eprint!("⚙ Running {}...", tu.name);
         let _ = std::io::stderr().flush();
 
-        let result = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).unwrap_or_else(|e| {
-            ToolResult {
+        let result = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx)
+            .await
+            .unwrap_or_else(|e| ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: format!("Internal error: {}", e),
                 is_error: true,
-            }
-        });
+            });
 
         eprintln!(" Done.");
         results.push(result);
     }
 
-    results
+    Ok(results)
 }
 
 /// Converts response content blocks to chat content blocks (non-streaming).

@@ -39,7 +39,10 @@ where
     let client = AnthropicClient::new(anthropic_config);
     let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
-    let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
+    let tool_ctx = ToolContext::with_timeout(
+        root.canonicalize().unwrap_or(root),
+        config.tool_timeout(),
+    );
     run_chat_with_client(
         input,
         &mut output,
@@ -271,7 +274,7 @@ async fn stream_response<W: Write>(
         let assistant_blocks = build_assistant_blocks(&full_text, &tool_uses)?;
 
         // Execute tools and get results
-        let tool_results = execute_tool_uses(&tool_uses, tool_ctx)?;
+        let tool_results = execute_tool_uses(&tool_uses, tool_ctx).await?;
 
         return Ok(StreamResult::ToolUse {
             assistant_blocks,
@@ -314,7 +317,10 @@ fn build_assistant_blocks(
 }
 
 /// Executes tool uses from streaming and returns results.
-fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<Vec<ToolResult>> {
+async fn execute_tool_uses(
+    tool_uses: &[ToolUseBuilder],
+    ctx: &ToolContext,
+) -> Result<Vec<ToolResult>> {
     let mut results = Vec::new();
 
     for tu in tool_uses {
@@ -327,8 +333,9 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
         let input: serde_json::Value = serde_json::from_str(&tu.input_json)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        let result =
-            tools::execute_tool(&tu.name, &tu.id, &input, ctx).unwrap_or_else(|e| ToolResult {
+        let result = tools::execute_tool(&tu.name, &tu.id, &input, ctx)
+            .await
+            .unwrap_or_else(|e| ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: format!("Internal error: {}", e),
                 is_error: true,
@@ -366,7 +373,10 @@ pub async fn run_interactive_chat_with_history(
     let client = AnthropicClient::new(anthropic_config);
     let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
-    let tool_ctx = ToolContext::new(root.canonicalize().unwrap_or(root));
+    let tool_ctx = ToolContext::with_timeout(
+        root.canonicalize().unwrap_or(root),
+        config.tool_timeout(),
+    );
 
     writeln!(stdout, "ZDX Chat (type :q to quit)")?;
     if let Some(ref s) = session {
