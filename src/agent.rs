@@ -236,6 +236,9 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
     let mut results = Vec::new();
 
     for tu in tool_uses {
+        eprint!("⚙ Running {}...", tu.name);
+        std::io::stderr().flush()?;
+
         let input: serde_json::Value = serde_json::from_str(&tu.input_json)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
@@ -246,6 +249,7 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
                 is_error: true,
             });
 
+        eprintln!(" Done.");
         results.push(result);
     }
 
@@ -255,17 +259,25 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
 /// Executes all tool calls from a response (non-streaming).
 #[allow(dead_code)] // Used by execute_prompt
 fn execute_tools(response: &AssistantResponse, ctx: &ToolContext) -> Vec<ToolResult> {
-    response
-        .tool_uses()
-        .into_iter()
-        .map(|tu| {
-            tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).unwrap_or_else(|e| ToolResult {
+    let mut results = Vec::new();
+
+    for tu in response.tool_uses() {
+        eprint!("⚙ Running {}...", tu.name);
+        let _ = std::io::stderr().flush();
+
+        let result = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).unwrap_or_else(|e| {
+            ToolResult {
                 tool_use_id: tu.id.clone(),
                 content: format!("Internal error: {}", e),
                 is_error: true,
-            })
-        })
-        .collect()
+            }
+        });
+
+        eprintln!(" Done.");
+        results.push(result);
+    }
+
+    results
 }
 
 /// Converts response content blocks to chat content blocks (non-streaming).

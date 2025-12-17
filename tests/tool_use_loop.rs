@@ -194,3 +194,35 @@ async fn test_tool_read_outside_root_allowed() {
         body
     );
 }
+
+#[tokio::test]
+async fn test_tool_shows_activity_indicator() {
+    let mock_server = MockServer::start().await;
+    let first_response = tool_use_sse("toolu_indicator", "read", r#"{"path": "nonexistent.txt"}"#);
+    let second_response = text_sse("Done.");
+
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = call_count.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |_req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                sse_response(&first_response)
+            } else {
+                sse_response(&second_response)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save", "exec", "-p", "Show indicator"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("⚙ Running read... Done."));
+}
