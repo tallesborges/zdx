@@ -4,10 +4,11 @@
 
 mod fixtures;
 
-use assert_cmd::cargo::cargo_bin_cmd;
-use fixtures::{sse_response, tool_use_sse};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use fixtures::{sse_response, tool_use_sse};
 use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};

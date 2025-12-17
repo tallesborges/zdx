@@ -1,0 +1,16 @@
+# Clippy configuration for zdx-cli
+
+# Cognitive complexity threshold for functions
+cognitive-complexity-threshold = 25
+
+# Maximum number of lines in a function body
+too-many-lines-threshold = 100
+
+# Type complexity threshold
+type-complexity-threshold = 250
+
+# Maximum number of function arguments
+too-many-arguments-threshold = 7
+
+# Allow common prefixes in enum variants (like ErrorKind::IoError)
+enum-variant-name-threshold = 3

@@ -7,12 +7,13 @@
 
 mod fixtures;
 
-use assert_cmd::cargo::cargo_bin_cmd;
-use fixtures::{sse_response, text_and_tool_use_sse, text_sse, tool_use_sse};
-use predicates::prelude::*;
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+use assert_cmd::cargo::cargo_bin_cmd;
+use fixtures::{sse_response, text_and_tool_use_sse, text_sse, tool_use_sse};
+use predicates::prelude::*;
 use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request};

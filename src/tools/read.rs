@@ -2,11 +2,12 @@
 //!
 //! Allows the agent to read file contents from the filesystem.
 
+use std::fs;
+use std::path::Path;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::fs;
-use std::path::Path;
 
 use super::{ToolContext, ToolDefinition};
 
@@ -65,8 +66,9 @@ fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[test]
     fn test_read_file_success() {

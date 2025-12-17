@@ -2,11 +2,12 @@
 //!
 //! Loads configuration from ${ZDX_HOME}/config.toml with sensible defaults.
 
-use anyhow::{Context, Result};
-use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+
+use anyhow::{Context, Result};
+use serde::{Deserialize, Serialize};
 
 use crate::paths;
 
@@ -115,9 +116,11 @@ impl Default for Config {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_default_config() {

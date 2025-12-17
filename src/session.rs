@@ -3,15 +3,16 @@
 //! Each session is stored as a JSONL file where each line is a JSON object
 //! representing a message event.
 
-use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
+use std::time::SystemTime;
+
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use serde::{Deserialize, Serialize};
 
 use crate::paths::sessions_dir;
-use std::time::SystemTime;
 
 /// A session event representing a message in the conversation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -268,8 +269,9 @@ impl SessionOptions {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn setup_temp_zdx_home() -> TempDir {
         let temp = TempDir::new().unwrap();
