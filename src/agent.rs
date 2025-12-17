@@ -125,6 +125,12 @@ pub async fn execute_prompt_streaming(
 
         // Process stream events
         while let Some(event_result) = stream.next().await {
+            if crate::interrupt::is_interrupted() {
+                if let Some(s) = session {
+                    let _ = s.append(&SessionEvent::interrupted());
+                }
+                return Err(crate::interrupt::InterruptedError.into());
+            }
             let event = event_result?;
 
             match event {
@@ -242,6 +248,9 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
     let mut results = Vec::new();
 
     for tu in tool_uses {
+        if crate::interrupt::is_interrupted() {
+            return Err(crate::interrupt::InterruptedError.into());
+        }
         eprint!("⚙ Running {}...", tu.name);
         std::io::stderr().flush()?;
 
