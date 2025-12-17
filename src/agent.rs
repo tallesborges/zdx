@@ -1,9 +1,10 @@
 //! Agent module for handling prompt execution with tool support.
 
-use anyhow::{Result, bail};
-use futures_util::StreamExt;
 use std::io::{Write, stdout};
 use std::path::PathBuf;
+
+use anyhow::{Result, bail};
+use futures_util::StreamExt;
 
 use crate::config::Config;
 use crate::providers::anthropic::{

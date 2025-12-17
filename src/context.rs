@@ -1,9 +1,9 @@
 //! Context module for loading project-specific guidelines.
 
-use anyhow::Result;
-
 use std::fs;
 use std::path::Path;
+
+use anyhow::Result;
 
 use crate::config::Config;
 
@@ -47,9 +47,11 @@ pub fn build_effective_system_prompt(config: &Config, root: &Path) -> Result<Opt
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::fs;
+
     use tempfile::tempdir;
+
+    use super::*;
 
     #[test]
     fn test_load_project_context_present() {
@@ -77,5 +79,4 @@ mod tests {
         let context = load_project_context(dir.path());
         assert_eq!(context, None);
     }
-
 }

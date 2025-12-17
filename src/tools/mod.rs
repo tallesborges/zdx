@@ -6,11 +6,12 @@
 pub mod bash;
 pub mod read;
 
+use std::path::PathBuf;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::path::PathBuf;
-use std::time::Duration;
 
 /// Tool definition for the Anthropic API.
 #[derive(Debug, Clone, Serialize)]
@@ -117,9 +118,10 @@ pub struct ToolUse {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use serde_json::json;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_execute_tool_times_out() {

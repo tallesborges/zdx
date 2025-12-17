@@ -5,10 +5,11 @@
 
 mod fixtures;
 
+use std::fs;
+
 use assert_cmd::cargo::cargo_bin_cmd;
 use fixtures::{sse_response, text_sse};
 use predicates::prelude::*;
-use std::fs;
 use tempfile::TempDir;
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};

@@ -3,11 +3,12 @@
 //! Allows the agent to run shell commands with safety guards.
 //! Requires `--allow-bash` flag or the tool returns "denied".
 
+use std::process::Stdio;
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::process::Stdio;
-use std::time::Duration;
 
 use super::{ToolContext, ToolDefinition};
 
@@ -105,8 +106,9 @@ async fn run_command(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tempfile::TempDir;
+
+    use super::*;
 
     #[tokio::test]
     async fn test_bash_executes_command() {

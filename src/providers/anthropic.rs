@@ -733,8 +733,9 @@ impl ChatMessage {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use futures_util::StreamExt;
+
+    use super::*;
 
     /// SSE fixture simulating a typical Anthropic streaming response
     const SSE_TEXT_RESPONSE: &str = r#"event: message_start

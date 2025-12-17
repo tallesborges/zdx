@@ -3,10 +3,11 @@
 //! Provides a REPL-style chat interface that maintains conversation history.
 //! Responses are streamed token-by-token for real-time feedback.
 
-use anyhow::{Result, bail};
-use futures_util::StreamExt;
 use std::io::{BufRead, Write};
 use std::path::PathBuf;
+
+use anyhow::{Result, bail};
+use futures_util::StreamExt;
 
 use crate::config::Config;
 use crate::providers::anthropic::{
