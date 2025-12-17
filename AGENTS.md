@@ -1,5 +1,9 @@
 # Repository Guidelines
 
+> **See also:** [SPEC.md](./SPEC.md) for product values, contracts, and non-goals.
+> SPEC.md is the source of truth for *what ZDX is* and *how it should behave*.
+> This file (AGENTS.md) covers *how to develop* the codebase.
+
 ## Project Structure & Module Organization
 
 - `src/main.rs`: CLI entrypoint; wires subcommands to implementations.
