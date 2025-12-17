@@ -134,7 +134,14 @@ where
                     continue;
                 }
                 Err(e) => {
-                    writeln!(output, "Error: {}", e)?;
+                    if e.downcast_ref::<crate::interrupt::InterruptedError>().is_some() {
+                        if let Some(ref s) = session {
+                            let _ = s.append(&SessionEvent::interrupted());
+                        }
+                        crate::interrupt::reset();
+                    } else {
+                        writeln!(output, "Error: {}", e)?;
+                    }
                     // Remove the failed user message from history
                     history.pop();
                     break String::new();
@@ -201,6 +208,9 @@ async fn stream_response<W: Write>(
 
     // Process stream events
     while let Some(event_result) = stream.next().await {
+        if crate::interrupt::is_interrupted() {
+            return Err(crate::interrupt::InterruptedError.into());
+        }
         let event = event_result?;
 
         match event {
@@ -308,6 +318,9 @@ fn execute_tool_uses(tool_uses: &[ToolUseBuilder], ctx: &ToolContext) -> Result<
     let mut results = Vec::new();
 
     for tu in tool_uses {
+        if crate::interrupt::is_interrupted() {
+            return Err(crate::interrupt::InterruptedError.into());
+        }
         eprint!("⚙ Running {}...", tu.name);
         let _ = std::io::stderr().flush();
 

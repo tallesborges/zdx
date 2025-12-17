@@ -43,6 +43,16 @@ impl SessionEvent {
             ts: chrono_timestamp(),
         }
     }
+
+    /// Creates a new interrupted event.
+    pub fn interrupted() -> Self {
+        Self {
+            event_type: "interrupted".to_string(),
+            role: "system".to_string(),
+            text: "Interrupted".to_string(),
+            ts: chrono_timestamp(),
+        }
+    }
 }
 
 /// Returns an ISO 8601 timestamp string.
@@ -308,6 +318,14 @@ mod tests {
         assert_eq!(events[0].text, "hello");
         assert_eq!(events[1].role, "assistant");
         assert_eq!(events[1].text, "hi there");
+    }
+
+    #[test]
+    fn test_session_event_interrupted_serializes() {
+        let event = SessionEvent::interrupted();
+        let json = serde_json::to_string(&event).unwrap();
+        assert!(json.contains("\"type\":\"interrupted\""));
+        assert!(json.contains("\"role\":\"system\""));
     }
 
     #[test]

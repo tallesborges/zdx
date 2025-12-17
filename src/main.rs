@@ -3,6 +3,7 @@ mod chat;
 mod cli;
 mod config;
 mod context;
+mod interrupt;
 mod paths;
 mod providers;
 mod session;
@@ -15,6 +16,9 @@ use session::SessionOptions;
 
 fn main() {
     if let Err(e) = main_result() {
+        if e.downcast_ref::<interrupt::InterruptedError>().is_some() {
+            std::process::exit(130);
+        }
         eprintln!("{:#}", e); // pretty anyhow chain
         std::process::exit(1);
     }
@@ -22,6 +26,8 @@ fn main() {
 
 fn main_result() -> Result<()> {
     let cli = Cli::parse();
+
+    interrupt::init();
 
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
