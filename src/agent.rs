@@ -41,6 +41,7 @@ pub async fn execute_prompt(
 ) -> Result<String> {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
+    let system_prompt = config.effective_system_prompt()?;
 
     // Log user message to session
     if let Some(s) = session {
@@ -54,7 +55,9 @@ pub async fn execute_prompt(
 
     // Tool loop - keep going until we get a final response
     loop {
-        let response = client.send_messages(&messages, &tools).await?;
+        let response = client
+            .send_messages(&messages, &tools, system_prompt.as_deref())
+            .await?;
 
         if response.has_tool_use() {
             // Process tool calls
@@ -96,6 +99,7 @@ pub async fn execute_prompt_streaming(
 ) -> Result<String> {
     let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
     let client = AnthropicClient::new(anthropic_config);
+    let system_prompt = config.effective_system_prompt()?;
 
     // Log user message to session
     if let Some(s) = session {
@@ -110,7 +114,9 @@ pub async fn execute_prompt_streaming(
 
     // Tool loop - keep going until we get a final response
     loop {
-        let mut stream = client.send_messages_stream(&messages, &tools).await?;
+        let mut stream = client
+            .send_messages_stream(&messages, &tools, system_prompt.as_deref())
+            .await?;
 
         // State for accumulating the current response
         let mut full_text = String::new();
