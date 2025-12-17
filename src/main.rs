@@ -52,7 +52,9 @@ fn main_result() -> Result<()> {
         };
 
         match command {
-            Commands::Exec { prompt } => run_exec(&cli.root, &cli.session_args, &prompt, &config).await,
+            Commands::Exec { prompt } => {
+                run_exec(&cli.root, &cli.session_args, &prompt, &config).await
+            }
 
             Commands::Sessions { command } => match command {
                 SessionCommands::List => {
@@ -101,7 +103,11 @@ fn main_result() -> Result<()> {
     })
 }
 
-async fn run_chat(root: &str, session_args: &cli::SessionArgs, config: &config::Config) -> Result<()> {
+async fn run_chat(
+    root: &str,
+    session_args: &cli::SessionArgs,
+    config: &config::Config,
+) -> Result<()> {
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
