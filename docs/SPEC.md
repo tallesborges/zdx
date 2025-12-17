@@ -128,6 +128,29 @@ ZDX aims for a minimal tool set:
 * `bash` (shell)
 * later: `write`, `edit` (authoring)
 
+### Path resolution rules
+
+* If a `path` is **absolute**, use it as-is.
+* If a `path` is **relative**, resolve relative to `--root` if provided, else current working directory.
+* Path canonicalization is allowed for correctness, not for sandboxing guarantees.
+* `--root` is treated as a **working directory context**, not a security boundary (YOLO).
+
+### Tool result envelope (all tools)
+
+All tool outputs use a consistent JSON envelope:
+
+**Success:**
+```json
+{ "ok": true, "data": { ... } }
+```
+
+**Error:**
+```json
+{ "ok": false, "error": { "code": "ENOENT", "message": "File not found" } }
+```
+
+This ensures tool results are deterministic and parseable.
+
 ### Tool definitions (current / v0.2.x)
 
 #### `read`
@@ -135,29 +158,98 @@ ZDX aims for a minimal tool set:
 * **Purpose:** Read file contents.
 * **Input schema:**
 
-  * `{ "path": "string" }`
-* **Output:** plain text string (file contents) OR structured error.
-* **Path behavior:**
+  ```json
+  { "path": "string", "max_bytes": 262144 }
+  ```
 
-  * Paths are resolved relative to the current execution context.
-  * If `--root` exists, it is treated as a **working directory context**, not a security boundary (YOLO).
-  * Path canonicalization is allowed for correctness, not for sandboxing guarantees.
+  * `max_bytes` is optional (default: 256KB)
+
+* **Output schema:**
+
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "path": "...",
+      "content": "...",
+      "truncated": false,
+      "bytes": 12345
+    }
+  }
+  ```
+
+* **Truncation:** If file exceeds `max_bytes`, content is truncated and `truncated: true`.
 
 #### `bash`
 
 * **Purpose:** Execute a shell command.
 * **Input schema:**
 
-  * `{ "command": "string" }`
-* **Output schema (recommended):**
+  ```json
+  { "command": "string" }
+  ```
 
-  * `{ "stdout": "string", "stderr": "string", "exit_code": number }`
-* **Execution context:**
+* **Output schema:**
 
-  * Runs in the current directory or `--root` directory if provided.
-* **Timeout:**
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "stdout": "...",
+      "stderr": "...",
+      "exit_code": 0,
+      "timed_out": false
+    }
+  }
+  ```
 
-  * Controlled by `tool_timeout_secs` (config)
+* **Shell invocation:** Commands run via `sh -lc "<command>"` for POSIX portability.
+* **Execution context:** Runs in the current directory or `--root` directory if provided.
+* **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`.
+* **Output limits:** stdout/stderr are truncated to a reasonable limit (e.g., 256KB each) with truncation indicated.
+
+#### `write` (v0.2.2)
+
+* **Purpose:** Create or overwrite a file; auto-create parent directories.
+* **Input schema:**
+
+  ```json
+  { "path": "string", "content": "string" }
+  ```
+
+* **Output schema:**
+
+  ```json
+  { "ok": true, "data": { "path": "...", "bytes_written": 123 } }
+  ```
+
+#### `edit` (v0.2.3)
+
+* **Purpose:** Surgical text replacement with explicit failure modes.
+* **Input schema:**
+
+  ```json
+  {
+    "path": "string",
+    "old": "string",
+    "new": "string",
+    "expected_replacements": 1
+  }
+  ```
+
+  * `expected_replacements` is optional (default: 1)
+
+* **Output schema:**
+
+  ```json
+  { "ok": true, "data": { "path": "...", "replacements": 1 } }
+  ```
+
+* **Failure modes:**
+
+  * `old` text not found
+  * replacements count != `expected_replacements`
+  * file not readable/writable
 
 ### Tool loop correctness requirements
 
@@ -177,8 +269,9 @@ The engine emits events for renderers (CLI now, TUI later).
 
 * `AssistantDelta { text }` — incremental text chunk
 * `AssistantFinal { text }` — completed message
-* `ToolStarted { id, name }`
-* `ToolFinished { id, result }`
+* `ToolRequested { id, name, input }` — model decided to call a tool
+* `ToolStarted { id, name }` — tool execution begins
+* `ToolFinished { id, result }` — tool execution complete
 * `Error { message }`
 * `Interrupted`
 
@@ -202,25 +295,59 @@ The engine emits events for renderers (CLI now, TUI later).
 
 ### Storage location
 
-* Default base directory: `~/.config/zdx/`
-* Override base directory: `$ZDX_HOME`
+* Default base directory: `$XDG_CONFIG_HOME/zdx/` if set, otherwise `~/.config/zdx/`
+* Override base directory: `$ZDX_HOME` (takes precedence over XDG)
 * Sessions directory:
 
-  * `~/.config/zdx/sessions/` or `$ZDX_HOME/sessions/`
+  * `<base>/sessions/`
+  * Note: Sessions are technically state/data, but kept under config dir for simplicity.
 
 ### File format
 
 * Sessions are **JSONL (append-only)** event logs.
 
+### Timestamp format
+
+* All timestamps (`ts`) are **RFC3339 UTC** (e.g., `2025-12-17T03:21:09Z`).
+
+### Schema versioning
+
+* First line of every session file must be a meta event:
+
+  ```json
+  { "type": "meta", "schema_version": 1, "ts": "..." }
+  ```
+
+* Schema version increments when event shapes change incompatibly.
+
 ### Minimum event schema (current)
 
-* Message:
+* **Meta** (first line):
+
+  ```json
+  { "type": "meta", "schema_version": 1, "ts": "..." }
+  ```
+
+* **Message:**
 
   ```json
   { "type": "message", "role": "user", "text": "...", "ts": "..." }
   { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
   ```
-* Interrupted:
+
+* **Tool use** (model requests a tool):
+
+  ```json
+  { "type": "tool_use", "id": "...", "name": "read", "input": { "path": "..." }, "ts": "..." }
+  ```
+
+* **Tool result** (tool execution output):
+
+  ```json
+  { "type": "tool_result", "tool_use_id": "...", "output": { ... }, "ok": true, "ts": "..." }
+  ```
+
+* **Interrupted:**
 
   ```json
   { "type": "interrupted", "role": "system", "text": "Interrupted", "ts": "..." }
@@ -284,13 +411,17 @@ The engine emits events for renderers (CLI now, TUI later).
 * `--root <ROOT>` (if present):
 
   * interpreted as a working directory context (not a sandbox)
+* `--format <text|json>`:
+
+  * `text` (default): human-readable output
+  * `json`: machine-readable output (schema versioned; stable from v0.5+)
 
 ### Output channel rules (terminal-first)
 
 * **stdout**:
 
-  * assistant text (and only assistant text) in default `--format text`
-  * machine output if `--format json`
+  * assistant text (and only assistant text) in `--format text`
+  * structured JSON events in `--format json`
 * **stderr**:
 
   * logs, tool status lines, diagnostics, warnings, errors (human-readable)
