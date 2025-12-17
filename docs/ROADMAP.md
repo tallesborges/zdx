@@ -1,6 +1,8 @@
 # Roadmap
 
-> **Principle:** Build the "engine" once, then render it in CLI and later TUI.
+> **Principle:** Build the engine once, then render it in CLI now and TUI later.
+>
+> **Note:** ROADMAP describes outcomes (what/why). `docs/SPEC.md` is the source of truth for contracts.
 
 ---
 
@@ -33,33 +35,34 @@
 
 ---
 
-## Next — v0.2.x (Engine Extraction + Authoring Tools)
+## Next — v0.2.x (Engine-First Hardening + Authoring)
 
-**Goal:** Extract UI-agnostic engine and add code authoring capabilities.
+**Goal:** Make the engine/renderer split real, keep sessions durable, and unlock minimal authoring tools.
 
-### Foundational
-- [ ] UI-agnostic engine module (agent loop emits events, no printing)
-- [ ] `EngineEvent` as communication layer between engine and renderer
-- [ ] Provider testability (base URL override for testing)
+### v0.2.0 — Engine/renderer separation (SPEC-first)
+- [ ] UI-agnostic engine module (agent loop emits events; no printing/formatting)
+- [ ] Engine emits the required event types (per SPEC §7)
+- [ ] Renderer strictly enforces stdout/stderr rules (per SPEC §10)
+- [ ] Ctrl+C reliably records an interruption event (per SPEC §11)
 
-### Authoring Tools
-- [ ] `write` tool — create/overwrite files, auto-create parent directories
-- [ ] `edit` tool — exact text replacement (surgical edits)
+### v0.2.1 — Provider testability (offline)
+- [ ] Provider base URL override (env or config) to enable local/fixture tests (per SPEC §5)
+- [ ] Fixture-driven tests for streaming + tool loop parsing (no network)
+- [ ] Clear, stable error shaping for provider failures (stderr-friendly)
 
-### Providers
-- [ ] Multiple providers support (provider abstraction)
-- [ ] OpenAI provider
-- [ ] Gemini provider
-- [ ] Thinking/reasoning support (extended thinking, chain-of-thought)
+### v0.2.2 — Tool: `write` (minimal authoring)
+- [ ] `write` tool: create/overwrite files; auto-create parent directories (per SPEC §6 target)
+- [ ] Deterministic tool result shape (easy to parse; good errors)
 
-### Performance
-- [ ] Response caching (tool/provider)
+### v0.2.3 — Tool: `edit` (surgical edits)
+- [ ] `edit` tool: exact text replacement with explicit failure modes (per SPEC §6 target)
+- [ ] Deterministic tool result shape (easy to parse; good errors)
 
-### UX Improvements
-- [ ] System prompt profiles (`--profile <name>`)
-- [ ] `AGENTS.md` auto-inclusion
-- [ ] Clean error rendering to stderr
-- [ ] Improved transcript formatting
+### v0.2.4 — Terminal UX polish
+- [ ] `AGENTS.md` auto-inclusion (repo-local instruction discovery)
+- [ ] Cleaner, consistent error rendering to stderr (terminal-first)
+- [ ] Improved transcript formatting (readable defaults; pipe-friendly)
+- [ ] Optional system prompt profiles (only if it stays simple)
 
 ---
 
@@ -67,24 +70,26 @@
 
 **Goal:** Minimal TUI powered by the same engine event stream.
 
-- [ ] `zdx tui` command
-- [ ] Sessions list view
+### v0.3.0 — "Same engine" TUI baseline
+- [ ] `zdx tui` command (MVP)
+- [ ] Sessions list + resume
 - [ ] Chat view with streaming output
 - [ ] Tool activity panel
-- [ ] Keyboard navigation
-- [ ] Renderer parity (TUI and CLI consume same events)
+- [ ] Renderer parity (CLI + TUI consume the same engine events)
 
 ---
 
-## Later — v0.4.x (Context & Safety Options)
+## Later — v0.4.x (Context + Optional Guardrails)
 
 **Goal:** Enhanced context and optional mutation visibility.
 
-### UX
-- [ ] Diff preview for write/edit
-- [ ] Optional `--confirm` for mutation approval (opt-in; YOLO default per SPEC §2)
-- [ ] `--file <path>` context attachment
-- [ ] Project-aware context (conservative auto-include)
+### v0.4.0 — Explicit context attachments
+- [ ] `--file <path>` context attachment (explicit, user-driven)
+- [ ] Conservative project-aware context (only if predictable and low magic)
+
+### v0.4.1 — Optional mutation visibility (still YOLO default)
+- [ ] Diff preview for `write`/`edit`
+- [ ] Optional `--confirm` for mutations (opt-in; YOLO default per SPEC §2)
 
 ---
 
@@ -92,7 +97,8 @@
 
 **Goal:** Stable `exec` for scripts and tooling.
 
-- [ ] `exec --format json` with versioned schema
+### v0.5.0 — Script-friendly outputs (versioned)
+- [ ] `exec --format json` with a versioned schema
 - [ ] `--tool-results=full|summary|omit`
 - [ ] Exit codes locked down (per SPEC §10)
 - [ ] Structured event stream export
@@ -109,17 +115,21 @@
 
 ---
 
-## Later — v0.7.x+ (Extensibility)
+## Later — v0.7.x+ (Ergonomics + Optional Providers)
 
-**Goal:** Deeper workflows and quality-of-life features.
+**Goal:** Deeper workflows and quality-of-life improvements without bloating the core.
 
-- [ ] Local model support (Ollama, etc.)
+### Providers (optional)
+- [ ] Second provider (e.g., OpenAI) behind the same provider contract
+- [ ] Local model support (e.g., Ollama) if it doesn’t bloat the core
+
+### UX / Ergonomics
 - [ ] Expanded prompt profiles
 - [ ] Chat slash commands
 - [ ] Shell completions (`zdx completion <shell>`)
 
 ---
 
-## Far Future
+## Far Future (post v1.0)
 
-- [ ] Web UI for session browsing
+- [ ] Web UI for session browsing (out of scope for v0.x per SPEC)
