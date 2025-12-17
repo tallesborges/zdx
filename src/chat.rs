@@ -39,10 +39,8 @@ where
     let client = AnthropicClient::new(anthropic_config);
     let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
-    let tool_ctx = ToolContext::with_timeout(
-        root.canonicalize().unwrap_or(root),
-        config.tool_timeout(),
-    );
+    let tool_ctx =
+        ToolContext::with_timeout(root.canonicalize().unwrap_or(root), config.tool_timeout());
     run_chat_with_client(
         input,
         &mut output,
@@ -128,7 +126,10 @@ where
         let final_text = loop {
             match stream_response(output, client, &history, &tools, tool_ctx, system_prompt).await {
                 Ok(StreamResult::FinalText(text)) => break text,
-                Ok(StreamResult::ToolUse { assistant_blocks, tool_results }) => {
+                Ok(StreamResult::ToolUse {
+                    assistant_blocks,
+                    tool_results,
+                }) => {
                     // Add assistant's response (with tool_use blocks) to history
                     history.push(ChatMessage::assistant_blocks(assistant_blocks));
                     // Add tool results as user message
@@ -137,7 +138,9 @@ where
                     continue;
                 }
                 Err(e) => {
-                    if e.downcast_ref::<crate::interrupt::InterruptedError>().is_some() {
+                    if e.downcast_ref::<crate::interrupt::InterruptedError>()
+                        .is_some()
+                    {
                         if let Some(ref s) = session {
                             let _ = s.append(&SessionEvent::interrupted());
                         }
@@ -348,8 +351,6 @@ async fn execute_tool_uses(
     Ok(results)
 }
 
-
-
 /// Runs the chat loop with stdin/stdout.
 pub async fn run_interactive_chat(
     config: &Config,
@@ -373,10 +374,8 @@ pub async fn run_interactive_chat_with_history(
     let client = AnthropicClient::new(anthropic_config);
     let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
-    let tool_ctx = ToolContext::with_timeout(
-        root.canonicalize().unwrap_or(root),
-        config.tool_timeout(),
-    );
+    let tool_ctx =
+        ToolContext::with_timeout(root.canonicalize().unwrap_or(root), config.tool_timeout());
 
     writeln!(stdout, "ZDX Chat (type :q to quit)")?;
     if let Some(ref s) = session {

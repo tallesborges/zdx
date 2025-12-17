@@ -42,7 +42,10 @@ pub struct ToolContext {
 impl ToolContext {
     #[allow(dead_code)]
     pub fn new(root: PathBuf) -> Self {
-        Self { root, timeout: None }
+        Self {
+            root,
+            timeout: None,
+        }
     }
 
     pub fn with_timeout(root: PathBuf, timeout: Option<Duration>) -> Self {
@@ -89,7 +92,7 @@ async fn execute_read(input: &Value, ctx: &ToolContext) -> Result<String> {
     let timeout = ctx.timeout;
     let mut handle = tokio::task::spawn_blocking(move || read::execute(&input, &ctx));
 
-    let result = match timeout {
+    match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, &mut handle).await {
             Ok(joined) => joined.context("tool execution panicked")?,
             Err(_) => {
@@ -101,9 +104,7 @@ async fn execute_read(input: &Value, ctx: &ToolContext) -> Result<String> {
             }
         },
         None => handle.await.context("tool execution panicked")?,
-    };
-
-    result
+    }
 }
 
 /// A tool use request from the model.
@@ -123,10 +124,13 @@ mod tests {
     #[tokio::test]
     async fn test_execute_tool_times_out() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
+        let ctx =
+            ToolContext::with_timeout(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
         let input = json!({"command": "sleep 2"});
 
-        let result = execute_tool("bash", "toolu_timeout", &input, &ctx).await.unwrap();
+        let result = execute_tool("bash", "toolu_timeout", &input, &ctx)
+            .await
+            .unwrap();
         assert!(result.is_error);
         assert!(result.content.contains("timed out"));
     }

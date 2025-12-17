@@ -129,7 +129,11 @@ async fn test_bash_runs_in_root_directory() {
 async fn test_bash_times_out_when_configured() {
     let temp_dir = TempDir::new().unwrap();
     let zdx_home = TempDir::new().unwrap();
-    std::fs::write(zdx_home.path().join("config.toml"), "tool_timeout_secs = 1\n").unwrap();
+    std::fs::write(
+        zdx_home.path().join("config.toml"),
+        "tool_timeout_secs = 1\n",
+    )
+    .unwrap();
 
     let mock_server = MockServer::start().await;
 

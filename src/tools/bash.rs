@@ -55,7 +55,11 @@ impl std::fmt::Display for BashOutput {
 }
 
 /// Executes the bash tool.
-pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>) -> Result<String> {
+pub async fn execute(
+    input: &Value,
+    ctx: &ToolContext,
+    timeout: Option<Duration>,
+) -> Result<String> {
     let input: BashInput =
         serde_json::from_value(input.clone()).context("Invalid input for bash tool")?;
 
@@ -64,7 +68,11 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
 }
 
 /// Runs a shell command in the context's root directory.
-async fn run_command(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> Result<BashOutput> {
+async fn run_command(
+    command: &str,
+    ctx: &ToolContext,
+    timeout: Option<Duration>,
+) -> Result<BashOutput> {
     let child = tokio::process::Command::new("sh")
         .arg("-c")
         .arg(command)
