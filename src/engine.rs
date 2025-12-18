@@ -10,11 +10,29 @@ use futures_util::StreamExt;
 use serde_json::Value;
 
 use crate::config::Config;
-use crate::events::EngineEvent;
+use crate::events::{EngineEvent, ErrorKind};
 use crate::providers::anthropic::{
-    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, StreamEvent,
+    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
 use crate::tools::{self, ToolContext, ToolResult};
+
+/// Extracts a ProviderError from an anyhow::Error if present and emits it to the sink.
+/// Falls back to an Internal error kind if no ProviderError is found.
+fn emit_error_from_anyhow(err: &anyhow::Error, sink: &mut EventSink) {
+    if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
+        sink(EngineEvent::Error {
+            kind: provider_err.kind.clone().into(),
+            message: provider_err.message.clone(),
+            details: provider_err.details.clone(),
+        });
+    } else {
+        sink(EngineEvent::Error {
+            kind: ErrorKind::Internal,
+            message: err.to_string(),
+            details: None,
+        });
+    }
+}
 
 /// Options for engine execution.
 #[derive(Debug, Clone)]
@@ -83,9 +101,16 @@ pub async fn run_turn(
             return Err(crate::interrupt::InterruptedError.into());
         }
 
-        let mut stream = client
+        let mut stream = match client
             .send_messages_stream(&messages, &tools, system_prompt)
-            .await?;
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                emit_error_from_anyhow(&e, &mut sink);
+                return Err(e);
+            }
+        };
 
         // State for accumulating the current response
         let mut full_text = String::new();
@@ -99,7 +124,13 @@ pub async fn run_turn(
                 return Err(crate::interrupt::InterruptedError.into());
             }
 
-            let event = event_result?;
+            let event = match event_result {
+                Ok(e) => e,
+                Err(e) => {
+                    emit_error_from_anyhow(&e, &mut sink);
+                    return Err(e);
+                }
+            };
 
             match event {
                 StreamEvent::TextDelta { text, .. } => {
@@ -140,11 +171,13 @@ pub async fn run_turn(
                     error_type,
                     message,
                 } => {
-                    let error_msg = format!("API error ({}): {}", error_type, message);
+                    let provider_err = ProviderError::api_error(&error_type, &message);
                     sink(EngineEvent::Error {
-                        message: error_msg.clone(),
+                        kind: ErrorKind::ApiError,
+                        message: provider_err.message.clone(),
+                        details: provider_err.details.clone(),
                     });
-                    bail!("{}", error_msg);
+                    bail!("{}", provider_err.message);
                 }
                 // Ignore other events (Ping, MessageStart, ContentBlockStop, MessageStop)
                 _ => {}

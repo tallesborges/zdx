@@ -3,8 +3,12 @@
 //! This module defines the contract for events emitted by the engine.
 //! Events are serializable for future JSON output mode support.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+
+use crate::providers::anthropic::ProviderErrorKind;
 
 /// Events emitted by the engine during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,10 +34,60 @@ pub enum EngineEvent {
     ToolFinished { id: String, result: ToolOutput },
 
     /// An error occurred during execution.
-    Error { message: String },
+    Error {
+        /// Error category for structured handling
+        kind: ErrorKind,
+        /// One-line summary
+        message: String,
+        /// Optional additional details
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<String>,
+    },
 
     /// Execution was interrupted (e.g., by user signal).
     Interrupted,
+}
+
+/// Error categories for EngineEvent::Error.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ErrorKind {
+    /// HTTP status error (4xx, 5xx)
+    HttpStatus,
+    /// Connection/request timeout
+    Timeout,
+    /// Response parsing failed
+    Parse,
+    /// API-level error from provider
+    ApiError,
+    /// Configuration error
+    Config,
+    /// Internal/unknown error
+    Internal,
+}
+
+impl From<ProviderErrorKind> for ErrorKind {
+    fn from(kind: ProviderErrorKind) -> Self {
+        match kind {
+            ProviderErrorKind::HttpStatus => ErrorKind::HttpStatus,
+            ProviderErrorKind::Timeout => ErrorKind::Timeout,
+            ProviderErrorKind::Parse => ErrorKind::Parse,
+            ProviderErrorKind::ApiError => ErrorKind::ApiError,
+        }
+    }
+}
+
+impl fmt::Display for ErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ErrorKind::HttpStatus => write!(f, "http_status"),
+            ErrorKind::Timeout => write!(f, "timeout"),
+            ErrorKind::Parse => write!(f, "parse"),
+            ErrorKind::ApiError => write!(f, "api_error"),
+            ErrorKind::Config => write!(f, "config"),
+            ErrorKind::Internal => write!(f, "internal"),
+        }
+    }
 }
 
 /// Structured envelope for tool outputs (per SPEC §6).
@@ -82,5 +136,3 @@ pub struct ToolError {
     pub code: String,
     pub message: String,
 }
-
-
