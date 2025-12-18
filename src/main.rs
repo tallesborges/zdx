@@ -8,6 +8,7 @@ mod events;
 mod interrupt;
 mod paths;
 mod providers;
+mod renderer;
 mod session;
 mod tools;
 

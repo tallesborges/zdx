@@ -387,3 +387,80 @@ async fn test_exec_includes_agents_md_context() {
         body
     );
 }
+
+/// Tests that stdout contains ONLY assistant text during tool use.
+/// Tool indicators and status messages must go to stderr only.
+#[tokio::test]
+async fn test_exec_stdout_contains_only_assistant_text() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = call_count.clone();
+
+    // First response: tool_use request (model wants to run a command)
+    let tool_use_body = tool_use_sse("toolu_test123", "bash", r#"{"command": "echo hello"}"#);
+    // Second response: final text after tool result
+    let final_response = fixtures::text_sse("The command ran successfully.");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |_req: &wiremock::Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                sse_response(&tool_use_body)
+            } else {
+                sse_response(&final_response)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    let output = cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save", "exec", "-p", "run echo hello"])
+        .output()
+        .expect("Failed to execute command");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // stdout should contain only assistant text
+    assert!(
+        stdout.contains("The command ran successfully."),
+        "stdout should contain assistant text. Got stdout: '{}'",
+        stdout
+    );
+
+    // stdout should NOT contain tool indicators
+    assert!(
+        !stdout.contains("⚙"),
+        "stdout should not contain tool indicator emoji. Got stdout: '{}'",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Running"),
+        "stdout should not contain 'Running' (tool status). Got stdout: '{}'",
+        stdout
+    );
+    assert!(
+        !stdout.contains("Done"),
+        "stdout should not contain 'Done' (tool status). Got stdout: '{}'",
+        stdout
+    );
+
+    // stderr should contain tool indicators
+    assert!(
+        stderr.contains("⚙ Running bash"),
+        "stderr should contain tool indicator. Got stderr: '{}'",
+        stderr
+    );
+    assert!(
+        stderr.contains("Done"),
+        "stderr should contain 'Done'. Got stderr: '{}'",
+        stderr
+    );
+}
