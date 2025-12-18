@@ -8,8 +8,7 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
-        .stdout(predicate::str::contains("sessions"))
-        .stdout(predicate::str::contains("resume"));
+        .stdout(predicate::str::contains("sessions"));
 }
 
 #[test]
@@ -19,7 +18,8 @@ fn test_sessions_help_shows_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))
-        .stdout(predicate::str::contains("show"));
+        .stdout(predicate::str::contains("show"))
+        .stdout(predicate::str::contains("resume"));
 }
 
 #[test]
