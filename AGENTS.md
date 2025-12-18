@@ -1,8 +1,10 @@
 # Repository Guidelines
 
-> **See also:** [SPEC.md](./docs/SPEC.md) for product values, contracts, and non-goals.
-> SPEC.md is the source of truth for *what ZDX is* and *how it should behave*.
-> This file (AGENTS.md) covers *how to develop* the codebase.
+> **See also:** [SPEC.md](./docs/SPEC.md) for product values, contracts, and non-goals.  
+> SPEC.md is the source of truth for *what ZDX is* and *how it should behave*.  
+> This file (AGENTS.md) covers *how to develop* the codebase.  
+>
+> **Decision log:** `docs/adr/` contains Architecture Decision Records (ADRs) explaining *why* we made notable choices.
 
 ## Project Structure & Module Organization
 
@@ -59,19 +61,41 @@ Run a single integration test file: `cargo test --test config_path`.
 - Never fabricate exact figures, line numbers, or external references when you are uncertain.
 - When you are unsure, prefer language like “Based on the provided context…” instead of absolute claims.
 
-## Documentation Protocol (SPEC / ROADMAP / PLAN)
+## Documentation Protocol (SPEC / ROADMAP / PLAN / ADR)
 
-ZDX uses three docs with different responsibilities:
+ZDX uses four docs with different responsibilities:
 
-- **SPEC.md** = values + contracts + non-goals (source of truth)
+- **SPEC.md** = values + contracts + non-goals (**source of truth**)
 - **ROADMAP.md** = high-level versions + outcomes (what/why, not how)
 - **PLAN_vX.Y.md** = concrete, commit-sized implementation plan (how)
+- **docs/adr/*.md** = **Architecture Decision Records** (why we chose a path, tradeoffs, consequences)
 
 ### Golden rules
-1) **SPEC.md wins**. ROADMAP/PLAN must not contradict SPEC values (KISS/YAGNI, terminal-first, YOLO default, engine-first).
+1) **SPEC.md wins.** ROADMAP/PLAN/ADR must not contradict SPEC values (KISS/YAGNI, terminal-first, YOLO default, engine-first).
 2) **Only update SPEC.md when a contract/value changes.** Refactors that don’t change observable behavior do not require SPEC changes.
-3) **ROADMAP.md tracks “what’s next”** (features grouped by version). Implementation details belong in PLAN.
-4) **PLAN is commit-sized**: each step has a runnable deliverable + at least one test (or a short justification).
+3) **ROADMAP.md tracks “what’s next”.** No implementation detail.
+4) **PLAN is commit-sized.** Each step has a runnable deliverable + at least one test (or a short justification).
+5) **ADRs are for durable decisions** (the “why”), not for restating SPEC/PLAN:
+   - ADRs should not re-document CLI/schema contracts (that belongs in SPEC).
+   - ADRs should not contain task lists (that belongs in PLAN).
+
+### ADR rules
+Write an ADR when you make a decision that is:
+- Hard to reverse (format/storage/layout), OR
+- Has meaningful tradeoffs (perf vs simplicity, strict vs flexible), OR
+- Likely to be questioned later (“why not X?”), OR
+- Impacts multiple modules or future features.
+
+Conventions:
+- Location: `docs/adr/`
+- Filename: `NNNN-short-slug.md` (e.g., `0001-session-format-jsonl.md`)
+- Status: `Proposed | Accepted | Superseded by ADR-XXXX`
+- Prefer **superseding** an ADR over rewriting history.
+
+Linking:
+- SPEC sections affected by a decision should link to the ADR (“see ADR-0001”).
+- PLAN steps may reference ADRs for rationale.
+- PRs/commits should reference ADR numbers when relevant.
 
 ---
 
@@ -82,7 +106,8 @@ You must:
 1) Decide **which version** it belongs to (or propose one).
 2) Update **ROADMAP.md** by inserting the item in the correct version section.
 3) Check whether the feature changes any SPEC contract. If yes, update **SPEC.md**.
-4) (Optional) If asked, create **PLAN_vX.Y.md** with commit-sized steps.
+4) If adding the feature requires a notable design choice/tradeoff, create a short **ADR** in `docs/adr/`.
+5) (Optional) If asked, create **PLAN_vX.Y.md** with commit-sized steps.
 
 ### B) If the request is "Implement feature X"
 You must:
@@ -94,9 +119,11 @@ You must:
    - engine event stream contract
    - tools (name/input/output semantics, timeouts)
    - provider behavior that affects user-visible output
-3) Update **ROADMAP.md** to reflect status:
+3) If implementation requires a non-trivial decision (format choice, interface boundary, error model, storage rules),
+   create/update an **ADR** in `docs/adr/` and link it from SPEC/PLAN as appropriate.
+4) Update **ROADMAP.md** to reflect status:
    - move item to “Shipped” or mark partially shipped
-4) Generate **PLAN_vX.Y.md** (or update it) as a list of micro-commits:
+5) Generate **PLAN_vX.Y.md** (or update it) as a list of micro-commits:
    - each commit: goal, deliverable, CLI demo command(s), files touched, tests, edge cases
 
 ---
@@ -191,6 +218,7 @@ Avoid “half-integrations”:
 
 When I ask you to add/implement a feature, respond with:
 
+0) **ADR changes** (only if needed / created / superseded)
 1) **SPEC.md changes** (only if needed)
 2) **ROADMAP.md changes** (always if feature affects roadmap)
 3) **PLAN_vX.Y.md** (only if I asked for a plan or implementation)
