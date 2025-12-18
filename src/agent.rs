@@ -68,7 +68,8 @@ pub async fn execute_prompt_streaming(
     let engine_opts = EngineOptions::from(options);
 
     // Create a combined sink that handles both rendering and session persistence
-    let sink = create_persisting_sink(session.clone());
+    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
+    let sink = create_persisting_sink(session.clone(), renderer.clone());
 
     let (final_text, _messages) = engine::run_turn(
         messages,
@@ -79,10 +80,8 @@ pub async fn execute_prompt_streaming(
     )
     .await?;
 
-    // Print final newline after streaming completes
-    if !final_text.is_empty() {
-        println!();
-    }
+    // Finish rendering (prints final newline if needed)
+    renderer.lock().unwrap().finish();
 
     // Log assistant response to session
     if let Some(ref s) = session {
@@ -95,15 +94,12 @@ pub async fn execute_prompt_streaming(
 }
 
 /// Creates an EventSink that renders to CLI and persists tool events to session.
-fn create_persisting_sink(session: Option<Arc<Mutex<Session>>>) -> EventSink {
-    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
-    let needs_newline = Arc::new(Mutex::new(false));
-
-    let renderer_clone = renderer.clone();
-    let needs_newline_clone = needs_newline.clone();
-
+fn create_persisting_sink(
+    session: Option<Arc<Mutex<Session>>>,
+    renderer: Arc<Mutex<CliRenderer>>,
+) -> EventSink {
     Box::new(move |event: EngineEvent| {
-        // Persist tool events to session
+        // Persist tool and interrupt events to session
         if let Some(ref s) = session {
             match &event {
                 EngineEvent::ToolRequested { id, name, input } => {
@@ -121,16 +117,15 @@ fn create_persisting_sink(session: Option<Arc<Mutex<Session>>>) -> EventSink {
                         result.is_ok(),
                     ));
                 }
+                EngineEvent::Interrupted => {
+                    // Persist interrupted event (best-effort, per SPEC §10)
+                    let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
+                }
                 _ => {}
             }
         }
 
-        // Track if we need final newline
-        if matches!(&event, EngineEvent::AssistantDelta { text } if !text.is_empty()) {
-            *needs_newline_clone.lock().unwrap() = true;
-        }
-
         // Render to CLI
-        renderer_clone.lock().unwrap().handle_event(event);
+        renderer.lock().unwrap().handle_event(event);
     })
 }
