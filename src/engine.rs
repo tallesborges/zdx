@@ -61,7 +61,11 @@ pub async fn run_turn(
     system_prompt: Option<&str>,
     mut sink: EventSink,
 ) -> Result<(String, Vec<ChatMessage>)> {
-    let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
+    let anthropic_config = AnthropicConfig::from_env(
+        config.model.clone(),
+        config.max_tokens,
+        config.effective_anthropic_base_url(),
+    )?;
     let client = AnthropicClient::new(anthropic_config);
 
     let tool_ctx = ToolContext::with_timeout(

@@ -29,6 +29,9 @@ pub struct Config {
 
     /// Timeout for tool execution in seconds (0 disables)
     pub tool_timeout_secs: u32,
+
+    /// Optional Anthropic API base URL (for test rigs or proxies)
+    pub anthropic_base_url: Option<String>,
 }
 
 impl Config {
@@ -76,6 +79,14 @@ impl Config {
         }
     }
 
+    /// Returns the effective Anthropic base URL from config, if set.
+    /// Empty strings are treated as unset.
+    pub fn effective_anthropic_base_url(&self) -> Option<&str> {
+        self.anthropic_base_url
+            .as_deref()
+            .filter(|s| !s.trim().is_empty())
+    }
+
     /// Creates a default config file at the given path.
     /// Returns an error if the file already exists.
     pub fn init(path: &Path) -> Result<()> {
@@ -89,7 +100,7 @@ impl Config {
         }
 
         let toml = format!(
-            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\ntool_timeout_secs = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n",
+            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\ntool_timeout_secs = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n\n# anthropic_base_url = \"https://api.anthropic.com\"\n",
             Self::DEFAULT_MODEL,
             Self::DEFAULT_MAX_TOKENS,
             Self::DEFAULT_TOOL_TIMEOUT_SECS
@@ -110,6 +121,7 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
+            anthropic_base_url: None,
         }
     }
 }
@@ -231,5 +243,55 @@ mod tests {
         let mut config = Config::default();
         config.tool_timeout_secs = 0;
         assert_eq!(config.tool_timeout(), None);
+    }
+
+    #[test]
+    fn test_anthropic_base_url_from_config() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            "anthropic_base_url = \"https://my-proxy.example.com\"\n",
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(
+            config.effective_anthropic_base_url(),
+            Some("https://my-proxy.example.com")
+        );
+    }
+
+    #[test]
+    fn test_anthropic_base_url_empty_string_is_none() {
+        let mut config = Config::default();
+        config.anthropic_base_url = Some("".to_string());
+        assert_eq!(config.effective_anthropic_base_url(), None);
+    }
+
+    #[test]
+    fn test_anthropic_base_url_whitespace_is_none() {
+        let mut config = Config::default();
+        config.anthropic_base_url = Some("   ".to_string());
+        assert_eq!(config.effective_anthropic_base_url(), None);
+    }
+
+    #[test]
+    fn test_anthropic_base_url_default_is_none() {
+        let config = Config::default();
+        assert_eq!(config.anthropic_base_url, None);
+        assert_eq!(config.effective_anthropic_base_url(), None);
+    }
+
+    #[test]
+    fn test_init_includes_commented_anthropic_base_url() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        Config::init(&config_path).unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# anthropic_base_url"));
     }
 }

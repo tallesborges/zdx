@@ -2196,6 +2196,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "url",
  "uuid",
  "wiremock",
 ]
