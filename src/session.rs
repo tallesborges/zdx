@@ -1,7 +1,17 @@
 //! Session persistence for ZDX.
 //!
 //! Each session is stored as a JSONL file where each line is a JSON object
-//! representing a message event.
+//! representing an event. Sessions use schema versioning (§8 of SPEC).
+//!
+//! ## Schema v1 Format
+//!
+//! ```jsonl
+//! { "type": "meta", "schema_version": 1, "ts": "2025-12-17T03:21:09Z" }
+//! { "type": "message", "role": "user", "text": "...", "ts": "..." }
+//! { "type": "tool_use", "id": "...", "name": "read", "input": { "path": "..." }, "ts": "..." }
+//! { "type": "tool_result", "tool_use_id": "...", "output": { ... }, "ok": true, "ts": "..." }
+//! { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
+//! ```
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -11,24 +21,61 @@ use std::time::SystemTime;
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
 use crate::paths::sessions_dir;
 
-/// A session event representing a message in the conversation.
+/// Current schema version for new sessions.
+pub const SCHEMA_VERSION: u32 = 1;
+
+/// A session event (polymorphic, tag-based).
+///
+/// This enum represents all event types that can be persisted in a session.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionEvent {
-    #[serde(rename = "type")]
-    pub event_type: String,
-    pub role: String,
-    pub text: String,
-    pub ts: String,
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum SessionEvent {
+    /// Meta event: first line of a v1+ session file.
+    Meta { schema_version: u32, ts: String },
+
+    /// Message event: user or assistant text.
+    Message {
+        role: String,
+        text: String,
+        ts: String,
+    },
+
+    /// Tool use event: model requested a tool call.
+    ToolUse {
+        id: String,
+        name: String,
+        input: Value,
+        ts: String,
+    },
+
+    /// Tool result event: output from tool execution.
+    ToolResult {
+        tool_use_id: String,
+        output: Value,
+        ok: bool,
+        ts: String,
+    },
+
+    /// Interrupted event: session was interrupted by user.
+    Interrupted { ts: String },
 }
 
 impl SessionEvent {
+    /// Creates a new meta event with the current schema version.
+    pub fn meta() -> Self {
+        Self::Meta {
+            schema_version: SCHEMA_VERSION,
+            ts: chrono_timestamp(),
+        }
+    }
+
     /// Creates a new user message event.
     pub fn user_message(text: impl Into<String>) -> Self {
-        Self {
-            event_type: "message".to_string(),
+        Self::Message {
             role: "user".to_string(),
             text: text.into(),
             ts: chrono_timestamp(),
@@ -37,28 +84,55 @@ impl SessionEvent {
 
     /// Creates a new assistant message event.
     pub fn assistant_message(text: impl Into<String>) -> Self {
-        Self {
-            event_type: "message".to_string(),
+        Self::Message {
             role: "assistant".to_string(),
             text: text.into(),
             ts: chrono_timestamp(),
         }
     }
 
+    /// Creates a new tool use event.
+    pub fn tool_use(id: impl Into<String>, name: impl Into<String>, input: Value) -> Self {
+        Self::ToolUse {
+            id: id.into(),
+            name: name.into(),
+            input,
+            ts: chrono_timestamp(),
+        }
+    }
+
+    /// Creates a new tool result event.
+    pub fn tool_result(tool_use_id: impl Into<String>, output: Value, ok: bool) -> Self {
+        Self::ToolResult {
+            tool_use_id: tool_use_id.into(),
+            output,
+            ok,
+            ts: chrono_timestamp(),
+        }
+    }
+
     /// Creates a new interrupted event.
     pub fn interrupted() -> Self {
-        Self {
-            event_type: "interrupted".to_string(),
-            role: "system".to_string(),
-            text: "Interrupted".to_string(),
+        Self::Interrupted {
             ts: chrono_timestamp(),
+        }
+    }
+
+    /// Returns the event type as a string.
+    pub fn event_type(&self) -> &'static str {
+        match self {
+            Self::Meta { .. } => "meta",
+            Self::Message { .. } => "message",
+            Self::ToolUse { .. } => "tool_use",
+            Self::ToolResult { .. } => "tool_result",
+            Self::Interrupted { .. } => "interrupted",
         }
     }
 }
 
-/// Returns an ISO 8601 timestamp string.
+/// Returns an RFC3339 UTC timestamp string.
 fn chrono_timestamp() -> String {
-    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
 /// Manages a session file.
@@ -66,13 +140,21 @@ fn chrono_timestamp() -> String {
 pub struct Session {
     pub id: String,
     path: PathBuf,
+    /// Whether this is a new session (needs meta event written).
+    is_new: bool,
 }
 
 impl Session {
     /// Creates a new session with a generated ID.
     pub fn new() -> Result<Self> {
         let id = generate_session_id();
-        Self::with_id(id)
+        let dir = sessions_dir();
+        fs::create_dir_all(&dir).context("Failed to create sessions directory")?;
+
+        let path = dir.join(format!("{}.jsonl", id));
+        let is_new = !path.exists();
+
+        Ok(Self { id, path, is_new })
     }
 
     /// Creates or opens a session with a specific ID.
@@ -81,12 +163,22 @@ impl Session {
         fs::create_dir_all(&dir).context("Failed to create sessions directory")?;
 
         let path = dir.join(format!("{}.jsonl", id));
+        let is_new = !path.exists();
 
-        Ok(Self { id, path })
+        Ok(Self { id, path, is_new })
     }
 
-    /// Appends an event to the session file.
-    pub fn append(&self, event: &SessionEvent) -> Result<()> {
+    /// Ensures the meta event is written for new sessions.
+    fn ensure_meta(&mut self) -> Result<()> {
+        if self.is_new {
+            self.append_raw(&SessionEvent::meta())?;
+            self.is_new = false;
+        }
+        Ok(())
+    }
+
+    /// Appends an event to the session file (internal, no meta check).
+    fn append_raw(&self, event: &SessionEvent) -> Result<()> {
         let mut file = OpenOptions::new()
             .create(true)
             .append(true)
@@ -99,34 +191,82 @@ impl Session {
         Ok(())
     }
 
+    /// Appends an event to the session file.
+    ///
+    /// For new sessions, automatically writes the meta event first.
+    pub fn append(&mut self, event: &SessionEvent) -> Result<()> {
+        // Don't write meta before another meta
+        if !matches!(event, SessionEvent::Meta { .. }) {
+            self.ensure_meta()?;
+        }
+        self.append_raw(event)
+    }
+
     /// Reads all events from the session file.
-    #[allow(dead_code)] // Used in tests and will be used for resume feature
     pub fn read_events(&self) -> Result<Vec<SessionEvent>> {
-        if !self.path.exists() {
-            return Ok(Vec::new());
-        }
-
-        let file = fs::File::open(&self.path).context("Failed to open session file")?;
-        let reader = BufReader::new(file);
-        let mut events = Vec::new();
-
-        for line in reader.lines() {
-            let line = line.context("Failed to read line")?;
-            if line.trim().is_empty() {
-                continue;
-            }
-            let event: SessionEvent =
-                serde_json::from_str(&line).context("Failed to parse session event")?;
-            events.push(event);
-        }
-
-        Ok(events)
+        read_session_events(&self.path)
     }
 
     /// Returns the path to the session file.
     #[allow(dead_code)] // Used in tests
     pub fn path(&self) -> &PathBuf {
         &self.path
+    }
+}
+
+/// Reads session events from a file path, with backward compatibility.
+fn read_session_events(path: &PathBuf) -> Result<Vec<SessionEvent>> {
+    if !path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let file = fs::File::open(path).context("Failed to open session file")?;
+    let reader = BufReader::new(file);
+    let mut events = Vec::new();
+
+    for line in reader.lines() {
+        let line = line.context("Failed to read line")?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        // Try to parse as new SessionEvent format first
+        if let Ok(event) = serde_json::from_str::<SessionEvent>(&line) {
+            events.push(event);
+            continue;
+        }
+
+        // Fall back to legacy format (backward compatibility)
+        if let Ok(legacy) = serde_json::from_str::<LegacySessionEvent>(&line) {
+            events.push(legacy.into());
+        }
+        // Skip unparseable lines (best-effort)
+    }
+
+    Ok(events)
+}
+
+/// Legacy session event format (pre-v1 sessions).
+#[derive(Debug, Deserialize)]
+struct LegacySessionEvent {
+    #[serde(rename = "type")]
+    event_type: String,
+    role: String,
+    text: String,
+    ts: String,
+}
+
+impl From<LegacySessionEvent> for SessionEvent {
+    fn from(legacy: LegacySessionEvent) -> Self {
+        if legacy.event_type == "interrupted" {
+            SessionEvent::Interrupted { ts: legacy.ts }
+        } else {
+            SessionEvent::Message {
+                role: legacy.role,
+                text: legacy.text,
+                ts: legacy.ts,
+            }
+        }
     }
 }
 
@@ -190,17 +330,85 @@ pub fn latest_session_id() -> Result<Option<String>> {
 }
 
 /// Loads session events and converts them to ChatMessages for API use.
+///
+/// Reconstructs the full conversation including tool use/result pairs.
 pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
-    use crate::providers::anthropic::MessageContent;
+    use crate::providers::anthropic::{ChatContentBlock, ChatMessage, MessageContent};
+
     let events = load_session(id)?;
-    Ok(events
-        .into_iter()
-        .filter(|e| e.event_type == "message")
-        .map(|e| crate::providers::anthropic::ChatMessage {
-            role: e.role,
-            content: MessageContent::Text(e.text),
-        })
-        .collect())
+    let mut messages: Vec<ChatMessage> = Vec::new();
+
+    // Track pending tool uses to group with results
+    let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
+    let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
+
+    for event in events {
+        match event {
+            SessionEvent::Meta { .. } => {
+                // Skip meta events
+            }
+            SessionEvent::Message { role, text, .. } => {
+                // Flush any pending tool uses/results before adding a message
+                if !pending_tool_uses.is_empty() {
+                    // Add assistant message with tool_use blocks
+                    let blocks: Vec<ChatContentBlock> = std::mem::take(&mut pending_tool_uses)
+                        .into_iter()
+                        .map(|(id, name, input)| ChatContentBlock::ToolUse { id, name, input })
+                        .collect();
+                    messages.push(ChatMessage::assistant_blocks(blocks));
+
+                    // Add tool results
+                    if !pending_tool_results.is_empty() {
+                        messages.push(ChatMessage::tool_results(std::mem::take(
+                            &mut pending_tool_results,
+                        )));
+                    }
+                }
+
+                messages.push(ChatMessage {
+                    role,
+                    content: MessageContent::Text(text),
+                });
+            }
+            SessionEvent::ToolUse {
+                id, name, input, ..
+            } => {
+                pending_tool_uses.push((id, name, input));
+            }
+            SessionEvent::ToolResult {
+                tool_use_id,
+                output,
+                ok,
+                ..
+            } => {
+                pending_tool_results.push(crate::tools::ToolResult {
+                    tool_use_id,
+                    content: serde_json::to_string(&output).unwrap_or_default(),
+                    is_error: !ok,
+                });
+            }
+            SessionEvent::Interrupted { .. } => {
+                // Skip interrupted events when loading for API
+            }
+        }
+    }
+
+    // Flush any remaining pending tool uses/results
+    if !pending_tool_uses.is_empty() {
+        let blocks: Vec<ChatContentBlock> = std::mem::take(&mut pending_tool_uses)
+            .into_iter()
+            .map(|(id, name, input)| ChatContentBlock::ToolUse { id, name, input })
+            .collect();
+        messages.push(ChatMessage::assistant_blocks(blocks));
+
+        if !pending_tool_results.is_empty() {
+            messages.push(ChatMessage::tool_results(std::mem::take(
+                &mut pending_tool_results,
+            )));
+        }
+    }
+
+    Ok(messages)
 }
 
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
@@ -214,15 +422,44 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
     let mut output = String::new();
 
     for event in events {
-        let role_label = match event.role.as_str() {
-            "user" => "You",
-            "assistant" => "Assistant",
-            _ => &event.role,
-        };
-
-        output.push_str(&format!("### {}\n", role_label));
-        output.push_str(&event.text);
-        output.push_str("\n\n");
+        match event {
+            SessionEvent::Meta { schema_version, .. } => {
+                output.push_str(&format!("### Session (schema v{})\n\n", schema_version));
+            }
+            SessionEvent::Message { role, text, .. } => {
+                let role_label = match role.as_str() {
+                    "user" => "You",
+                    "assistant" => "Assistant",
+                    _ => role,
+                };
+                output.push_str(&format!("### {}\n", role_label));
+                output.push_str(text);
+                output.push_str("\n\n");
+            }
+            SessionEvent::ToolUse { name, input, .. } => {
+                output.push_str(&format!("### Tool: {}\n", name));
+                output.push_str(&format!(
+                    "```json\n{}\n```\n\n",
+                    serde_json::to_string_pretty(input).unwrap_or_default()
+                ));
+            }
+            SessionEvent::ToolResult {
+                ok, output: out, ..
+            } => {
+                let status = if *ok { "✓" } else { "✗" };
+                output.push_str(&format!("### Result {}\n", status));
+                // Truncate long outputs for display
+                let out_str = serde_json::to_string_pretty(out).unwrap_or_default();
+                if out_str.len() > 500 {
+                    output.push_str(&format!("```json\n{}...\n```\n\n", &out_str[..500]));
+                } else {
+                    output.push_str(&format!("```json\n{}\n```\n\n", out_str));
+                }
+            }
+            SessionEvent::Interrupted { .. } => {
+                output.push_str("### Interrupted\n\n");
+            }
+        }
     }
 
     output.trim_end().to_string()
@@ -258,6 +495,7 @@ impl SessionOptions {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
@@ -281,58 +519,150 @@ mod tests {
     }
 
     #[test]
-    fn test_session_creates_file() {
+    fn test_session_creates_file_with_meta() {
         let _temp = setup_temp_zdx_home();
 
-        let session = Session::with_id(unique_session_id("creates")).unwrap();
-        let event = SessionEvent::user_message("hello");
-        session.append(&event).unwrap();
-
-        assert!(session.path().exists());
-    }
-
-    #[test]
-    fn test_session_appends_jsonl() {
-        let _temp = setup_temp_zdx_home();
-
-        let session = Session::with_id(unique_session_id("appends")).unwrap();
+        let mut session = Session::with_id(unique_session_id("creates-meta")).unwrap();
         session
             .append(&SessionEvent::user_message("hello"))
             .unwrap();
+
+        assert!(session.path().exists());
+
+        // Read raw file content to verify meta is first
+        let content = fs::read_to_string(session.path()).unwrap();
+        let lines: Vec<&str> = content.lines().collect();
+        assert!(lines.len() >= 2);
+        assert!(lines[0].contains("\"type\":\"meta\""));
+        assert!(lines[0].contains("\"schema_version\":1"));
+    }
+
+    #[test]
+    fn test_session_appends_jsonl_with_tool_events() {
+        let _temp = setup_temp_zdx_home();
+
+        let mut session = Session::with_id(unique_session_id("tool-events")).unwrap();
         session
-            .append(&SessionEvent::assistant_message("hi there"))
+            .append(&SessionEvent::user_message("read main.rs"))
+            .unwrap();
+        session
+            .append(&SessionEvent::tool_use(
+                "tool-1",
+                "read",
+                json!({"path": "main.rs"}),
+            ))
+            .unwrap();
+        session
+            .append(&SessionEvent::tool_result(
+                "tool-1",
+                json!({"ok": true, "data": {"content": "fn main() {}"}}),
+                true,
+            ))
+            .unwrap();
+        session
+            .append(&SessionEvent::assistant_message("Here's the file"))
             .unwrap();
 
         let events = session.read_events().unwrap();
-        assert_eq!(events.len(), 2);
-        assert_eq!(events[0].role, "user");
-        assert_eq!(events[0].text, "hello");
-        assert_eq!(events[1].role, "assistant");
-        assert_eq!(events[1].text, "hi there");
+        // meta + user + tool_use + tool_result + assistant = 5 events
+        assert_eq!(events.len(), 5);
+        assert!(matches!(events[0], SessionEvent::Meta { .. }));
+        assert!(matches!(events[1], SessionEvent::Message { ref role, .. } if role == "user"));
+        assert!(matches!(events[2], SessionEvent::ToolUse { ref name, .. } if name == "read"));
+        assert!(matches!(
+            events[3],
+            SessionEvent::ToolResult { ok: true, .. }
+        ));
+        assert!(matches!(events[4], SessionEvent::Message { ref role, .. } if role == "assistant"));
     }
 
     #[test]
-    fn test_session_event_interrupted_serializes() {
-        let event = SessionEvent::interrupted();
-        let json = serde_json::to_string(&event).unwrap();
-        assert!(json.contains("\"type\":\"interrupted\""));
-        assert!(json.contains("\"role\":\"system\""));
-    }
-
-    #[test]
-    fn test_session_with_id() {
+    fn test_session_backward_compat_legacy_format() {
         let _temp = setup_temp_zdx_home();
 
-        let id = unique_session_id("my-session");
-        let session = Session::with_id(id.clone()).unwrap();
-        session.append(&SessionEvent::user_message("test")).unwrap();
+        // Create session first to get the correct path
+        let id = unique_session_id("legacy");
+        let session = Session::with_id(id).unwrap();
 
+        // Write legacy format directly to the session's path
+        let legacy_content = r#"{"type":"message","role":"user","text":"hello","ts":"2025-01-01T00:00:00Z"}
+{"type":"message","role":"assistant","text":"hi there","ts":"2025-01-01T00:00:01Z"}
+{"type":"interrupted","role":"system","text":"Interrupted","ts":"2025-01-01T00:00:02Z"}"#;
+        fs::write(session.path(), legacy_content).unwrap();
+
+        let events = session.read_events().unwrap();
+
+        assert_eq!(events.len(), 3);
         assert!(
-            session
-                .path()
-                .to_string_lossy()
-                .contains(&format!("{}.jsonl", id))
+            matches!(&events[0], SessionEvent::Message { role, text, .. }
+            if role == "user" && text == "hello")
         );
+        assert!(
+            matches!(&events[1], SessionEvent::Message { role, text, .. }
+            if role == "assistant" && text == "hi there")
+        );
+        assert!(matches!(&events[2], SessionEvent::Interrupted { .. }));
+    }
+
+    #[test]
+    fn test_session_event_serialization() {
+        let meta = SessionEvent::meta();
+        let json = serde_json::to_string(&meta).unwrap();
+        assert!(json.contains("\"type\":\"meta\""));
+        assert!(json.contains("\"schema_version\":1"));
+
+        let tool_use = SessionEvent::tool_use("t1", "bash", json!({"command": "ls"}));
+        let json = serde_json::to_string(&tool_use).unwrap();
+        assert!(json.contains("\"type\":\"tool_use\""));
+        assert!(json.contains("\"name\":\"bash\""));
+
+        let tool_result = SessionEvent::tool_result("t1", json!({"stdout": "file.txt"}), true);
+        let json = serde_json::to_string(&tool_result).unwrap();
+        assert!(json.contains("\"type\":\"tool_result\""));
+        assert!(json.contains("\"ok\":true"));
+    }
+
+    #[test]
+    fn test_load_session_as_messages_with_tools() {
+        let temp = setup_temp_zdx_home();
+
+        let id = unique_session_id("messages-tools");
+        let mut session = Session::with_id(id.clone()).unwrap();
+        session
+            .append(&SessionEvent::user_message("list files"))
+            .unwrap();
+        session
+            .append(&SessionEvent::tool_use(
+                "t1",
+                "bash",
+                json!({"command": "ls"}),
+            ))
+            .unwrap();
+        session
+            .append(&SessionEvent::tool_result(
+                "t1",
+                json!({"stdout": "file.txt\n"}),
+                true,
+            ))
+            .unwrap();
+        session
+            .append(&SessionEvent::assistant_message("Found file.txt"))
+            .unwrap();
+
+        // Re-set ZDX_HOME to ensure path consistency (guards against parallel test interference)
+        unsafe { std::env::set_var("ZDX_HOME", temp.path()) };
+
+        let messages = load_session_as_messages(&id).unwrap();
+
+        // user message + assistant with tool_use block + tool_results + assistant message = 4
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, "user");
+        // Second message should be assistant with tool_use blocks
+        assert_eq!(messages[1].role, "assistant");
+        // Third message should be tool results (role "user")
+        assert_eq!(messages[2].role, "user");
+        // Fourth is final assistant message
+        assert_eq!(messages[3].role, "assistant");
     }
 
     #[test]
@@ -355,5 +685,27 @@ mod tests {
         };
         let session = opts.resolve().unwrap().unwrap();
         assert_eq!(session.id, id);
+    }
+
+    #[test]
+    fn test_format_transcript_with_tools() {
+        let events = vec![
+            SessionEvent::meta(),
+            SessionEvent::user_message("read main.rs"),
+            SessionEvent::tool_use("t1", "read", json!({"path": "main.rs"})),
+            SessionEvent::tool_result(
+                "t1",
+                json!({"ok": true, "data": {"content": "fn main() {}"}}),
+                true,
+            ),
+            SessionEvent::assistant_message("Here's the file content."),
+        ];
+
+        let transcript = format_transcript(&events);
+        assert!(transcript.contains("Session (schema v1)"));
+        assert!(transcript.contains("### You"));
+        assert!(transcript.contains("### Tool: read"));
+        assert!(transcript.contains("### Result ✓"));
+        assert!(transcript.contains("### Assistant"));
     }
 }
