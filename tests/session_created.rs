@@ -44,25 +44,30 @@ async fn test_exec_creates_session_file() {
 
     assert_eq!(entries.len(), 1, "should have exactly one session file");
 
-    // Read and verify the session file contains both roles
+    // Read and verify the session file contains meta, user, and assistant
     let session_path = entries[0].path();
     let content = fs::read_to_string(&session_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
 
     assert_eq!(
         lines.len(),
-        2,
-        "session should have 2 lines (user + assistant)"
+        3,
+        "session should have 3 lines (meta + user + assistant)"
     );
 
+    // Parse and verify meta event (first line for schema v1)
+    let meta_event: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    assert_eq!(meta_event["type"], "meta");
+    assert_eq!(meta_event["schema_version"], 1);
+
     // Parse and verify user message
-    let user_event: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
+    let user_event: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
     assert_eq!(user_event["type"], "message");
     assert_eq!(user_event["role"], "user");
     assert_eq!(user_event["text"], "hello");
 
     // Parse and verify assistant message
-    let assistant_event: serde_json::Value = serde_json::from_str(lines[1]).unwrap();
+    let assistant_event: serde_json::Value = serde_json::from_str(lines[2]).unwrap();
     assert_eq!(assistant_event["type"], "message");
     assert_eq!(assistant_event["role"], "assistant");
     assert_eq!(assistant_event["text"], "Hello from assistant!");
@@ -125,27 +130,28 @@ async fn test_exec_appends_to_existing_session() {
         .assert()
         .success();
 
-    // Verify the session file has 4 lines (2 user + 2 assistant)
+    // Verify the session file has 5 lines (meta + 2 user + 2 assistant)
     let session_path = temp_dir.path().join("sessions").join("test-session.jsonl");
     let content = fs::read_to_string(&session_path).unwrap();
     let lines: Vec<&str> = content.lines().collect();
 
     assert_eq!(
         lines.len(),
-        4,
-        "session should have 4 lines after two execs"
+        5,
+        "session should have 5 lines after two execs (meta + 2*(user+assistant))"
     );
 
-    // Verify order: user, assistant, user, assistant
+    // Verify order: meta, user, assistant, user, assistant
     let events: Vec<serde_json::Value> = lines
         .iter()
         .map(|l| serde_json::from_str(l).unwrap())
         .collect();
 
-    assert_eq!(events[0]["role"], "user");
-    assert_eq!(events[0]["text"], "first message");
-    assert_eq!(events[1]["role"], "assistant");
-    assert_eq!(events[2]["role"], "user");
-    assert_eq!(events[2]["text"], "second message");
-    assert_eq!(events[3]["role"], "assistant");
+    assert_eq!(events[0]["type"], "meta");
+    assert_eq!(events[1]["role"], "user");
+    assert_eq!(events[1]["text"], "first message");
+    assert_eq!(events[2]["role"], "assistant");
+    assert_eq!(events[3]["role"], "user");
+    assert_eq!(events[3]["text"], "second message");
+    assert_eq!(events[4]["role"], "assistant");
 }

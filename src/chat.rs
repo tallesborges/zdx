@@ -84,7 +84,7 @@ pub async fn run_chat_with_history<R, W>(
     input: R,
     output: &mut W,
     client: &AnthropicClient,
-    session: Option<Session>,
+    mut session: Option<Session>,
     initial_history: Vec<ChatMessage>,
     tool_ctx: &ToolContext,
     system_prompt: Option<&str>,
@@ -117,7 +117,7 @@ where
         history.push(ChatMessage::user(trimmed));
 
         // Log user message to session
-        if let Some(ref s) = session
+        if let Some(ref mut s) = session
             && let Err(e) = s.append(&SessionEvent::user_message(trimmed))
         {
             writeln!(output, "Warning: Failed to save session: {}", e)?;
@@ -125,7 +125,17 @@ where
 
         // Tool loop with streaming - keep going until we get a final response
         let final_text = loop {
-            match stream_response(output, client, &history, &tools, tool_ctx, system_prompt).await {
+            match stream_response(
+                output,
+                client,
+                &history,
+                &tools,
+                tool_ctx,
+                system_prompt,
+                &mut session,
+            )
+            .await
+            {
                 Ok(StreamResult::FinalText(text)) => break text,
                 Ok(StreamResult::ToolUse {
                     assistant_blocks,
@@ -142,7 +152,7 @@ where
                     if e.downcast_ref::<crate::interrupt::InterruptedError>()
                         .is_some()
                     {
-                        if let Some(ref s) = session {
+                        if let Some(ref mut s) = session {
                             let _ = s.append(&SessionEvent::interrupted());
                         }
                         crate::interrupt::reset();
@@ -158,7 +168,7 @@ where
 
         if !final_text.is_empty() {
             // Log assistant response to session
-            if let Some(ref s) = session
+            if let Some(ref mut s) = session
                 && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
             {
                 writeln!(output, "Warning: Failed to save session: {}", e)?;
@@ -202,6 +212,7 @@ async fn stream_response<W: Write>(
     tools: &[crate::tools::ToolDefinition],
     tool_ctx: &ToolContext,
     system_prompt: Option<&str>,
+    session: &mut Option<Session>,
 ) -> Result<StreamResult> {
     let mut stream = client
         .send_messages_stream(history, tools, system_prompt)
@@ -277,8 +288,8 @@ async fn stream_response<W: Write>(
         // Build the assistant response with tool_use blocks
         let assistant_blocks = build_assistant_blocks(&full_text, &tool_uses)?;
 
-        // Execute tools and get results
-        let tool_results = execute_tool_uses(&tool_uses, tool_ctx).await?;
+        // Execute tools and get results, persisting events to session
+        let tool_results = execute_tool_uses(&tool_uses, tool_ctx, session).await?;
 
         return Ok(StreamResult::ToolUse {
             assistant_blocks,
@@ -324,6 +335,7 @@ fn build_assistant_blocks(
 async fn execute_tool_uses(
     tool_uses: &[ToolUseBuilder],
     ctx: &ToolContext,
+    session: &mut Option<Session>,
 ) -> Result<Vec<ToolResult>> {
     let mut results = Vec::new();
 
@@ -337,7 +349,22 @@ async fn execute_tool_uses(
         let input: serde_json::Value = serde_json::from_str(&tu.input_json)
             .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
 
-        let (_output, result) = tools::execute_tool(&tu.name, &tu.id, &input, ctx).await;
+        // Persist tool_use event to session
+        if let Some(s) = session.as_mut() {
+            let _ = s.append(&SessionEvent::tool_use(&tu.id, &tu.name, input.clone()));
+        }
+
+        let (output, result) = tools::execute_tool(&tu.name, &tu.id, &input, ctx).await;
+
+        // Persist tool_result event to session
+        if let Some(s) = session.as_mut() {
+            let output_value = serde_json::to_value(&output).unwrap_or_default();
+            let _ = s.append(&SessionEvent::tool_result(
+                &tu.id,
+                output_value,
+                output.is_ok(),
+            ));
+        }
 
         eprintln!(" Done.");
         results.push(result);

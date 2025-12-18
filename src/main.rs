@@ -136,7 +136,7 @@ async fn run_exec(
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    agent::execute_prompt_streaming(prompt, config, session.as_ref(), &agent_opts)
+    agent::execute_prompt_streaming(prompt, config, session, &agent_opts)
         .await
         .context("execute prompt")?;
 
