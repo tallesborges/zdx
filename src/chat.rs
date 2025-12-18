@@ -50,6 +50,7 @@ pub async fn run_interactive_chat_with_history(
     // Print welcome banner to stderr
     let mut err = stderr();
     writeln!(err, "ZDX Chat (type :q to quit)")?;
+    writeln!(err, "Model: {}", config.model)?;
     if let Some(ref s) = session {
         writeln!(err, "Session: {}", s.lock().unwrap().id)?;
     }
@@ -254,6 +255,7 @@ where
 
     // Write welcome to the provided output (for test capture)
     writeln!(output, "ZDX Chat (type :q to quit)")?;
+    writeln!(output, "Model: {}", config.model)?;
     if let Some(ref s) = session {
         writeln!(output, "Session: {}", s.lock().unwrap().id)?;
     }
