@@ -2,6 +2,10 @@
 //!
 //! Verifies that resume loads previous session history and includes it
 //! in API requests.
+//!
+//! After refactor (commit 2b):
+//! - Assistant text goes to stdout only
+//! - REPL UI (session info, loaded messages, goodbye) goes to stderr only
 
 mod fixtures;
 
@@ -40,6 +44,11 @@ fn create_session_file(temp_dir: &TempDir, session_id: &str, events: &[(&str, &s
     fs::write(&session_path, content + "\n").unwrap();
 }
 
+/// Test that resume loads history and sends it to the API.
+///
+/// After refactor (commit 2b):
+/// - "Loaded N previous messages" goes to stderr
+/// - Assistant response goes to stdout
 #[tokio::test]
 async fn test_resume_loads_history_into_api_request() {
     let mock_server = MockServer::start().await;
@@ -71,10 +80,17 @@ async fn test_resume_loads_history_into_api_request() {
         .write_stdin("And what is 3+3?\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Loaded 2 previous messages"))
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Loaded 2 previous messages"))
+        // Assistant text goes to stdout
         .stdout(predicate::str::contains("The answer is 6."));
 }
 
+/// Test that resume without explicit ID uses the most recently modified session.
+///
+/// After refactor (commit 2b):
+/// - "Loaded N previous messages" and session ID go to stderr
+/// - Assistant text goes to stdout
 #[tokio::test]
 async fn test_resume_without_id_uses_latest_session() {
     let mock_server = MockServer::start().await;
@@ -114,8 +130,11 @@ async fn test_resume_without_id_uses_latest_session() {
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Loaded 2 previous messages"))
-        .stdout(predicate::str::contains("new-session"));
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Loaded 2 previous messages"))
+        .stderr(predicate::str::contains("new-session"))
+        // Assistant text goes to stdout
+        .stdout(predicate::str::contains("Continuing..."));
 }
 
 #[tokio::test]
@@ -179,8 +198,16 @@ async fn test_resume_no_sessions_exits_with_error() {
         .stderr(predicate::str::contains("No sessions found to resume"));
 }
 
+/// Test that resume with nonexistent ID creates a new session.
+///
+/// Note: Resuming a nonexistent session creates a new (empty) session
+/// with that ID. This is a valid use case.
+///
+/// After refactor (commit 2b):
+/// - Session info and goodbye go to stderr
+/// - stdout is empty (no assistant response when quitting immediately)
 #[tokio::test]
-async fn test_resume_nonexistent_session_exits_with_error() {
+async fn test_resume_nonexistent_session_creates_empty_session() {
     let temp_dir = TempDir::new().unwrap();
     let sessions_dir = temp_dir.path().join("sessions");
     fs::create_dir_all(&sessions_dir).unwrap();
@@ -193,6 +220,9 @@ async fn test_resume_nonexistent_session_exits_with_error() {
         .write_stdin(":q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Session: nonexistent-id"))
-        .stdout(predicate::str::contains("Goodbye!"));
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Session: nonexistent-id"))
+        .stderr(predicate::str::contains("Goodbye!"))
+        // stdout is empty (no assistant response)
+        .stdout(predicate::str::is_empty());
 }

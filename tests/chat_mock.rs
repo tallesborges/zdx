@@ -16,6 +16,11 @@ fn streaming_text_response(text: &str) -> ResponseTemplate {
     sse_response(&text_sse(text))
 }
 
+/// Test that chat responds to user input and shows goodbye message.
+///
+/// After refactor (commit 2b):
+/// - Assistant text "Hello there!" goes to stdout only
+/// - REPL UI "Goodbye!" goes to stderr only
 #[tokio::test]
 async fn test_chat_responds_and_exits_on_quit() {
     let mock_server = MockServer::start().await;
@@ -32,11 +37,14 @@ async fn test_chat_responds_and_exits_on_quit() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("hi\n:q\n")
         .assert()
         .success()
+        // Assistant text goes to stdout
         .stdout(predicate::str::contains("Hello there!"))
-        .stdout(predicate::str::contains("Goodbye!"));
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Goodbye!"));
 }
 
 #[tokio::test]
@@ -55,6 +63,7 @@ async fn test_chat_maintains_history() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
@@ -76,12 +85,18 @@ async fn test_chat_handles_empty_input() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("\n\ntest\n:q\n")
         .assert()
         .success()
         .stdout(predicate::str::contains("Got it!"));
 }
 
+/// Test that welcome message and quit hint go to stderr.
+///
+/// After refactor (commit 2b):
+/// - "ZDX Chat" and ":q to quit" go to stderr
+/// - stdout is empty when no assistant response occurs
 #[tokio::test]
 async fn test_chat_shows_welcome_message() {
     let mock_server = MockServer::start().await;
@@ -95,13 +110,22 @@ async fn test_chat_shows_welcome_message() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin(":q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("ZDX Chat"))
-        .stdout(predicate::str::contains(":q to quit"));
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("ZDX Chat"))
+        .stderr(predicate::str::contains(":q to quit"))
+        // stdout is empty (no assistant response)
+        .stdout(predicate::str::is_empty());
 }
 
+/// Test that API errors go to stderr, not stdout.
+///
+/// After refactor (commit 2b):
+/// - Error messages go to stderr
+/// - stdout remains empty (no assistant response)
 #[tokio::test]
 async fn test_chat_handles_api_error_gracefully() {
     let mock_server = MockServer::start().await;
@@ -124,23 +148,41 @@ async fn test_chat_handles_api_error_gracefully() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Error:"))
-        .stdout(predicate::str::contains("429"));
+        // Errors go to stderr
+        .stderr(predicate::str::contains("Error:"))
+        .stderr(predicate::str::contains("429"))
+        // stdout is empty (no assistant response)
+        .stdout(predicate::str::is_empty());
 }
 
+/// Test that missing API key error is reported on stderr.
+///
+/// Note: In interactive chat mode, errors are shown but the user can continue
+/// (e.g., to quit gracefully). This is more user-friendly than crashing.
+/// The error is shown when attempting to make a request.
 #[tokio::test]
-async fn test_chat_fails_without_api_key() {
+async fn test_chat_handles_missing_api_key_gracefully() {
     cargo_bin_cmd!("zdx-cli")
         .env_remove("ANTHROPIC_API_KEY")
-        .write_stdin(":q\n")
+        .args(["--no-save"])
+        .write_stdin("hello\n:q\n")
         .assert()
-        .failure()
-        .stderr(predicate::str::contains("ANTHROPIC_API_KEY"));
+        .success()
+        // Error is shown on stderr
+        .stderr(predicate::str::contains("ANTHROPIC_API_KEY"))
+        // User can still quit
+        .stderr(predicate::str::contains("Goodbye!"));
 }
 
+/// Test that tool use loop works correctly with files.
+///
+/// After refactor (commit 2b):
+/// - Tool status indicators go to stderr (via renderer)
+/// - Final assistant text goes to stdout
 #[tokio::test]
 async fn test_chat_tool_use_loop_reads_file() {
     let temp_dir = TempDir::new().unwrap();
@@ -184,9 +226,12 @@ async fn test_chat_tool_use_loop_reads_file() {
         .write_stdin("read hello.txt\n:q\n")
         .assert()
         .success()
+        // Assistant text goes to stdout
         .stdout(predicate::str::contains(
             "The file says: Hello from chat tool!",
-        ));
+        ))
+        // Tool indicators go to stderr
+        .stderr(predicate::str::contains("Running read"));
 
     assert_eq!(call_count.load(Ordering::SeqCst), 2);
 }
@@ -208,6 +253,7 @@ async fn test_chat_streams_multi_chunk_response() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("test streaming\n:q\n")
         .assert()
         .success()
@@ -215,6 +261,11 @@ async fn test_chat_streams_multi_chunk_response() {
         .stdout(predicate::str::contains("Hello, this is streaming!"));
 }
 
+/// Test that mid-stream SSE errors are handled gracefully.
+///
+/// After refactor (commit 2b):
+/// - Partial assistant text (before error) goes to stdout
+/// - Error messages and REPL UI go to stderr
 #[tokio::test]
 async fn test_chat_handles_sse_error_midstream() {
     let mock_server = MockServer::start().await;
@@ -232,10 +283,14 @@ async fn test_chat_handles_sse_error_midstream() {
     cargo_bin_cmd!("zdx-cli")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save"])
         .write_stdin("hello\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Error:"))
-        .stdout(predicate::str::contains("overloaded_error"))
-        .stdout(predicate::str::contains("Goodbye!"));
+        // Partial text before error goes to stdout
+        .stdout(predicate::str::contains("Starting..."))
+        // Error and REPL UI go to stderr
+        .stderr(predicate::str::contains("Error:"))
+        .stderr(predicate::str::contains("overloaded_error"))
+        .stderr(predicate::str::contains("Goodbye!"));
 }

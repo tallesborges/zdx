@@ -1,379 +1,30 @@
 //! Interactive chat module for ZDX.
 //!
 //! Provides a REPL-style chat interface that maintains conversation history.
-//! Responses are streamed token-by-token for real-time feedback.
+//! Uses the engine module for streaming and tool execution.
+//!
+//! ## Output Contract
+//! - Assistant text (streamed) → stdout only
+//! - REPL UI (welcome, prompts, goodbye, warnings) → stderr only
+//! - Tool status indicators → stderr only (via renderer)
 
-use std::io::{BufRead, Write};
+use std::io::{BufRead, Write, stderr, stdin};
 use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
 
-use anyhow::{Result, bail};
-use futures_util::StreamExt;
+use anyhow::{Context, Result};
 
 use crate::config::Config;
-use crate::providers::anthropic::{
-    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, StreamEvent,
-};
+use crate::engine::{self, EngineOptions, EventSink};
+use crate::events::EngineEvent;
+use crate::providers::anthropic::ChatMessage;
+use crate::renderer::CliRenderer;
 use crate::session::{Session, SessionEvent};
-use crate::tools::{self, ToolContext, ToolResult};
 
 const QUIT_COMMAND: &str = ":q";
 const PROMPT_PREFIX: &str = "you> ";
-const ASSISTANT_PREFIX: &str = "assistant> ";
 
-/// Runs the interactive chat loop.
-///
-/// Reads user input from `input`, writes responses to `output`.
-/// Exits on `:q` command or EOF.
-#[allow(dead_code)] // Useful for testing
-pub async fn run_chat<R, W>(
-    input: R,
-    mut output: W,
-    config: &Config,
-    session: Option<Session>,
-    root: PathBuf,
-) -> Result<()>
-where
-    R: BufRead,
-    W: Write,
-{
-    let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
-    let client = AnthropicClient::new(anthropic_config);
-    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
-
-    let tool_ctx =
-        ToolContext::with_timeout(root.canonicalize().unwrap_or(root), config.tool_timeout());
-    run_chat_with_client(
-        input,
-        &mut output,
-        &client,
-        session,
-        &tool_ctx,
-        system_prompt.as_deref(),
-    )
-    .await
-}
-
-/// Runs the chat loop with a provided client (for testing).
-#[allow(dead_code)] // Useful for testing
-pub async fn run_chat_with_client<R, W>(
-    input: R,
-    output: &mut W,
-    client: &AnthropicClient,
-    session: Option<Session>,
-    tool_ctx: &ToolContext,
-    system_prompt: Option<&str>,
-) -> Result<()>
-where
-    R: BufRead,
-    W: Write,
-{
-    run_chat_with_history(
-        input,
-        output,
-        client,
-        session,
-        Vec::new(),
-        tool_ctx,
-        system_prompt,
-    )
-    .await
-}
-
-/// Runs the chat loop with pre-loaded history.
-pub async fn run_chat_with_history<R, W>(
-    input: R,
-    output: &mut W,
-    client: &AnthropicClient,
-    mut session: Option<Session>,
-    initial_history: Vec<ChatMessage>,
-    tool_ctx: &ToolContext,
-    system_prompt: Option<&str>,
-) -> Result<()>
-where
-    R: BufRead,
-    W: Write,
-{
-    let mut history: Vec<ChatMessage> = initial_history;
-    let tools = tools::all_tools();
-
-    for line in input.lines() {
-        let line = line?;
-        let trimmed = line.trim();
-
-        // Handle quit command
-        if trimmed == QUIT_COMMAND {
-            writeln!(output, "Goodbye!")?;
-            break;
-        }
-
-        // Skip empty lines
-        if trimmed.is_empty() {
-            write!(output, "{}", PROMPT_PREFIX)?;
-            output.flush()?;
-            continue;
-        }
-
-        // Add user message to history
-        history.push(ChatMessage::user(trimmed));
-
-        // Log user message to session
-        if let Some(ref mut s) = session
-            && let Err(e) = s.append(&SessionEvent::user_message(trimmed))
-        {
-            writeln!(output, "Warning: Failed to save session: {}", e)?;
-        }
-
-        // Tool loop with streaming - keep going until we get a final response
-        let final_text = loop {
-            match stream_response(
-                output,
-                client,
-                &history,
-                &tools,
-                tool_ctx,
-                system_prompt,
-                &mut session,
-            )
-            .await
-            {
-                Ok(StreamResult::FinalText(text)) => break text,
-                Ok(StreamResult::ToolUse {
-                    assistant_blocks,
-                    tool_results,
-                }) => {
-                    // Add assistant's response (with tool_use blocks) to history
-                    history.push(ChatMessage::assistant_blocks(assistant_blocks));
-                    // Add tool results as user message
-                    history.push(ChatMessage::tool_results(tool_results));
-                    // Continue the loop for the next response
-                    continue;
-                }
-                Err(e) => {
-                    if e.downcast_ref::<crate::interrupt::InterruptedError>()
-                        .is_some()
-                    {
-                        if let Some(ref mut s) = session {
-                            let _ = s.append(&SessionEvent::interrupted());
-                        }
-                        crate::interrupt::reset();
-                    } else {
-                        writeln!(output, "Error: {}", e)?;
-                    }
-                    // Remove the failed user message from history
-                    history.pop();
-                    break String::new();
-                }
-            }
-        };
-
-        if !final_text.is_empty() {
-            // Log assistant response to session
-            if let Some(ref mut s) = session
-                && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
-            {
-                writeln!(output, "Warning: Failed to save session: {}", e)?;
-            }
-
-            history.push(ChatMessage::assistant(final_text));
-        }
-
-        write!(output, "{}", PROMPT_PREFIX)?;
-        output.flush()?;
-    }
-
-    Ok(())
-}
-
-/// Result of streaming a single response.
-enum StreamResult {
-    /// Final text response (no tool use).
-    FinalText(String),
-    /// Tool use requested - contains blocks for history and results to send.
-    ToolUse {
-        assistant_blocks: Vec<ChatContentBlock>,
-        tool_results: Vec<ToolResult>,
-    },
-}
-
-/// Builder for accumulating tool use data from streaming events.
-#[derive(Debug)]
-struct ToolUseBuilder {
-    index: usize,
-    id: String,
-    name: String,
-    input_json: String,
-}
-
-/// Streams a single response from the API, handling tool use detection.
-async fn stream_response<W: Write>(
-    output: &mut W,
-    client: &AnthropicClient,
-    history: &[ChatMessage],
-    tools: &[crate::tools::ToolDefinition],
-    tool_ctx: &ToolContext,
-    system_prompt: Option<&str>,
-    session: &mut Option<Session>,
-) -> Result<StreamResult> {
-    let mut stream = client
-        .send_messages_stream(history, tools, system_prompt)
-        .await?;
-
-    // State for accumulating the current response
-    let mut full_text = String::new();
-    let mut tool_uses: Vec<ToolUseBuilder> = Vec::new();
-    let mut stop_reason: Option<String> = None;
-    let mut printed_prefix = false;
-
-    // Process stream events
-    while let Some(event_result) = stream.next().await {
-        if crate::interrupt::is_interrupted() {
-            return Err(crate::interrupt::InterruptedError.into());
-        }
-        let event = event_result?;
-
-        match event {
-            StreamEvent::TextDelta { text, .. } => {
-                if !text.is_empty() {
-                    // Print prefix before first text
-                    if !printed_prefix {
-                        write!(output, "{}", ASSISTANT_PREFIX)?;
-                        printed_prefix = true;
-                    }
-                    write!(output, "{}", text)?;
-                    output.flush()?;
-                    full_text.push_str(&text);
-                }
-            }
-            StreamEvent::ContentBlockStart {
-                index,
-                block_type,
-                id,
-                name,
-            } => {
-                if block_type == "tool_use" {
-                    tool_uses.push(ToolUseBuilder {
-                        index,
-                        id: id.unwrap_or_default(),
-                        name: name.unwrap_or_default(),
-                        input_json: String::new(),
-                    });
-                }
-            }
-            StreamEvent::InputJsonDelta {
-                index,
-                partial_json,
-            } => {
-                if let Some(tu) = tool_uses.iter_mut().find(|t| t.index == index) {
-                    tu.input_json.push_str(&partial_json);
-                }
-            }
-            StreamEvent::MessageDelta {
-                stop_reason: reason,
-            } => {
-                stop_reason = reason;
-            }
-            StreamEvent::Error {
-                error_type,
-                message,
-            } => {
-                bail!("API error ({}): {}", error_type, message);
-            }
-            // Ignore other events (Ping, MessageStart, ContentBlockStop, MessageStop)
-            _ => {}
-        }
-    }
-
-    // Check if we have tool use to process
-    if stop_reason.as_deref() == Some("tool_use") && !tool_uses.is_empty() {
-        // Build the assistant response with tool_use blocks
-        let assistant_blocks = build_assistant_blocks(&full_text, &tool_uses)?;
-
-        // Execute tools and get results, persisting events to session
-        let tool_results = execute_tool_uses(&tool_uses, tool_ctx, session).await?;
-
-        return Ok(StreamResult::ToolUse {
-            assistant_blocks,
-            tool_results,
-        });
-    }
-
-    // Final newline after streaming completes
-    if !full_text.is_empty() {
-        writeln!(output)?;
-    }
-
-    Ok(StreamResult::FinalText(full_text))
-}
-
-/// Builds assistant content blocks from accumulated text and tool uses.
-fn build_assistant_blocks(
-    text: &str,
-    tool_uses: &[ToolUseBuilder],
-) -> Result<Vec<ChatContentBlock>> {
-    let mut blocks = Vec::new();
-
-    // Add text block if any
-    if !text.is_empty() {
-        blocks.push(ChatContentBlock::Text(text.to_string()));
-    }
-
-    // Add tool_use blocks
-    for tu in tool_uses {
-        let input: serde_json::Value = serde_json::from_str(&tu.input_json)
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-        blocks.push(ChatContentBlock::ToolUse {
-            id: tu.id.clone(),
-            name: tu.name.clone(),
-            input,
-        });
-    }
-
-    Ok(blocks)
-}
-
-/// Executes tool uses from streaming and returns results.
-async fn execute_tool_uses(
-    tool_uses: &[ToolUseBuilder],
-    ctx: &ToolContext,
-    session: &mut Option<Session>,
-) -> Result<Vec<ToolResult>> {
-    let mut results = Vec::new();
-
-    for tu in tool_uses {
-        if crate::interrupt::is_interrupted() {
-            return Err(crate::interrupt::InterruptedError.into());
-        }
-        eprint!("⚙ Running {}...", tu.name);
-        let _ = std::io::stderr().flush();
-
-        let input: serde_json::Value = serde_json::from_str(&tu.input_json)
-            .unwrap_or(serde_json::Value::Object(serde_json::Map::new()));
-
-        // Persist tool_use event to session
-        if let Some(s) = session.as_mut() {
-            let _ = s.append(&SessionEvent::tool_use(&tu.id, &tu.name, input.clone()));
-        }
-
-        let (output, result) = tools::execute_tool(&tu.name, &tu.id, &input, ctx).await;
-
-        // Persist tool_result event to session
-        if let Some(s) = session.as_mut() {
-            let output_value = serde_json::to_value(&output).unwrap_or_default();
-            let _ = s.append(&SessionEvent::tool_result(
-                &tu.id,
-                output_value,
-                output.is_ok(),
-            ));
-        }
-
-        eprintln!(" Done.");
-        results.push(result);
-    }
-
-    Ok(results)
-}
-
-/// Runs the chat loop with stdin/stdout.
+/// Runs the interactive chat loop with stdin/stdout.
 pub async fn run_interactive_chat(
     config: &Config,
     session: Option<Session>,
@@ -389,34 +40,279 @@ pub async fn run_interactive_chat_with_history(
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
-    let stdin = std::io::stdin();
-    let mut stdout = std::io::stdout();
-
-    let anthropic_config = AnthropicConfig::from_env(config.model.clone(), config.max_tokens)?;
-    let client = AnthropicClient::new(anthropic_config);
     let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
 
-    let tool_ctx =
-        ToolContext::with_timeout(root.canonicalize().unwrap_or(root), config.tool_timeout());
+    // Wrap session in Arc<Mutex> for shared access in event sink
+    let session = session.map(|s| Arc::new(Mutex::new(s)));
 
-    writeln!(stdout, "ZDX Chat (type :q to quit)")?;
+    let engine_opts = EngineOptions { root };
+
+    // Print welcome banner to stderr
+    let mut err = stderr();
+    writeln!(err, "ZDX Chat (type :q to quit)")?;
     if let Some(ref s) = session {
-        writeln!(stdout, "Session: {}", s.id)?;
+        writeln!(err, "Session: {}", s.lock().unwrap().id)?;
     }
     if !history.is_empty() {
-        writeln!(stdout, "Loaded {} previous messages", history.len())?;
+        writeln!(err, "Loaded {} previous messages", history.len())?;
     }
-    write!(stdout, "{}", PROMPT_PREFIX)?;
-    stdout.flush()?;
+    write!(err, "{}", PROMPT_PREFIX)?;
+    err.flush()?;
 
-    run_chat_with_history(
-        stdin.lock(),
-        &mut stdout,
-        &client,
+    run_chat_loop(
+        stdin().lock(),
+        config,
+        &engine_opts,
         session,
         history,
-        &tool_ctx,
         system_prompt.as_deref(),
     )
     .await
+}
+
+/// Internal chat loop that reads from a BufRead source.
+///
+/// This is separated for testability.
+async fn run_chat_loop<R: BufRead>(
+    input: R,
+    config: &Config,
+    engine_opts: &EngineOptions,
+    session: Option<Arc<Mutex<Session>>>,
+    initial_history: Vec<ChatMessage>,
+    system_prompt: Option<&str>,
+) -> Result<()> {
+    let mut history = initial_history;
+    let mut err = stderr();
+
+    for line in input.lines() {
+        let line = line.context("Failed to read input line")?;
+        let trimmed = line.trim();
+
+        // Handle quit command
+        if trimmed == QUIT_COMMAND {
+            writeln!(err, "Goodbye!")?;
+            break;
+        }
+
+        // Skip empty lines - re-render prompt
+        if trimmed.is_empty() {
+            write!(err, "{}", PROMPT_PREFIX)?;
+            err.flush()?;
+            continue;
+        }
+
+        // Add user message to history
+        history.push(ChatMessage::user(trimmed));
+
+        // Log user message to session
+        if let Some(ref s) = session
+            && let Err(e) = s
+                .lock()
+                .unwrap()
+                .append(&SessionEvent::user_message(trimmed))
+        {
+            writeln!(err, "Warning: Failed to save session: {}", e)?;
+        }
+
+        // Run the turn through the engine
+        let result = run_chat_turn(
+            history.clone(),
+            config,
+            engine_opts,
+            system_prompt,
+            session.clone(),
+        )
+        .await;
+
+        match result {
+            Ok((final_text, new_history)) => {
+                // Print final newline after assistant text
+                if !final_text.is_empty() {
+                    println!();
+
+                    // Log assistant response to session
+                    if let Some(ref s) = session
+                        && let Err(e) = s
+                            .lock()
+                            .unwrap()
+                            .append(&SessionEvent::assistant_message(&final_text))
+                    {
+                        writeln!(err, "Warning: Failed to save session: {}", e)?;
+                    }
+                }
+
+                // Update history for next turn
+                history = new_history;
+            }
+            Err(e) => {
+                if e.downcast_ref::<crate::interrupt::InterruptedError>()
+                    .is_some()
+                {
+                    if let Some(ref s) = session {
+                        let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
+                    }
+                    crate::interrupt::reset();
+                } else {
+                    writeln!(err, "Error: {}", e)?;
+                }
+                // Remove the failed user message from history
+                history.pop();
+            }
+        }
+
+        // Re-render prompt
+        write!(err, "{}", PROMPT_PREFIX)?;
+        err.flush()?;
+    }
+
+    Ok(())
+}
+
+/// Runs a single chat turn through the engine with rendering.
+async fn run_chat_turn(
+    messages: Vec<ChatMessage>,
+    config: &Config,
+    engine_opts: &EngineOptions,
+    system_prompt: Option<&str>,
+    session: Option<Arc<Mutex<Session>>>,
+) -> Result<(String, Vec<ChatMessage>)> {
+    let sink = create_persisting_sink(session);
+
+    engine::run_turn(messages, config, engine_opts, system_prompt, sink).await
+}
+
+/// Creates an EventSink that renders to CLI and persists tool events to session.
+fn create_persisting_sink(session: Option<Arc<Mutex<Session>>>) -> EventSink {
+    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
+    let renderer_clone = renderer.clone();
+
+    Box::new(move |event: EngineEvent| {
+        // Persist tool events to session
+        if let Some(ref s) = session {
+            match &event {
+                EngineEvent::ToolRequested { id, name, input } => {
+                    let _ = s.lock().unwrap().append(&SessionEvent::tool_use(
+                        id.clone(),
+                        name.clone(),
+                        input.clone(),
+                    ));
+                }
+                EngineEvent::ToolFinished { id, result } => {
+                    let output = serde_json::to_value(result).unwrap_or_default();
+                    let _ = s.lock().unwrap().append(&SessionEvent::tool_result(
+                        id.clone(),
+                        output,
+                        result.is_ok(),
+                    ));
+                }
+                _ => {}
+            }
+        }
+
+        // Render to CLI
+        renderer_clone.lock().unwrap().handle_event(event);
+    })
+}
+
+/// Runs the chat loop with an output writer (for testing).
+///
+/// Note: In the refactored version, we maintain backward compatibility by
+/// writing REPL UI to `output` but assistant text goes to stdout.
+#[allow(dead_code)] // Useful for testing
+pub async fn run_chat<R, W>(
+    input: R,
+    mut output: W,
+    config: &Config,
+    session: Option<Session>,
+    root: PathBuf,
+) -> Result<()>
+where
+    R: BufRead,
+    W: Write,
+{
+    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
+    let session = session.map(|s| Arc::new(Mutex::new(s)));
+    let engine_opts = EngineOptions { root };
+
+    // Write welcome to the provided output (for test capture)
+    writeln!(output, "ZDX Chat (type :q to quit)")?;
+    if let Some(ref s) = session {
+        writeln!(output, "Session: {}", s.lock().unwrap().id)?;
+    }
+    write!(output, "{}", PROMPT_PREFIX)?;
+    output.flush()?;
+
+    let mut history: Vec<ChatMessage> = Vec::new();
+
+    for line in input.lines() {
+        let line = line?;
+        let trimmed = line.trim();
+
+        if trimmed == QUIT_COMMAND {
+            writeln!(output, "Goodbye!")?;
+            break;
+        }
+
+        if trimmed.is_empty() {
+            write!(output, "{}", PROMPT_PREFIX)?;
+            output.flush()?;
+            continue;
+        }
+
+        history.push(ChatMessage::user(trimmed));
+
+        if let Some(ref s) = session
+            && let Err(e) = s
+                .lock()
+                .unwrap()
+                .append(&SessionEvent::user_message(trimmed))
+        {
+            writeln!(output, "Warning: Failed to save session: {}", e)?;
+        }
+
+        let result = run_chat_turn(
+            history.clone(),
+            config,
+            &engine_opts,
+            system_prompt.as_deref(),
+            session.clone(),
+        )
+        .await;
+
+        match result {
+            Ok((final_text, new_history)) => {
+                if !final_text.is_empty() {
+                    println!();
+
+                    if let Some(ref s) = session
+                        && let Err(e) = s
+                            .lock()
+                            .unwrap()
+                            .append(&SessionEvent::assistant_message(&final_text))
+                    {
+                        writeln!(output, "Warning: Failed to save session: {}", e)?;
+                    }
+                }
+                history = new_history;
+            }
+            Err(e) => {
+                if e.downcast_ref::<crate::interrupt::InterruptedError>()
+                    .is_some()
+                {
+                    if let Some(ref s) = session {
+                        let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
+                    }
+                    crate::interrupt::reset();
+                } else {
+                    writeln!(output, "Error: {}", e)?;
+                }
+                history.pop();
+            }
+        }
+
+        write!(output, "{}", PROMPT_PREFIX)?;
+        output.flush()?;
+    }
+
+    Ok(())
 }
