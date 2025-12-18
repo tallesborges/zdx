@@ -61,7 +61,13 @@ pub enum SessionEvent {
     },
 
     /// Interrupted event: session was interrupted by user.
-    Interrupted { ts: String },
+    Interrupted {
+        #[serde(default = "default_interrupted_role")]
+        role: String,
+        #[serde(default = "default_interrupted_text")]
+        text: String,
+        ts: String,
+    },
 }
 
 impl SessionEvent {
@@ -114,6 +120,8 @@ impl SessionEvent {
     /// Creates a new interrupted event.
     pub fn interrupted() -> Self {
         Self::Interrupted {
+            role: default_interrupted_role(),
+            text: default_interrupted_text(),
             ts: chrono_timestamp(),
         }
     }
@@ -128,6 +136,14 @@ impl SessionEvent {
             Self::Interrupted { .. } => "interrupted",
         }
     }
+}
+
+fn default_interrupted_role() -> String {
+    "system".to_string()
+}
+
+fn default_interrupted_text() -> String {
+    "Interrupted".to_string()
 }
 
 /// Returns an RFC3339 UTC timestamp string.
@@ -259,7 +275,11 @@ struct LegacySessionEvent {
 impl From<LegacySessionEvent> for SessionEvent {
     fn from(legacy: LegacySessionEvent) -> Self {
         if legacy.event_type == "interrupted" {
-            SessionEvent::Interrupted { ts: legacy.ts }
+            SessionEvent::Interrupted {
+                role: legacy.role,
+                text: legacy.text,
+                ts: legacy.ts,
+            }
         } else {
             SessionEvent::Message {
                 role: legacy.role,
@@ -601,7 +621,10 @@ mod tests {
             matches!(&events[1], SessionEvent::Message { role, text, .. }
             if role == "assistant" && text == "hi there")
         );
-        assert!(matches!(&events[2], SessionEvent::Interrupted { .. }));
+        assert!(
+            matches!(&events[2], SessionEvent::Interrupted { role, text, .. }
+            if role == "system" && text == "Interrupted")
+        );
     }
 
     #[test]
@@ -620,6 +643,12 @@ mod tests {
         let json = serde_json::to_string(&tool_result).unwrap();
         assert!(json.contains("\"type\":\"tool_result\""));
         assert!(json.contains("\"ok\":true"));
+
+        let interrupted = SessionEvent::interrupted();
+        let json = serde_json::to_string(&interrupted).unwrap();
+        assert!(json.contains("\"type\":\"interrupted\""));
+        assert!(json.contains("\"role\":\"system\""));
+        assert!(json.contains("\"text\":\"Interrupted\""));
     }
 
     #[test]

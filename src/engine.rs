@@ -376,4 +376,34 @@ mod tests {
             if !result.is_ok())
         );
     }
+
+    #[tokio::test]
+    async fn test_execute_tools_handles_interrupt() {
+        use tempfile::TempDir;
+
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf());
+
+        let tool_uses = vec![ToolUseBuilder {
+            index: 0,
+            id: "tool1".to_string(),
+            name: "read".to_string(),
+            input_json: r#"{"path": "test.txt"}"#.to_string(),
+        }];
+
+        let (mut sink, events) = collecting_sink();
+
+        // Set interrupt flag
+        crate::interrupt::set_interrupted(true);
+
+        let result = execute_tools(&tool_uses, &ctx, &mut sink).await;
+
+        assert!(result.is_err());
+        let collected = events.lock().unwrap();
+        assert_eq!(collected.len(), 1);
+        assert!(matches!(&collected[0], EngineEvent::Interrupted));
+
+        // Clean up
+        crate::interrupt::set_interrupted(false);
+    }
 }

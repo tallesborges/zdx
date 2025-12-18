@@ -115,21 +115,23 @@ async fn run_chat_loop<R: BufRead>(
         }
 
         // Run the turn through the engine
+        let renderer = Arc::new(Mutex::new(CliRenderer::new()));
         let result = run_chat_turn(
             history.clone(),
             config,
-            engine_opts,
-            system_prompt,
+            &engine_opts,
+            system_prompt.as_deref(),
             session.clone(),
+            renderer.clone(),
         )
         .await;
 
         match result {
             Ok((final_text, new_history)) => {
-                // Print final newline after assistant text
-                if !final_text.is_empty() {
-                    println!();
+                // Finish rendering (prints final newline if needed)
+                renderer.lock().unwrap().finish();
 
+                if !final_text.is_empty() {
                     // Log assistant response to session
                     if let Some(ref s) = session
                         && let Err(e) = s
@@ -148,9 +150,7 @@ async fn run_chat_loop<R: BufRead>(
                 if e.downcast_ref::<crate::interrupt::InterruptedError>()
                     .is_some()
                 {
-                    if let Some(ref s) = session {
-                        let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
-                    }
+                    // Interrupted event is already persisted via the event sink
                     crate::interrupt::reset();
                 } else {
                     writeln!(err, "Error: {}", e)?;
@@ -175,19 +175,20 @@ async fn run_chat_turn(
     engine_opts: &EngineOptions,
     system_prompt: Option<&str>,
     session: Option<Arc<Mutex<Session>>>,
+    renderer: Arc<Mutex<CliRenderer>>,
 ) -> Result<(String, Vec<ChatMessage>)> {
-    let sink = create_persisting_sink(session);
+    let sink = create_persisting_sink(session, renderer);
 
     engine::run_turn(messages, config, engine_opts, system_prompt, sink).await
 }
 
 /// Creates an EventSink that renders to CLI and persists tool events to session.
-fn create_persisting_sink(session: Option<Arc<Mutex<Session>>>) -> EventSink {
-    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
-    let renderer_clone = renderer.clone();
-
+fn create_persisting_sink(
+    session: Option<Arc<Mutex<Session>>>,
+    renderer: Arc<Mutex<CliRenderer>>,
+) -> EventSink {
     Box::new(move |event: EngineEvent| {
-        // Persist tool events to session
+        // Persist tool and interrupt events to session
         if let Some(ref s) = session {
             match &event {
                 EngineEvent::ToolRequested { id, name, input } => {
@@ -205,12 +206,16 @@ fn create_persisting_sink(session: Option<Arc<Mutex<Session>>>) -> EventSink {
                         result.is_ok(),
                     ));
                 }
+                EngineEvent::Interrupted => {
+                    // Persist interrupted event (best-effort, per SPEC §10)
+                    let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
+                }
                 _ => {}
             }
         }
 
         // Render to CLI
-        renderer_clone.lock().unwrap().handle_event(event);
+        renderer.lock().unwrap().handle_event(event);
     })
 }
 
@@ -270,20 +275,23 @@ where
             writeln!(output, "Warning: Failed to save session: {}", e)?;
         }
 
+        let renderer = Arc::new(Mutex::new(CliRenderer::new()));
         let result = run_chat_turn(
             history.clone(),
             config,
             &engine_opts,
             system_prompt.as_deref(),
             session.clone(),
+            renderer.clone(),
         )
         .await;
 
         match result {
             Ok((final_text, new_history)) => {
-                if !final_text.is_empty() {
-                    println!();
+                // Finish rendering (prints final newline if needed)
+                renderer.lock().unwrap().finish();
 
+                if !final_text.is_empty() {
                     if let Some(ref s) = session
                         && let Err(e) = s
                             .lock()
@@ -299,9 +307,7 @@ where
                 if e.downcast_ref::<crate::interrupt::InterruptedError>()
                     .is_some()
                 {
-                    if let Some(ref s) = session {
-                        let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
-                    }
+                    // Interrupted event is already persisted via the event sink
                     crate::interrupt::reset();
                 } else {
                     writeln!(output, "Error: {}", e)?;

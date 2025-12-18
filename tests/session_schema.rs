@@ -272,7 +272,7 @@ async fn test_interrupted_session_mid_tool_is_resumable() {
     let session_content = r#"{"type":"meta","schema_version":1,"ts":"2025-01-01T00:00:00Z"}
 {"type":"message","role":"user","text":"run ls","ts":"2025-01-01T00:00:01Z"}
 {"type":"tool_use","id":"t1","name":"bash","input":{"command":"ls"},"ts":"2025-01-01T00:00:02Z"}
-{"type":"interrupted","ts":"2025-01-01T00:00:03Z"}"#;
+{"type":"interrupted","role":"system","text":"Interrupted","ts":"2025-01-01T00:00:03Z"}"#;
     fs::write(&session_path, session_content).unwrap();
 
     // Session should be loadable and resumable

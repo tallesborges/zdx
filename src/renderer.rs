@@ -68,7 +68,8 @@ impl CliRenderer {
                 let _ = writeln!(self.stderr, "Error: {}", message);
             }
             EngineEvent::Interrupted => {
-                // Interruption message is handled by main after the turn completes
+                // Print interruption message to stderr (per SPEC §10)
+                let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
         }
     }
