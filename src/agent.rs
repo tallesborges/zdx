@@ -52,10 +52,36 @@ pub async fn execute_prompt_streaming(
     session: Option<Session>,
     options: &AgentOptions,
 ) -> Result<String> {
-    let system_prompt = crate::context::build_effective_system_prompt(config, &options.root)?;
+    let effective =
+        crate::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
     // Wrap session in Arc<Mutex> for shared access in event sink
     let session = session.map(|s| Arc::new(Mutex::new(s)));
+
+    // Create renderer for all output
+    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
+
+    // Emit warnings from context loading via renderer
+    for warning in &effective.warnings {
+        renderer.lock().unwrap().handle_event(EngineEvent::Warning {
+            message: warning.message.clone(),
+        });
+    }
+
+    // Emit loaded AGENTS.md paths info (per SPEC §10)
+    if !effective.loaded_agents_paths.is_empty() {
+        let paths_str: Vec<String> = effective
+            .loaded_agents_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "Loaded AGENTS.md from: {}",
+            paths_str.join(", ")
+        );
+    }
 
     // Log user message to session
     if let Some(ref s) = session {
@@ -68,14 +94,13 @@ pub async fn execute_prompt_streaming(
     let engine_opts = EngineOptions::from(options);
 
     // Create a combined sink that handles both rendering and session persistence
-    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
     let sink = create_persisting_sink(session.clone(), renderer.clone());
 
     let (final_text, _messages) = engine::run_turn(
         messages,
         config,
         &engine_opts,
-        system_prompt.as_deref(),
+        effective.prompt.as_deref(),
         sink,
     )
     .await?;
