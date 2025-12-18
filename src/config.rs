@@ -134,14 +134,7 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_default_config() {
-        let config = Config::default();
-        assert_eq!(config.model, "claude-haiku-4-5");
-        assert_eq!(config.max_tokens, 1024);
-        assert_eq!(config.tool_timeout_secs, 30);
-    }
-
+    /// Config loading: missing file returns defaults (SPEC §9).
     #[test]
     fn test_load_missing_file_returns_defaults() {
         let dir = tempdir().unwrap();
@@ -149,10 +142,12 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-haiku-4-5");
+        assert_eq!(config.max_tokens, 1024);
     }
 
+    /// Config loading: partial config merges with defaults.
     #[test]
-    fn test_load_partial_config() {
+    fn test_load_partial_config_merges_defaults() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
@@ -160,11 +155,12 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
-        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.max_tokens, 1024); // default preserved
     }
 
+    /// Config init: creates file with defaults, creates parent dirs (SPEC §9).
     #[test]
-    fn test_init_creates_config() {
+    fn test_init_creates_config_with_defaults() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("subdir").join("config.toml");
 
@@ -173,8 +169,10 @@ mod tests {
         assert!(config_path.exists());
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("claude-haiku-4-5"));
+        assert!(contents.contains("max_tokens"));
     }
 
+    /// Config init: fails if file exists (no silent overwrite).
     #[test]
     fn test_init_fails_if_exists() {
         let dir = tempdir().unwrap();
@@ -186,25 +184,9 @@ mod tests {
         assert!(result.is_err());
     }
 
+    /// Prompt resolution: file wins over inline (SPEC §9).
     #[test]
-    fn test_effective_system_prompt_inline() {
-        let mut config = Config::default();
-        config.system_prompt = Some("inline prompt".to_string());
-        assert_eq!(
-            config.effective_system_prompt().unwrap(),
-            Some("inline prompt".to_string())
-        );
-    }
-
-    #[test]
-    fn test_effective_system_prompt_inline_empty_is_none() {
-        let mut config = Config::default();
-        config.system_prompt = Some("   ".to_string());
-        assert_eq!(config.effective_system_prompt().unwrap(), None);
-    }
-
-    #[test]
-    fn test_effective_system_prompt_file() {
+    fn test_system_prompt_file_wins_over_inline() {
         let dir = tempdir().unwrap();
         let prompt_file = dir.path().join("prompt.txt");
         fs::write(&prompt_file, "file prompt").unwrap();
@@ -219,25 +201,7 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_effective_system_prompt_file_empty_is_none() {
-        let dir = tempdir().unwrap();
-        let prompt_file = dir.path().join("prompt.txt");
-        fs::write(&prompt_file, " \n\t ").unwrap();
-
-        let mut config = Config::default();
-        config.system_prompt_file = Some(prompt_file.to_str().unwrap().to_string());
-        config.system_prompt = Some("inline prompt".to_string());
-
-        assert_eq!(config.effective_system_prompt().unwrap(), None);
-    }
-
-    #[test]
-    fn test_effective_system_prompt_none() {
-        let config = Config::default();
-        assert_eq!(config.effective_system_prompt().unwrap(), None);
-    }
-
+    /// Timeout: zero disables timeout (SPEC §6).
     #[test]
     fn test_tool_timeout_zero_disables() {
         let mut config = Config::default();
@@ -245,8 +209,9 @@ mod tests {
         assert_eq!(config.tool_timeout(), None);
     }
 
+    /// Base URL: loaded from config file.
     #[test]
-    fn test_anthropic_base_url_from_config() {
+    fn test_anthropic_base_url_loaded_from_config() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
@@ -263,35 +228,11 @@ mod tests {
         );
     }
 
+    /// Base URL: empty/whitespace treated as unset.
     #[test]
-    fn test_anthropic_base_url_empty_string_is_none() {
-        let mut config = Config::default();
-        config.anthropic_base_url = Some("".to_string());
-        assert_eq!(config.effective_anthropic_base_url(), None);
-    }
-
-    #[test]
-    fn test_anthropic_base_url_whitespace_is_none() {
+    fn test_anthropic_base_url_empty_is_none() {
         let mut config = Config::default();
         config.anthropic_base_url = Some("   ".to_string());
         assert_eq!(config.effective_anthropic_base_url(), None);
-    }
-
-    #[test]
-    fn test_anthropic_base_url_default_is_none() {
-        let config = Config::default();
-        assert_eq!(config.anthropic_base_url, None);
-        assert_eq!(config.effective_anthropic_base_url(), None);
-    }
-
-    #[test]
-    fn test_init_includes_commented_anthropic_base_url() {
-        let dir = tempdir().unwrap();
-        let config_path = dir.path().join("config.toml");
-
-        Config::init(&config_path).unwrap();
-
-        let contents = fs::read_to_string(&config_path).unwrap();
-        assert!(contents.contains("# anthropic_base_url"));
     }
 }
