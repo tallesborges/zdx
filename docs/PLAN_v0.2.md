@@ -95,6 +95,37 @@ zdx exec -p "hello" --no-save
 
 ---
 
+### Commit 2b: `refactor(chat): route REPL turns through engine + renderer`
+
+**Goal:** Remove the duplicate chat streaming/tool loop and make chat obey the same stdout/stderr contract as `exec`.
+
+**Deliverable:** Interactive chat:
+- uses `engine::run_turn(...)` for each user turn (no direct provider/tool-loop in `src/chat.rs`)
+- streams assistant text via `CliRenderer` to **stdout** only (no `assistant>` prefixes)
+- prints REPL UI (welcome, prompt, goodbye, warnings) to **stderr** only
+- relies on renderer for tool activity indicators + final newline behavior
+
+**CLI demo command(s):**
+```bash
+echo -e "hi\n:q\n" | zdx 2>err.txt | cat
+cat err.txt
+```
+
+**Files changed:**
+- modify `src/chat.rs` — drive turns via `engine::run_turn` + `CliRenderer`
+- modify `src/main.rs` — keep default chat mode, but ensure banner/prompt go to stderr
+
+**Tests added/updated:**
+- modify `tests/chat_mock.rs` — assert stdout contains only assistant text; stderr contains "ZDX Chat", prompts, and "Goodbye!"
+- modify `tests/session_schema.rs` / `tests/resume_uses_history.rs` (if needed) — update expectations for chat UI output channel
+
+**Edge cases covered:**
+- empty input re-renders prompt without calling provider
+- `:q` exits cleanly without emitting anything to stdout
+- history remains correct across turns (messages returned by engine become the next request context)
+
+---
+
 ### Commit 3: `feat(session): add schema versioning and tool event persistence`
 
 **Goal:** Make sessions resumable with full tool history (per SPEC §8).
