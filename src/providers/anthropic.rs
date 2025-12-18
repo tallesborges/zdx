@@ -290,14 +290,14 @@ pub enum StreamEvent {
 /// SSE parser that converts a byte stream into StreamEvents.
 pub struct SseParser<S> {
     inner: S,
-    buffer: String,
+    buffer: Vec<u8>,
 }
 
 impl<S> SseParser<S> {
     pub fn new(stream: S) -> Self {
         Self {
             inner: stream,
-            buffer: String::new(),
+            buffer: Vec::new(),
         }
     }
 }
@@ -325,8 +325,7 @@ where
             let inner = Pin::new(&mut self.inner);
             match inner.poll_next(cx) {
                 Poll::Ready(Some(Ok(bytes))) => {
-                    let text = String::from_utf8_lossy(&bytes);
-                    self.buffer.push_str(&text);
+                    self.buffer.extend_from_slice(&bytes);
                     // Continue looping to parse
                 }
                 Poll::Ready(Some(Err(e))) => {
@@ -334,7 +333,8 @@ where
                 }
                 Poll::Ready(None) => {
                     // Stream ended - check for any remaining buffered event
-                    if self.buffer.trim().is_empty() {
+                    let is_empty = self.buffer.iter().all(|b| b.is_ascii_whitespace());
+                    if is_empty {
                         return Poll::Ready(None);
                     }
                     // Try to parse remaining buffer
@@ -354,11 +354,23 @@ impl<S> SseParser<S> {
     /// Returns None if no complete event is available yet.
     fn try_parse_event(&mut self) -> Option<Result<StreamEvent>> {
         // SSE events are separated by double newlines
-        let event_end = self.buffer.find("\n\n")?;
-        let event_text = self.buffer[..event_end].to_string();
-        self.buffer = self.buffer[event_end + 2..].to_string();
+        // Find \n\n in the byte buffer
+        let event_end = self
+            .buffer
+            .windows(2)
+            .position(|w| w == b"\n\n")?;
 
-        Some(parse_sse_event(&event_text))
+        // Extract the event bytes and remove from buffer
+        let event_bytes: Vec<u8> = self.buffer.drain(..event_end).collect();
+        self.buffer.drain(..2); // remove the \n\n delimiter
+
+        // Decode UTF-8 only after we have the complete event
+        let event_text = match std::str::from_utf8(&event_bytes) {
+            Ok(s) => s,
+            Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in SSE event: {}", e))),
+        };
+
+        Some(parse_sse_event(event_text))
     }
 }
 
@@ -1107,5 +1119,44 @@ data: {"type":"message_stop"}
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], StreamEvent::Ping);
         assert_eq!(events[1], StreamEvent::MessageStop);
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_handles_utf8_split_across_chunks() {
+        // Test that multi-byte UTF-8 characters split across TCP chunks are handled correctly.
+        // 👋 = F0 9F 91 8B (4 bytes) - splitting this would corrupt with from_utf8_lossy
+        let data = r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello 👋 world"}}
+
+"#;
+        let bytes = data.as_bytes();
+
+        // Find the start of the emoji (F0 byte) and split inside it
+        let emoji_start = bytes
+            .windows(4)
+            .position(|w| w == [0xF0, 0x9F, 0x91, 0x8B])
+            .expect("emoji not found");
+
+        // Split right in the middle of the emoji (after 2 of 4 bytes)
+        let split_point = emoji_start + 2;
+
+        let chunks: Vec<std::result::Result<bytes::Bytes, std::io::Error>> = vec![
+            Ok(bytes::Bytes::copy_from_slice(&bytes[..split_point])),
+            Ok(bytes::Bytes::copy_from_slice(&bytes[split_point..])),
+        ];
+
+        let stream = futures_util::stream::iter(chunks);
+        let mut parser = SseParser::new(stream);
+
+        let event = parser.next().await.unwrap().expect("should parse valid event");
+
+        // Verify the emoji is intact, not corrupted with replacement characters
+        assert_eq!(
+            event,
+            StreamEvent::TextDelta {
+                index: 0,
+                text: "Hello 👋 world".to_string()
+            }
+        );
     }
 }
