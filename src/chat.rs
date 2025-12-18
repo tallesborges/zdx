@@ -40,7 +40,7 @@ pub async fn run_interactive_chat_with_history(
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
-    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
+    let effective = crate::context::build_effective_system_prompt_with_paths(config, &root)?;
 
     // Wrap session in Arc<Mutex> for shared access in event sink
     let session = session.map(|s| Arc::new(Mutex::new(s)));
@@ -56,6 +56,13 @@ pub async fn run_interactive_chat_with_history(
     if !history.is_empty() {
         writeln!(err, "Loaded {} previous messages", history.len())?;
     }
+    // Show loaded AGENTS.md files
+    if !effective.loaded_agents_paths.is_empty() {
+        writeln!(err, "Loaded AGENTS.md from:")?;
+        for path in &effective.loaded_agents_paths {
+            writeln!(err, "  - {}", path.display())?;
+        }
+    }
     write!(err, "{}", PROMPT_PREFIX)?;
     err.flush()?;
 
@@ -65,7 +72,7 @@ pub async fn run_interactive_chat_with_history(
         &engine_opts,
         session,
         history,
-        system_prompt.as_deref(),
+        effective.prompt.as_deref(),
     )
     .await
 }
@@ -235,7 +242,7 @@ where
     R: BufRead,
     W: Write,
 {
-    let system_prompt = crate::context::build_effective_system_prompt(config, &root)?;
+    let effective = crate::context::build_effective_system_prompt_with_paths(config, &root)?;
     let session = session.map(|s| Arc::new(Mutex::new(s)));
     let engine_opts = EngineOptions { root };
 
@@ -243,6 +250,13 @@ where
     writeln!(output, "ZDX Chat (type :q to quit)")?;
     if let Some(ref s) = session {
         writeln!(output, "Session: {}", s.lock().unwrap().id)?;
+    }
+    // Show loaded AGENTS.md files
+    if !effective.loaded_agents_paths.is_empty() {
+        writeln!(output, "Loaded AGENTS.md from:")?;
+        for path in &effective.loaded_agents_paths {
+            writeln!(output, "  - {}", path.display())?;
+        }
     }
     write!(output, "{}", PROMPT_PREFIX)?;
     output.flush()?;
@@ -280,7 +294,7 @@ where
             history.clone(),
             config,
             &engine_opts,
-            system_prompt.as_deref(),
+            effective.prompt.as_deref(),
             session.clone(),
             renderer.clone(),
         )

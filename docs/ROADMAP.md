@@ -61,12 +61,11 @@
 - [ ] Deterministic tool result shape (easy to parse; good errors)
 
 ### v0.2.4 — Terminal UX polish
-- [ ] `AGENTS.md` auto-inclusion:
+- [x] `AGENTS.md` hierarchical auto-inclusion (per SPEC §15):
   - Deterministic file name (`AGENTS.md`)
-  - Deterministic search path (`--root` then cwd)
+  - Hierarchical search: `ZDX_HOME` → `~` → ancestors → project root
   - Loaded once at session start
   - Surfaced to stderr (e.g., "Loaded AGENTS.md from ...")
-  - Optionally disableable via flag/config (without being a "guardrail")
 - [ ] Cleaner, consistent error rendering to stderr (terminal-first)
 - [ ] Improved transcript formatting (readable defaults; pipe-friendly)
 - [ ] Optional system prompt profiles (only if it stays simple)

@@ -503,3 +503,46 @@ Breaking changes, if necessary, should:
 * **Session (JSONL)**: append-only record of conversation and events
 * **Tool loop**: model requests tool → tool runs → tool_result returned → model continues
 * **YOLO mode**: permissive operation prioritizing speed and flow over guardrails
+
+---
+
+## 15) Project context (AGENTS.md)
+
+### Purpose
+
+ZDX automatically loads `AGENTS.md` files to provide project-specific guidelines to the model.
+This enables per-project customization without modifying the global config.
+
+### Loading order
+
+AGENTS.md files are loaded hierarchically and concatenated in this order:
+
+1. `$ZDX_HOME/AGENTS.md` — global user guidelines (always checked)
+2. `~/AGENTS.md` — user home (only if project root is under home)
+3. Ancestor directories from `~` to project root (only if project root is under home)
+4. Project root (`--root` or cwd) — most specific
+
+### Behavior
+
+* Empty files are skipped silently.
+* Unreadable files log a warning to stderr but don't fail.
+* Loaded file paths are logged to stderr (per §10 output channel rules).
+* Content is concatenated with path headers for clarity:
+
+  ```markdown
+  # Project Context
+
+  ## /path/to/AGENTS.md
+
+  <content>
+
+  ## /another/path/AGENTS.md
+
+  <content>
+  ```
+
+### Integration with system prompt
+
+* Project context is appended to the system prompt (config or flag).
+* If no system prompt is configured, project context becomes the system prompt.
+* Content order: system prompt first, then project context.

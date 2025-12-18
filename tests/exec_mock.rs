@@ -388,8 +388,8 @@ async fn test_exec_includes_agents_md_context() {
         body
     );
     assert!(
-        body.contains("# Project Guidelines"),
-        "Request body should contain Project Guidelines header. Got: {}",
+        body.contains("# Project Context"),
+        "Request body should contain Project Context header. Got: {}",
         body
     );
 }
