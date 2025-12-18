@@ -100,10 +100,20 @@ impl Config {
         }
 
         let toml = format!(
-            "# ZDX Configuration\n\nmodel = \"{}\"\nmax_tokens = {}\ntool_timeout_secs = {}\n\n# system_prompt = \"You are a helpful assistant.\"\n# system_prompt_file = \"/path/to/system_prompt.md\"\n\n# anthropic_base_url = \"https://api.anthropic.com\"\n",
+            r#"# ZDX Configuration
+
+model = "{}"
+max_tokens = {}
+tool_timeout_secs = {}
+
+# system_prompt = "You are a helpful assistant."
+# system_prompt_file = "/path/to/system_prompt.md"
+
+# anthropic_base_url = "https://api.anthropic.com"
+"#,
             Self::DEFAULT_MODEL,
             Self::DEFAULT_MAX_TOKENS,
-            Self::DEFAULT_TOOL_TIMEOUT_SECS
+            Self::DEFAULT_TOOL_TIMEOUT_SECS,
         );
 
         fs::write(path, toml)
