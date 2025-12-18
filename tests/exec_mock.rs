@@ -107,6 +107,9 @@ async fn test_exec_handles_api_error() {
         .args(["exec", "-p", "hello"])
         .assert()
         .failure()
+        .code(1)
+        // Structured error: "Error [http_status]: HTTP 401: Invalid API key"
+        .stderr(predicate::str::contains("Error [http_status]"))
         .stderr(predicate::str::contains("401"));
 }
 
@@ -128,6 +131,9 @@ async fn test_exec_handles_api_error_midstream() {
         .args(["exec", "-p", "hello"])
         .assert()
         .failure()
+        .code(1)
+        // Structured error: "Error [api_error]: overloaded_error: API is temporarily overloaded"
+        .stderr(predicate::str::contains("Error [api_error]"))
         .stderr(predicate::str::contains("overloaded_error"))
         .stderr(predicate::str::contains("API is temporarily overloaded"));
 }
@@ -424,7 +430,6 @@ async fn test_exec_uses_config_base_url_when_env_absent() {
 #[tokio::test]
 async fn test_exec_empty_config_base_url_uses_default() {
     let temp_dir = tempfile::TempDir::new().unwrap();
-    let mock_server = MockServer::start().await;
 
     // Write config with empty base URL
     std::fs::write(
@@ -583,4 +588,112 @@ async fn test_exec_stdout_contains_only_assistant_text() {
         "stderr should contain 'Done'. Got stderr: '{}'",
         stderr
     );
+}
+
+/// Tests that non-JSON error bodies still produce structured errors.
+#[tokio::test]
+async fn test_exec_handles_non_json_error_body() {
+    let mock_server = MockServer::start().await;
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(503).set_body_string("Service Temporarily Unavailable"))
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["exec", "-p", "hello"])
+        .assert()
+        .failure()
+        .code(1)
+        // Structured error format with http_status kind
+        .stderr(predicate::str::contains("Error [http_status]"))
+        .stderr(predicate::str::contains("503"));
+}
+
+/// Tests that connection failures produce timeout-category errors with exit code 1.
+#[tokio::test]
+async fn test_exec_connection_refused_error() {
+    // Use a port that's unlikely to have anything listening
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9999")
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .failure()
+        .code(1)
+        // Connection failures map to timeout category
+        .stderr(predicate::str::contains("Error [timeout]"))
+        .stderr(predicate::str::contains("Connection failed"));
+}
+
+/// Tests that error details are printed when available (JSON error body).
+#[tokio::test]
+async fn test_exec_error_shows_details_when_available() {
+    let mock_server = MockServer::start().await;
+
+    let error_body = serde_json::json!({
+        "type": "error",
+        "error": {
+            "type": "rate_limit_error",
+            "message": "Rate limit exceeded. Please retry after 60 seconds."
+        }
+    });
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(&error_body))
+        .mount(&mock_server)
+        .await;
+
+    let output = cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["exec", "-p", "hello"])
+        .output()
+        .expect("Failed to execute command");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    // Should have structured error prefix
+    assert!(
+        stderr.contains("Error [http_status]"),
+        "stderr should contain structured error prefix. Got: '{}'",
+        stderr
+    );
+    // Should have the extracted message in the one-liner
+    assert!(
+        stderr.contains("Rate limit exceeded"),
+        "stderr should contain error message. Got: '{}'",
+        stderr
+    );
+    // Should show details (raw JSON body)
+    assert!(
+        stderr.contains("Details:"),
+        "stderr should show details section. Got: '{}'",
+        stderr
+    );
+}
+
+/// Tests that exit code is 1 for all provider errors.
+#[tokio::test]
+async fn test_exec_error_exit_code_is_one() {
+    let mock_server = MockServer::start().await;
+
+    // 500 Internal Server Error
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(500).set_body_string("Internal Server Error"))
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["exec", "-p", "hello"])
+        .assert()
+        .failure()
+        .code(1);
 }

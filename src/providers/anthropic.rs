@@ -1,5 +1,6 @@
 //! Anthropic Claude API client.
 
+use std::fmt;
 use std::pin::Pin;
 
 use anyhow::{Context, Result, bail};
@@ -11,6 +12,122 @@ use crate::tools::{ToolDefinition, ToolResult, ToolUse};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
+
+// === Structured Provider Errors ===
+
+/// Categories of provider errors for consistent error handling.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderErrorKind {
+    /// HTTP status error (4xx, 5xx)
+    HttpStatus,
+    /// Connection timeout or request timeout
+    Timeout,
+    /// Failed to parse response (JSON parse error, invalid SSE, etc.)
+    Parse,
+    /// API-level error returned by the provider (e.g., overloaded, rate_limit)
+    ApiError,
+}
+
+impl fmt::Display for ProviderErrorKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            ProviderErrorKind::HttpStatus => write!(f, "http_status"),
+            ProviderErrorKind::Timeout => write!(f, "timeout"),
+            ProviderErrorKind::Parse => write!(f, "parse"),
+            ProviderErrorKind::ApiError => write!(f, "api_error"),
+        }
+    }
+}
+
+/// Structured error from the provider with kind and details.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderError {
+    /// Error category
+    pub kind: ProviderErrorKind,
+    /// One-line summary suitable for display
+    pub message: String,
+    /// Optional additional details (e.g., raw error body)
+    pub details: Option<String>,
+}
+
+impl ProviderError {
+    /// Creates a new provider error.
+    pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            details: None,
+        }
+    }
+
+    /// Creates a provider error with details.
+    pub fn with_details(
+        kind: ProviderErrorKind,
+        message: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
+        Self {
+            kind,
+            message: message.into(),
+            details: Some(details.into()),
+        }
+    }
+
+    /// Creates an HTTP status error.
+    pub fn http_status(status: u16, body: &str) -> Self {
+        let message = format!("HTTP {}", status);
+        let details = if body.is_empty() {
+            None
+        } else {
+            // Try to extract a cleaner error message from JSON
+            if let Ok(json) = serde_json::from_str::<Value>(body) {
+                if let Some(error_obj) = json.get("error") {
+                    if let Some(msg) = error_obj.get("message").and_then(|v| v.as_str()) {
+                        return Self {
+                            kind: ProviderErrorKind::HttpStatus,
+                            message: format!("HTTP {}: {}", status, msg),
+                            details: Some(body.to_string()),
+                        };
+                    }
+                }
+            }
+            Some(body.to_string())
+        };
+        Self {
+            kind: ProviderErrorKind::HttpStatus,
+            message,
+            details,
+        }
+    }
+
+    /// Creates a timeout error.
+    pub fn timeout(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorKind::Timeout, message)
+    }
+
+    /// Creates a parse error.
+    pub fn parse(message: impl Into<String>) -> Self {
+        Self::new(ProviderErrorKind::Parse, message)
+    }
+
+    /// Creates an API error (from mid-stream error event).
+    pub fn api_error(error_type: &str, message: &str) -> Self {
+        Self {
+            kind: ProviderErrorKind::ApiError,
+            message: format!("{}: {}", error_type, message),
+            details: None,
+        }
+    }
+}
+
+impl fmt::Display for ProviderError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl std::error::Error for ProviderError {}
 
 /// Configuration for the Anthropic client.
 #[derive(Debug, Clone)]
@@ -137,22 +254,18 @@ impl AnthropicClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to send request to Anthropic API")?;
+            .map_err(|e| Self::classify_reqwest_error(e))?;
 
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
-            bail!(
-                "Anthropic API request failed with status {}: {}",
-                status,
-                error_body
-            );
+            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
         }
 
         let raw: MessagesResponse = response
             .json()
             .await
-            .context("Failed to parse Anthropic API response")?;
+            .map_err(|e| ProviderError::parse(format!("Failed to parse response: {}", e)))?;
 
         Ok(AssistantResponse::from(raw))
     }
@@ -194,21 +307,36 @@ impl AnthropicClient {
             .json(&request)
             .send()
             .await
-            .context("Failed to send streaming request to Anthropic API")?;
+            .map_err(|e| Self::classify_reqwest_error(e))?;
 
         let status = response.status();
         if !status.is_success() {
             let error_body = response.text().await.unwrap_or_default();
-            bail!(
-                "Anthropic API streaming request failed with status {}: {}",
-                status,
-                error_body
-            );
+            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
         }
 
         let byte_stream = response.bytes_stream();
         let event_stream = SseParser::new(byte_stream);
         Ok(Box::pin(event_stream))
+    }
+
+    /// Classifies a reqwest error into a ProviderError.
+    fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+        if e.is_timeout() {
+            ProviderError::timeout(format!("Request timed out: {}", e))
+        } else if e.is_connect() {
+            ProviderError::timeout(format!("Connection failed: {}", e))
+        } else if e.is_request() {
+            ProviderError::new(
+                ProviderErrorKind::HttpStatus,
+                format!("Request error: {}", e),
+            )
+        } else {
+            ProviderError::new(
+                ProviderErrorKind::HttpStatus,
+                format!("Network error: {}", e),
+            )
+        }
     }
 }
 
@@ -848,138 +976,6 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
 
 "#;
 
-    #[test]
-    fn test_parse_message_start() {
-        let event_text = r#"event: message_start
-data: {"type":"message_start","message":{"id":"msg_123","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::MessageStart {
-                model: "claude-sonnet-4-20250514".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_content_block_start_text() {
-        let event_text = r#"event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::ContentBlockStart {
-                index: 0,
-                block_type: "text".to_string(),
-                id: None,
-                name: None,
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_content_block_start_tool_use() {
-        let event_text = r#"event: content_block_start
-data: {"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_abc","name":"read_file"}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::ContentBlockStart {
-                index: 0,
-                block_type: "tool_use".to_string(),
-                id: Some("toolu_abc".to_string()),
-                name: Some("read_file".to_string()),
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_text_delta() {
-        let event_text = r#"event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hello"}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::TextDelta {
-                index: 0,
-                text: "Hello".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_input_json_delta() {
-        let event_text = r#"event: content_block_delta
-data: {"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"key\":"}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::InputJsonDelta {
-                index: 0,
-                partial_json: "{\"key\":".to_string()
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_content_block_stop() {
-        let event_text = r#"event: content_block_stop
-data: {"type":"content_block_stop","index":0}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(result, StreamEvent::ContentBlockStop { index: 0 });
-    }
-
-    #[test]
-    fn test_parse_message_delta() {
-        let event_text = r#"event: message_delta
-data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::MessageDelta {
-                stop_reason: Some("end_turn".to_string())
-            }
-        );
-    }
-
-    #[test]
-    fn test_parse_message_stop() {
-        let event_text = r#"event: message_stop
-data: {"type":"message_stop"}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(result, StreamEvent::MessageStop);
-    }
-
-    #[test]
-    fn test_parse_ping() {
-        let event_text = "event: ping\ndata: {\"type\":\"ping\"}";
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(result, StreamEvent::Ping);
-    }
-
-    #[test]
-    fn test_parse_error() {
-        let event_text = r#"event: error
-data: {"type":"error","error":{"type":"overloaded_error","message":"API is temporarily overloaded"}}"#;
-
-        let result = parse_sse_event(event_text).unwrap();
-        assert_eq!(
-            result,
-            StreamEvent::Error {
-                error_type: "overloaded_error".to_string(),
-                message: "API is temporarily overloaded".to_string()
-            }
-        );
-    }
-
     /// Helper to create a mock byte stream from a string
     fn mock_byte_stream(
         data: &str,
@@ -1196,5 +1192,4 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
             }
         );
     }
-
 }

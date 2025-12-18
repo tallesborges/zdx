@@ -64,8 +64,17 @@ impl CliRenderer {
             EngineEvent::ToolFinished { .. } => {
                 let _ = writeln!(self.stderr, " Done.");
             }
-            EngineEvent::Error { message } => {
-                let _ = writeln!(self.stderr, "Error: {}", message);
+            EngineEvent::Error {
+                kind,
+                message,
+                details,
+            } => {
+                // Print one-liner to stderr
+                let _ = writeln!(self.stderr, "Error [{}]: {}", kind, message);
+                // Print details if present (indented)
+                if let Some(ref detail_text) = details {
+                    let _ = writeln!(self.stderr, "  Details: {}", detail_text);
+                }
             }
             EngineEvent::Interrupted => {
                 // Print interruption message to stderr (per SPEC §10)
@@ -115,5 +124,3 @@ impl RendererHandle {
         r.finish();
     }
 }
-
-
