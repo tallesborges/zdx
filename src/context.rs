@@ -186,32 +186,6 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
     })
 }
 
-/// Loads project context from AGENTS.md in the given root directory.
-///
-/// **Deprecated:** Use `load_all_agents_files` for hierarchical loading.
-#[allow(dead_code)]
-pub fn load_project_context(root: &Path) -> Option<String> {
-    let agents_md = root.join("AGENTS.md");
-    if !agents_md.exists() {
-        return None;
-    }
-
-    let content = match fs::read_to_string(&agents_md) {
-        Ok(s) => s,
-        Err(e) => {
-            eprintln!(
-                "Warning: Failed to read AGENTS.md in {}: {}",
-                root.display(),
-                e
-            );
-            return None;
-        }
-    };
-
-    let trimmed = content.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_string())
-}
-
 /// Result of building the effective system prompt.
 #[derive(Debug, Clone)]
 pub struct EffectivePrompt {
@@ -262,15 +236,6 @@ pub fn build_effective_system_prompt_with_paths(
     })
 }
 
-/// Builds the effective system prompt by combining config and AGENTS.md files.
-///
-/// **Deprecated:** Use `build_effective_system_prompt_with_paths` and handle
-/// warnings/loaded paths via the renderer for cleaner separation of concerns.
-pub fn build_effective_system_prompt(config: &Config, root: &Path) -> Result<Option<String>> {
-    let result = build_effective_system_prompt_with_paths(config, root)?;
-    Ok(result.prompt)
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -278,33 +243,6 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-
-    #[test]
-    fn test_load_project_context_present() {
-        let dir = tempdir().unwrap();
-        let agents_md = dir.path().join("AGENTS.md");
-        fs::write(&agents_md, "Project guidelines").unwrap();
-
-        let context = load_project_context(dir.path());
-        assert_eq!(context, Some("Project guidelines".to_string()));
-    }
-
-    #[test]
-    fn test_load_project_context_missing() {
-        let dir = tempdir().unwrap();
-        let context = load_project_context(dir.path());
-        assert_eq!(context, None);
-    }
-
-    #[test]
-    fn test_load_project_context_empty() {
-        let dir = tempdir().unwrap();
-        let agents_md = dir.path().join("AGENTS.md");
-        fs::write(&agents_md, "  ").unwrap();
-
-        let context = load_project_context(dir.path());
-        assert_eq!(context, None);
-    }
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
