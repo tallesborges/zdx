@@ -286,8 +286,14 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 ### Persistence mapping
 
-* Important engine events should be persistable as JSONL session events
-  (at minimum: messages, interruptions; later: tool events).
+* Engine events that affect model context or user-visible history must be persistable as JSONL session events.
+  * Minimum persisted set in v0.2.x:
+    - `meta` (schema header)
+    - `message`
+    - `tool_use`
+    - `tool_result`
+    - `interrupted`
+  * Additional event types may be added later, but backward readability should be preserved where possible.
 
 ---
 
@@ -483,7 +489,7 @@ Breaking changes, if necessary, should:
 * **SPEC.md**: values + contracts + non-goals (this document)
 * **ROADMAP.md**: high-level versions and outcomes (what's next and why)
 * **PLAN_vX.Y.md**: concrete, commit-level delivery plan (how to build it)
-* **ADR (docs/adr/ADR-XXXX)**: decision rationale over time (the “why”)
+* **docs/adr/NNNN-*.md**: decision rationale over time (the “why”)
 
 **Rule:** ROADMAP and PLAN must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
 **Rule:** When a notable decision changes, add a new ADR that supersedes the old one; avoid rewriting past ADRs.
