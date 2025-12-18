@@ -138,6 +138,11 @@ async fn test_tool_use_persisted_to_session() {
     assert!(tool_result["ok"].is_boolean());
 }
 
+/// Test that legacy sessions (without meta event) are backward compatible.
+///
+/// After refactor (commit 2b):
+/// - "Loaded N previous messages" goes to stderr
+/// - Assistant text goes to stdout
 #[tokio::test]
 async fn test_legacy_session_backward_compatible() {
     let mock_server = MockServer::start().await;
@@ -170,7 +175,9 @@ async fn test_legacy_session_backward_compatible() {
         .write_stdin("And 3+3?\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Loaded 2 previous messages"))
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Loaded 2 previous messages"))
+        // Assistant text goes to stdout
         .stdout(predicate::str::contains("3+3 is 6"));
 }
 
@@ -200,6 +207,11 @@ async fn test_sessions_show_displays_tool_events() {
         .stdout(predicate::str::contains("### Result ✓"));
 }
 
+/// Test that resume with tool history includes tool context in API request.
+///
+/// After refactor (commit 2b):
+/// - "Loaded N previous messages" goes to stderr
+/// - Assistant text goes to stdout
 #[tokio::test]
 async fn test_resume_with_tool_history_includes_tools_in_context() {
     let mock_server = MockServer::start().await;
@@ -240,7 +252,12 @@ async fn test_resume_with_tool_history_includes_tools_in_context() {
         .write_stdin("continue\n:q\n")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Loaded 4 previous messages"));
+        // REPL UI goes to stderr
+        .stderr(predicate::str::contains("Loaded 4 previous messages"))
+        // Assistant text goes to stdout
+        .stdout(predicate::str::contains(
+            "Okay, continuing from where we left off.",
+        ));
 }
 
 #[tokio::test]
