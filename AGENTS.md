@@ -34,9 +34,69 @@ Example: `cargo run -- config init` (creates a default config file).
 
 ## Testing Guidelines
 
-- Unit tests live next to code (e.g., `src/config.rs`); integration tests in `tests/*.rs`.
-- Prefer black-box CLI tests using `assert_cmd::cargo::cargo_bin_cmd!`.
-- Naming: `test_<behavior>_<expected>()` and keep tests independent/isolated.
+### Testing philosophy (contract-first, surgical)
+
+ZDX tests exist to **prevent breaking changes** and **lock in user-visible contracts** (SPEC/CLI/persistence/tool loop).
+We do **not** write tests to maximize line/branch coverage.
+
+Before adding a test, you must be able to answer in one sentence:
+
+> **What contract would silently break if this test didn't exist?**
+
+If you can't point to a SPEC contract, a CLI behavior, a persisted format, a prior bug/regression, or a genuinely tricky parser edge case, **do not add the test**.
+
+### What we test (high leverage)
+
+Prefer **black-box** tests (integration/CLI) over unit tests when possible.
+
+We *do* test:
+- **CLI contracts:** stdout/stderr shape, exit codes, `--format json` envelope, command/flag behavior.
+- **Persistence contracts:** session JSONL schema, paths (`ZDX_HOME`), migration/version rules (if any).
+- **Provider/tool loop contracts:** tool_use → tool_result cycles, event stream sequencing (via mock server/fixtures).
+- **Tricky parsing/streaming logic:** e.g., SSE parsing, incremental JSON, UTF-8 boundary handling.
+  - These should be covered by **a small number of fixtures** that exercise the important edges.
+
+### What we avoid (low leverage / "test bloat")
+
+We avoid tests that:
+- Mirror implementation details (tests that read like the code's `if/else` tree).
+- Assert internal/private helper behavior when the same behavior can be validated via a public API or CLI.
+- Enumerate "all permutations" (e.g., whitespace variants, redundant precedence cases) unless there was a real regression.
+- Require fragile setup (global state, timing dependencies, `sleep`, real network).
+- Force serial execution (`--test-threads=1`) just to mutate process-global state.
+
+**Rule of thumb:** if a test would fail after a refactor that does not change observable behavior, it's probably testing the wrong thing.
+
+### Env vars and other global state (important)
+
+Avoid mutating process-wide environment variables in unit tests (`std::env::set_var/remove_var`), because it:
+- couples unrelated tests,
+- can become flaky under parallel test execution,
+- often leads to "serial test" footguns.
+
+Prefer instead:
+- **Integration tests** that spawn the CLI as a subprocess and set env vars on the `Command` (`assert_cmd` supports this).
+- Tests that validate behavior via a **mock server base URL** (e.g., the CLI hits the mock endpoint when `ANTHROPIC_BASE_URL` is set), rather than unit-testing internal resolution branches.
+
+If you *must* test env behavior in-process, keep it to **one minimal test** and scope changes with a guard pattern. Do not add a pile of permutation tests.
+
+### Fixture discipline
+
+- Use fixtures to cover **representative** cases, not exhaustive ones.
+- Prefer **1–3 end-to-end fixture tests** over 10 micro-tests that each assert one tiny field.
+- Add new fixtures only when they catch a regression or cover a new contract.
+
+### Test review checklist (required)
+
+When adding or changing tests, ensure:
+- ✅ The test protects a SPEC/CLI/persistence/tool contract (cite the section or link an issue).
+- ✅ The test asserts **observable behavior**, not internal structure.
+- ✅ The test is minimal: one happy path + one failure path (or one regression) is usually enough.
+- ✅ No new test depends on process-global env mutation unless unavoidable.
+- ✅ There isn't already a test covering the same failure mode.
+
+**Example smell:** Testing every permutation of env/config/default resolution for a base URL via a private helper.
+**Preferred:** One integration test that runs the CLI with `ANTHROPIC_BASE_URL` pointing at a mock server and asserts the request arrives there.
 
 Run a single integration test file: `cargo test --test config_path`.
 
@@ -185,6 +245,11 @@ When creating/updating a PLAN:
   - Files changed (explicit list)
   - Tests added/updated (explicit list + what they assert)
   - Edge cases covered
+
+**Important:** A PLAN step does **not** require *new* tests if existing tests already cover the behavior.
+Never add a low-signal test just to satisfy the checklist. In that case, explicitly say:
+- which existing tests cover it, or
+- why the change is refactor-only and covered by `cargo test`.
 
 Constraints:
 - KISS/YAGNI: smallest useful increment
