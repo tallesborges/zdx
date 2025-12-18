@@ -85,9 +85,8 @@ fn main_result() -> Result<()> {
                     }
                     Ok(())
                 }
+                SessionCommands::Resume { id } => run_resume(id, &config).await,
             },
-
-            Commands::Resume { id } => run_resume(id, &config).await,
 
             Commands::Config { command } => match command {
                 ConfigCommands::Path => {

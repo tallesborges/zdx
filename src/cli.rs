@@ -12,11 +12,11 @@ pub struct Cli {
     pub command: Option<Commands>,
 
     /// Root directory for file operations (default: current directory)
-    #[arg(long, default_value = ".", global = true)]
+    #[arg(long, default_value = ".")]
     pub root: String,
 
     /// Override the system prompt from config
-    #[arg(long, global = true)]
+    #[arg(long)]
     pub system_prompt: Option<String>,
 
     #[command(flatten)]
@@ -58,12 +58,6 @@ pub enum Commands {
         #[command(subcommand)]
         command: SessionCommands,
     },
-    /// Resume a previous session
-    Resume {
-        /// The ID of the session to resume (uses latest if not provided)
-        #[arg(value_name = "SESSION_ID")]
-        id: Option<String>,
-    },
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -80,6 +74,12 @@ pub enum SessionCommands {
         /// The ID of the session to show
         #[arg(value_name = "SESSION_ID")]
         id: String,
+    },
+    /// Resume a previous session
+    Resume {
+        /// The ID of the session to resume (uses latest if not provided)
+        #[arg(value_name = "SESSION_ID")]
+        id: Option<String>,
     },
 }
 
