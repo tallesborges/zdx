@@ -9,4 +9,5 @@ pub mod events;
 pub mod interrupt;
 pub mod paths;
 pub mod providers;
+pub mod renderer;
 pub mod tools;
