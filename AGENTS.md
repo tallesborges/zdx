@@ -126,14 +126,14 @@ Run a single integration test file: `cargo test --test config_path`.
 ZDX uses four docs with different responsibilities:
 
 - **SPEC.md** = values + contracts + non-goals (**source of truth**)
-- **ROADMAP.md** = high-level versions + outcomes (what/why, not how)
+- **docs/ROADMAP.md** = optional priorities list (what/why, not how)
 - **PLAN_vX.Y.md** = concrete, commit-sized implementation plan (how)
 - **docs/adr/*.md** = **Architecture Decision Records** (why we chose a path, tradeoffs, consequences)
 
 ### Golden rules
 1) **SPEC.md wins.** ROADMAP/PLAN/ADR must not contradict SPEC values (KISS/YAGNI, terminal-first, YOLO default, engine-first).
 2) **Only update SPEC.md when a contract/value changes.** Refactors that don’t change observable behavior do not require SPEC changes.
-3) **ROADMAP.md tracks “what’s next”.** No implementation detail.
+3) **docs/ROADMAP.md is optional.** If it exists, it tracks “what’s next” with minimal maintenance (no implementation detail).
 4) **PLAN is commit-sized.** Each step has a runnable deliverable + at least one test (or a short justification).
 5) **ADRs are for durable decisions** (the “why”), not for restating SPEC/PLAN:
    - ADRs should not re-document CLI/schema contracts (that belongs in SPEC).
@@ -161,29 +161,54 @@ Linking:
 
 ## When you (the agent/LLM) receive a request
 
-### A) If the request is "Add feature X to the roadmap"
-You must:
-1) Decide **which version** it belongs to (or propose one).
-2) Update **ROADMAP.md** by inserting the item in the correct version section.
-3) Check whether the feature changes any SPEC contract. If yes, update **SPEC.md**.
-4) If adding the feature requires a notable design choice/tradeoff, create a short **ADR** in `docs/adr/`.
-5) (Optional) If asked, create **PLAN_vX.Y.md** with commit-sized steps.
+## Docs and process: Fast path vs Contract path
+
+Most changes should follow the **Fast path**. Only use the **Contract path** when a user-visible contract changes.
+
+### Fast path (default)
+Use this when:
+- change is internal/refactor, or
+- feature is additive and does not change existing CLI/persistence/tool contracts.
+
+Rules:
+- You may ship without touching SPEC/ROADMAP/ADR.
+- Add tests only if they catch a real regression risk (see Testing Guidelines).
+- Updating `docs/ROADMAP.md` is optional and can be done later in batch.
+
+### Contract path (only when needed)
+Use this when the change modifies a contract in SPEC:
+- CLI commands/flags/output/exit codes
+- session schema/paths/schema_version rules
+- tool schemas/envelopes/timeouts
+- provider behavior that affects user-visible output
+- engine event stream semantics
+
+Rules:
+- Update `docs/SPEC.md` with the minimal contract delta.
+- Add a surgical test that would have caught an accidental contract break.
+- Write an ADR only for decisions that are hard to reverse.
+- Updating `docs/ROADMAP.md` is optional unless the change affects priorities/sequence.
+
+### A) If the request is "Add feature X to the roadmap / priorities"
+You should:
+1) Add the item to `docs/ROADMAP.md` (if the repo is using it), placing it under **Now / Next / Later**.
+2) Check whether the feature changes any SPEC contract. If yes, update `docs/SPEC.md`.
+3) If adding the feature requires a notable design choice/tradeoff, create a short ADR in `docs/adr/`.
+4) If asked, create `docs/PLAN_vX.Y.md` (or update the current plan) with commit-sized steps.
 
 ### B) If the request is "Implement feature X"
-You must:
-1) Identify the target version (from ROADMAP; if missing, propose one and update ROADMAP).
-2) Update **SPEC.md** if the implementation changes:
+You should:
+1) Follow **Fast path** vs **Contract path** above.
+2) Update `docs/SPEC.md` if (and only if) the implementation changes:
    - CLI surface (commands/flags/output/exit codes)
    - session JSONL schema or paths
    - config keys or resolution rules
    - engine event stream contract
    - tools (name/input/output semantics, timeouts)
    - provider behavior that affects user-visible output
-3) If implementation requires a non-trivial decision (format choice, interface boundary, error model, storage rules),
-   create/update an **ADR** in `docs/adr/` and link it from SPEC/PLAN as appropriate.
-4) Update **ROADMAP.md** to reflect status:
-   - move item to “Shipped” or mark partially shipped
-5) Generate **PLAN_vX.Y.md** (or update it) as a list of micro-commits:
+3) If implementation requires a non-trivial decision (format choice, interface boundary, error model, storage rules), create/update an ADR in `docs/adr/` and link it from SPEC/PLAN as appropriate.
+4) Update `docs/ROADMAP.md` only if it helps keep priorities accurate (optional).
+5) If asked, generate/update `docs/PLAN_vX.Y.md` as a list of micro-commits:
    - each commit: goal, deliverable, CLI demo command(s), files touched, tests, edge cases
 
 ---
@@ -221,16 +246,16 @@ Update SPEC.md when any of the following change:
 
 ## ROADMAP.md update rules
 
-- ROADMAP contains **features/outcomes**, not implementation detail.
+- `docs/ROADMAP.md` contains **features/outcomes**, not implementation detail.
 - Every roadmap item should be one of:
   - **User-visible UX improvement**
   - **New capability** (tool/command)
   - **Foundational enabler** (engine event stream, core extraction) described as an outcome
 
 When updating ROADMAP:
-- Keep items grouped by version (v0.2.x / v0.3.x / …)
-- Add a short **one-line goal** per version
-- If a feature is shipped, move it under “Shipped” for that version
+- Prefer **Now / Next / Later** (or similar) over version micro-buckets.
+- Keep “Now” short (e.g., max 3 items).
+- If a feature is shipped, move it under “Shipped”.
 
 ---
 
@@ -284,8 +309,8 @@ Avoid “half-integrations”:
 When I ask you to add/implement a feature, respond with:
 
 0) **ADR changes** (only if needed / created / superseded)
-1) **SPEC.md changes** (only if needed)
-2) **ROADMAP.md changes** (always if feature affects roadmap)
-3) **PLAN_vX.Y.md** (only if I asked for a plan or implementation)
+1) **docs/SPEC.md changes** (only if needed)
+2) **docs/ROADMAP.md changes** (only if updated / needed)
+3) **docs/PLAN_vX.Y.md** (only if I asked for a plan or implementation)
 
 Prefer showing the *full updated sections* (not vague suggestions), so I can copy/paste into files.

@@ -430,7 +430,7 @@ zdx --help | rg -n "0\\.2\\."
 **Files changed:**
 - modify `Cargo.toml` — bump version
 - modify `src/cli.rs` — use `#[command(version)]` or align literal version
-- modify `docs/ROADMAP.md` — move shipped v0.2.x items under "Shipped" as appropriate
+- modify `docs/ROADMAP.md` — move shipped items under "Shipped" as appropriate
 
 **Tests added/updated:**
 - `tests/cli_help.rs` — assert help shows the right version string

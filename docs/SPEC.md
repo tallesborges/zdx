@@ -1,8 +1,8 @@
 # ZDX Specification
 
 **Product:** ZDX (terminal-first agentic coding CLI)  
-**Spec version:** v0.2.x (living document)  
-**Status:** Source of truth for *values + contracts*. ROADMAP.md must not contradict SPEC.md.
+**Spec version:** living document  
+**Status:** Source of truth for *values + contracts*. If `docs/ROADMAP.md` exists, it must not contradict `docs/SPEC.md`.
 
 ---
 
@@ -47,7 +47,7 @@ ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
 
 ## 3) Non-goals
 
-These are explicitly *out of scope* for v0.x unless the roadmap promotes them later:
+These are explicitly *out of scope* for now:
 
 - Web UI / server mode
 - Multi-agent orchestration (agent graphs, swarms, etc.)
@@ -82,7 +82,7 @@ ZDX follows a layered design:
 
 ### Provider(s)
 
-* Primary provider for v0.2.x: **Anthropic Claude**
+* Primary provider (current): **Anthropic Claude**
 * The provider must support:
 
   * Non-streaming responses (baseline)
@@ -120,13 +120,10 @@ ZDX follows a layered design:
 * Tools are exposed to the model as JSON-schema definitions.
 * Tool results must be deterministic and easy to parse.
 
-### Tool set (target)
-
-ZDX aims for a minimal tool set:
+### Tool set (current)
 
 * `read` (filesystem)
 * `bash` (shell)
-* later: `write`, `edit` (authoring)
 
 ### Path resolution rules
 
@@ -151,7 +148,7 @@ All tool outputs use a consistent JSON envelope:
 
 This ensures tool results are deterministic and parseable.
 
-### Tool definitions (current / v0.2.x)
+### Tool definitions (current)
 
 #### `read`
 
@@ -208,49 +205,6 @@ This ensures tool results are deterministic and parseable.
 * **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`.
 * **Output limits:** stdout/stderr are truncated to a reasonable limit (e.g., 256KB each) with truncation indicated.
 
-#### `write` (v0.2.2)
-
-* **Purpose:** Create or overwrite a file; auto-create parent directories.
-* **Input schema:**
-
-  ```json
-  { "path": "string", "content": "string" }
-  ```
-
-* **Output schema:**
-
-  ```json
-  { "ok": true, "data": { "path": "...", "bytes_written": 123 } }
-  ```
-
-#### `edit` (v0.2.3)
-
-* **Purpose:** Surgical text replacement with explicit failure modes.
-* **Input schema:**
-
-  ```json
-  {
-    "path": "string",
-    "old": "string",
-    "new": "string",
-    "expected_replacements": 1
-  }
-  ```
-
-  * `expected_replacements` is optional (default: 1)
-
-* **Output schema:**
-
-  ```json
-  { "ok": true, "data": { "path": "...", "replacements": 1 } }
-  ```
-
-* **Failure modes:**
-
-  * `old` text not found
-  * replacements count != `expected_replacements`
-  * file not readable/writable
-
 ### Tool loop correctness requirements
 
 * When the model requests a tool, ZDX must:
@@ -265,7 +219,7 @@ This ensures tool results are deterministic and parseable.
 
 The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr/0002-engine-emits-events-to-renderer-sink.md).
 
-### Required event types (v0.2.x)
+### Required event types (current)
 
 * `AssistantDelta { text }` — incremental text chunk
 * `AssistantFinal { text }` — completed message
@@ -287,7 +241,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 ### Persistence mapping
 
 * Engine events that affect model context or user-visible history must be persistable as JSONL session events.
-  * Minimum persisted set in v0.2.x:
+  * Minimum persisted set (current):
     - `meta` (schema header)
     - `message`
     - `tool_use`
@@ -380,7 +334,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 * TOML
 
-### Current keys (v0.2.x)
+### Current keys (current)
 
 * `model` (string)
 * `max_tokens` (int)
@@ -420,7 +374,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 * `--format <text|json>`:
 
   * `text` (default): human-readable output
-  * `json`: machine-readable output (schema versioned; stable from v0.5+)
+  * `json`: machine-readable output (schema versioned; may evolve in v0.x)
 
 ### Output channel rules (terminal-first)
 
@@ -439,7 +393,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 * `2` config error (missing/invalid config)
 * `130` interrupted (Ctrl+C)
 
-(Exact codes may evolve, but once committed in ROADMAP v0.5+, they should be treated as stable.)
+Exact codes may evolve in v0.x; avoid breaking changes without a clear reason.
 
 ---
 
@@ -479,19 +433,19 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 Breaking changes, if necessary, should:
 
-* be announced in ROADMAP.md
-* include a migration note in release notes
+* be called out in release notes (with a migration note where feasible)
+* optionally be reflected in `docs/ROADMAP.md` (if the project is using it)
 
 ---
 
 ## 13) How SPEC, ROADMAP, and PLAN documents relate
 
 * **SPEC.md**: values + contracts + non-goals (this document)
-* **ROADMAP.md**: high-level versions and outcomes (what's next and why)
+* **docs/ROADMAP.md**: optional priorities list (what's next and why)
 * **PLAN_vX.Y.md**: concrete, commit-level delivery plan (how to build it)
 * **docs/adr/NNNN-*.md**: decision rationale over time (the “why”)
 
-**Rule:** ROADMAP and PLAN must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
+**Rule:** If present, `docs/ROADMAP.md` and `docs/PLAN_vX.Y.md` must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
 **Rule:** When a notable decision changes, add a new ADR that supersedes the old one; avoid rewriting past ADRs.
 
 ---
