@@ -49,6 +49,16 @@ Run a single integration test file: `cargo test --test config_path`.
 - `ZDX_HOME` controls where config/data are stored; default is `~/.config/zdx`.
 - Don’t commit secrets or local configs; use env vars and keep test fixtures synthetic.
 
+## Uncertainty & ambiguity
+
+- If the question is ambiguous or underspecified, explicitly call this out and:
+  - Ask up to 1–3 precise clarifying questions, OR
+  - Present 2–3 plausible interpretations with clearly labeled assumptions.
+- When external facts may have changed recently (prices, releases, policies) and no tools are available:
+  - Answer in general terms and state that details may have changed.
+- Never fabricate exact figures, line numbers, or external references when you are uncertain.
+- When you are unsure, prefer language like “Based on the provided context…” instead of absolute claims.
+
 ## Documentation Protocol (SPEC / ROADMAP / PLAN)
 
 ZDX uses three docs with different responsibilities:
