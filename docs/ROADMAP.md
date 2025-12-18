@@ -2,7 +2,7 @@
 
 > **Principle:** Build the engine once, then render it in CLI now and TUI later.
 >
-> **Note:** ROADMAP describes outcomes (what/why). `docs/SPEC.md` is the source of truth for contracts.
+> **Note:** ROADMAP describes outcomes (what). `docs/SPEC.md` is the source of truth for contracts, and `docs/adr/` captures decision rationale (why).
 
 ---
 

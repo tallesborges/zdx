@@ -3,6 +3,8 @@
 > **Source of truth:** `docs/SPEC.md` (contracts) + `docs/ROADMAP.md` (outcomes).
 >
 > **Plan rule:** Each step is ~1 commit: small, observable, tested.
+>
+> **Rationale:** When a step requires (or changes) a notable decision, capture it in `docs/adr/ADR-XXXX` and link it from SPEC where relevant.
 
 ---
 

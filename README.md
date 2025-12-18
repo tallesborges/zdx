@@ -129,6 +129,13 @@ cargo clippy           # Lint
 cargo fmt              # Format
 ```
 
+## Docs
+
+- `docs/SPEC.md` — values + contracts (source of truth)
+- `docs/ROADMAP.md` — versions + outcomes
+- `docs/PLAN_v0.2.md` — commit-sized implementation plan
+- `docs/adr/` — Architecture Decision Records (the “why”)
+
 ## License
 
 MIT
