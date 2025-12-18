@@ -263,7 +263,7 @@ This ensures tool results are deterministic and parseable.
 
 ## 7) Engine event stream contract
 
-The engine emits events for renderers (CLI now, TUI later).
+The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr/0002-engine-emits-events-to-renderer-sink.md).
 
 ### Required event types (v0.2.x)
 
@@ -304,7 +304,7 @@ The engine emits events for renderers (CLI now, TUI later).
 
 ### File format
 
-* Sessions are **JSONL (append-only)** event logs.
+* Sessions are **JSONL (append-only)** event logs. See [ADR-0001](./adr/0001-session-format-jsonl.md).
 
 ### Timestamp format
 
@@ -483,8 +483,10 @@ Breaking changes, if necessary, should:
 * **SPEC.md**: values + contracts + non-goals (this document)
 * **ROADMAP.md**: high-level versions and outcomes (what's next and why)
 * **PLAN_vX.Y.md**: concrete, commit-level delivery plan (how to build it)
+* **ADR (docs/adr/ADR-XXXX)**: decision rationale over time (the “why”)
 
 **Rule:** ROADMAP and PLAN must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
+**Rule:** When a notable decision changes, add a new ADR that supersedes the old one; avoid rewriting past ADRs.
 
 ---
 
