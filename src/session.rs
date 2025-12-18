@@ -58,18 +58,7 @@ impl SessionEvent {
 
 /// Returns an ISO 8601 timestamp string.
 fn chrono_timestamp() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let duration = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default();
-
-    // Format as ISO 8601 (simplified)
-    let secs = duration.as_secs();
-    let millis = duration.subsec_millis();
-
-    // Convert to approximate datetime (not perfect but avoids chrono dependency)
-    format!("{}:{:03}Z", secs, millis)
+    chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 /// Manages a session file.
