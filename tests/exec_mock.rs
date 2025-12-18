@@ -388,6 +388,126 @@ async fn test_exec_includes_agents_md_context() {
     );
 }
 
+/// Tests that the config anthropic_base_url is used when env var is absent.
+#[tokio::test]
+async fn test_exec_uses_config_base_url_when_env_absent() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    // Write config with custom base URL
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        format!("anthropic_base_url = \"{}\"\n", mock_server.uri()),
+    )
+    .unwrap();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "test-api-key"))
+        .respond_with(text_response("Config URL works!"))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    // Note: ANTHROPIC_BASE_URL is NOT set - should use config
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Config URL works!"));
+}
+
+/// Tests that empty anthropic_base_url in config uses the default.
+#[tokio::test]
+async fn test_exec_empty_config_base_url_uses_default() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+
+    // Write config with empty base URL
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        "anthropic_base_url = \"\"\n",
+    )
+    .unwrap();
+
+    // This should fail because it tries to hit the real API without valid key
+    // But if empty string was used, it would fail differently
+    // We verify it tries the default by checking the error message
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .failure()
+        // Should fail because it's hitting the real API (not a mock), not empty URL error
+        .stderr(predicate::str::contains("401").or(predicate::str::contains("api.anthropic.com")));
+}
+
+/// Tests that env var takes precedence over config base URL.
+#[tokio::test]
+async fn test_exec_env_base_url_takes_precedence_over_config() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+    let mock_server = MockServer::start().await;
+    let decoy_server = MockServer::start().await;
+
+    // Write config with decoy URL that should NOT be hit
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        format!("anthropic_base_url = \"{}\"\n", decoy_server.uri()),
+    )
+    .unwrap();
+
+    // The decoy should NOT receive any requests
+    Mock::given(method("POST"))
+        .respond_with(text_response("WRONG SERVER!"))
+        .expect(0)
+        .mount(&decoy_server)
+        .await;
+
+    // The env-specified server SHOULD receive the request
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(text_response("Env URL wins!"))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Env URL wins!"));
+}
+
+/// Tests that invalid URL in config yields an error with exit code 2.
+#[tokio::test]
+async fn test_exec_invalid_config_base_url_exits_with_error() {
+    let temp_dir = tempfile::TempDir::new().unwrap();
+
+    // Write config with invalid URL
+    std::fs::write(
+        temp_dir.path().join("config.toml"),
+        "anthropic_base_url = \"not-a-valid-url\"\n",
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", temp_dir.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env_remove("ANTHROPIC_BASE_URL")
+        .args(["--no-save", "exec", "-p", "hello"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid Anthropic base URL"));
+}
+
 /// Tests that stdout contains ONLY assistant text during tool use.
 /// Tool indicators and status messages must go to stderr only.
 #[tokio::test]

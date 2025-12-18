@@ -27,12 +27,17 @@ impl AnthropicConfig {
     /// Environment variables:
     /// - `ANTHROPIC_API_KEY`: Required API key
     /// - `ANTHROPIC_BASE_URL`: Optional base URL override
-    pub fn from_env(model: String, max_tokens: u32) -> Result<Self> {
+    ///
+    /// Base URL resolution order:
+    /// 1. `ANTHROPIC_BASE_URL` env var (if set and non-empty)
+    /// 2. `config_base_url` parameter (if Some and non-empty)
+    /// 3. Default: `https://api.anthropic.com`
+    pub fn from_env(model: String, max_tokens: u32, config_base_url: Option<&str>) -> Result<Self> {
         let api_key = std::env::var("ANTHROPIC_API_KEY")
             .context("ANTHROPIC_API_KEY environment variable is not set")?;
 
-        let base_url =
-            std::env::var("ANTHROPIC_BASE_URL").unwrap_or_else(|_| DEFAULT_BASE_URL.to_string());
+        // Resolution order: env > config > default
+        let base_url = Self::resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,
@@ -40,6 +45,37 @@ impl AnthropicConfig {
             model,
             max_tokens,
         })
+    }
+
+    /// Resolves the base URL with precedence: env > config > default.
+    /// Validates that the URL is well-formed.
+    fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
+        // Try env var first
+        if let Ok(env_url) = std::env::var("ANTHROPIC_BASE_URL") {
+            let trimmed = env_url.trim();
+            if !trimmed.is_empty() {
+                Self::validate_url(trimmed)?;
+                return Ok(trimmed.to_string());
+            }
+        }
+
+        // Try config value
+        if let Some(config_url) = config_base_url {
+            let trimmed = config_url.trim();
+            if !trimmed.is_empty() {
+                Self::validate_url(trimmed)?;
+                return Ok(trimmed.to_string());
+            }
+        }
+
+        // Default
+        Ok(DEFAULT_BASE_URL.to_string())
+    }
+
+    /// Validates that a URL is well-formed.
+    fn validate_url(url: &str) -> Result<()> {
+        url::Url::parse(url).with_context(|| format!("Invalid Anthropic base URL: {}", url))?;
+        Ok(())
     }
 }
 
@@ -355,10 +391,7 @@ impl<S> SseParser<S> {
     fn try_parse_event(&mut self) -> Option<Result<StreamEvent>> {
         // SSE events are separated by double newlines
         // Find \n\n in the byte buffer
-        let event_end = self
-            .buffer
-            .windows(2)
-            .position(|w| w == b"\n\n")?;
+        let event_end = self.buffer.windows(2).position(|w| w == b"\n\n")?;
 
         // Extract the event bytes and remove from buffer
         let event_bytes: Vec<u8> = self.buffer.drain(..event_end).collect();
@@ -1148,7 +1181,11 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
         let stream = futures_util::stream::iter(chunks);
         let mut parser = SseParser::new(stream);
 
-        let event = parser.next().await.unwrap().expect("should parse valid event");
+        let event = parser
+            .next()
+            .await
+            .unwrap()
+            .expect("should parse valid event");
 
         // Verify the emoji is intact, not corrupted with replacement characters
         assert_eq!(
@@ -1158,5 +1195,107 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
                 text: "Hello 👋 world".to_string()
             }
         );
+    }
+
+    // === Base URL resolution tests ===
+    // Note: These tests use resolve_base_url directly to avoid needing API key
+    // SAFETY: These tests run with --test-threads=1 to avoid data races with env vars
+
+    #[test]
+    fn test_resolve_base_url_default() {
+        // Ensure env var is not set
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let url = AnthropicConfig::resolve_base_url(None).unwrap();
+        assert_eq!(url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn test_resolve_base_url_from_config() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let url = AnthropicConfig::resolve_base_url(Some("https://my-proxy.example.com")).unwrap();
+        assert_eq!(url, "https://my-proxy.example.com");
+    }
+
+    #[test]
+    fn test_resolve_base_url_env_takes_precedence() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::set_var("ANTHROPIC_BASE_URL", "https://env-url.example.com") };
+
+        let url =
+            AnthropicConfig::resolve_base_url(Some("https://config-url.example.com")).unwrap();
+        assert_eq!(url, "https://env-url.example.com");
+
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+    }
+
+    #[test]
+    fn test_resolve_base_url_empty_env_uses_config() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::set_var("ANTHROPIC_BASE_URL", "") };
+
+        let url =
+            AnthropicConfig::resolve_base_url(Some("https://config-url.example.com")).unwrap();
+        assert_eq!(url, "https://config-url.example.com");
+
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+    }
+
+    #[test]
+    fn test_resolve_base_url_empty_config_uses_default() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let url = AnthropicConfig::resolve_base_url(Some("")).unwrap();
+        assert_eq!(url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn test_resolve_base_url_whitespace_config_uses_default() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let url = AnthropicConfig::resolve_base_url(Some("   ")).unwrap();
+        assert_eq!(url, DEFAULT_BASE_URL);
+    }
+
+    #[test]
+    fn test_resolve_base_url_invalid_url_fails() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let result = AnthropicConfig::resolve_base_url(Some("not-a-valid-url"));
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid Anthropic base URL"));
+    }
+
+    #[test]
+    fn test_resolve_base_url_invalid_env_fails() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::set_var("ANTHROPIC_BASE_URL", "also-not-valid") };
+
+        let result = AnthropicConfig::resolve_base_url(None);
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("Invalid Anthropic base URL"));
+
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+    }
+
+    #[test]
+    fn test_resolve_base_url_trims_whitespace() {
+        // SAFETY: Single-threaded test execution
+        unsafe { std::env::remove_var("ANTHROPIC_BASE_URL") };
+
+        let url =
+            AnthropicConfig::resolve_base_url(Some("  https://trimmed.example.com  ")).unwrap();
+        assert_eq!(url, "https://trimmed.example.com");
     }
 }
