@@ -5,6 +5,9 @@
 //! 2. ~/AGENTS.md (user home)
 //! 3. Ancestor directories from home to project root
 //! 4. Project root (--root or cwd)
+//!
+//! This module is UI-agnostic: it returns structured warnings instead of
+//! printing directly. The caller (renderer) decides how to display them.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -14,6 +17,42 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::paths;
 
+/// Maximum size for a single AGENTS.md file (64KB).
+/// Files larger than this are truncated with a warning.
+pub const MAX_AGENTS_FILE_SIZE: usize = 64 * 1024;
+
+/// A warning generated during context loading.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextWarning {
+    /// The path that caused the warning (if applicable).
+    pub path: Option<PathBuf>,
+    /// Human-readable warning message.
+    pub message: String,
+}
+
+impl ContextWarning {
+    /// Creates a warning for a file that couldn't be read.
+    pub fn unreadable(path: &Path, error: &std::io::Error) -> Self {
+        Self {
+            path: Some(path.to_path_buf()),
+            message: format!("Failed to read {}: {}", path.display(), error),
+        }
+    }
+
+    /// Creates a warning for a truncated file.
+    pub fn truncated(path: &Path, original_size: usize) -> Self {
+        Self {
+            path: Some(path.to_path_buf()),
+            message: format!(
+                "Truncated {} ({} bytes) to {} bytes",
+                path.display(),
+                original_size,
+                MAX_AGENTS_FILE_SIZE
+            ),
+        }
+    }
+}
+
 /// Result of loading AGENTS.md files.
 #[derive(Debug, Clone)]
 pub struct LoadedContext {
@@ -21,6 +60,8 @@ pub struct LoadedContext {
     pub content: String,
     /// Paths of files that were loaded (in order).
     pub loaded_paths: Vec<PathBuf>,
+    /// Warnings generated during loading (e.g., unreadable files, truncation).
+    pub warnings: Vec<ContextWarning>,
 }
 
 /// Collects all AGENTS.md paths to check, in order.
@@ -94,32 +135,46 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
 ///
 /// Returns None if no files were found or all were empty.
 /// Empty files are skipped silently.
-/// Unreadable files log a warning but don't fail.
+/// Unreadable files generate a warning but don't fail.
+/// Large files are truncated with a warning.
 pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
     let paths = collect_agents_paths(root);
     let mut loaded_paths: Vec<PathBuf> = Vec::new();
     let mut sections: Vec<String> = Vec::new();
+    let mut warnings: Vec<ContextWarning> = Vec::new();
 
     for path in paths {
         if !path.exists() {
             continue;
         }
 
-        match fs::read_to_string(&path) {
-            Ok(content) => {
+        match fs::read(&path) {
+            Ok(bytes) => {
+                // Check for truncation
+                let (content_bytes, was_truncated) = if bytes.len() > MAX_AGENTS_FILE_SIZE {
+                    warnings.push(ContextWarning::truncated(&path, bytes.len()));
+                    (&bytes[..MAX_AGENTS_FILE_SIZE], true)
+                } else {
+                    (bytes.as_slice(), false)
+                };
+
+                // Convert to string (lossy for non-UTF8)
+                let content = String::from_utf8_lossy(content_bytes);
                 let trimmed = content.trim();
+
                 if !trimmed.is_empty() {
-                    sections.push(format!("## {}\n\n{}", path.display(), trimmed));
+                    let suffix = if was_truncated { " [truncated]" } else { "" };
+                    sections.push(format!("## {}{}\n\n{}", path.display(), suffix, trimmed));
                     loaded_paths.push(path);
                 }
             }
             Err(e) => {
-                eprintln!("Warning: Failed to read {}: {}", path.display(), e);
+                warnings.push(ContextWarning::unreadable(&path, &e));
             }
         }
     }
 
-    if sections.is_empty() {
+    if sections.is_empty() && warnings.is_empty() {
         return None;
     }
 
@@ -127,6 +182,7 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
     Some(LoadedContext {
         content,
         loaded_paths,
+        warnings,
     })
 }
 
@@ -163,6 +219,8 @@ pub struct EffectivePrompt {
     pub prompt: Option<String>,
     /// Paths of AGENTS.md files that were loaded (in order).
     pub loaded_agents_paths: Vec<PathBuf>,
+    /// Warnings generated during context loading.
+    pub warnings: Vec<ContextWarning>,
 }
 
 /// Builds the effective system prompt by combining config and AGENTS.md files.
@@ -173,48 +231,43 @@ pub struct EffectivePrompt {
 /// 3. Ancestor directories from home to project root
 /// 4. Project root
 ///
-/// Returns the combined prompt and the list of loaded AGENTS.md paths.
+/// Returns the combined prompt, the list of loaded AGENTS.md paths, and any warnings.
+/// This function is UI-agnostic; callers should surface warnings via the renderer.
 pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
 ) -> Result<EffectivePrompt> {
     let mut system_prompt = config.effective_system_prompt()?;
     let mut loaded_agents_paths = Vec::new();
+    let mut warnings = Vec::new();
 
     // Auto-include AGENTS.md files from hierarchy
     if let Some(loaded) = load_all_agents_files(root) {
         loaded_agents_paths = loaded.loaded_paths;
+        warnings = loaded.warnings;
 
-        let combined = match system_prompt {
-            Some(sp) => format!("{}\n\n# Project Context\n\n{}", sp, loaded.content),
-            None => format!("# Project Context\n\n{}", loaded.content),
-        };
-        system_prompt = Some(combined);
+        if !loaded.content.is_empty() {
+            let combined = match system_prompt {
+                Some(sp) => format!("{}\n\n# Project Context\n\n{}", sp, loaded.content),
+                None => format!("# Project Context\n\n{}", loaded.content),
+            };
+            system_prompt = Some(combined);
+        }
     }
 
     Ok(EffectivePrompt {
         prompt: system_prompt,
         loaded_agents_paths,
+        warnings,
     })
 }
 
 /// Builds the effective system prompt by combining config and AGENTS.md files.
 ///
-/// This is a convenience wrapper that logs loaded files to stderr.
-/// For more control, use `build_effective_system_prompt_with_paths`.
+/// **Deprecated:** Use `build_effective_system_prompt_with_paths` and handle
+/// warnings/loaded paths via the renderer for cleaner separation of concerns.
 pub fn build_effective_system_prompt(config: &Config, root: &Path) -> Result<Option<String>> {
     let result = build_effective_system_prompt_with_paths(config, root)?;
-
-    // Log loaded files to stderr (per SPEC §10)
-    if !result.loaded_agents_paths.is_empty() {
-        let paths_str: Vec<String> = result
-            .loaded_agents_paths
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
-        eprintln!("Loaded AGENTS.md from: {}", paths_str.join(", "));
-    }
-
     Ok(result.prompt)
 }
 
@@ -409,5 +462,98 @@ mod tests {
         assert_eq!(deduped.len(), 2);
         assert_eq!(deduped[0], PathBuf::from("/a/b/c"));
         assert_eq!(deduped[1], PathBuf::from("/x/y/z"));
+    }
+
+    #[test]
+    fn test_unreadable_agents_triggers_warning() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempdir().unwrap();
+        let agents_md = dir.path().join("AGENTS.md");
+
+        // Create file with no read permissions
+        fs::write(&agents_md, "Secret content").unwrap();
+        let mut perms = fs::metadata(&agents_md).unwrap().permissions();
+        perms.set_mode(0o000); // No permissions
+        fs::set_permissions(&agents_md, perms).unwrap();
+
+        let result = load_all_agents_files(dir.path());
+
+        // Restore permissions for cleanup
+        let mut perms = fs::metadata(&agents_md).unwrap().permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&agents_md, perms).unwrap();
+
+        // Should return Some because we have a warning to report
+        assert!(result.is_some(), "Should return Some with warning");
+
+        let loaded = result.unwrap();
+        // Content should not include the unreadable file
+        assert!(
+            !loaded.content.contains("Secret content"),
+            "Should not include unreadable content"
+        );
+        // Should have a warning
+        assert!(!loaded.warnings.is_empty(), "Should have a warning");
+        assert!(
+            loaded.warnings[0].message.contains("Failed to read"),
+            "Warning should mention read failure"
+        );
+    }
+
+    #[test]
+    fn test_large_agents_file_truncated_with_warning() {
+        let dir = tempdir().unwrap();
+        let agents_md = dir.path().join("AGENTS.md");
+
+        // Create a file larger than MAX_AGENTS_FILE_SIZE
+        let large_content = "x".repeat(MAX_AGENTS_FILE_SIZE + 1000);
+        fs::write(&agents_md, &large_content).unwrap();
+
+        let result = load_all_agents_files(dir.path());
+        assert!(result.is_some());
+
+        let loaded = result.unwrap();
+        // Should have a warning about truncation
+        assert!(
+            !loaded.warnings.is_empty(),
+            "Should have a truncation warning"
+        );
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("Truncated")),
+            "Warning should mention truncation"
+        );
+        // Content should be marked as truncated
+        assert!(
+            loaded.content.contains("[truncated]"),
+            "Content should show truncation marker"
+        );
+        // Content should be capped at MAX_AGENTS_FILE_SIZE
+        // (actual content is trimmed, so just verify it's smaller than original)
+        assert!(
+            loaded.content.len() < large_content.len(),
+            "Content should be truncated"
+        );
+    }
+
+    #[test]
+    fn test_context_warning_constructors() {
+        // Test unreadable warning
+        let path = PathBuf::from("/test/path/AGENTS.md");
+        let io_error =
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "permission denied");
+        let warning = ContextWarning::unreadable(&path, &io_error);
+        assert!(warning.path.is_some());
+        assert!(warning.message.contains("Failed to read"));
+        assert!(warning.message.contains("permission denied"));
+
+        // Test truncated warning
+        let truncated = ContextWarning::truncated(&path, 100_000);
+        assert!(truncated.path.is_some());
+        assert!(truncated.message.contains("Truncated"));
+        assert!(truncated.message.contains("100000"));
     }
 }

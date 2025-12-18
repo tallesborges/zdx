@@ -56,6 +56,12 @@ pub async fn run_interactive_chat_with_history(
     if !history.is_empty() {
         writeln!(err, "Loaded {} previous messages", history.len())?;
     }
+
+    // Emit warnings from context loading (per SPEC §10)
+    for warning in &effective.warnings {
+        writeln!(err, "Warning: {}", warning.message)?;
+    }
+
     // Show loaded AGENTS.md files
     if !effective.loaded_agents_paths.is_empty() {
         writeln!(err, "Loaded AGENTS.md from:")?;
@@ -251,6 +257,12 @@ where
     if let Some(ref s) = session {
         writeln!(output, "Session: {}", s.lock().unwrap().id)?;
     }
+
+    // Emit warnings from context loading
+    for warning in &effective.warnings {
+        writeln!(output, "Warning: {}", warning.message)?;
+    }
+
     // Show loaded AGENTS.md files
     if !effective.loaded_agents_paths.is_empty() {
         writeln!(output, "Loaded AGENTS.md from:")?;
