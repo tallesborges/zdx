@@ -154,6 +154,27 @@ Constraints:
 - Offline-testable: use fixtures/mocks for provider
 - Don’t introduce new dependencies unless justified
 
+### What counts as a “deliverable” for a PLAN micro-commit?
+
+A PLAN step is valid if the commit leaves the repo in a runnable, coherent state and the change can be verified.
+
+A deliverable MAY be:
+- User-visible behavior (a command/flag/output that works for at least one real case), OR
+- Internal capability with proof (new module / logic + unit tests + fixtures), OR
+- Test harness / mock infra enabling offline tests, OR
+- Refactor-only change with evidence (all existing tests pass) and a short justification.
+
+A deliverable MUST include at least one verification path:
+- A CLI demo command, OR
+- A test command (`cargo test` / `go test` / `pytest` etc.), OR
+- A short justification if no new tests are added (e.g., purely mechanical refactor covered by existing tests).
+
+Avoid “half-integrations”:
+- Do not expose a CLI command/flag that exists but is non-functional (“TODO”) unless SPEC explicitly allows it.
+- Do not change persistence/schema contracts without implementing both write + read paths (or clearly gating it behind a versioned schema rule in SPEC).
+- Prefer: internal + tests first, then a single commit that wires the complete vertical slice into the CLI.
+
+
 ---
 
 ## Output format requirement when updating docs
