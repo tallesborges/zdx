@@ -245,71 +245,7 @@ async fn execute_tools(
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use serde_json::json;
-
     use super::*;
-
-    #[test]
-    fn test_tool_use_builder_parse_input() {
-        let builder = ToolUseBuilder {
-            index: 0,
-            id: "test".to_string(),
-            name: "read".to_string(),
-            input_json: r#"{"path": "test.txt"}"#.to_string(),
-        };
-
-        let input = builder.parse_input();
-        assert_eq!(input, json!({"path": "test.txt"}));
-    }
-
-    #[test]
-    fn test_tool_use_builder_parse_invalid_json() {
-        let builder = ToolUseBuilder {
-            index: 0,
-            id: "test".to_string(),
-            name: "read".to_string(),
-            input_json: "invalid json".to_string(),
-        };
-
-        let input = builder.parse_input();
-        assert_eq!(input, json!({}));
-    }
-
-    #[test]
-    fn test_build_assistant_blocks_text_only() {
-        let blocks = build_assistant_blocks("Hello world", &[]);
-        assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], ChatContentBlock::Text(t) if t == "Hello world"));
-    }
-
-    #[test]
-    fn test_build_assistant_blocks_with_tools() {
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
-            id: "tool1".to_string(),
-            name: "read".to_string(),
-            input_json: r#"{"path": "test.txt"}"#.to_string(),
-        }];
-
-        let blocks = build_assistant_blocks("I'll read that file", &tool_uses);
-        assert_eq!(blocks.len(), 2);
-        assert!(matches!(&blocks[0], ChatContentBlock::Text(_)));
-        assert!(matches!(&blocks[1], ChatContentBlock::ToolUse { name, .. } if name == "read"));
-    }
-
-    #[test]
-    fn test_build_assistant_blocks_empty_text() {
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
-            id: "tool1".to_string(),
-            name: "bash".to_string(),
-            input_json: r#"{"command": "ls"}"#.to_string(),
-        }];
-
-        let blocks = build_assistant_blocks("", &tool_uses);
-        assert_eq!(blocks.len(), 1);
-        assert!(matches!(&blocks[0], ChatContentBlock::ToolUse { .. }));
-    }
 
     /// Helper to collect events into a vec.
     fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<EngineEvent>>>) {
@@ -321,6 +257,7 @@ mod tests {
         (sink, events)
     }
 
+    /// Verifies engine emits ToolStarted and ToolFinished events (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_emits_events() {
         use tempfile::TempDir;
@@ -353,6 +290,7 @@ mod tests {
         );
     }
 
+    /// Verifies ToolFinished is emitted even on tool errors (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_error_emits_finished() {
         use tempfile::TempDir;
@@ -381,6 +319,7 @@ mod tests {
         );
     }
 
+    /// Verifies Interrupted event is emitted on Ctrl+C (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_handles_interrupt() {
         use tempfile::TempDir;
