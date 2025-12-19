@@ -49,8 +49,30 @@ impl Default for EngineOptions {
     }
 }
 
-/// Event sink type for receiving engine events.
+/// Event sink type for receiving engine events (callback-based, deprecated).
 pub type EventSink = Box<dyn FnMut(EngineEvent) + Send>;
+
+/// Channel-based event sender (async, bounded).
+///
+/// Used with `run_turn_async` for concurrent rendering and session persistence.
+/// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
+pub type EventTx = tokio::sync::mpsc::Sender<std::sync::Arc<EngineEvent>>;
+
+/// Channel-based event receiver (async, bounded).
+pub type EventRx = tokio::sync::mpsc::Receiver<std::sync::Arc<EngineEvent>>;
+
+/// Default channel capacity for event streams.
+pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 64;
+
+/// Creates a bounded event channel with the default capacity.
+pub fn create_event_channel() -> (EventTx, EventRx) {
+    tokio::sync::mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
+}
+
+/// Creates a bounded event channel with a custom capacity.
+pub fn create_event_channel_with_capacity(capacity: usize) -> (EventTx, EventRx) {
+    tokio::sync::mpsc::channel(capacity)
+}
 
 /// Builder for accumulating tool use data from streaming events.
 #[derive(Debug, Clone)]
