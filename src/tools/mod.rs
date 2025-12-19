@@ -4,6 +4,7 @@
 //! along with schema definitions for the Anthropic API.
 
 pub mod bash;
+pub mod edit;
 pub mod read;
 pub mod write;
 
@@ -61,7 +62,12 @@ impl ToolContext {
 
 /// Returns all available tool definitions.
 pub fn all_tools() -> Vec<ToolDefinition> {
-    vec![bash::definition(), read::definition(), write::definition()]
+    vec![
+        bash::definition(),
+        edit::definition(),
+        read::definition(),
+        write::definition(),
+    ]
 }
 
 /// Executes a tool by name with the given input.
@@ -74,6 +80,7 @@ pub async fn execute_tool(
 ) -> (ToolOutput, ToolResult) {
     let output = match name {
         "bash" => bash::execute(input, ctx, ctx.timeout).await,
+        "edit" => execute_edit(input, ctx).await,
         "read" => execute_read(input, ctx).await,
         "write" => execute_write(input, ctx).await,
         _ => ToolOutput::failure("unknown_tool", format!("Unknown tool: {}", name)),
@@ -81,6 +88,15 @@ pub async fn execute_tool(
 
     let result = ToolResult::from_output(tool_use_id.to_string(), &output);
     (output, result)
+}
+
+async fn execute_edit(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || edit::execute(&input, &ctx)
+    })
+    .await
 }
 
 async fn execute_read(input: &Value, ctx: &ToolContext) -> ToolOutput {

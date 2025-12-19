@@ -305,6 +305,87 @@ async fn test_tool_use_loop_writes_file() {
 }
 
 #[tokio::test]
+async fn test_tool_use_loop_edits_file() {
+    let temp_dir = TempDir::new().unwrap();
+    let test_file = temp_dir.path().join("target.txt");
+    fs::write(&test_file, "Hello world! This is a test.").unwrap();
+
+    let mock_server = MockServer::start().await;
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = call_count.clone();
+    let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
+    let second_request_body_clone = second_request_body.clone();
+
+    let first_response = tool_use_sse(
+        "toolu_edit001",
+        "edit",
+        r#"{"path": "target.txt", "old": "world", "new": "Rust"}"#,
+    );
+    let second_response = text_sse("File edited successfully!");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                sse_response(&first_response)
+            } else {
+                let body = String::from_utf8_lossy(&req.body).to_string();
+                *second_request_body_clone.lock().unwrap() = body;
+                sse_response(&second_response)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--root",
+            temp_dir.path().to_str().unwrap(),
+            "--no-save",
+            "exec",
+            "-p",
+            "Edit target.txt: replace world with Rust",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("File edited successfully!"));
+
+    assert_eq!(call_count.load(Ordering::SeqCst), 2);
+
+    // Assert the file was actually edited
+    let content = fs::read_to_string(&test_file).unwrap();
+    assert_eq!(content, "Hello Rust! This is a test.");
+
+    // Assert tool_result was sent in the second request
+    let body = second_request_body.lock().unwrap().clone();
+    assert!(
+        body.contains("tool_result"),
+        "Second request should contain tool_result block. Got: {}",
+        body
+    );
+    assert!(
+        body.contains("toolu_edit001"),
+        "Second request should reference the tool_use_id. Got: {}",
+        body
+    );
+    // The ok:true appears inside a JSON string, so it's escaped as \"ok\":true
+    assert!(
+        body.contains(r#"\"ok\":true"#),
+        "Tool result should indicate success. Got: {}",
+        body
+    );
+    assert!(
+        body.contains(r#"\"replacements\":1"#),
+        "Tool result should show 1 replacement. Got: {}",
+        body
+    );
+}
+
+#[tokio::test]
 async fn test_bash_tool_shows_debug_lines() {
     let mock_server = MockServer::start().await;
     let first_response = tool_use_sse("toolu_bash", "bash", r#"{"command": "echo hello"}"#);
