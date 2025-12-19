@@ -358,7 +358,6 @@ impl AssistantResponse {
             Some(texts.join("\n"))
         }
     }
-
 }
 
 impl From<MessagesResponse> for AssistantResponse {

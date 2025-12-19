@@ -3,8 +3,8 @@
 //! This module provides backward-compatible wrappers around the engine.
 //! New code should use the engine module directly.
 
-use std::path::PathBuf;
 use anyhow::Result;
+use std::path::PathBuf;
 
 use crate::config::Config;
 use crate::engine::{self, EngineOptions};
