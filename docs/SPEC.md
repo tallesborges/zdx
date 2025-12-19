@@ -257,11 +257,11 @@ This ensures tool results are deterministic and parseable.
   ```
 
 * **Path:** `data.path` is the resolved absolute path on disk.
-* **Behavior:** Creates the file if it doesn't exist, overwrites if it does. No implicit creation of parent directories.
+* **Behavior:** Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories if needed (mkdir -p).
 * **`created`:** `true` if the file did not exist before, `false` if overwritten.
 * **Error codes:**
   - `invalid_input`: Missing or malformed input fields.
-  - `path_error`: Parent directory does not exist.
+  - `mkdir_error`: Failed to create parent directories.
   - `write_error`: I/O or permission failure.
 
 #### `bash`
