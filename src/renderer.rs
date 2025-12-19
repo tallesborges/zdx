@@ -72,8 +72,7 @@ impl CliRenderer {
                 if name == "bash"
                     && let Some(command) = input.get("command").and_then(|v| v.as_str())
                 {
-                    let _ =
-                        writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
+                    let _ = writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
                 }
             }
             EngineEvent::ToolStarted { id, name } => {

@@ -27,7 +27,6 @@ pub struct EngineOptions {
     pub root: PathBuf,
 }
 
-
 /// Channel-based event sender (async, bounded).
 ///
 /// Used with `run_turn` for concurrent rendering and session persistence.

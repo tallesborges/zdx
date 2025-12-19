@@ -93,7 +93,6 @@ impl ProviderError {
         Self::new(ProviderErrorKind::Timeout, message)
     }
 
-
     /// Creates an API error (from mid-stream error event).
     pub fn api_error(error_type: &str, message: &str) -> Self {
         Self {
@@ -263,7 +262,6 @@ impl AnthropicClient {
         }
     }
 }
-
 
 // === Streaming Types ===
 
@@ -693,7 +691,6 @@ impl ChatMessage {
             content: MessageContent::Blocks(blocks),
         }
     }
-
 }
 
 #[cfg(test)]
