@@ -556,7 +556,6 @@ When `stdin` is a TTY, the interactive chat uses a multiline-capable editor and 
 * **Ctrl+K**: Clear text from the cursor to the end of the line.
 * **Ctrl+C** or **Esc**: Clear the current input buffer.
 * **Ctrl+C** (twice): Exit the chat.
-* **:q** (as a submitted message): Exit the chat (legacy compatibility).
 
 #### Feature Support
 * **Bracketed Paste**: Enabled to allow pasting blocks of code without accidental submission.
