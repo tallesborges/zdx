@@ -3,7 +3,7 @@
 //! Uses inline viewport: messages print normally above, input fixed at bottom.
 //! Uses tui-textarea for input handling.
 
-use std::io::{self, Stdout};
+use std::io::{self, Stderr};
 
 use anyhow::Result;
 use crossterm::{
@@ -113,11 +113,11 @@ impl TuiApp {
         let mut terminal = setup_terminal()?;
 
         enable_raw_mode()?;
-        execute!(io::stdout(), event::EnableBracketedPaste)?;
+        execute!(io::stderr(), event::EnableBracketedPaste)?;
 
         let result = self.run_input_loop(&mut terminal);
 
-        execute!(io::stdout(), event::DisableBracketedPaste)?;
+        execute!(io::stderr(), event::DisableBracketedPaste)?;
         disable_raw_mode()?;
 
         // Clear the viewport area and drop terminal
@@ -129,7 +129,7 @@ impl TuiApp {
 
     fn run_input_loop(
         &mut self,
-        terminal: &mut Terminal<CrosstermBackend<Stdout>>,
+        terminal: &mut Terminal<CrosstermBackend<Stderr>>,
     ) -> Result<InputResult> {
         loop {
             // Render
@@ -277,8 +277,8 @@ impl TuiApp {
     }
 }
 
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    let backend = CrosstermBackend::new(io::stdout());
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stderr>>> {
+    let backend = CrosstermBackend::new(io::stderr());
     let options = TerminalOptions {
         viewport: Viewport::Inline(INPUT_HEIGHT),
     };
