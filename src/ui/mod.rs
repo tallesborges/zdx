@@ -6,8 +6,3 @@
 pub mod tui;
 
 pub use tui::{InputResult, TuiApp};
-
-/// Checks if stdin is a TTY.
-pub fn is_tty() -> bool {
-    std::io::IsTerminal::is_terminal(&std::io::stdin())
-}
