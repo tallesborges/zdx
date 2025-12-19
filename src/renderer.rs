@@ -7,7 +7,9 @@
 
 use std::io::{Stderr, Stdout, Write, stderr, stdout};
 
-use crate::engine::EventSink;
+use tokio::task::JoinHandle;
+
+use crate::engine::{EventRx, EventSink};
 use crate::events::EngineEvent;
 
 /// CLI renderer that writes engine events to stdout/stderr.
@@ -127,4 +129,32 @@ impl RendererHandle {
         let mut r = self.renderer.lock().unwrap();
         r.finish();
     }
+}
+
+/// Spawns a renderer task that consumes events from a channel.
+///
+/// The task owns the `CliRenderer` and processes events until the channel closes.
+/// Returns a `JoinHandle` that resolves when all events have been rendered.
+///
+/// # Example
+///
+/// ```ignore
+/// let (tx, rx) = engine::create_event_channel();
+/// let renderer_handle = spawn_renderer_task(rx);
+///
+/// // ... send events to tx ...
+/// drop(tx); // Close channel
+///
+/// renderer_handle.await.unwrap(); // Wait for renderer to finish
+/// ```
+pub fn spawn_renderer_task(mut rx: EventRx) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        let mut renderer = CliRenderer::new();
+
+        while let Some(event) = rx.recv().await {
+            renderer.handle_event((*event).clone());
+        }
+
+        renderer.finish();
+    })
 }
