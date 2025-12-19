@@ -18,8 +18,8 @@ use crate::config::Config;
 use crate::engine::{self, EngineOptions, EventSink};
 use crate::events::EngineEvent;
 use crate::providers::anthropic::ChatMessage;
-use crate::renderer::CliRenderer;
-use crate::session::{Session, SessionEvent};
+use crate::renderer::{self, CliRenderer};
+use crate::session::{self, Session, SessionEvent};
 
 const QUIT_COMMAND: &str = ":q";
 const PROMPT_PREFIX: &str = "you> ";
@@ -42,9 +42,6 @@ pub async fn run_interactive_chat_with_history(
 ) -> Result<()> {
     let effective = crate::context::build_effective_system_prompt_with_paths(config, &root)?;
 
-    // Wrap session in Arc<Mutex> for shared access in event sink
-    let session = session.map(|s| Arc::new(Mutex::new(s)));
-
     let engine_opts = EngineOptions { root };
 
     // Print welcome banner to stderr
@@ -52,7 +49,7 @@ pub async fn run_interactive_chat_with_history(
     writeln!(err, "ZDX Chat (type :q to quit)")?;
     writeln!(err, "Model: {}", config.model)?;
     if let Some(ref s) = session {
-        writeln!(err, "Session: {}", s.lock().unwrap().id)?;
+        writeln!(err, "Session: {}", s.id)?;
     }
     if !history.is_empty() {
         writeln!(err, "Loaded {} previous messages", history.len())?;
@@ -91,7 +88,7 @@ async fn run_chat_loop<R: BufRead>(
     input: R,
     config: &Config,
     engine_opts: &EngineOptions,
-    session: Option<Arc<Mutex<Session>>>,
+    mut session: Option<Session>,
     initial_history: Vec<ChatMessage>,
     system_prompt: Option<&str>,
 ) -> Result<()> {
@@ -118,42 +115,37 @@ async fn run_chat_loop<R: BufRead>(
         // Add user message to history
         history.push(ChatMessage::user(trimmed));
 
-        // Log user message to session
-        if let Some(ref s) = session
-            && let Err(e) = s
-                .lock()
-                .unwrap()
-                .append(&SessionEvent::user_message(trimmed))
-        {
-            writeln!(err, "Warning: Failed to save session: {}", e)?;
+        // Log user message to session (this ensures meta is written for new sessions)
+        if let Some(ref mut s) = session {
+            if let Err(e) = s.append(&SessionEvent::user_message(trimmed)) {
+                writeln!(err, "Warning: Failed to save session: {}", e)?;
+            }
         }
 
-        // Run the turn through the engine
-        let renderer = Arc::new(Mutex::new(CliRenderer::new()));
-        let result = run_chat_turn(
+        // Clone session for the persist task (tool events will be logged there)
+        // User/assistant messages are logged here in the chat loop
+        let session_for_turn = session.clone();
+
+        // Run the turn through the engine with channel-based rendering
+        let result = run_chat_turn_async(
             history.clone(),
             config,
-            &engine_opts,
+            engine_opts,
             system_prompt.as_deref(),
-            session.clone(),
-            renderer.clone(),
+            session_for_turn,
         )
         .await;
 
         match result {
             Ok((final_text, new_history)) => {
-                // Finish rendering (prints final newline if needed)
-                renderer.lock().unwrap().finish();
+                // Renderer task handles finish() automatically
 
                 if !final_text.is_empty() {
                     // Log assistant response to session
-                    if let Some(ref s) = session
-                        && let Err(e) = s
-                            .lock()
-                            .unwrap()
-                            .append(&SessionEvent::assistant_message(&final_text))
-                    {
-                        writeln!(err, "Warning: Failed to save session: {}", e)?;
+                    if let Some(ref mut s) = session {
+                        if let Err(e) = s.append(&SessionEvent::assistant_message(&final_text)) {
+                            writeln!(err, "Warning: Failed to save session: {}", e)?;
+                        }
                     }
                 }
 
@@ -164,7 +156,7 @@ async fn run_chat_loop<R: BufRead>(
                 if e.downcast_ref::<crate::interrupt::InterruptedError>()
                     .is_some()
                 {
-                    // Interrupted event is already persisted via the event sink
+                    // Interrupted event is already persisted via the persist task
                     crate::interrupt::reset();
                 } else {
                     writeln!(err, "Error: {}", e)?;
@@ -182,7 +174,58 @@ async fn run_chat_loop<R: BufRead>(
     Ok(())
 }
 
-/// Runs a single chat turn through the engine with rendering.
+/// Runs a single chat turn through the engine with channel-based rendering.
+///
+/// This is the new channel-based implementation that spawns separate tasks
+/// for rendering and session persistence, avoiding Arc<Mutex> across awaits.
+async fn run_chat_turn_async(
+    messages: Vec<ChatMessage>,
+    config: &Config,
+    engine_opts: &EngineOptions,
+    system_prompt: Option<&str>,
+    session: Option<Session>,
+) -> Result<(String, Vec<ChatMessage>)> {
+    // Create channels for fan-out
+    let (engine_tx, engine_rx) = engine::create_event_channel();
+    let (render_tx, render_rx) = engine::create_event_channel();
+
+    // Spawn renderer task
+    let renderer_handle = renderer::spawn_renderer_task(render_rx);
+
+    // Spawn persist task if session exists, otherwise create a dummy receiver
+    let persist_handle = if let Some(sess) = session {
+        let (persist_tx, persist_rx) = engine::create_event_channel();
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+        let persist = session::spawn_persist_task(sess, persist_rx);
+        Some((fanout, persist))
+    } else {
+        // No session - just fan out to renderer
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx]);
+        Some((fanout, tokio::spawn(async {}))) // Dummy persist task
+    };
+
+    // Run the engine turn
+    let result = engine::run_turn_async(
+        messages,
+        config,
+        engine_opts,
+        system_prompt,
+        engine_tx,
+    )
+    .await;
+
+    // Wait for all tasks to complete (channel closes when engine_tx is dropped)
+    if let Some((fanout, persist)) = persist_handle {
+        let _ = fanout.await;
+        let _ = persist.await;
+    }
+    let _ = renderer_handle.await;
+
+    result
+}
+
+/// Runs a single chat turn through the engine with rendering (legacy callback version).
+#[allow(dead_code)]
 async fn run_chat_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -197,6 +240,7 @@ async fn run_chat_turn(
 }
 
 /// Creates an EventSink that renders to CLI and persists tool events to session.
+#[allow(dead_code)]
 fn create_persisting_sink(
     session: Option<Arc<Mutex<Session>>>,
     renderer: Arc<Mutex<CliRenderer>>,
