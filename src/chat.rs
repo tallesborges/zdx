@@ -18,6 +18,7 @@ use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
 use crate::renderer;
 use crate::session::{self, Session, SessionEvent};
+use crate::ui::{self, InputResult, TuiApp};
 
 const QUIT_COMMAND: &str = ":q";
 const PROMPT_PREFIX: &str = "you> ";
@@ -65,23 +66,134 @@ pub async fn run_interactive_chat_with_history(
             writeln!(err, "  - {}", path.display())?;
         }
     }
-    write!(err, "{}", PROMPT_PREFIX)?;
-    err.flush()?;
 
-    run_chat_loop(
-        stdin().lock(),
-        config,
-        &engine_opts,
-        session,
-        history,
-        effective.prompt.as_deref(),
-    )
-    .await
+    // Build history for the input handler (user messages only for navigation)
+    let user_history: Vec<String> = history
+        .iter()
+        .filter_map(|m| {
+            if m.role == "user" {
+                // Extract text from MessageContent
+                match &m.content {
+                    crate::providers::anthropic::MessageContent::Text(text) => Some(text.clone()),
+                    crate::providers::anthropic::MessageContent::Blocks(blocks) => {
+                        blocks.iter().find_map(|block| {
+                            if let crate::providers::anthropic::ChatContentBlock::Text(text) = block
+                            {
+                                Some(text.clone())
+                            } else {
+                                None
+                            }
+                        })
+                    }
+                }
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    // Use TTY handler if available, otherwise fall back to line reader
+    if ui::is_tty() {
+        run_chat_loop_tty(
+            config,
+            &engine_opts,
+            session,
+            history,
+            user_history,
+            effective.prompt.as_deref(),
+        )
+        .await
+    } else {
+        // Print initial prompt for non-TTY mode
+        write!(err, "{}", PROMPT_PREFIX)?;
+        err.flush()?;
+
+        run_chat_loop(
+            stdin().lock(),
+            config,
+            &engine_opts,
+            session,
+            history,
+            effective.prompt.as_deref(),
+        )
+        .await
+    }
 }
 
-/// Internal chat loop that reads from a BufRead source.
+/// TTY-based chat loop using ratatui TUI.
+async fn run_chat_loop_tty(
+    config: &Config,
+    engine_opts: &EngineOptions,
+    mut session: Option<Session>,
+    initial_history: Vec<ChatMessage>,
+    user_history: Vec<String>,
+    system_prompt: Option<&str>,
+) -> Result<()> {
+    let mut history = initial_history;
+    let mut err = stderr();
+    let mut tui = TuiApp::new(PROMPT_PREFIX, user_history);
+
+    loop {
+        // Reset interrupt state before reading input
+        crate::interrupt::reset();
+
+        // Read input using the TUI
+        let result = match tui.read_input() {
+            Ok(r) => r,
+            Err(e) => {
+                writeln!(err, "Input error: {}", e)?;
+                continue;
+            }
+        };
+
+        match result {
+            InputResult::Quit => {
+                writeln!(err, "Goodbye!")?;
+                break;
+            }
+            InputResult::Clear | InputResult::Continue => {
+                // Buffer was cleared or no action, continue
+                continue;
+            }
+            InputResult::Submit(text) => {
+                let trimmed = text.trim();
+
+                // Skip empty input
+                if trimmed.is_empty() {
+                    tui.reset_input();
+                    continue;
+                }
+
+                // Echo user's message
+                println!("> {}", trimmed);
+
+                // Add to history
+                tui.push_history(trimmed.to_string());
+
+                // Process the message
+                process_user_message(
+                    trimmed,
+                    &mut history,
+                    &mut session,
+                    config,
+                    engine_opts,
+                    system_prompt,
+                    &mut err,
+                )
+                .await?;
+            }
+        }
+
+        // Reset for next input
+        tui.reset_input();
+    }
+
+    Ok(())
+}
+
+/// Internal chat loop that reads from a BufRead source (non-TTY fallback).
 ///
-/// This is separated for testability.
+/// This is separated for testability and non-TTY compatibility.
 async fn run_chat_loop<R: BufRead>(
     input: R,
     config: &Config,
@@ -110,63 +222,88 @@ async fn run_chat_loop<R: BufRead>(
             continue;
         }
 
-        // Add user message to history
-        history.push(ChatMessage::user(trimmed));
-
-        // Log user message to session (this ensures meta is written for new sessions)
-        if let Some(ref mut s) = session
-            && let Err(e) = s.append(&SessionEvent::user_message(trimmed))
-        {
-            writeln!(err, "Warning: Failed to save session: {}", e)?;
-        }
-
-        // Clone session for the persist task (tool events will be logged there)
-        // User/assistant messages are logged here in the chat loop
-        let session_for_turn = session.clone();
-
-        // Run the turn through the engine with channel-based rendering
-        let result = run_chat_turn_async(
-            history.clone(),
+        // Process the message
+        process_user_message(
+            trimmed,
+            &mut history,
+            &mut session,
             config,
             engine_opts,
             system_prompt,
-            session_for_turn,
+            &mut err,
         )
-        .await;
-
-        match result {
-            Ok((final_text, new_history)) => {
-                // Renderer task handles finish() automatically
-
-                if !final_text.is_empty() {
-                    // Log assistant response to session
-                    if let Some(ref mut s) = session
-                        && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
-                    {
-                        writeln!(err, "Warning: Failed to save session: {}", e)?;
-                    }
-                }
-
-                // Update history for next turn
-                history = new_history;
-            }
-            Err(e) => {
-                if e.downcast_ref::<crate::interrupt::InterruptedError>()
-                    .is_some()
-                {
-                    // Interrupted event is already persisted via the persist task
-                    crate::interrupt::reset();
-                } else {
-                    writeln!(err, "Error: {}", e)?;
-                }
-                // Remove the failed user message from history
-                history.pop();
-            }
-        }
+        .await?;
 
         // Re-render prompt
         write!(err, "{}", PROMPT_PREFIX)?;
         err.flush()?;
+    }
+
+    Ok(())
+}
+
+/// Processes a single user message through the engine.
+async fn process_user_message(
+    text: &str,
+    history: &mut Vec<ChatMessage>,
+    session: &mut Option<Session>,
+    config: &Config,
+    engine_opts: &EngineOptions,
+    system_prompt: Option<&str>,
+    err: &mut impl Write,
+) -> Result<()> {
+    // Add user message to history
+    history.push(ChatMessage::user(text));
+
+    // Log user message to session (this ensures meta is written for new sessions)
+    if let Some(s) = session
+        && let Err(e) = s.append(&SessionEvent::user_message(text))
+    {
+        writeln!(err, "Warning: Failed to save session: {}", e)?;
+    }
+
+    // Clone session for the persist task (tool events will be logged there)
+    // User/assistant messages are logged here in the chat loop
+    let session_for_turn = session.clone();
+
+    // Run the turn through the engine with channel-based rendering
+    let result = run_chat_turn_async(
+        history.clone(),
+        config,
+        engine_opts,
+        system_prompt,
+        session_for_turn,
+    )
+    .await;
+
+    match result {
+        Ok((final_text, new_history)) => {
+            // Renderer task handles finish() automatically
+
+            if !final_text.is_empty() {
+                // Log assistant response to session
+                if let Some(s) = session
+                    && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
+                {
+                    writeln!(err, "Warning: Failed to save session: {}", e)?;
+                }
+            }
+
+            // Update history for next turn
+            *history = new_history;
+        }
+        Err(e) => {
+            if e.downcast_ref::<crate::interrupt::InterruptedError>()
+                .is_some()
+            {
+                // Interrupted event is already persisted via the persist task
+                crate::interrupt::reset();
+            } else {
+                writeln!(err, "Error: {}", e)?;
+            }
+            // Remove the failed user message from history
+            history.pop();
+        }
     }
 
     Ok(())
