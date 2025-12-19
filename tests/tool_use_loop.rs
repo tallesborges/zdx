@@ -227,3 +227,40 @@ async fn test_tool_shows_activity_indicator() {
         .success()
         .stderr(predicate::str::contains("⚙ Running read... Done."));
 }
+
+#[tokio::test]
+async fn test_bash_tool_shows_debug_lines() {
+    let mock_server = MockServer::start().await;
+    let first_response = tool_use_sse("toolu_bash", "bash", r#"{"command": "echo hello"}"#);
+    let second_response = text_sse("Command executed.");
+
+    let call_count = Arc::new(AtomicUsize::new(0));
+    let call_count_clone = call_count.clone();
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(move |_req: &Request| {
+            let count = call_count_clone.fetch_add(1, Ordering::SeqCst);
+            if count == 0 {
+                sse_response(&first_response)
+            } else {
+                sse_response(&second_response)
+            }
+        })
+        .expect(2)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-save", "exec", "-p", "Run bash"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Tool requested: bash command=\"echo hello\"",
+        ))
+        // Check for duration format: Done. (X.XXs)
+        .stderr(predicate::str::is_match(r"Done\. \(\d+\.\d{2}s\)").unwrap())
+        .stderr(predicate::str::contains("Tool finished: bash exit=0"));
+}

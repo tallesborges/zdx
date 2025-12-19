@@ -5,12 +5,14 @@
 //! - Assistant text (deltas/final) → stdout only
 //! - Tool status, diagnostics, errors → stderr only
 
+use std::collections::HashMap;
 use std::io::{Stderr, Stdout, Write, stderr, stdout};
+use std::time::Instant;
 
 use tokio::task::JoinHandle;
 
 use crate::engine::EventRx;
-use crate::events::EngineEvent;
+use crate::events::{EngineEvent, ToolOutput};
 
 /// CLI renderer that writes engine events to stdout/stderr.
 ///
@@ -22,6 +24,10 @@ pub struct CliRenderer {
     stderr: Stderr,
     /// Whether the final newline has been printed after assistant output.
     needs_final_newline: bool,
+    /// Tracks tool_use id -> name for ToolFinished rendering.
+    tool_names: HashMap<String, String>,
+    /// Tracks tool start times for duration calculation.
+    tool_start_times: HashMap<String, Instant>,
 }
 
 impl Default for CliRenderer {
@@ -37,6 +43,8 @@ impl CliRenderer {
             stdout: stdout(),
             stderr: stderr(),
             needs_final_newline: false,
+            tool_names: HashMap::new(),
+            tool_start_times: HashMap::new(),
         }
     }
 
@@ -56,15 +64,39 @@ impl CliRenderer {
                     self.needs_final_newline = true;
                 }
             }
-            EngineEvent::ToolRequested { .. } => {
-                // Not rendered in CLI - the ToolStarted event shows activity
+            EngineEvent::ToolRequested { id, name, input } => {
+                // Track tool name for ToolFinished rendering
+                self.tool_names.insert(id.clone(), name.clone());
+
+                // Emit debug line for bash tool (per SPEC §10)
+                if name == "bash"
+                    && let Some(command) = input.get("command").and_then(|v| v.as_str())
+                {
+                    let _ =
+                        writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
+                }
             }
-            EngineEvent::ToolStarted { name, .. } => {
+            EngineEvent::ToolStarted { id, name } => {
+                self.tool_start_times.insert(id, Instant::now());
                 let _ = write!(self.stderr, "⚙ Running {}...", name);
                 let _ = self.stderr.flush();
             }
-            EngineEvent::ToolFinished { .. } => {
-                let _ = writeln!(self.stderr, " Done.");
+            EngineEvent::ToolFinished { id, result } => {
+                // Calculate duration if we have a start time
+                let duration_str = self
+                    .tool_start_times
+                    .remove(&id)
+                    .map(|start| format!(" ({:.2}s)", start.elapsed().as_secs_f64()))
+                    .unwrap_or_default();
+
+                let _ = writeln!(self.stderr, " Done.{}", duration_str);
+
+                // Emit debug line for bash tool (per SPEC §10)
+                if let Some(name) = self.tool_names.get(&id)
+                    && name == "bash"
+                {
+                    self.emit_bash_finish_details(&result);
+                }
             }
             EngineEvent::Warning { message } => {
                 // Print warning to stderr (per SPEC §10)
@@ -85,6 +117,27 @@ impl CliRenderer {
             EngineEvent::Interrupted => {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
+            }
+        }
+    }
+
+    /// Emits bash tool finish details to stderr.
+    fn emit_bash_finish_details(&mut self, result: &ToolOutput) {
+        match result {
+            ToolOutput::Success { data, .. } => {
+                // Check for timed_out first
+                if let Some(true) = data.get("timed_out").and_then(|v| v.as_bool()) {
+                    let _ = writeln!(self.stderr, "Tool finished: bash timed_out=true");
+                } else if let Some(exit_code) = data.get("exit_code").and_then(|v| v.as_i64()) {
+                    let _ = writeln!(self.stderr, "Tool finished: bash exit={}", exit_code);
+                }
+            }
+            ToolOutput::Failure { error, .. } => {
+                let _ = writeln!(
+                    self.stderr,
+                    "Tool finished: bash error=\"{}\"",
+                    error.message
+                );
             }
         }
     }
