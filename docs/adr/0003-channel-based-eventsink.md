@@ -103,4 +103,4 @@ Engine (run_turn)
 ## References
 
 - ADR-0002: Engine emits events to a renderer sink
-- PLAN_v0.2.1: Channel-based EventSink refactor implementation plan
+- Plans: `docs/plans/` (implementation checklists)

@@ -1,4 +1,4 @@
-# PLAN v0.2.2 — Bash Tool Debug Lines (stderr)
+# plan_bash_tool_debug_lines
 
 > **Goal:** Show bash tool request + completion details on stderr using existing tool events.
 >

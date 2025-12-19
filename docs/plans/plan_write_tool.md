@@ -1,4 +1,4 @@
-# PLAN v0.2.3 — Write Tool
+# plan_write_tool
 
 > **Goal:** Add a deterministic filesystem `write` tool with clear error behavior.
 >

@@ -127,7 +127,7 @@ ZDX uses four docs with different responsibilities:
 
 - **SPEC.md** = values + contracts + non-goals (**source of truth**)
 - **docs/ROADMAP.md** = optional priorities list (what/why, not how)
-- **PLAN_vX.Y.md** = concrete, commit-sized implementation plan (how)
+- **docs/plans/plan_*.md** = concrete, commit-sized implementation plan (how)
 - **docs/adr/*.md** = **Architecture Decision Records** (why we chose a path, tradeoffs, consequences)
 
 ### Golden rules
@@ -159,7 +159,7 @@ Linking:
 
 ---
 
-## When you (the agent/LLM) receive a request
+## When you (the AI assistant) receive a request
 
 ## Docs and process: Fast path vs Contract path
 
@@ -194,7 +194,7 @@ You should:
 1) Add the item to `docs/ROADMAP.md` (if the repo is using it), placing it under **Now / Next / Later**.
 2) Check whether the feature changes any SPEC contract. If yes, update `docs/SPEC.md`.
 3) If adding the feature requires a notable design choice/tradeoff, create a short ADR in `docs/adr/`.
-4) If asked, create `docs/PLAN_vX.Y.md` (or update the current plan) with commit-sized steps.
+4) If asked, create a plan doc under `docs/plans/` (or update the current plan) with commit-sized steps.
 
 ### B) If the request is "Implement feature X"
 You should:
@@ -208,7 +208,7 @@ You should:
    - provider behavior that affects user-visible output
 3) If implementation requires a non-trivial decision (format choice, interface boundary, error model, storage rules), create/update an ADR in `docs/adr/` and link it from SPEC/PLAN as appropriate.
 4) Update `docs/ROADMAP.md` only if it helps keep priorities accurate (optional).
-5) If asked, generate/update `docs/PLAN_vX.Y.md` as a list of micro-commits:
+5) If asked, generate/update a `docs/plans/plan_<short_slug>.md` file as a list of micro-commits:
    - each commit: goal, deliverable, CLI demo command(s), files touched, tests, edge cases
 
 ---
@@ -259,7 +259,7 @@ When updating ROADMAP:
 
 ---
 
-## PLAN_vX.Y.md rules (micro-commit delivery)
+## docs/plans/plan_*.md rules (micro-commit delivery)
 
 When creating/updating a PLAN:
 - Each step is ~1 commit and must include:
@@ -311,6 +311,6 @@ When I ask you to add/implement a feature, respond with:
 0) **ADR changes** (only if needed / created / superseded)
 1) **docs/SPEC.md changes** (only if needed)
 2) **docs/ROADMAP.md changes** (only if updated / needed)
-3) **docs/PLAN_vX.Y.md** (only if I asked for a plan or implementation)
+3) **docs/plans/plan_*.md** (only if I asked for a plan or implementation)
 
 Prefer showing the *full updated sections* (not vague suggestions), so I can copy/paste into files.
