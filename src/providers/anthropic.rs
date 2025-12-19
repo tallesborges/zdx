@@ -93,10 +93,6 @@ impl ProviderError {
         Self::new(ProviderErrorKind::Timeout, message)
     }
 
-    /// Creates a parse error.
-    pub fn parse(message: impl Into<String>) -> Self {
-        Self::new(ProviderErrorKind::Parse, message)
-    }
 
     /// Creates an API error (from mid-stream error event).
     pub fn api_error(error_type: &str, message: &str) -> Self {
@@ -198,65 +194,6 @@ impl AnthropicClient {
         }
     }
 
-    /// Sends a message and returns the assistant's text response.
-    #[allow(dead_code)] // Useful API for simpler use cases
-    pub async fn send_message(&self, prompt: &str) -> Result<String> {
-        let response = self
-            .send_messages(&[ChatMessage::user(prompt)], &[], None)
-            .await?;
-        response.text().context("No text content in response")
-    }
-
-    /// Sends a conversation and returns the full response with content blocks.
-    pub async fn send_messages(
-        &self,
-        messages: &[ChatMessage],
-        tools: &[ToolDefinition],
-        system: Option<&str>,
-    ) -> Result<AssistantResponse> {
-        let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
-
-        let tool_defs = if tools.is_empty() {
-            None
-        } else {
-            Some(tools.iter().map(ApiToolDef::from).collect::<Vec<_>>())
-        };
-
-        let request = MessagesRequest {
-            model: &self.config.model,
-            max_tokens: self.config.max_tokens,
-            messages: api_messages,
-            tools: tool_defs,
-            system,
-        };
-
-        let url = format!("{}/v1/messages", self.config.base_url);
-
-        let response = self
-            .http
-            .post(&url)
-            .header("x-api-key", &self.config.api_key)
-            .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(Self::classify_reqwest_error)?;
-
-        let status = response.status();
-        if !status.is_success() {
-            let error_body = response.text().await.unwrap_or_default();
-            return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
-        }
-
-        let raw: MessagesResponse = response
-            .json()
-            .await
-            .map_err(|e| ProviderError::parse(format!("Failed to parse response: {}", e)))?;
-
-        Ok(AssistantResponse::from(raw))
-    }
-
     /// Sends a conversation and returns an async stream of events.
     ///
     /// This enables chunk-by-chunk token streaming from the API.
@@ -327,57 +264,6 @@ impl AnthropicClient {
     }
 }
 
-/// A content block in the response.
-#[derive(Debug, Clone)]
-pub enum ContentBlock {
-    Text(String),
-}
-
-/// The assistant's response, parsed into content blocks.
-#[derive(Debug, Clone)]
-pub struct AssistantResponse {
-    pub content: Vec<ContentBlock>,
-    #[allow(dead_code)] // Useful for future features
-    pub stop_reason: String,
-}
-
-impl AssistantResponse {
-    /// Extracts all text blocks concatenated.
-    pub fn text(&self) -> Option<String> {
-        let texts: Vec<&str> = self
-            .content
-            .iter()
-            .map(|b| match b {
-                ContentBlock::Text(t) => t.as_str(),
-            })
-            .collect();
-
-        if texts.is_empty() {
-            None
-        } else {
-            Some(texts.join("\n"))
-        }
-    }
-}
-
-impl From<MessagesResponse> for AssistantResponse {
-    fn from(raw: MessagesResponse) -> Self {
-        let content = raw
-            .content
-            .into_iter()
-            .filter_map(|block| match block.block_type.as_str() {
-                "text" => Some(ContentBlock::Text(block.text.unwrap_or_default())),
-                "tool_use" => None,
-                _ => None,
-            })
-            .collect();
-
-        Self {
-            content,
-            stop_reason: raw.stop_reason.unwrap_or_default(),
-        }
-    }
-}
 
 // === Streaming Types ===
 
@@ -651,17 +537,6 @@ struct SseErrorInfo {
 // === API Request Types ===
 
 #[derive(Debug, Serialize)]
-struct MessagesRequest<'a> {
-    model: &'a str,
-    max_tokens: u32,
-    messages: Vec<ApiMessage>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tools: Option<Vec<ApiToolDef<'a>>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
 struct StreamingMessagesRequest<'a> {
     model: &'a str,
     max_tokens: u32,
@@ -758,22 +633,6 @@ impl From<&ChatMessage> for ApiMessage {
     }
 }
 
-// === API Response Types ===
-
-#[derive(Debug, Deserialize)]
-struct MessagesResponse {
-    content: Vec<RawContentBlock>,
-    stop_reason: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RawContentBlock {
-    #[serde(rename = "type")]
-    block_type: String,
-    #[serde(default)]
-    text: Option<String>,
-}
-
 // === Public Chat Types ===
 
 /// Content block in a chat message.
@@ -835,20 +694,6 @@ impl ChatMessage {
         }
     }
 
-    /// Returns the text content if this is a simple text message.
-    #[allow(dead_code)] // Useful API for simple text extraction
-    pub fn text(&self) -> Option<&str> {
-        match &self.content {
-            MessageContent::Text(t) => Some(t),
-            MessageContent::Blocks(blocks) => {
-                // Return first text block if any
-                blocks.iter().find_map(|b| match b {
-                    ChatContentBlock::Text(t) => Some(t.as_str()),
-                    _ => None,
-                })
-            }
-        }
-    }
 }
 
 #[cfg(test)]

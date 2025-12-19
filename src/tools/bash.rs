@@ -136,7 +136,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_executes_command() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo hello"});
 
         let result = execute(&input, &ctx, None).await;
@@ -151,7 +151,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_captures_stderr() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo error >&2"});
 
         let result = execute(&input, &ctx, None).await;
@@ -163,7 +163,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_captures_exit_code() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"command": "exit 42"});
 
         let result = execute(&input, &ctx, None).await;
@@ -177,7 +177,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("test.txt"), "content").unwrap();
 
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"command": "ls"});
 
         let result = execute(&input, &ctx, None).await;
@@ -189,7 +189,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_timeout() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"command": "sleep 5"});
 
         let result = execute(&input, &ctx, Some(Duration::from_millis(100))).await;
@@ -201,7 +201,7 @@ mod tests {
     #[tokio::test]
     async fn test_bash_invalid_input() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"wrong_field": "ls"});
 
         let result = execute(&input, &ctx, None).await;

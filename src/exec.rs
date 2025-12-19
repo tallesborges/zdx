@@ -19,14 +19,6 @@ pub struct ExecOptions {
     pub root: PathBuf,
 }
 
-impl Default for ExecOptions {
-    fn default() -> Self {
-        Self {
-            root: PathBuf::from("."),
-        }
-    }
-}
-
 impl From<&ExecOptions> for EngineOptions {
     fn from(opts: &ExecOptions) -> Self {
         EngineOptions {

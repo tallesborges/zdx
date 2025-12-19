@@ -3,7 +3,6 @@
 //! Tests the schema v1 format including:
 //! - meta event as first line
 //! - tool_use and tool_result events during tool loops
-//! - backward compatibility with pre-v1 sessions
 //! - resume with full tool history
 
 mod fixtures;
@@ -136,49 +135,6 @@ async fn test_tool_use_persisted_to_session() {
         .expect("session should contain tool_result event");
     assert_eq!(tool_result["tool_use_id"], "tool-123");
     assert!(tool_result["ok"].is_boolean());
-}
-
-/// Test that legacy sessions (without meta event) are backward compatible.
-///
-/// After refactor (commit 2b):
-/// - "Loaded N previous messages" goes to stderr
-/// - Assistant text goes to stdout
-#[tokio::test]
-async fn test_legacy_session_backward_compatible() {
-    let mock_server = MockServer::start().await;
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create a legacy format session file (without meta event)
-    let sessions_dir = temp_dir.path().join("sessions");
-    fs::create_dir_all(&sessions_dir).unwrap();
-    let session_path = sessions_dir.join("legacy-session.jsonl");
-
-    let legacy_content = r#"{"type":"message","role":"user","text":"What is 2+2?","ts":"2025-01-01T00:00:00Z"}
-{"type":"message","role":"assistant","text":"The answer is 4.","ts":"2025-01-01T00:00:01Z"}"#;
-    fs::write(&session_path, legacy_content).unwrap();
-
-    // Resume the legacy session
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        .and(body_string_contains("What is 2+2?"))
-        .and(body_string_contains("The answer is 4."))
-        .respond_with(streaming_text_response("3+3 is 6"))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    cargo_bin_cmd!("zdx-cli")
-        .env("ZDX_HOME", temp_dir.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["sessions", "resume", "legacy-session"])
-        .write_stdin("And 3+3?\n:q\n")
-        .assert()
-        .success()
-        // REPL UI goes to stderr
-        .stderr(predicate::str::contains("Loaded 2 previous messages"))
-        // Assistant text goes to stdout
-        .stdout(predicate::str::contains("3+3 is 6"));
 }
 
 #[tokio::test]

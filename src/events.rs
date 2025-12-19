@@ -33,11 +33,6 @@ pub enum EngineEvent {
     /// A tool invocation has completed.
     ToolFinished { id: String, result: ToolOutput },
 
-    /// A non-fatal warning (e.g., context loading issues).
-    Warning {
-        /// One-line summary
-        message: String,
-    },
 
     /// An error occurred during execution.
     Error {
@@ -66,8 +61,6 @@ pub enum ErrorKind {
     Parse,
     /// API-level error from provider
     ApiError,
-    /// Configuration error
-    Config,
     /// Internal/unknown error
     Internal,
 }
@@ -90,7 +83,6 @@ impl fmt::Display for ErrorKind {
             ErrorKind::Timeout => write!(f, "timeout"),
             ErrorKind::Parse => write!(f, "parse"),
             ErrorKind::ApiError => write!(f, "api_error"),
-            ErrorKind::Config => write!(f, "config"),
             ErrorKind::Internal => write!(f, "internal"),
         }
     }
