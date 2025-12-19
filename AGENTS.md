@@ -10,15 +10,25 @@
 
 - `src/main.rs`: CLI entrypoint; wires subcommands to implementations.
 - `src/cli.rs`: `clap` command/flag definitions (`Cli`, `Commands`, etc.).
+- `src/chat.rs`: interactive chat loop (TTY) and orchestration around the engine (input + streaming + sessions).
+- `src/ui/`: minimal TUI input editor (ratatui/crossterm).
+- `src/renderer.rs`: terminal renderer for engine events (stdout/stderr contracts).
 - `src/config.rs`: config loading + initialization (`config.toml`), with unit tests.
 - `src/paths.rs`: resolves `ZDX_HOME`/default paths (config + sessions).
 - `tests/`: integration tests for CLI behavior (`assert_cmd`, `predicates`).
+
+## Product direction (UX-first, TUI-first interactive)
+
+- Optimize for a simple, fast, keyboard-first terminal UX; avoid “pane zoo” UI complexity.
+- Keep output contracts stable: in non-interactive mode, stdout is assistant text only; stderr is UI/tool status/errors.
+- Keep the engine UI-agnostic: terminal I/O belongs in renderers/UI modules only.
 
 ## Build, Test, and Development Commands
 
 - `cargo build`: compile a debug build.
 - `cargo build --release`: compile an optimized binary.
 - `cargo run -- --help`: run the CLI (args after `--`).
+- `cargo run --`: start interactive chat (TTY required; provider key required via env).
 - `cargo test`: run unit + integration tests.
 - `cargo fmt`: format the codebase with Rustfmt.
 - `cargo clippy`: lint the codebase (optionally add `-- -D warnings` for strict CI-like checks).

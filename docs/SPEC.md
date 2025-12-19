@@ -1,18 +1,20 @@
 # ZDX Specification
 
-**Product:** ZDX (terminal-first agentic coding CLI)  
+**Product:** ZDX (terminal-first agentic coding tool)  
 **Spec version:** living document  
 **Status:** Source of truth for *values + contracts*. If `docs/ROADMAP.md` exists, it must not contradict `docs/SPEC.md`.
 **Notation:** Sections labeled **Current (v0.1)** describe shipped behavior in this repo; sections labeled **Planned** describe intended future behavior and are not shipped yet.
 
 ---
 
-## 0) Scope (CLI-first)
+## 0) Scope (terminal-first, UX-first)
 
-ZDX is a **CLI product first**.
+ZDX is a **terminal product first**.
 
-- The primary UX is `zdx ...` commands in a terminal.
-- Anything that does not improve the CLI’s day-to-day usefulness is out of scope for the current spec version.
+- The primary UX is running `zdx` in a terminal:
+  - **Interactive (TTY):** `zdx` provides a fast, keyboard-first experience with a minimal TUI input editor.
+  - **Non-interactive:** `zdx exec ...` (or piping into `zdx`) behaves like a normal UNIX CLI for scripting.
+- Anything that does not improve the terminal UX (interactive or scriptable) is out of scope for the current spec version.
 
 ### Success criteria (current)
 
@@ -20,28 +22,31 @@ ZDX is “working” when I can:
 - run a prompt and stream output reliably
 - use tools (`read`, `write`, `bash` now; `edit` planned) to inspect/modify files in a repo
 - save/resume sessions in a predictable format
-- pipe/redirect output like a normal UNIX CLI
+- pipe/redirect output like a normal UNIX CLI (via `exec` / non-interactive mode)
+- use multiline input + interrupts in interactive mode
 
 ### Non-goals (for now)
 
-- Building a full TUI (ratatui/crossterm) or IDE-like UI
+- Building an IDE-like workspace (file tree, refactor UI, project indexing, etc.)
+- A “pane zoo” / dashboard-style TUI with lots of modes
 - Plugin systems / provider marketplace
 - “Safety sandbox” / heavy permission systems beyond a simple root dir context
 - Premature abstractions beyond the minimal multi-provider/tool interface
 
 ### Design constraints
 
-- Engine is UI-agnostic, but **CLI is the only shipped UI** right now.
+- Engine is UI-agnostic, and renderers own terminal I/O.
+- **Current (v0.1):** shipped interactive mode uses a minimal TUI input editor; non-interactive commands remain CLI-friendly.
 - Prefer fewer flags and fewer modes; add only when real usage demands it.
 
 ## 1) Purpose
 
-ZDX is a **terminal-first** agentic coding CLI that you can use daily for real work.
+ZDX is a **terminal-first** agentic coding tool you can use daily for real work: a **simple, fast, powerful** interactive experience (TUI) with a scriptable CLI surface.
 
 ZDX optimizes for:
 - Fast iteration and "ship small" delivery
-- A great terminal UX (streaming, resumable sessions, clean output)
-- A core architecture that can later power a TUI without rewriting the engine
+- A great terminal UX (streaming, resumable sessions, clean output, strong defaults)
+- A core architecture that can later power a richer TUI without rewriting the engine
 
 ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
 
@@ -54,6 +59,11 @@ ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
 - Prefer **simple data structures + explicit contracts** over "smart" abstractions.
 - Refactor only after usage proves the shape.
 
+### UX-first
+- UX is the product: reduce friction, keep flows obvious, and optimize for keyboard-driven speed.
+- Prefer strong defaults and progressive disclosure over configuration knobs.
+- Keep interactive behavior consistent; avoid surprising state/mode switches.
+
 ### Terminal-first
 - Designed around UNIX expectations:
   - stdout/stderr separation
@@ -61,8 +71,8 @@ ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
   - exit codes
   - predictable output formats
 
-### CLI-first shipping
-Ship CLI features that I will use this week. Everything else waits.
+### Daily-driver shipping
+Ship features that I will use this week. Everything else waits.
 
 ### YOLO default
 - ZDX prioritizes speed and flow.
@@ -71,11 +81,11 @@ Ship CLI features that I will use this week. Everything else waits.
 
 ### Engine-first (UI-agnostic)
 - ZDX has a core "engine" that emits events.
-- CLI is just a renderer over the event stream.
+- Renderers (TUI/CLI) are just views over the event stream.
 - Future TUI must consume the same engine events (no forked logic).
 
 ### UX inspiration
-ZDX aims for an “iOS-like” CLI UX: strong defaults, consistent patterns, minimal configuration, and progressive disclosure of advanced options.
+ZDX aims for an “iOS-like” terminal UX: strong defaults, consistent patterns, minimal configuration, and progressive disclosure of advanced options.
 
 ---
 
@@ -99,7 +109,7 @@ ZDX follows a layered design:
 [Config] -> [Session store (JSONL)]  (durable)
                   ^
                   |
-[User] -> [CLI Renderer] <-> [Agent Engine] <-> [Provider (Anthropic)]
+[User] -> [Renderer (TUI/CLI)] <-> [Agent Engine] <-> [Provider (Anthropic)]
                                    ^
                                    |
                                  [Tools]
@@ -349,7 +359,7 @@ This ensures tool results are deterministic and parseable.
 
 ## 7) Engine event stream contract
 
-The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr/0002-engine-emits-events-to-renderer-sink.md).
+The engine emits events for renderers (interactive TUI and non-interactive CLI today; richer UI later). See [ADR-0002](./adr/0002-engine-emits-events-to-renderer-sink.md).
 
 ### Required event types (current)
 
@@ -523,9 +533,13 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 ### Output channel rules (terminal-first)
 
-**Agent commands** (`zdx`, `zdx exec`, `zdx sessions resume`):
+**Agent commands (non-interactive)** (`zdx exec`, or `zdx` when stdin is piped):
 * **stdout**: assistant text only (streaming)
-* **stderr**: REPL UI, tool status lines, diagnostics, warnings, errors (human-readable)
+* **stderr**: diagnostics, warnings, errors, tool status (human-readable)
+
+**Agent commands (interactive / TTY)** (`zdx`, `zdx sessions resume`):
+* **stdout**: transcript (user lines prefixed with `> `; assistant text streamed)
+* **stderr**: TUI input editor, banner/warnings, tool status, diagnostics/errors
 
 **Utility commands** (`zdx sessions list/show`, `zdx config path/init`):
 * **stdout**: command output
