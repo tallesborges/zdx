@@ -8,19 +8,18 @@
 //! - REPL UI (welcome, prompts, goodbye, warnings) → stderr only
 //! - Tool status indicators → stderr only (via renderer)
 
-use std::io::{BufRead, Write, stderr, stdin};
+use std::io::{Write, stderr};
 use std::path::PathBuf;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use crate::config::Config;
 use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
 use crate::renderer;
 use crate::session::{self, Session, SessionEvent};
-use crate::ui::{self, InputResult, TuiApp};
+use crate::ui::{InputResult, TuiApp};
 
-const QUIT_COMMAND: &str = ":q";
 const PROMPT_PREFIX: &str = "you> ";
 
 /// Runs the interactive chat loop with stdin/stdout.
@@ -39,6 +38,15 @@ pub async fn run_interactive_chat_with_history(
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
+    // Chat mode requires a terminal to render the TUI
+    use std::io::IsTerminal;
+    if !stderr().is_terminal() {
+        anyhow::bail!(
+            "Chat mode requires a terminal.\n\
+             Use `zdx exec --prompt '...'` for non-interactive execution."
+        );
+    }
+
     let effective = crate::context::build_effective_system_prompt_with_paths(config, &root)?;
 
     let engine_opts = EngineOptions { root };
@@ -92,35 +100,18 @@ pub async fn run_interactive_chat_with_history(
         })
         .collect();
 
-    // Use TTY handler if available, otherwise fall back to line reader
-    if ui::is_tty() {
-        run_chat_loop_tty(
-            config,
-            &engine_opts,
-            session,
-            history,
-            user_history,
-            effective.prompt.as_deref(),
-        )
-        .await
-    } else {
-        // Print initial prompt for non-TTY mode
-        write!(err, "{}", PROMPT_PREFIX)?;
-        err.flush()?;
-
-        run_chat_loop(
-            stdin().lock(),
-            config,
-            &engine_opts,
-            session,
-            history,
-            effective.prompt.as_deref(),
-        )
-        .await
-    }
+    run_chat_loop_tty(
+        config,
+        &engine_opts,
+        session,
+        history,
+        user_history,
+        effective.prompt.as_deref(),
+    )
+    .await
 }
 
-/// TTY-based chat loop using ratatui TUI.
+/// TUI-based chat loop using ratatui.
 async fn run_chat_loop_tty(
     config: &Config,
     engine_opts: &EngineOptions,
@@ -186,57 +177,6 @@ async fn run_chat_loop_tty(
 
         // Reset for next input
         tui.reset_input();
-    }
-
-    Ok(())
-}
-
-/// Internal chat loop that reads from a BufRead source (non-TTY fallback).
-///
-/// This is separated for testability and non-TTY compatibility.
-async fn run_chat_loop<R: BufRead>(
-    input: R,
-    config: &Config,
-    engine_opts: &EngineOptions,
-    mut session: Option<Session>,
-    initial_history: Vec<ChatMessage>,
-    system_prompt: Option<&str>,
-) -> Result<()> {
-    let mut history = initial_history;
-    let mut err = stderr();
-
-    for line in input.lines() {
-        let line = line.context("Failed to read input line")?;
-        let trimmed = line.trim();
-
-        // Handle quit command
-        if trimmed == QUIT_COMMAND {
-            writeln!(err, "Goodbye!")?;
-            break;
-        }
-
-        // Skip empty lines - re-render prompt
-        if trimmed.is_empty() {
-            write!(err, "{}", PROMPT_PREFIX)?;
-            err.flush()?;
-            continue;
-        }
-
-        // Process the message
-        process_user_message(
-            trimmed,
-            &mut history,
-            &mut session,
-            config,
-            engine_opts,
-            system_prompt,
-            &mut err,
-        )
-        .await?;
-
-        // Re-render prompt
-        write!(err, "{}", PROMPT_PREFIX)?;
-        err.flush()?;
     }
 
     Ok(())

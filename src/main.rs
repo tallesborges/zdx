@@ -111,6 +111,19 @@ async fn run_chat(
     session_args: &cli::SessionArgs,
     config: &config::Config,
 ) -> Result<()> {
+    use std::io::{IsTerminal, Read};
+
+    // If stdin is piped, run exec mode instead
+    if !std::io::stdin().is_terminal() {
+        let mut prompt = String::new();
+        std::io::stdin().lock().read_to_string(&mut prompt)?;
+        let prompt = prompt.trim();
+        if prompt.is_empty() {
+            anyhow::bail!("No input provided via pipe");
+        }
+        return run_exec(root, session_args, prompt, config).await;
+    }
+
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
