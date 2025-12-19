@@ -12,8 +12,8 @@ use crate::config::Config;
 use crate::engine::{self, EngineOptions, EventSink};
 use crate::events::EngineEvent;
 use crate::providers::anthropic::ChatMessage;
-use crate::renderer::CliRenderer;
-use crate::session::{Session, SessionEvent};
+use crate::renderer::{self, CliRenderer};
+use crate::session::{self, Session, SessionEvent};
 
 /// Options for agent execution.
 #[derive(Debug, Clone)]
@@ -49,23 +49,16 @@ impl From<&AgentOptions> for EngineOptions {
 pub async fn execute_prompt_streaming(
     prompt: &str,
     config: &Config,
-    session: Option<Session>,
+    mut session: Option<Session>,
     options: &AgentOptions,
 ) -> Result<String> {
     let effective =
         crate::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
-    // Wrap session in Arc<Mutex> for shared access in event sink
-    let session = session.map(|s| Arc::new(Mutex::new(s)));
-
-    // Create renderer for all output
-    let renderer = Arc::new(Mutex::new(CliRenderer::new()));
-
-    // Emit warnings from context loading via renderer
+    // Emit warnings from context loading to stderr
     for warning in &effective.warnings {
-        renderer.lock().unwrap().handle_event(EngineEvent::Warning {
-            message: warning.message.clone(),
-        });
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
     }
 
     // Emit loaded AGENTS.md paths info (per SPEC §10)
@@ -83,42 +76,63 @@ pub async fn execute_prompt_streaming(
         );
     }
 
-    // Log user message to session
-    if let Some(ref s) = session {
-        s.lock()
-            .unwrap()
-            .append(&SessionEvent::user_message(prompt))?;
+    // Log user message to session (ensures meta is written for new sessions)
+    if let Some(ref mut s) = session {
+        s.append(&SessionEvent::user_message(prompt))?;
     }
 
     let messages = vec![ChatMessage::user(prompt)];
     let engine_opts = EngineOptions::from(options);
 
-    // Create a combined sink that handles both rendering and session persistence
-    let sink = create_persisting_sink(session.clone(), renderer.clone());
+    // Create channels for fan-out
+    let (engine_tx, engine_rx) = engine::create_event_channel();
+    let (render_tx, render_rx) = engine::create_event_channel();
 
-    let (final_text, _messages) = engine::run_turn(
+    // Spawn renderer task
+    let renderer_handle = renderer::spawn_renderer_task(render_rx);
+
+    // Spawn persist task if session exists
+    let persist_handle = if let Some(sess) = session.clone() {
+        let (persist_tx, persist_rx) = engine::create_event_channel();
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+        let persist = session::spawn_persist_task(sess, persist_rx);
+        Some((fanout, persist))
+    } else {
+        // No session - just fan out to renderer
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx]);
+        Some((fanout, tokio::spawn(async {}))) // Dummy persist task
+    };
+
+    // Run the engine turn
+    let result = engine::run_turn_async(
         messages,
         config,
         &engine_opts,
         effective.prompt.as_deref(),
-        sink,
+        engine_tx,
     )
-    .await?;
+    .await;
 
-    // Finish rendering (prints final newline if needed)
-    renderer.lock().unwrap().finish();
+    // Wait for all tasks to complete (even on error, to flush error events)
+    if let Some((fanout, persist)) = persist_handle {
+        let _ = fanout.await;
+        let _ = persist.await;
+    }
+    let _ = renderer_handle.await;
+
+    // Propagate error after tasks complete
+    let (final_text, _messages) = result?;
 
     // Log assistant response to session
-    if let Some(ref s) = session {
-        s.lock()
-            .unwrap()
-            .append(&SessionEvent::assistant_message(&final_text))?;
+    if let Some(ref mut s) = session {
+        s.append(&SessionEvent::assistant_message(&final_text))?;
     }
 
     Ok(final_text)
 }
 
 /// Creates an EventSink that renders to CLI and persists tool events to session.
+#[allow(dead_code)]
 fn create_persisting_sink(
     session: Option<Arc<Mutex<Session>>>,
     renderer: Arc<Mutex<CliRenderer>>,
