@@ -114,10 +114,10 @@ async fn run_chat_loop<R: BufRead>(
         history.push(ChatMessage::user(trimmed));
 
         // Log user message to session (this ensures meta is written for new sessions)
-        if let Some(ref mut s) = session {
-            if let Err(e) = s.append(&SessionEvent::user_message(trimmed)) {
-                writeln!(err, "Warning: Failed to save session: {}", e)?;
-            }
+        if let Some(ref mut s) = session
+            && let Err(e) = s.append(&SessionEvent::user_message(trimmed))
+        {
+            writeln!(err, "Warning: Failed to save session: {}", e)?;
         }
 
         // Clone session for the persist task (tool events will be logged there)
@@ -129,7 +129,7 @@ async fn run_chat_loop<R: BufRead>(
             history.clone(),
             config,
             engine_opts,
-            system_prompt.as_deref(),
+            system_prompt,
             session_for_turn,
         )
         .await;
@@ -140,10 +140,10 @@ async fn run_chat_loop<R: BufRead>(
 
                 if !final_text.is_empty() {
                     // Log assistant response to session
-                    if let Some(ref mut s) = session {
-                        if let Err(e) = s.append(&SessionEvent::assistant_message(&final_text)) {
-                            writeln!(err, "Warning: Failed to save session: {}", e)?;
-                        }
+                    if let Some(ref mut s) = session
+                        && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
+                    {
+                        writeln!(err, "Warning: Failed to save session: {}", e)?;
                     }
                 }
 
@@ -203,7 +203,7 @@ async fn run_chat_turn_async(
     };
 
     // Run the engine turn (don't use ? yet - need to await tasks first)
-    let result = engine::run_turn_async(
+    let result = engine::run_turn(
         messages,
         config,
         engine_opts,

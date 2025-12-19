@@ -81,16 +81,15 @@ impl ProviderError {
             None
         } else {
             // Try to extract a cleaner error message from JSON
-            if let Ok(json) = serde_json::from_str::<Value>(body) {
-                if let Some(error_obj) = json.get("error") {
-                    if let Some(msg) = error_obj.get("message").and_then(|v| v.as_str()) {
-                        return Self {
-                            kind: ProviderErrorKind::HttpStatus,
-                            message: format!("HTTP {}: {}", status, msg),
-                            details: Some(body.to_string()),
-                        };
-                    }
-                }
+            if let Ok(json) = serde_json::from_str::<Value>(body)
+                && let Some(error_obj) = json.get("error")
+                && let Some(msg) = error_obj.get("message").and_then(|v| v.as_str())
+            {
+                return Self {
+                    kind: ProviderErrorKind::HttpStatus,
+                    message: format!("HTTP {}: {}", status, msg),
+                    details: Some(body.to_string()),
+                };
             }
             Some(body.to_string())
         };
@@ -254,7 +253,7 @@ impl AnthropicClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| Self::classify_reqwest_error(e))?;
+            .map_err(Self::classify_reqwest_error)?;
 
         let status = response.status();
         if !status.is_success() {
@@ -307,7 +306,7 @@ impl AnthropicClient {
             .json(&request)
             .send()
             .await
-            .map_err(|e| Self::classify_reqwest_error(e))?;
+            .map_err(Self::classify_reqwest_error)?;
 
         let status = response.status();
         if !status.is_success() {
