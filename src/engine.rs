@@ -19,6 +19,9 @@ use crate::tools::{self, ToolContext, ToolResult};
 
 /// Extracts a ProviderError from an anyhow::Error if present and emits it to the sink.
 /// Falls back to an Internal error kind if no ProviderError is found.
+///
+/// **Deprecated:** Use `emit_error_async` with channels instead.
+#[allow(dead_code)]
 fn emit_error_from_anyhow(err: &anyhow::Error, sink: &mut EventSink) {
     if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
         sink(EngineEvent::Error {
@@ -50,7 +53,10 @@ impl Default for EngineOptions {
     }
 }
 
-/// Event sink type for receiving engine events (callback-based, deprecated).
+/// Event sink type for receiving engine events.
+///
+/// **Deprecated:** Use channel-based `EventTx` with `run_turn_async` instead.
+#[allow(dead_code)]
 pub type EventSink = Box<dyn FnMut(EngineEvent) + Send>;
 
 /// Channel-based event sender (async, bounded).
@@ -129,6 +135,9 @@ impl ToolUseBuilder {
 /// handles tool loops, and emits events via the sink.
 ///
 /// Returns the final assistant text and the updated message history.
+///
+/// **Deprecated:** Use `run_turn_async` with channels instead.
+#[allow(dead_code)]
 pub async fn run_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -509,6 +518,9 @@ fn build_assistant_blocks(text: &str, tool_uses: &[ToolUseBuilder]) -> Vec<ChatC
 }
 
 /// Executes all tool uses and emits events.
+///
+/// **Deprecated:** Use `execute_tools_async` with channels instead.
+#[allow(dead_code)]
 async fn execute_tools(
     tool_uses: &[ToolUseBuilder],
     ctx: &ToolContext,
@@ -549,112 +561,18 @@ mod tests {
 
     use super::*;
 
-    /// Helper to collect events into a vec.
-    fn collecting_sink() -> (EventSink, Arc<Mutex<Vec<EngineEvent>>>) {
-        let events = Arc::new(Mutex::new(Vec::new()));
-        let events_clone = events.clone();
-        let sink: EventSink = Box::new(move |event| {
-            events_clone.lock().unwrap().push(event);
-        });
-        (sink, events)
+    /// Helper to collect events from a channel into a vec.
+    async fn collect_events(mut rx: EventRx) -> Vec<EngineEvent> {
+        let mut events = Vec::new();
+        while let Some(ev) = rx.recv().await {
+            events.push((*ev).clone());
+        }
+        events
     }
 
     /// Verifies engine emits ToolStarted and ToolFinished events (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_emits_events() {
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
-
-        let ctx = ToolContext::new(temp.path().to_path_buf());
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
-            id: "tool1".to_string(),
-            name: "read".to_string(),
-            input_json: r#"{"path": "test.txt"}"#.to_string(),
-        }];
-
-        let (mut sink, events) = collecting_sink();
-        let results = execute_tools(&tool_uses, &ctx, &mut sink).await.unwrap();
-
-        assert_eq!(results.len(), 1);
-        let collected = events.lock().unwrap();
-        assert_eq!(collected.len(), 2); // ToolStarted, ToolFinished
-
-        assert!(
-            matches!(&collected[0], EngineEvent::ToolStarted { id, name }
-            if id == "tool1" && name == "read")
-        );
-        assert!(
-            matches!(&collected[1], EngineEvent::ToolFinished { id, result }
-            if id == "tool1" && result.is_ok())
-        );
-    }
-
-    /// Verifies ToolFinished is emitted even on tool errors (SPEC §7).
-    #[tokio::test]
-    async fn test_execute_tools_error_emits_finished() {
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
-
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
-            id: "tool1".to_string(),
-            name: "read".to_string(),
-            input_json: r#"{"path": "nonexistent.txt"}"#.to_string(),
-        }];
-
-        let (mut sink, events) = collecting_sink();
-        let results = execute_tools(&tool_uses, &ctx, &mut sink).await.unwrap();
-
-        assert_eq!(results.len(), 1);
-        assert!(results[0].is_error);
-
-        let collected = events.lock().unwrap();
-        assert_eq!(collected.len(), 2);
-        assert!(
-            matches!(&collected[1], EngineEvent::ToolFinished { result, .. }
-            if !result.is_ok())
-        );
-    }
-
-    /// Verifies Interrupted event is emitted on Ctrl+C (SPEC §7).
-    #[tokio::test]
-    async fn test_execute_tools_handles_interrupt() {
-        use tempfile::TempDir;
-
-        let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
-
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
-            id: "tool1".to_string(),
-            name: "read".to_string(),
-            input_json: r#"{"path": "test.txt"}"#.to_string(),
-        }];
-
-        let (mut sink, events) = collecting_sink();
-
-        // Set interrupt flag
-        crate::interrupt::set_interrupted(true);
-
-        let result = execute_tools(&tool_uses, &ctx, &mut sink).await;
-
-        assert!(result.is_err());
-        let collected = events.lock().unwrap();
-        assert_eq!(collected.len(), 1);
-        assert!(matches!(&collected[0], EngineEvent::Interrupted));
-
-        // Clean up
-        crate::interrupt::set_interrupted(false);
-    }
-
-    /// Verifies async channel-based tool execution emits events (SPEC §7).
-    #[tokio::test]
-    async fn test_execute_tools_async_emits_events() {
         use tempfile::TempDir;
 
         let temp = TempDir::new().unwrap();

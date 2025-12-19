@@ -101,6 +101,9 @@ impl CliRenderer {
     ///
     /// The sink takes ownership of a mutable reference, so the renderer
     /// must be created before the sink and finished after the engine returns.
+    ///
+    /// **Deprecated:** Use `spawn_renderer_task` with channels instead.
+    #[allow(dead_code)]
     pub fn into_sink(self) -> (EventSink, RendererHandle) {
         use std::sync::{Arc, Mutex};
 
@@ -119,10 +122,14 @@ impl CliRenderer {
 /// Handle to a renderer used by an EventSink.
 ///
 /// Call `finish()` after the engine completes to print trailing newlines.
+///
+/// **Deprecated:** Use `spawn_renderer_task` instead.
+#[allow(dead_code)]
 pub struct RendererHandle {
     renderer: std::sync::Arc<std::sync::Mutex<CliRenderer>>,
 }
 
+#[allow(dead_code)]
 impl RendererHandle {
     /// Finishes rendering (prints final newline if needed).
     pub fn finish(self) {
