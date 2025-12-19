@@ -18,7 +18,7 @@ ZDX is a **CLI product first**.
 
 ZDX is “working” when I can:
 - run a prompt and stream output reliably
-- use tools (`read`, `bash` now; `write`/`edit` planned) to inspect/modify files in a repo
+- use tools (`read`, `write`, `bash` now; `edit` planned) to inspect/modify files in a repo
 - save/resume sessions in a predictable format
 - pipe/redirect output like a normal UNIX CLI
 
@@ -180,6 +180,7 @@ Tool calling mode is always allowed if tools are enabled.
 ### Tool set (current)
 
 * `read` (filesystem)
+* `write` (filesystem)
 * `bash` (shell)
 
 ### Path resolution rules
@@ -232,6 +233,36 @@ This ensures tool results are deterministic and parseable.
 
 * **Path:** `data.path` is the canonicalized absolute path on disk.
 * **Truncation (v0.1):** If the file content exceeds 50 KiB (51200 bytes), `content` is truncated to the first 50 KiB and `truncated: true`.
+
+#### `write`
+
+* **Purpose:** Write content to a file, creating or overwriting.
+* **Input schema:**
+
+  ```json
+  { "path": "string", "content": "string" }
+  ```
+
+* **Output schema:**
+
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "path": "...",
+      "bytes": 12345,
+      "created": true
+    }
+  }
+  ```
+
+* **Path:** `data.path` is the resolved absolute path on disk.
+* **Behavior:** Creates the file if it doesn't exist, overwrites if it does. No implicit creation of parent directories.
+* **`created`:** `true` if the file did not exist before, `false` if overwritten.
+* **Error codes:**
+  - `invalid_input`: Missing or malformed input fields.
+  - `path_error`: Parent directory does not exist.
+  - `write_error`: I/O or permission failure.
 
 #### `bash`
 
