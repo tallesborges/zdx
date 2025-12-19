@@ -204,7 +204,7 @@ async fn run_chat_turn_async(
         Some((fanout, tokio::spawn(async {}))) // Dummy persist task
     };
 
-    // Run the engine turn
+    // Run the engine turn (don't use ? yet - need to await tasks first)
     let result = engine::run_turn_async(
         messages,
         config,
@@ -214,13 +214,14 @@ async fn run_chat_turn_async(
     )
     .await;
 
-    // Wait for all tasks to complete (channel closes when engine_tx is dropped)
+    // Wait for all tasks to complete (even on error, to flush error events)
     if let Some((fanout, persist)) = persist_handle {
         let _ = fanout.await;
         let _ = persist.await;
     }
     let _ = renderer_handle.await;
 
+    // Now propagate the result (success or error)
     result
 }
 
