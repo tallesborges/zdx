@@ -182,7 +182,7 @@ Tool calling mode is always allowed if tools are enabled.
 * `read` (filesystem)
 * `write` (filesystem)
 * `bash` (shell)
-* (Planned) `edit` (filesystem)
+* `edit` (filesystem)
 
 ### Path resolution rules
 
@@ -293,7 +293,7 @@ This ensures tool results are deterministic and parseable.
 * **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`, `exit_code: -1`, and `stderr` contains a one-line timeout message.
 * **Output limits (v0.1):** stdout/stderr are not truncated.
 
-#### `edit` (planned)
+#### `edit`
 
 * **Purpose:** Edit an existing file by performing an exact string replacement.
 * **Input schema:**
