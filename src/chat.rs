@@ -143,7 +143,11 @@ async fn run_chat_loop_tty(
                 break;
             }
             InputResult::Clear | InputResult::Continue => {
-                // Buffer was cleared or no action, continue
+                // Buffer was cleared or no action - continue
+                continue;
+            }
+            InputResult::Resized => {
+                // Terminal was resized - handled internally, just continue
                 continue;
             }
             InputResult::Submit(text) => {

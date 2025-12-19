@@ -33,6 +33,8 @@ pub enum InputResult {
     Clear,
     /// Quit the application.
     Quit,
+    /// Terminal was resized - needs viewport refresh.
+    Resized,
 }
 
 /// Minimal TUI application with inline viewport.
@@ -120,7 +122,7 @@ impl TuiApp {
         execute!(io::stderr(), event::DisableBracketedPaste)?;
         disable_raw_mode()?;
 
-        // Clear the viewport area and drop terminal
+        // Clear viewport and drop terminal
         terminal.clear()?;
         drop(terminal);
 
@@ -142,6 +144,11 @@ impl TuiApp {
                 let result = self.handle_event(ev);
                 match result {
                     InputResult::Continue => {}
+                    InputResult::Resized => {
+                        // Let ratatui handle the resize - autoresize adjusts
+                        // the viewport to the new terminal dimensions
+                        terminal.autoresize()?;
+                    }
                     _ => return Ok(result),
                 }
             }
@@ -155,6 +162,10 @@ impl TuiApp {
                 self.textarea.insert_str(&text);
                 self.pending_ctrl_c = false;
                 InputResult::Continue
+            }
+            Event::Resize(_, _) => {
+                // Signal that we need to clear and redraw the viewport
+                InputResult::Resized
             }
             _ => InputResult::Continue,
         }
