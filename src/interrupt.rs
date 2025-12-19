@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-
 #[derive(Debug)]
 pub struct InterruptedError;
 

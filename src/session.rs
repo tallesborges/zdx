@@ -241,7 +241,6 @@ impl Session {
     pub fn read_events(&self) -> Result<Vec<SessionEvent>> {
         read_session_events(&self.path)
     }
-
 }
 
 /// Reads session events from a file path, with backward compatibility.

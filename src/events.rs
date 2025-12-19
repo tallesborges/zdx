@@ -33,7 +33,6 @@ pub enum EngineEvent {
     /// A tool invocation has completed.
     ToolFinished { id: String, result: ToolOutput },
 
-
     /// An error occurred during execution.
     Error {
         /// Error category for structured handling
