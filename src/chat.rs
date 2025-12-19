@@ -203,14 +203,7 @@ async fn run_chat_turn_async(
     };
 
     // Run the engine turn (don't use ? yet - need to await tasks first)
-    let result = engine::run_turn(
-        messages,
-        config,
-        engine_opts,
-        system_prompt,
-        engine_tx,
-    )
-    .await;
+    let result = engine::run_turn(messages, config, engine_opts, system_prompt, engine_tx).await;
 
     // Wait for all tasks to complete (even on error, to flush error events)
     if let Some((fanout, persist)) = persist_handle {

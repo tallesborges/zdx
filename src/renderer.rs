@@ -96,7 +96,6 @@ impl CliRenderer {
             self.needs_final_newline = false;
         }
     }
-
 }
 
 /// Spawns a renderer task that consumes events from a channel.

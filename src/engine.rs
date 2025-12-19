@@ -4,11 +4,14 @@
 //! via async channels. No direct stdout/stderr writes occur in this module.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Result, bail};
 use futures_util::StreamExt;
 use serde_json::Value;
+use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::JoinHandle;
+use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
 use crate::events::{EngineEvent, ErrorKind};
@@ -36,27 +39,57 @@ impl Default for EngineOptions {
 ///
 /// Used with `run_turn` for concurrent rendering and session persistence.
 /// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
-pub type EventTx = tokio::sync::mpsc::Sender<std::sync::Arc<EngineEvent>>;
+pub type EventTx = tokio::sync::mpsc::Sender<Arc<EngineEvent>>;
 
 /// Channel-based event receiver (async, bounded).
-pub type EventRx = tokio::sync::mpsc::Receiver<std::sync::Arc<EngineEvent>>;
+pub type EventRx = tokio::sync::mpsc::Receiver<Arc<EngineEvent>>;
 
 /// Default channel capacity for event streams.
-pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 64;
+///
+/// Set higher (128) to accommodate best-effort delta sends without blocking.
+pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Creates a bounded event channel with the default capacity.
 pub fn create_event_channel() -> (EventTx, EventRx) {
     tokio::sync::mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
 }
 
+/// Event sink wrapper that provides best-effort and reliable send modes.
+///
+/// Use `delta()` for high-volume events (TextDelta) that can be dropped
+/// if the consumer is slow. Use `important()` for events that must be
+/// delivered (ToolStarted, ToolFinished, Final, Error, Interrupted).
+#[derive(Clone)]
+pub struct EventSink {
+    tx: EventTx,
+}
+
+impl EventSink {
+    /// Creates a new EventSink wrapping the given channel sender.
+    pub fn new(tx: EventTx) -> Self {
+        Self { tx }
+    }
+
+    /// Best-effort send: never awaits, drops if channel is full.
+    /// Use for high-volume events like TextDelta that can afford loss.
+    pub fn delta(&self, ev: EngineEvent) {
+        let _ = self.tx.try_send(Arc::new(ev));
+    }
+
+    /// Reliable send: awaits delivery.
+    /// Use for important events (tool lifecycle, final, errors).
+    pub async fn important(&self, ev: EngineEvent) {
+        let _ = self.tx.send(Arc::new(ev)).await;
+    }
+}
+
 /// Spawns a fan-out task that distributes events to multiple consumers.
 ///
-/// The task receives events from a single source channel and forwards them
-/// to multiple downstream channels (e.g., renderer and session persistence).
-/// Events are cloned via `Arc` for efficient multi-consumer delivery.
+/// Uses `try_send` (best-effort) to prevent slow consumers from blocking
+/// others. Events are dropped if a consumer's channel is full. Closed
+/// sinks are automatically removed.
 ///
-/// The task exits when the source channel closes. Downstream channels that
-/// close early are silently ignored (the other consumers continue).
+/// The task exits when the source channel closes.
 ///
 /// # Example
 ///
@@ -71,14 +104,16 @@ pub fn create_event_channel() -> (EventTx, EventRx) {
 /// // Renderer receives from render_rx
 /// // Persister receives from persist_rx
 /// ```
-pub fn spawn_fanout_task(mut rx: EventRx, sinks: Vec<EventTx>) -> JoinHandle<()> {
+pub fn spawn_fanout_task(mut rx: EventRx, mut sinks: Vec<EventTx>) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            for sink in &sinks {
-                // Clone the Arc and send to each consumer
-                // Ignore send errors (consumer may have closed early)
-                let _ = sink.send(event.clone()).await;
-            }
+            sinks.retain(|sink| {
+                match sink.try_send(event.clone()) {
+                    Ok(()) => true,
+                    Err(TrySendError::Full(_)) => true, // drop this event for this sink
+                    Err(TrySendError::Closed(_)) => false, // remove sink
+                }
+            });
         }
     })
 }
@@ -92,16 +127,30 @@ pub struct ToolUseBuilder {
     pub input_json: String,
 }
 
+/// Finalized tool use with parsed input (ready for execution).
+#[derive(Debug, Clone)]
+pub struct ToolUse {
+    pub id: String,
+    pub name: String,
+    pub input: Value,
+}
+
 impl ToolUseBuilder {
-    /// Parses the accumulated JSON input.
-    pub fn parse_input(&self) -> Value {
-        serde_json::from_str(&self.input_json).unwrap_or(Value::Object(serde_json::Map::new()))
+    /// Finalizes the builder by parsing the accumulated JSON input.
+    /// Returns an error if the JSON is malformed.
+    pub fn finalize(self) -> Result<ToolUse, serde_json::Error> {
+        let input = serde_json::from_str(&self.input_json)?;
+        Ok(ToolUse {
+            id: self.id,
+            name: self.name,
+            input,
+        })
     }
 }
 
-/// Sends an error event via the async channel.
-/// Returns `true` if sent successfully, `false` if channel closed.
-async fn emit_error_async(err: &anyhow::Error, sink: &EventTx) -> bool {
+/// Sends an error event via the async channel and returns the original error.
+/// This preserves the full error chain (including ProviderError details) for callers.
+async fn emit_error_async(err: anyhow::Error, sink: &EventSink) -> anyhow::Error {
     let event = if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
         EngineEvent::Error {
             kind: provider_err.kind.clone().into(),
@@ -115,14 +164,12 @@ async fn emit_error_async(err: &anyhow::Error, sink: &EventTx) -> bool {
             details: None,
         }
     };
-    sink.send(std::sync::Arc::new(event)).await.is_ok()
+    sink.important(event).await;
+    err
 }
 
-/// Sends an event via the async channel.
-/// Returns `true` if sent successfully, `false` if channel closed.
-async fn send_event(sink: &EventTx, event: EngineEvent) -> bool {
-    sink.send(std::sync::Arc::new(event)).await.is_ok()
-}
+/// Timeout for stream polling to allow interrupt checks.
+const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Runs a single turn of the engine using async channels.
 ///
@@ -137,6 +184,8 @@ pub async fn run_turn(
     system_prompt: Option<&str>,
     sink: EventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
+    let sink = EventSink::new(sink);
+
     let anthropic_config = AnthropicConfig::from_env(
         config.model.clone(),
         config.max_tokens,
@@ -148,6 +197,7 @@ pub async fn run_turn(
         options.root.canonicalize().unwrap_or(options.root.clone()),
         config.tool_timeout(),
     );
+    // Cache tool definitions outside the loop (they're constant)
     let tools = tools::all_tools();
 
     let mut messages = messages;
@@ -155,7 +205,7 @@ pub async fn run_turn(
     // Tool loop - keep going until we get a final response
     loop {
         if crate::interrupt::is_interrupted() {
-            let _ = send_event(&sink, EngineEvent::Interrupted).await;
+            sink.important(EngineEvent::Interrupted).await;
             return Err(crate::interrupt::InterruptedError.into());
         }
 
@@ -165,8 +215,7 @@ pub async fn run_turn(
         {
             Ok(s) => s,
             Err(e) => {
-                emit_error_async(&e, &sink).await;
-                return Err(e);
+                return Err(emit_error_async(e, &sink).await);
             }
         };
 
@@ -175,26 +224,34 @@ pub async fn run_turn(
         let mut tool_uses: Vec<ToolUseBuilder> = Vec::new();
         let mut stop_reason: Option<String> = None;
 
-        // Process stream events
-        while let Some(event_result) = stream.next().await {
+        // Process stream events with periodic interrupt checking
+        loop {
             if crate::interrupt::is_interrupted() {
-                let _ = send_event(&sink, EngineEvent::Interrupted).await;
+                sink.important(EngineEvent::Interrupted).await;
                 return Err(crate::interrupt::InterruptedError.into());
             }
+
+            // Use timeout to periodically check for interrupts even if stream stalls
+            let next = timeout(STREAM_POLL_TIMEOUT, stream.next()).await;
+            let event_result = match next {
+                Ok(Some(result)) => result,
+                Ok(None) => break,  // Stream ended
+                Err(_) => continue, // Timeout, loop to re-check interrupt
+            };
 
             let event = match event_result {
                 Ok(e) => e,
                 Err(e) => {
-                    emit_error_async(&e, &sink).await;
-                    return Err(e);
+                    return Err(emit_error_async(e, &sink).await);
                 }
             };
 
             match event {
                 StreamEvent::TextDelta { text, .. } => {
                     if !text.is_empty() {
-                        let _ = send_event(&sink, EngineEvent::AssistantDelta { text: text.clone() }).await;
+                        // Push to full_text first, then move text into event (no clone)
                         full_text.push_str(&text);
+                        sink.delta(EngineEvent::AssistantDelta { text });
                     }
                 }
                 StreamEvent::ContentBlockStart {
@@ -230,12 +287,13 @@ pub async fn run_turn(
                     message,
                 } => {
                     let provider_err = ProviderError::api_error(&error_type, &message);
-                    let _ = send_event(&sink, EngineEvent::Error {
+                    sink.important(EngineEvent::Error {
                         kind: ErrorKind::ApiError,
                         message: provider_err.message.clone(),
                         details: provider_err.details.clone(),
-                    }).await;
-                    bail!("{}", provider_err.message);
+                    })
+                    .await;
+                    return Err(anyhow::Error::new(provider_err));
                 }
                 // Ignore other events (Ping, MessageStart, ContentBlockStop, MessageStop)
                 _ => {}
@@ -244,21 +302,40 @@ pub async fn run_turn(
 
         // Check if we have tool use to process
         if stop_reason.as_deref() == Some("tool_use") && !tool_uses.is_empty() {
+            // Finalize all tool uses (parse JSON once)
+            let mut finalized = Vec::with_capacity(tool_uses.len());
+            for tu in tool_uses.drain(..) {
+                match tu.clone().finalize() {
+                    Ok(tool_use) => finalized.push(tool_use),
+                    Err(e) => {
+                        // Emit structured error for invalid JSON
+                        sink.important(EngineEvent::Error {
+                            kind: ErrorKind::Parse,
+                            message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
+                            details: Some(tu.input_json),
+                        })
+                        .await;
+                        bail!("Invalid tool input JSON for {}: {}", tu.name, e);
+                    }
+                }
+            }
+
             // Emit ToolRequested events for all tools before execution
-            for tu in &tool_uses {
-                let _ = send_event(&sink, EngineEvent::ToolRequested {
+            for tu in &finalized {
+                sink.important(EngineEvent::ToolRequested {
                     id: tu.id.clone(),
                     name: tu.name.clone(),
-                    input: tu.parse_input(),
-                }).await;
+                    input: tu.input.clone(),
+                })
+                .await;
             }
 
             // Build the assistant response with tool_use blocks
-            let assistant_blocks = build_assistant_blocks(&full_text, &tool_uses);
+            let assistant_blocks = build_assistant_blocks(&full_text, &finalized);
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results
-            let tool_results = execute_tools_async(&tool_uses, &tool_ctx, &sink).await?;
+            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sink).await?;
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Continue the loop for the next response
@@ -267,9 +344,10 @@ pub async fn run_turn(
 
         // Emit final assistant text
         if !full_text.is_empty() {
-            let _ = send_event(&sink, EngineEvent::AssistantFinal {
+            sink.important(EngineEvent::AssistantFinal {
                 text: full_text.clone(),
-            }).await;
+            })
+            .await;
         }
 
         return Ok((full_text, messages));
@@ -278,32 +356,33 @@ pub async fn run_turn(
 
 /// Executes all tool uses and emits events via async channel.
 async fn execute_tools_async(
-    tool_uses: &[ToolUseBuilder],
+    tool_uses: &[ToolUse],
     ctx: &ToolContext,
-    sink: &EventTx,
+    sink: &EventSink,
 ) -> Result<Vec<ToolResult>> {
-    let mut results = Vec::new();
+    let mut results = Vec::with_capacity(tool_uses.len());
 
     for tu in tool_uses {
         if crate::interrupt::is_interrupted() {
-            let _ = send_event(sink, EngineEvent::Interrupted).await;
+            sink.important(EngineEvent::Interrupted).await;
             return Err(crate::interrupt::InterruptedError.into());
         }
 
         // Emit ToolStarted
-        let _ = send_event(sink, EngineEvent::ToolStarted {
+        sink.important(EngineEvent::ToolStarted {
             id: tu.id.clone(),
             name: tu.name.clone(),
-        }).await;
+        })
+        .await;
 
-        let input = tu.parse_input();
-        let (output, result) = tools::execute_tool(&tu.name, &tu.id, &input, ctx).await;
+        let (output, result) = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).await;
 
         // Emit ToolFinished with structured output
-        let _ = send_event(sink, EngineEvent::ToolFinished {
+        sink.important(EngineEvent::ToolFinished {
             id: tu.id.clone(),
             result: output,
-        }).await;
+        })
+        .await;
 
         results.push(result);
     }
@@ -312,8 +391,8 @@ async fn execute_tools_async(
 }
 
 /// Builds assistant content blocks from accumulated text and tool uses.
-fn build_assistant_blocks(text: &str, tool_uses: &[ToolUseBuilder]) -> Vec<ChatContentBlock> {
-    let mut blocks = Vec::new();
+fn build_assistant_blocks(text: &str, tool_uses: &[ToolUse]) -> Vec<ChatContentBlock> {
+    let mut blocks = Vec::with_capacity(1 + tool_uses.len());
 
     // Add text block if any
     if !text.is_empty() {
@@ -325,7 +404,7 @@ fn build_assistant_blocks(text: &str, tool_uses: &[ToolUseBuilder]) -> Vec<ChatC
         blocks.push(ChatContentBlock::ToolUse {
             id: tu.id.clone(),
             name: tu.name.clone(),
-            input: tu.parse_input(),
+            input: tu.input.clone(),
         });
     }
 
@@ -335,6 +414,7 @@ fn build_assistant_blocks(text: &str, tool_uses: &[ToolUseBuilder]) -> Vec<ChatC
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tokio::time::{Duration, timeout};
 
     /// Verifies engine emits ToolStarted and ToolFinished events (SPEC §7).
     #[tokio::test]
@@ -345,23 +425,28 @@ mod tests {
         std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf());
-        let tool_uses = vec![ToolUseBuilder {
-            index: 0,
+
+        // Use ToolUse (finalized) instead of ToolUseBuilder
+        let tool_uses = vec![ToolUse {
             id: "tool1".to_string(),
             name: "read".to_string(),
-            input_json: r#"{"path": "test.txt"}"#.to_string(),
+            input: serde_json::json!({"path": "test.txt"}),
         }];
 
         let (tx, mut rx) = create_event_channel();
-        
-        // Run in a task so we can collect events
-        let handle = tokio::spawn(async move {
-            execute_tools_async(&tool_uses, &ctx, &tx).await
-        });
+        let sink = EventSink::new(tx);
 
-        // Collect events
+        // Run in a task so we can collect events
+        let handle =
+            tokio::spawn(async move { execute_tools_async(&tool_uses, &ctx, &sink).await });
+
+        // Collect events with timeout to avoid hangs
         let mut events = Vec::new();
-        while let Some(ev) = rx.recv().await {
+        for _ in 0..2 {
+            let ev = timeout(Duration::from_secs(5), rx.recv())
+                .await
+                .expect("timeout waiting for event")
+                .expect("channel closed unexpectedly");
             events.push((*ev).clone());
         }
 
@@ -369,10 +454,8 @@ mod tests {
         assert_eq!(results.len(), 1);
         assert_eq!(events.len(), 2); // ToolStarted, ToolFinished
 
-        assert!(
-            matches!(&events[0], EngineEvent::ToolStarted { id, name }
-            if id == "tool1" && name == "read")
-        );
+        assert!(matches!(&events[0], EngineEvent::ToolStarted { id, name }
+            if id == "tool1" && name == "read"));
         assert!(
             matches!(&events[1], EngineEvent::ToolFinished { id, result }
             if id == "tool1" && result.is_ok())
@@ -383,18 +466,81 @@ mod tests {
     #[tokio::test]
     async fn test_event_channel_closes_on_sender_drop() {
         let (tx, mut rx) = create_event_channel();
-        
+
         // Send one event then drop sender
-        tx.send(std::sync::Arc::new(EngineEvent::AssistantDelta { 
-            text: "hello".to_string() 
-        })).await.unwrap();
+        tx.send(Arc::new(EngineEvent::AssistantDelta {
+            text: "hello".to_string(),
+        }))
+        .await
+        .unwrap();
         drop(tx);
 
         // Should receive the event
-        let ev = rx.recv().await.unwrap();
+        let ev = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .unwrap();
         assert!(matches!(&*ev, EngineEvent::AssistantDelta { text } if text == "hello"));
 
         // Should get None when channel is closed
         assert!(rx.recv().await.is_none());
+    }
+
+    /// Verifies EventSink delta() is best-effort (doesn't block on full channel).
+    #[tokio::test]
+    async fn test_event_sink_delta_is_best_effort() {
+        // Create a tiny channel that will fill up quickly
+        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+        let sink = EventSink::new(tx);
+
+        // This should not block even though channel is tiny
+        for i in 0..100 {
+            sink.delta(EngineEvent::AssistantDelta {
+                text: format!("chunk {}", i),
+            });
+        }
+        // If we got here without blocking, the test passes
+    }
+
+    /// Verifies ToolUseBuilder finalization fails on invalid JSON.
+    #[tokio::test]
+    async fn test_tool_use_builder_finalize_fails_on_invalid_json() {
+        let builder = ToolUseBuilder {
+            index: 0,
+            id: "tool1".to_string(),
+            name: "test".to_string(),
+            input_json: "{invalid json}".to_string(),
+        };
+
+        let result = builder.finalize();
+        assert!(result.is_err());
+    }
+
+    /// Verifies fanout removes closed sinks.
+    #[tokio::test]
+    async fn test_fanout_removes_closed_sinks() {
+        let (source_tx, source_rx) = create_event_channel();
+        let (sink1_tx, mut sink1_rx) = create_event_channel();
+        let (sink2_tx, sink2_rx) = create_event_channel();
+
+        // Drop sink2's receiver immediately
+        drop(sink2_rx);
+
+        let _fanout = spawn_fanout_task(source_rx, vec![sink1_tx, sink2_tx]);
+
+        // Send an event
+        source_tx
+            .send(Arc::new(EngineEvent::AssistantDelta {
+                text: "test".to_string(),
+            }))
+            .await
+            .unwrap();
+
+        // Sink1 should receive it
+        let ev = timeout(Duration::from_secs(1), sink1_rx.recv())
+            .await
+            .expect("timeout")
+            .expect("should receive event");
+        assert!(matches!(&*ev, EngineEvent::AssistantDelta { text } if text == "test"));
     }
 }
