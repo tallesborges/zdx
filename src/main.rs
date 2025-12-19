@@ -11,6 +11,7 @@ mod providers;
 mod renderer;
 mod session;
 mod tools;
+mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
