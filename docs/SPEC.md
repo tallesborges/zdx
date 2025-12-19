@@ -467,9 +467,22 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 ### Planned: Handoff bundles
 
-* `zdx handoff` emits a small, human-readable bundle that makes it easy to continue elsewhere.
-* Default output is to stdout; `--out <PATH>` writes to a file.
-* The bundle includes: brief summary, current goal, open tasks, key files, and reproducible commands.
+Handoff is the replacement for “compaction”: it does not overwrite history with a lossy summary.
+Instead, it creates a focused starter prompt for the next thread/session.
+
+* **Command:** `zdx handoff --goal "<GOAL>" [--from-session <SESSION_ID>] [--out <PATH>]`
+* **Purpose:** Extract the minimum context needed to achieve `<GOAL>` and package it for starting fresh.
+* **Default output:** Markdown to stdout (pipeable); `--out <PATH>` writes the same markdown to a file.
+* **Source selection (contract):**
+  - If `--from-session` is provided, handoff uses that saved session as the source.
+  - Otherwise, handoff uses the latest saved session.
+* **Bundle contents (contract):**
+  - `Goal`: the exact goal string passed by the user
+  - `Starter prompt`: a single prompt suitable to paste into a new `zdx exec -p ...` / new chat session
+  - `Relevant files`: a short, explicit list of paths relative to `--root`
+  - `Open tasks`: concrete next actions (checklist style)
+  - `Repro commands`: copy/paste shell commands that reproduce current state or continue work
+* **Reviewability:** The output is intended to be edited by the user before use (draft-first).
 
 ### Exit codes (v0.1)
 

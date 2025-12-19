@@ -35,7 +35,7 @@
 - Multi-provider support: OpenAI + Gemini (streaming + tool loop)
 - Model switching UX (`--model` flag + config default)
 - Login for subscription-based access (OpenAI / Gemini / Claude) with tokens stored in OS credential store (not config)
-- Handoff bundles for continuing work elsewhere (like amp’s handoff)
+- Goal-based handoff bundles (Amp-style): generate a draft starter prompt + relevant file list to start a new focused session without lossy compaction
 
 ---
 
