@@ -1,4 +1,4 @@
-//! Agent module for handling prompt execution with tool support.
+//! Exec module for handling single-shot prompt execution with tool support.
 //!
 //! This module provides backward-compatible wrappers around the engine.
 //! New code should use the engine module directly.
@@ -12,14 +12,14 @@ use crate::providers::anthropic::ChatMessage;
 use crate::renderer;
 use crate::session::{self, Session, SessionEvent};
 
-/// Options for agent execution.
+/// Options for exec execution.
 #[derive(Debug, Clone)]
-pub struct AgentOptions {
+pub struct ExecOptions {
     /// Root directory for file operations.
     pub root: PathBuf,
 }
 
-impl Default for AgentOptions {
+impl Default for ExecOptions {
     fn default() -> Self {
         Self {
             root: PathBuf::from("."),
@@ -27,8 +27,8 @@ impl Default for AgentOptions {
     }
 }
 
-impl From<&AgentOptions> for EngineOptions {
-    fn from(opts: &AgentOptions) -> Self {
+impl From<&ExecOptions> for EngineOptions {
+    fn from(opts: &ExecOptions) -> Self {
         EngineOptions {
             root: opts.root.clone(),
         }
@@ -47,7 +47,7 @@ pub async fn execute_prompt_streaming(
     prompt: &str,
     config: &Config,
     mut session: Option<Session>,
-    options: &AgentOptions,
+    options: &ExecOptions,
 ) -> Result<String> {
     let effective =
         crate::context::build_effective_system_prompt_with_paths(config, &options.root)?;

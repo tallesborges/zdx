@@ -1,9 +1,9 @@
-mod agent;
 mod chat;
 mod cli;
 mod config;
 mod context;
 mod engine;
+mod exec;
 mod events;
 mod interrupt;
 mod paths;
@@ -130,12 +130,12 @@ async fn run_exec(
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
-    let agent_opts = agent::AgentOptions {
+    let exec_opts = exec::ExecOptions {
         root: std::path::PathBuf::from(root),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    agent::execute_prompt_streaming(prompt, config, session, &agent_opts)
+    exec::execute_prompt_streaming(prompt, config, session, &exec_opts)
         .await
         .context("execute prompt")?;
 
