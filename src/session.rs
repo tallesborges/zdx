@@ -128,17 +128,6 @@ impl SessionEvent {
         }
     }
 
-    /// Returns the event type as a string.
-    pub fn event_type(&self) -> &'static str {
-        match self {
-            Self::Meta { .. } => "meta",
-            Self::Message { .. } => "message",
-            Self::ToolUse { .. } => "tool_use",
-            Self::ToolResult { .. } => "tool_result",
-            Self::Interrupted { .. } => "interrupted",
-        }
-    }
-
     /// Converts an `EngineEvent` to a `SessionEvent` if applicable.
     ///
     /// Not all engine events are persisted. This returns `None` for events

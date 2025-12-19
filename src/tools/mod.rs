@@ -118,14 +118,6 @@ async fn execute_read(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 }
 
-/// A tool use request from the model.
-#[derive(Debug, Clone, Deserialize)]
-pub struct ToolUse {
-    pub id: String,
-    pub name: String,
-    pub input: Value,
-}
-
 #[cfg(test)]
 mod tests {
     use serde_json::json;
