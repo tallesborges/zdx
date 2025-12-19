@@ -8,7 +8,7 @@ use futures_util::Stream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::tools::{ToolDefinition, ToolResult, ToolUse};
+use crate::tools::{ToolDefinition, ToolResult};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
@@ -62,18 +62,6 @@ impl ProviderError {
     }
 
     /// Creates a provider error with details.
-    pub fn with_details(
-        kind: ProviderErrorKind,
-        message: impl Into<String>,
-        details: impl Into<String>,
-    ) -> Self {
-        Self {
-            kind,
-            message: message.into(),
-            details: Some(details.into()),
-        }
-    }
-
     /// Creates an HTTP status error.
     pub fn http_status(status: u16, body: &str) -> Self {
         let message = format!("HTTP {}", status);
@@ -343,7 +331,6 @@ impl AnthropicClient {
 #[derive(Debug, Clone)]
 pub enum ContentBlock {
     Text(String),
-    ToolUse(ToolUse),
 }
 
 /// The assistant's response, parsed into content blocks.
@@ -360,9 +347,8 @@ impl AssistantResponse {
         let texts: Vec<&str> = self
             .content
             .iter()
-            .filter_map(|b| match b {
-                ContentBlock::Text(t) => Some(t.as_str()),
-                _ => None,
+            .map(|b| match b {
+                ContentBlock::Text(t) => t.as_str(),
             })
             .collect();
 
@@ -373,23 +359,6 @@ impl AssistantResponse {
         }
     }
 
-    /// Returns all tool use requests.
-    pub fn tool_uses(&self) -> Vec<&ToolUse> {
-        self.content
-            .iter()
-            .filter_map(|b| match b {
-                ContentBlock::ToolUse(tu) => Some(tu),
-                _ => None,
-            })
-            .collect()
-    }
-
-    /// Returns true if the model wants to use tools.
-    pub fn has_tool_use(&self) -> bool {
-        self.content
-            .iter()
-            .any(|b| matches!(b, ContentBlock::ToolUse(_)))
-    }
 }
 
 impl From<MessagesResponse> for AssistantResponse {
@@ -399,14 +368,7 @@ impl From<MessagesResponse> for AssistantResponse {
             .into_iter()
             .filter_map(|block| match block.block_type.as_str() {
                 "text" => Some(ContentBlock::Text(block.text.unwrap_or_default())),
-                "tool_use" => {
-                    let tu = ToolUse {
-                        id: block.id.unwrap_or_default(),
-                        name: block.name.unwrap_or_default(),
-                        input: block.input.unwrap_or(Value::Null),
-                    };
-                    Some(ContentBlock::ToolUse(tu))
-                }
+                "tool_use" => None,
                 _ => None,
             })
             .collect();
@@ -811,12 +773,6 @@ struct RawContentBlock {
     block_type: String,
     #[serde(default)]
     text: Option<String>,
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    input: Option<Value>,
 }
 
 // === Public Chat Types ===
@@ -856,13 +812,6 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: "user".to_string(),
-            content: MessageContent::Text(content.into()),
-        }
-    }
-
-    pub fn assistant(content: impl Into<String>) -> Self {
-        Self {
-            role: "assistant".to_string(),
             content: MessageContent::Text(content.into()),
         }
     }
