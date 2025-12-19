@@ -3,8 +3,36 @@
 **Product:** ZDX (terminal-first agentic coding CLI)  
 **Spec version:** living document  
 **Status:** Source of truth for *values + contracts*. If `docs/ROADMAP.md` exists, it must not contradict `docs/SPEC.md`.
+**Notation:** Sections labeled **Current (v0.1)** describe shipped behavior in this repo; sections labeled **Planned** describe intended future behavior and are not shipped yet.
 
 ---
+
+## 0) Scope (CLI-first)
+
+ZDX is a **CLI product first**.
+
+- The primary UX is `zdx ...` commands in a terminal.
+- Anything that does not improve the CLI’s day-to-day usefulness is out of scope for the current spec version.
+
+### Success criteria (current)
+
+ZDX is “working” when I can:
+- run a prompt and stream output reliably
+- use tools (`read`, `bash` now; `write`/`edit` planned) to inspect/modify files in a repo
+- save/resume sessions in a predictable format
+- pipe/redirect output like a normal UNIX CLI
+
+### Non-goals (for now)
+
+- Building a full TUI (ratatui/crossterm) or IDE-like UI
+- Plugin systems / provider marketplace
+- “Safety sandbox” / heavy permission systems beyond a simple root dir context
+- Premature abstractions beyond the minimal multi-provider/tool interface
+
+### Design constraints
+
+- Engine is UI-agnostic, but **CLI is the only shipped UI** right now.
+- Prefer fewer flags and fewer modes; add only when real usage demands it.
 
 ## 1) Purpose
 
@@ -33,15 +61,21 @@ ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
   - exit codes
   - predictable output formats
 
+### CLI-first shipping
+Ship CLI features that I will use this week. Everything else waits.
+
 ### YOLO default
 - ZDX prioritizes speed and flow.
 - By default, ZDX assumes the user is operating on their own machine and accepts risk.
-- Optional guardrails may exist later, but must remain **low friction** and **opt-in**.
+- ZDX does not attempt to be a “safety sandbox”; any guardrails must remain **opt-in** and **low friction**.
 
 ### Engine-first (UI-agnostic)
 - ZDX has a core "engine" that emits events.
 - CLI is just a renderer over the event stream.
 - Future TUI must consume the same engine events (no forked logic).
+
+### UX inspiration
+ZDX aims for an “iOS-like” CLI UX: strong defaults, consistent patterns, minimal configuration, and progressive disclosure of advanced options.
 
 ---
 
@@ -82,8 +116,13 @@ ZDX follows a layered design:
 
 ### Provider(s)
 
-* Primary provider (current): **Anthropic Claude**
-* The provider must support:
+**Current (v0.1):** Anthropic Claude.
+
+**Planned:** OpenAI, Gemini, OpenRouter.
+
+### Provider interface (contract)
+
+Regardless of provider, ZDX requires:
 
   * Non-streaming responses (baseline)
   * Streaming responses (SSE / incremental tokens)
@@ -91,17 +130,31 @@ ZDX follows a layered design:
 
 ### Key management
 
-* API keys are **never stored** in config files.
-* API keys are provided via environment variables:
+* API keys or access tokens are **never stored** in config files.
+
+**Current (v0.1):** API keys are provided via environment variables:
 
   * `ANTHROPIC_API_KEY`
 
+**Planned:** provider API keys use environment variables:
+
+  * `OPENAI_API_KEY`
+  * `GEMINI_API_KEY`
+  * `OPENROUTER_API_KEY`
+
+**Planned:** subscription-based login (OpenAI / Gemini / Claude) stores access tokens in an OS credential store (never in config/session files).
+
 ### Provider configuration surface (user-visible)
 
+**Current (v0.1):**
 * `model`
 * `max_tokens`
-* `temperature` (optional; may exist later)
-* Tool calling mode: always allowed if tools are enabled
+
+**Planned:**
+* `provider`
+* `temperature`
+
+Tool calling mode is always allowed if tools are enabled.
 
 ### Testability requirement
 
@@ -109,6 +162,10 @@ ZDX follows a layered design:
 
   * a base URL override (env or config)
   * deterministic fixture-driven stream parsing tests
+
+**Current (v0.1):** Anthropic base URL override precedence is:
+1) `ANTHROPIC_BASE_URL` env var (if set and non-empty)
+2) `anthropic_base_url` in `config.toml` (if set and non-empty)
 
 ---
 
@@ -128,7 +185,7 @@ ZDX follows a layered design:
 ### Path resolution rules
 
 * If a `path` is **absolute**, use it as-is.
-* If a `path` is **relative**, resolve relative to `--root` if provided, else current working directory.
+* If a `path` is **relative**, resolve relative to `--root` (default: current working directory).
 * Path canonicalization is allowed for correctness, not for sandboxing guarantees.
 * `--root` is treated as a **working directory context**, not a security boundary (YOLO).
 
@@ -156,10 +213,8 @@ This ensures tool results are deterministic and parseable.
 * **Input schema:**
 
   ```json
-  { "path": "string", "max_bytes": 262144 }
+  { "path": "string" }
   ```
-
-  * `max_bytes` is optional (default: 256KB)
 
 * **Output schema:**
 
@@ -175,7 +230,8 @@ This ensures tool results are deterministic and parseable.
   }
   ```
 
-* **Truncation:** If file exceeds `max_bytes`, content is truncated and `truncated: true`.
+* **Path:** `data.path` is the canonicalized absolute path on disk.
+* **Truncation (v0.1):** If the file content exceeds 50 KiB (51200 bytes), `content` is truncated to the first 50 KiB and `truncated: true`.
 
 #### `bash`
 
@@ -200,10 +256,10 @@ This ensures tool results are deterministic and parseable.
   }
   ```
 
-* **Shell invocation:** Commands run via `sh -lc "<command>"` for POSIX portability.
-* **Execution context:** Runs in the current directory or `--root` directory if provided.
-* **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`.
-* **Output limits:** stdout/stderr are truncated to a reasonable limit (e.g., 256KB each) with truncation indicated.
+* **Shell invocation:** Commands run via `sh -c "<command>"` for POSIX portability.
+* **Execution context:** Runs in the `--root` directory (default: current directory).
+* **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`, `exit_code: -1`, and `stderr` contains a one-line timeout message.
+* **Output limits (v0.1):** stdout/stderr are not truncated.
 
 ### Tool loop correctness requirements
 
@@ -226,7 +282,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 * `ToolRequested { id, name, input }` — model decided to call a tool
 * `ToolStarted { id, name }` — tool execution begins
 * `ToolFinished { id, result }` — tool execution complete
-* `Error { message }`
+* `Error { kind, message, details? }` — structured error for renderers
 * `Interrupted`
 
 ### Renderer rules
@@ -315,7 +371,7 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 ### Session IDs
 
-* Session IDs are UUID v4 (or equivalent stable unique id).
+* Session IDs are UUID v4 in hyphenated lowercase form (e.g., `550e8400-e29b-41d4-a716-446655440000`).
 
 ### Session UX requirements
 
@@ -334,13 +390,20 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 * TOML
 
-### Current keys (current)
+### Current keys (v0.1)
 
 * `model` (string)
 * `max_tokens` (int)
-* `tool_timeout_secs` (int)
+* `tool_timeout_secs` (int; `0` disables timeouts)
 * `system_prompt` (string, optional)
 * `system_prompt_file` (string, optional)
+* `anthropic_base_url` (string, optional; empty string treated as unset)
+
+### Planned keys
+
+* `provider` (string)
+* `temperature` (float)
+* `openai_base_url` / `gemini_base_url` / `openrouter_base_url` (string, optional)
 
 ### Prompt resolution rules
 
@@ -354,50 +417,66 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 
 ## 10) CLI contract
 
-### Commands (stable surface)
+### Commands (v0.1)
 
-* `exec` — non-interactive execution
-* `chat` — interactive REPL (if present)
-* `sessions` — list/show sessions
-* `resume` — resume last or specific session
-* `config` — init/path/etc.
-* `help`
+* `zdx` — interactive chat (default when no subcommand is provided)
+* `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
+* `zdx sessions list`
+* `zdx sessions show <SESSION_ID>`
+* `zdx sessions resume [SESSION_ID]` — resume by id, or latest if omitted
+* `zdx config path`
+* `zdx config init`
 
-### Options (current)
+### Global options (v0.1)
 
-* `--system-prompt <PROMPT>`
-* `--session <ID>`
-* `--no-save`
-* `--root <ROOT>` (if present):
+* `--root <ROOT>` (default: `.`): working directory context for tools and engine
+* `--system-prompt <PROMPT>`: overrides config system prompt; an empty string clears both `system_prompt` and `system_prompt_file` for that run
+* `--session <ID>`: append to an existing session id
+* `--no-save`: disable session persistence
 
-  * interpreted as a working directory context (not a sandbox)
-* `--format <text|json>`:
+### Planned commands (not shipped)
 
-  * `text` (default): human-readable output
-  * `json`: machine-readable output (schema versioned; may evolve in v0.x)
+* `zdx auth login` — login for subscription-based provider access
+* `zdx handoff` — emit a handoff bundle for continuing work elsewhere
+
+### Planned options (not shipped)
+
+* `--provider <anthropic|openai|gemini|openrouter>`
+* `--model <MODEL>`
+* `--format <text|json>`
 
 ### Output channel rules (terminal-first)
 
-* **stdout**:
+**Agent commands** (`zdx`, `zdx exec`, `zdx sessions resume`):
+* **stdout**: assistant text only (streaming)
+* **stderr**: REPL UI, tool status lines, diagnostics, warnings, errors (human-readable)
 
-  * assistant text (and only assistant text) in `--format text`
-  * structured JSON events in `--format json`
-* **stderr**:
+**Utility commands** (`zdx sessions list/show`, `zdx config path/init`):
+* **stdout**: command output
+* **stderr**: errors/warnings
 
-  * logs, tool status lines, diagnostics, warnings, errors (human-readable)
-  * **Tool duration:** All tool finish lines include duration: `Done. (X.XXs)`
-  * **bash tool debug lines:**
-    - On request: `Tool requested: bash command="<command>"`
-    - On finish: `Tool finished: bash exit=<code>` or `Tool finished: bash timed_out=true`
+**Tool status details (v0.1):**
+* Tool completion lines include duration: `Done. (X.XXs)`
+* Bash tool debug lines:
+  - On request: `Tool requested: bash command="<command>"`
+  - On finish: `Tool finished: bash exit=<code>` or `Tool finished: bash timed_out=true`
 
-### Exit codes (recommended contract)
+### Planned: JSON output mode
+
+* `--format json` emits a versioned stream of structured events to stdout suitable for piping and scripting.
+
+### Planned: Handoff bundles
+
+* `zdx handoff` emits a small, human-readable bundle that makes it easy to continue elsewhere.
+* Default output is to stdout; `--out <PATH>` writes to a file.
+* The bundle includes: brief summary, current goal, open tasks, key files, and reproducible commands.
+
+### Exit codes (v0.1)
 
 * `0` success
-* `1` general failure (provider/tool/parse)
-* `2` config error (missing/invalid config)
+* `1` runtime error (provider/tool/session)
+* `2` CLI usage error (argument parsing)
 * `130` interrupted (Ctrl+C)
-
-Exact codes may evolve in v0.x; avoid breaking changes without a clear reason.
 
 ---
 
@@ -418,7 +497,10 @@ Exact codes may evolve in v0.x; avoid breaking changes without a clear reason.
 
 ### Timeouts
 
-* Tool timeouts must return clean structured errors and allow the agent loop to continue or stop gracefully.
+* Tool timeouts must return clean, structured results and allow the agent loop to continue or stop gracefully.
+* Timeout semantics are tool-specific (v0.1):
+  - `bash`: `ok: true` with `timed_out: true`
+  - `read`: `ok: false` with `error.code: "timeout"`
 
 ---
 
@@ -431,7 +513,7 @@ Exact codes may evolve in v0.x; avoid breaking changes without a clear reason.
 ### What should remain stable as early as possible
 
 * Session JSONL event types (or at least backward-readable)
-* Core CLI commands (`exec`, `resume`, `sessions`)
+* Core CLI commands (`exec`, default chat, `sessions`, `config`)
 * Output channel rules (stdout vs stderr)
 * Engine event stream types (additive changes preferred)
 
