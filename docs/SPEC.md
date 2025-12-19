@@ -537,6 +537,35 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
   - On request: `Tool requested: bash command="<command>"`
   - On finish: `Tool finished: bash exit=<code>` or `Tool finished: bash timed_out=true`
 
+### Interactive input and interruption (TTY-only)
+
+When `stdin` is a TTY, the interactive chat uses a multiline-capable editor and supports responsive interruption via keyboard events. (See ADR-0004).
+
+#### Keybindings (Input Phase)
+* **Enter**: Submit message.
+* **Shift+Enter** or **Alt+Enter**: Insert a newline.
+* **Option+Left / Option+Right**: Word-level navigation (back/forward).
+* **Backspace / Delete**: Character deletion.
+* **Option+Backspace**: Delete previous word.
+* **Cmd+Backspace** (or **Ctrl+U**): Delete the entire current line.
+* **Left / Right Arrows**: Move cursor within the buffer.
+* **Up / Down Arrows**: 
+  - Move cursor between lines in the multiline buffer.
+  - Navigate session history if the cursor is at the first or last line (user messages only).
+* **Home / End** (or **Ctrl+A / Ctrl+E**): Move cursor to the start or end of the current line.
+* **Ctrl+K**: Clear text from the cursor to the end of the line.
+* **Ctrl+C** or **Esc**: Clear the current input buffer.
+* **Ctrl+C** (twice): Exit the chat.
+* **:q** (as a submitted message): Exit the chat (legacy compatibility).
+
+#### Feature Support
+* **Bracketed Paste**: Enabled to allow pasting blocks of code without accidental submission.
+
+#### Interrupt Behavior (Execution Phase)
+While the engine is streaming a response or executing a tool:
+* **Ctrl+C** or **Esc**: Signal an interrupt to the engine. This stops the current tool execution or streaming turn gracefully.
+* **Ctrl+C** (twice): Force exit the application immediately.
+
 ### Planned: JSON output mode
 
 * `--format json` emits a versioned stream of structured events to stdout suitable for piping and scripting.
