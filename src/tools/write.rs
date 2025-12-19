@@ -55,13 +55,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     let file_path = resolve_path(&input.path, &ctx.root);
 
-    // Check that parent directory exists
+    // Create parent directories if needed (mkdir -p behavior)
     if let Some(parent) = file_path.parent()
-        && !parent.exists()
+        && !parent.as_os_str().is_empty()
+        && let Err(e) = fs::create_dir_all(parent)
     {
         return ToolOutput::failure(
-            "path_error",
-            format!("Parent directory does not exist: '{}'", parent.display()),
+            "mkdir_error",
+            format!("Failed to create directory '{}': {}", parent.display(), e),
         );
     }
 
@@ -152,16 +153,20 @@ mod tests {
     }
 
     #[test]
-    fn test_write_missing_parent() {
+    fn test_write_creates_parent_dirs() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
-        let input = json!({"path": "nonexistent_dir/file.txt", "content": "content"});
+        let input = json!({"path": "new_dir/nested/file.txt", "content": "nested content"});
 
         let result = execute(&input, &ctx);
-        assert!(!result.is_ok());
+        assert!(result.is_ok());
         let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""code":"path_error""#));
-        assert!(json_str.contains("Parent directory does not exist"));
+        assert!(json_str.contains(r#""created":true"#));
+
+        // Verify directories were created and file was written
+        let file_path = temp.path().join("new_dir/nested/file.txt");
+        assert!(file_path.exists());
+        assert_eq!(fs::read_to_string(&file_path).unwrap(), "nested content");
     }
 
     #[test]
