@@ -9,7 +9,7 @@ use std::io::{Stderr, Stdout, Write, stderr, stdout};
 
 use tokio::task::JoinHandle;
 
-use crate::engine::{EventRx, EventSink};
+use crate::engine::EventRx;
 use crate::events::EngineEvent;
 
 /// CLI renderer that writes engine events to stdout/stderr.
@@ -97,45 +97,6 @@ impl CliRenderer {
         }
     }
 
-    /// Creates an EventSink that delegates to this renderer.
-    ///
-    /// The sink takes ownership of a mutable reference, so the renderer
-    /// must be created before the sink and finished after the engine returns.
-    ///
-    /// **Deprecated:** Use `spawn_renderer_task` with channels instead.
-    #[allow(dead_code)]
-    pub fn into_sink(self) -> (EventSink, RendererHandle) {
-        use std::sync::{Arc, Mutex};
-
-        let renderer = Arc::new(Mutex::new(self));
-        let renderer_clone = renderer.clone();
-
-        let sink: EventSink = Box::new(move |event| {
-            let mut r = renderer_clone.lock().unwrap();
-            r.handle_event(event);
-        });
-
-        (sink, RendererHandle { renderer })
-    }
-}
-
-/// Handle to a renderer used by an EventSink.
-///
-/// Call `finish()` after the engine completes to print trailing newlines.
-///
-/// **Deprecated:** Use `spawn_renderer_task` instead.
-#[allow(dead_code)]
-pub struct RendererHandle {
-    renderer: std::sync::Arc<std::sync::Mutex<CliRenderer>>,
-}
-
-#[allow(dead_code)]
-impl RendererHandle {
-    /// Finishes rendering (prints final newline if needed).
-    pub fn finish(self) {
-        let mut r = self.renderer.lock().unwrap();
-        r.finish();
-    }
 }
 
 /// Spawns a renderer task that consumes events from a channel.

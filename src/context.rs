@@ -84,23 +84,22 @@ pub fn collect_agents_paths(root: &Path) -> Vec<PathBuf> {
     let canonical_root = root.canonicalize().ok();
 
     // 2-3. User home and ancestors (only if root is under home)
-    if let Some(home) = dirs::home_dir() {
-        if let Some(ref cr) = canonical_root {
-            if let Ok(canonical_home) = home.canonicalize() {
-                // Check if root is under home
-                if let Ok(relative) = cr.strip_prefix(&canonical_home) {
-                    // Include ~/AGENTS.md
-                    paths.push(home.join("AGENTS.md"));
+    if let Some(home) = dirs::home_dir()
+        && let Some(ref cr) = canonical_root
+        && let Ok(canonical_home) = home.canonicalize()
+    {
+        // Check if root is under home
+        if let Ok(relative) = cr.strip_prefix(&canonical_home) {
+            // Include ~/AGENTS.md
+            paths.push(home.join("AGENTS.md"));
 
-                    // Add each ancestor directory between home and root
-                    let mut current = canonical_home.clone();
-                    for component in relative.components() {
-                        current = current.join(component);
-                        // Don't add the root itself yet (added at end)
-                        if current != *cr {
-                            paths.push(current.join("AGENTS.md"));
-                        }
-                    }
+            // Add each ancestor directory between home and root
+            let mut current = canonical_home.clone();
+            for component in relative.components() {
+                current = current.join(component);
+                // Don't add the root itself yet (added at end)
+                if current != *cr {
+                    paths.push(current.join("AGENTS.md"));
                 }
             }
         }

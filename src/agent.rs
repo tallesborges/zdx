@@ -4,15 +4,12 @@
 //! New code should use the engine module directly.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
-
 use anyhow::Result;
 
 use crate::config::Config;
-use crate::engine::{self, EngineOptions, EventSink};
-use crate::events::EngineEvent;
+use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
-use crate::renderer::{self, CliRenderer};
+use crate::renderer;
 use crate::session::{self, Session, SessionEvent};
 
 /// Options for agent execution.
@@ -104,7 +101,7 @@ pub async fn execute_prompt_streaming(
     };
 
     // Run the engine turn
-    let result = engine::run_turn_async(
+    let result = engine::run_turn(
         messages,
         config,
         &engine_opts,
@@ -129,42 +126,4 @@ pub async fn execute_prompt_streaming(
     }
 
     Ok(final_text)
-}
-
-/// Creates an EventSink that renders to CLI and persists tool events to session.
-#[allow(dead_code)]
-fn create_persisting_sink(
-    session: Option<Arc<Mutex<Session>>>,
-    renderer: Arc<Mutex<CliRenderer>>,
-) -> EventSink {
-    Box::new(move |event: EngineEvent| {
-        // Persist tool and interrupt events to session
-        if let Some(ref s) = session {
-            match &event {
-                EngineEvent::ToolRequested { id, name, input } => {
-                    let _ = s.lock().unwrap().append(&SessionEvent::tool_use(
-                        id.clone(),
-                        name.clone(),
-                        input.clone(),
-                    ));
-                }
-                EngineEvent::ToolFinished { id, result } => {
-                    let output = serde_json::to_value(result).unwrap_or_default();
-                    let _ = s.lock().unwrap().append(&SessionEvent::tool_result(
-                        id.clone(),
-                        output,
-                        result.is_ok(),
-                    ));
-                }
-                EngineEvent::Interrupted => {
-                    // Persist interrupted event (best-effort, per SPEC §10)
-                    let _ = s.lock().unwrap().append(&SessionEvent::interrupted());
-                }
-                _ => {}
-            }
-        }
-
-        // Render to CLI
-        renderer.lock().unwrap().handle_event(event);
-    })
 }
