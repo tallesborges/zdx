@@ -133,7 +133,7 @@ cargo fmt              # Format
 
 - `docs/SPEC.md` — values + contracts (source of truth)
 - `docs/ROADMAP.md` — optional priorities (Now/Next/Later)
-- `docs/PLAN_v0.2.md` — commit-sized implementation plan
+- `docs/plans/plan_<short_slug>.md` — commit-sized implementation plans
 - `docs/adr/` — Architecture Decision Records (the “why”)
 
 ## License

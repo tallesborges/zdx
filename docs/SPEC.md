@@ -182,6 +182,7 @@ Tool calling mode is always allowed if tools are enabled.
 * `read` (filesystem)
 * `write` (filesystem)
 * `bash` (shell)
+* (Planned) `edit` (filesystem)
 
 ### Path resolution rules
 
@@ -291,6 +292,50 @@ This ensures tool results are deterministic and parseable.
 * **Execution context:** Runs in the `--root` directory (default: current directory).
 * **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`, `exit_code: -1`, and `stderr` contains a one-line timeout message.
 * **Output limits (v0.1):** stdout/stderr are not truncated.
+
+#### `edit` (planned)
+
+* **Purpose:** Edit an existing file by performing an exact string replacement.
+* **Input schema:**
+
+  ```json
+  {
+    "path": "string",
+    "old": "string",
+    "new": "string",
+    "expected_replacements": 1
+  }
+  ```
+
+  - `expected_replacements` defaults to `1` if omitted.
+
+* **Output schema:**
+
+  ```json
+  {
+    "ok": true,
+    "data": {
+      "path": "...",
+      "replacements": 1
+    }
+  }
+  ```
+
+* **Path:** `data.path` is the resolved absolute path on disk.
+* **Behavior:**
+  - Reads the file as UTF-8 text (no newline normalization).
+  - `old` must be non-empty.
+  - Counts non-overlapping occurrences of `old` in the file.
+  - If `count == 0`, returns `old_not_found`.
+  - If `count != expected_replacements`, returns `replacement_count_mismatch`.
+  - Otherwise replaces the text (exact match) and writes the updated file back.
+* **Error codes:**
+  - `invalid_input`: Missing/malformed fields; `old` is empty; or `expected_replacements < 1`.
+  - `path_error`: Path does not exist (or cannot be resolved/canonicalized).
+  - `read_error`: I/O failure reading the file (including non-UTF-8).
+  - `write_error`: I/O failure writing the file.
+  - `old_not_found`: No occurrences of `old` were found.
+  - `replacement_count_mismatch`: Found occurrences != `expected_replacements`.
 
 ### Tool loop correctness requirements
 
@@ -572,10 +617,10 @@ Breaking changes, if necessary, should:
 
 * **SPEC.md**: values + contracts + non-goals (this document)
 * **docs/ROADMAP.md**: optional priorities list (what's next and why)
-* **PLAN_vX.Y.md**: concrete, commit-level delivery plan (how to build it)
+* **docs/plans/plan_<short_slug>.md**: concrete, commit-level delivery plan (how to build it)
 * **docs/adr/NNNN-*.md**: decision rationale over time (the “why”)
 
-**Rule:** If present, `docs/ROADMAP.md` and `docs/PLAN_vX.Y.md` must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
+**Rule:** If present, `docs/ROADMAP.md` and `docs/plans/plan_<short_slug>.md` must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
 **Rule:** When a notable decision changes, add a new ADR that supersedes the old one; avoid rewriting past ADRs.
 
 ---
