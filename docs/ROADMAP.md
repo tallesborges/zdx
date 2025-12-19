@@ -41,3 +41,4 @@
 - Session inspection: search/filter/export + offline viewer
 - Optional mutation visibility (diff preview) and opt-in confirmations (still YOLO default)
 - Optional additional providers behind the same provider contract
+- [Agent Skills](https://agentskills.io/specification) support: load `SKILL.md` files with progressive disclosure (metadata → instructions → resources)
