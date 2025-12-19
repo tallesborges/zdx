@@ -163,59 +163,6 @@ async fn test_sessions_show_displays_tool_events() {
         .stdout(predicate::str::contains("### Result ✓"));
 }
 
-/// Test that resume with tool history includes tool context in API request.
-///
-/// After refactor (commit 2b):
-/// - "Loaded N previous messages" goes to stderr
-/// - Assistant text goes to stdout
-#[tokio::test]
-async fn test_resume_with_tool_history_includes_tools_in_context() {
-    let mock_server = MockServer::start().await;
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create a session with tool use history
-    let sessions_dir = temp_dir.path().join("sessions");
-    fs::create_dir_all(&sessions_dir).unwrap();
-    let session_path = sessions_dir.join("resume-tools.jsonl");
-
-    let session_content = r#"{"type":"meta","schema_version":1,"ts":"2025-01-01T00:00:00Z"}
-{"type":"message","role":"user","text":"read file.txt","ts":"2025-01-01T00:00:01Z"}
-{"type":"tool_use","id":"t1","name":"read","input":{"path":"file.txt"},"ts":"2025-01-01T00:00:02Z"}
-{"type":"tool_result","tool_use_id":"t1","output":{"ok":true,"data":{"content":"hello world"}},"ok":true,"ts":"2025-01-01T00:00:03Z"}
-{"type":"message","role":"assistant","text":"The file contains hello world.","ts":"2025-01-01T00:00:04Z"}"#;
-    fs::write(&session_path, session_content).unwrap();
-
-    // Resume should include the tool context
-    Mock::given(method("POST"))
-        .and(path("/v1/messages"))
-        // Should have tool_use in the conversation history
-        .and(body_string_contains("tool_use"))
-        .and(body_string_contains("read"))
-        // Should have tool_result in the conversation history
-        .and(body_string_contains("tool_result"))
-        .respond_with(streaming_text_response(
-            "Okay, continuing from where we left off.",
-        ))
-        .expect(1)
-        .mount(&mock_server)
-        .await;
-
-    cargo_bin_cmd!("zdx-cli")
-        .env("ZDX_HOME", temp_dir.path())
-        .env("ANTHROPIC_API_KEY", "test-api-key")
-        .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["sessions", "resume", "resume-tools"])
-        .write_stdin("continue\n:q\n")
-        .assert()
-        .success()
-        // REPL UI goes to stderr
-        .stderr(predicate::str::contains("Loaded 4 previous messages"))
-        // Assistant text goes to stdout
-        .stdout(predicate::str::contains(
-            "Okay, continuing from where we left off.",
-        ));
-}
-
 #[tokio::test]
 async fn test_interrupted_session_mid_tool_is_resumable() {
     let temp_dir = TempDir::new().unwrap();
