@@ -364,9 +364,14 @@ pub fn latest_session_id() -> Result<Option<String>> {
 ///
 /// Reconstructs the full conversation including tool use/result pairs.
 pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
+    let events = load_session(id)?;
+    Ok(events_to_messages(events))
+}
+
+/// Converts session events to chat messages for API replay.
+pub fn events_to_messages(events: Vec<SessionEvent>) -> Vec<crate::providers::anthropic::ChatMessage> {
     use crate::providers::anthropic::{ChatContentBlock, ChatMessage, MessageContent};
 
-    let events = load_session(id)?;
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     // Track pending tool uses to group with results
@@ -439,7 +444,7 @@ pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthro
         }
     }
 
-    Ok(messages)
+    messages
 }
 
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
@@ -630,36 +635,16 @@ mod tests {
     }
 
     #[test]
-    fn test_load_session_as_messages_with_tools() {
-        let temp = setup_temp_zdx_home();
+    fn test_events_to_messages_with_tools() {
+        // Test the conversion logic directly without env var dependency
+        let events = vec![
+            SessionEvent::user_message("list files"),
+            SessionEvent::tool_use("t1", "bash", json!({"command": "ls"})),
+            SessionEvent::tool_result("t1", json!({"stdout": "file.txt\n"}), true),
+            SessionEvent::assistant_message("Found file.txt"),
+        ];
 
-        let id = unique_session_id("messages-tools");
-        let mut session = Session::with_id(id.clone()).unwrap();
-        session
-            .append(&SessionEvent::user_message("list files"))
-            .unwrap();
-        session
-            .append(&SessionEvent::tool_use(
-                "t1",
-                "bash",
-                json!({"command": "ls"}),
-            ))
-            .unwrap();
-        session
-            .append(&SessionEvent::tool_result(
-                "t1",
-                json!({"stdout": "file.txt\n"}),
-                true,
-            ))
-            .unwrap();
-        session
-            .append(&SessionEvent::assistant_message("Found file.txt"))
-            .unwrap();
-
-        // Re-set ZDX_HOME to ensure path consistency (guards against parallel test interference)
-        unsafe { std::env::set_var("ZDX_HOME", temp.path()) };
-
-        let messages = load_session_as_messages(&id).unwrap();
+        let messages = events_to_messages(events);
 
         // user message + assistant with tool_use block + tool_results + assistant message = 4
         assert_eq!(messages.len(), 4);
