@@ -367,7 +367,14 @@ async fn execute_tools_async(
         })
         .await;
 
-        let (output, result) = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx).await;
+        let (output, result) = tokio::select! {
+            biased;
+            _ = crate::interrupt::wait_for_interrupt() => {
+                sink.important(EngineEvent::Interrupted).await;
+                return Err(crate::interrupt::InterruptedError.into());
+            }
+            res = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx) => res,
+        };
 
         // Emit ToolFinished with structured output
         sink.important(EngineEvent::ToolFinished {
