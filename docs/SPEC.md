@@ -385,6 +385,10 @@ The engine emits events for renderers (CLI now, TUI later). See [ADR-0002](./adr
 * **stderr**:
 
   * logs, tool status lines, diagnostics, warnings, errors (human-readable)
+  * **Tool duration:** All tool finish lines include duration: `Done. (X.XXs)`
+  * **bash tool debug lines:**
+    - On request: `Tool requested: bash command="<command>"`
+    - On finish: `Tool finished: bash exit=<code>` or `Tool finished: bash timed_out=true`
 
 ### Exit codes (recommended contract)
 
