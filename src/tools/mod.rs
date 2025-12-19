@@ -5,6 +5,7 @@
 
 pub mod bash;
 pub mod read;
+pub mod write;
 
 use std::path::PathBuf;
 use std::time::Duration;
@@ -60,7 +61,7 @@ impl ToolContext {
 
 /// Returns all available tool definitions.
 pub fn all_tools() -> Vec<ToolDefinition> {
-    vec![bash::definition(), read::definition()]
+    vec![bash::definition(), read::definition(), write::definition()]
 }
 
 /// Executes a tool by name with the given input.
@@ -74,6 +75,7 @@ pub async fn execute_tool(
     let output = match name {
         "bash" => bash::execute(input, ctx, ctx.timeout).await,
         "read" => execute_read(input, ctx).await,
+        "write" => execute_write(input, ctx).await,
         _ => ToolOutput::failure("unknown_tool", format!("Unknown tool: {}", name)),
     };
 
@@ -82,11 +84,29 @@ pub async fn execute_tool(
 }
 
 async fn execute_read(input: &Value, ctx: &ToolContext) -> ToolOutput {
-    let input = input.clone();
-    let ctx = ctx.clone();
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || read::execute(&input, &ctx)
+    })
+    .await
+}
 
-    let timeout = ctx.timeout;
-    let mut handle = tokio::task::spawn_blocking(move || read::execute(&input, &ctx));
+async fn execute_write(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || write::execute(&input, &ctx)
+    })
+    .await
+}
+
+/// Execute a blocking tool function with optional timeout.
+async fn execute_blocking<F>(timeout: Option<Duration>, f: F) -> ToolOutput
+where
+    F: FnOnce() -> ToolOutput + Send + 'static,
+{
+    let mut handle = tokio::task::spawn_blocking(f);
 
     match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, &mut handle).await {
