@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use anyhow::{Result, bail};
 use futures_util::StreamExt;
 use serde_json::Value;
+use tokio::task::JoinHandle;
 
 use crate::config::Config;
 use crate::events::{EngineEvent, ErrorKind};
@@ -72,6 +73,40 @@ pub fn create_event_channel() -> (EventTx, EventRx) {
 /// Creates a bounded event channel with a custom capacity.
 pub fn create_event_channel_with_capacity(capacity: usize) -> (EventTx, EventRx) {
     tokio::sync::mpsc::channel(capacity)
+}
+
+/// Spawns a fan-out task that distributes events to multiple consumers.
+///
+/// The task receives events from a single source channel and forwards them
+/// to multiple downstream channels (e.g., renderer and session persistence).
+/// Events are cloned via `Arc` for efficient multi-consumer delivery.
+///
+/// The task exits when the source channel closes. Downstream channels that
+/// close early are silently ignored (the other consumers continue).
+///
+/// # Example
+///
+/// ```ignore
+/// let (engine_tx, engine_rx) = create_event_channel();
+/// let (render_tx, render_rx) = create_event_channel();
+/// let (persist_tx, persist_rx) = create_event_channel();
+///
+/// let fanout = spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+///
+/// // Engine sends to engine_tx
+/// // Renderer receives from render_rx
+/// // Persister receives from persist_rx
+/// ```
+pub fn spawn_fanout_task(mut rx: EventRx, sinks: Vec<EventTx>) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            for sink in &sinks {
+                // Clone the Arc and send to each consumer
+                // Ignore send errors (consumer may have closed early)
+                let _ = sink.send(event.clone()).await;
+            }
+        }
+    })
 }
 
 /// Builder for accumulating tool use data from streaming events.
