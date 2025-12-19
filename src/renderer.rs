@@ -65,6 +65,13 @@ impl CliRenderer {
                 }
             }
             EngineEvent::ToolRequested { id, name, input } => {
+                // Ensure newline after assistant text before tool status
+                if self.needs_final_newline {
+                    let _ = writeln!(self.stdout);
+                    let _ = self.stdout.flush();
+                    self.needs_final_newline = false;
+                }
+
                 // Track tool name for ToolFinished rendering
                 self.tool_names.insert(id.clone(), name.clone());
 
