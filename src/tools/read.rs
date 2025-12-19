@@ -110,7 +110,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt"});
 
         let result = execute(&input, &ctx);
@@ -129,7 +129,7 @@ mod tests {
         let file_path = temp.path().join("subdir/nested.txt");
         fs::write(&file_path, "nested content").unwrap();
 
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"path": "subdir/nested.txt"});
 
         let result = execute(&input, &ctx);
@@ -141,7 +141,7 @@ mod tests {
     #[test]
     fn test_read_file_not_found() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"path": "nonexistent.txt"});
 
         let result = execute(&input, &ctx);
@@ -158,7 +158,7 @@ mod tests {
         let outside_file = outside_dir.path().join("external.txt");
         fs::write(&outside_file, "external content").unwrap();
 
-        let ctx = ToolContext::new(root.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(root.path().to_path_buf(), None);
         let input = json!({ "path": outside_file.to_str().unwrap() });
 
         let result = execute(&input, &ctx);
@@ -175,7 +175,7 @@ mod tests {
         let content = "x".repeat(60 * 1024);
         fs::write(&file_path, &content).unwrap();
 
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"path": "large.txt"});
 
         let result = execute(&input, &ctx);
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn test_read_invalid_input() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({"wrong_field": "test.txt"});
 
         let result = execute(&input, &ctx);

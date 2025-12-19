@@ -2,10 +2,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 
-#[cfg(test)]
-thread_local! {
-    static TEST_INTERRUPT_OVERRIDE: std::cell::Cell<Option<bool>> = const { std::cell::Cell::new(None) };
-}
 
 #[derive(Debug)]
 pub struct InterruptedError;
@@ -37,16 +33,10 @@ pub fn init() {
 
 /// Checks if an interrupt has been requested.
 pub fn is_interrupted() -> bool {
-    #[cfg(test)]
-    if let Some(val) = TEST_INTERRUPT_OVERRIDE.with(|c| c.get()) {
-        return val;
-    }
     INTERRUPTED.load(Ordering::SeqCst)
 }
 
 /// Resets the interrupt flag.
 pub fn reset() {
     INTERRUPTED.store(false, Ordering::SeqCst);
-    #[cfg(test)]
-    TEST_INTERRUPT_OVERRIDE.with(|c| c.set(None));
 }

@@ -25,7 +25,6 @@ pub fn config_path() -> PathBuf {
 }
 
 /// Returns the path to the sessions directory.
-#[allow(dead_code)]
 pub fn sessions_dir() -> PathBuf {
     zdx_home().join("sessions")
 }

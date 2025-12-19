@@ -151,7 +151,6 @@ impl SessionEvent {
             // - AssistantDelta: streamed chunks, not final
             // - AssistantFinal: handled by caller with full context
             // - ToolStarted: UI-only, not persisted
-            // - Warning: not persisted
             // - Error: not persisted (may be in future)
             _ => None,
         }
@@ -243,11 +242,6 @@ impl Session {
         read_session_events(&self.path)
     }
 
-    /// Returns the path to the session file.
-    #[allow(dead_code)] // Used in tests
-    pub fn path(&self) -> &PathBuf {
-        &self.path
-    }
 }
 
 /// Reads session events from a file path, with backward compatibility.
@@ -266,48 +260,13 @@ fn read_session_events(path: &PathBuf) -> Result<Vec<SessionEvent>> {
             continue;
         }
 
-        // Try to parse as new SessionEvent format first
         if let Ok(event) = serde_json::from_str::<SessionEvent>(&line) {
             events.push(event);
-            continue;
-        }
-
-        // Fall back to legacy format (backward compatibility)
-        if let Ok(legacy) = serde_json::from_str::<LegacySessionEvent>(&line) {
-            events.push(legacy.into());
         }
         // Skip unparseable lines (best-effort)
     }
 
     Ok(events)
-}
-
-/// Legacy session event format (pre-v1 sessions).
-#[derive(Debug, Deserialize)]
-struct LegacySessionEvent {
-    #[serde(rename = "type")]
-    event_type: String,
-    role: String,
-    text: String,
-    ts: String,
-}
-
-impl From<LegacySessionEvent> for SessionEvent {
-    fn from(legacy: LegacySessionEvent) -> Self {
-        if legacy.event_type == "interrupted" {
-            SessionEvent::Interrupted {
-                role: legacy.role,
-                text: legacy.text,
-                ts: legacy.ts,
-            }
-        } else {
-            SessionEvent::Message {
-                role: legacy.role,
-                text: legacy.text,
-                ts: legacy.ts,
-            }
-        }
-    }
 }
 
 /// Generates a unique session ID using UUID v4.
@@ -600,10 +559,8 @@ mod tests {
             .append(&SessionEvent::user_message("hello"))
             .unwrap();
 
-        assert!(session.path().exists());
-
         // Read raw file content to verify meta is first
-        let content = fs::read_to_string(session.path()).unwrap();
+        let content = fs::read_to_string(&session.path).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert!(lines.len() >= 2);
         assert!(lines[0].contains("\"type\":\"meta\""));
@@ -647,37 +604,6 @@ mod tests {
             SessionEvent::ToolResult { ok: true, .. }
         ));
         assert!(matches!(events[4], SessionEvent::Message { ref role, .. } if role == "assistant"));
-    }
-
-    #[test]
-    fn test_session_backward_compat_legacy_format() {
-        let _temp = setup_temp_zdx_home();
-
-        // Create session first to get the correct path
-        let id = unique_session_id("legacy");
-        let session = Session::with_id(id).unwrap();
-
-        // Write legacy format directly to the session's path
-        let legacy_content = r#"{"type":"message","role":"user","text":"hello","ts":"2025-01-01T00:00:00Z"}
-{"type":"message","role":"assistant","text":"hi there","ts":"2025-01-01T00:00:01Z"}
-{"type":"interrupted","role":"system","text":"Interrupted","ts":"2025-01-01T00:00:02Z"}"#;
-        fs::write(session.path(), legacy_content).unwrap();
-
-        let events = session.read_events().unwrap();
-
-        assert_eq!(events.len(), 3);
-        assert!(
-            matches!(&events[0], SessionEvent::Message { role, text, .. }
-            if role == "user" && text == "hello")
-        );
-        assert!(
-            matches!(&events[1], SessionEvent::Message { role, text, .. }
-            if role == "assistant" && text == "hi there")
-        );
-        assert!(
-            matches!(&events[2], SessionEvent::Interrupted { role, text, .. }
-            if role == "system" && text == "Interrupted")
-        );
     }
 
     #[test]

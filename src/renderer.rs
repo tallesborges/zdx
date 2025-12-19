@@ -98,10 +98,6 @@ impl CliRenderer {
                     self.emit_bash_finish_details(&result);
                 }
             }
-            EngineEvent::Warning { message } => {
-                // Print warning to stderr (per SPEC §10)
-                let _ = writeln!(self.stderr, "Warning: {}", message);
-            }
             EngineEvent::Error {
                 kind,
                 message,

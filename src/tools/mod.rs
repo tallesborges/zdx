@@ -53,14 +53,6 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    #[allow(dead_code)]
-    pub fn new(root: PathBuf) -> Self {
-        Self {
-            root,
-            timeout: None,
-        }
-    }
-
     pub fn with_timeout(root: PathBuf, timeout: Option<Duration>) -> Self {
         Self { root, timeout }
     }
@@ -141,7 +133,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_unknown_tool() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
         let input = json!({});
 
         let (output, result) = execute_tool("unknown", "toolu_unknown", &input, &ctx).await;

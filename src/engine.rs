@@ -27,13 +27,6 @@ pub struct EngineOptions {
     pub root: PathBuf,
 }
 
-impl Default for EngineOptions {
-    fn default() -> Self {
-        Self {
-            root: PathBuf::from("."),
-        }
-    }
-}
 
 /// Channel-based event sender (async, bounded).
 ///
@@ -424,7 +417,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
 
-        let ctx = ToolContext::new(temp.path().to_path_buf());
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
 
         // Use ToolUse (finalized) instead of ToolUseBuilder
         let tool_uses = vec![ToolUse {
