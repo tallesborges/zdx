@@ -50,17 +50,3 @@ pub fn reset() {
     #[cfg(test)]
     TEST_INTERRUPT_OVERRIDE.with(|c| c.set(None));
 }
-
-/// Sets the interrupt flag (primarily for testing).
-#[cfg(test)]
-pub fn set_interrupted(val: bool) {
-    // Avoid cross-test interference by using a thread-local override in tests.
-    //
-    // `val = true`  => force interruption for this test thread
-    // `val = false` => clear override (fall back to global signal flag)
-    if val {
-        TEST_INTERRUPT_OVERRIDE.with(|c| c.set(Some(true)));
-    } else {
-        TEST_INTERRUPT_OVERRIDE.with(|c| c.set(None));
-    }
-}
