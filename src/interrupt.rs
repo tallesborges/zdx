@@ -1,6 +1,8 @@
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static INTERRUPT_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct InterruptedError;
@@ -20,19 +22,41 @@ impl std::error::Error for InterruptedError {}
 /// This keeps stdout/stderr ownership in the renderer (per SPEC §10).
 pub fn init() {
     ctrlc::set_handler(move || {
-        if INTERRUPTED.load(Ordering::SeqCst) {
-            // Second Ctrl+C - force exit
-            std::process::exit(130);
-        }
-        INTERRUPTED.store(true, Ordering::SeqCst);
-        // Note: Renderer handles printing the interruption message
+        trigger_ctrl_c();
     })
     .expect("Error setting Ctrl+C handler");
+}
+
+fn notify_waiters() {
+    INTERRUPT_NOTIFY
+        .get_or_init(tokio::sync::Notify::new)
+        .notify_waiters();
+}
+
+/// Triggers an interrupt via Ctrl+C, force-exiting on a second Ctrl+C.
+pub fn trigger_ctrl_c() {
+    if INTERRUPTED.swap(true, Ordering::SeqCst) {
+        std::process::exit(130);
+    }
+    notify_waiters();
 }
 
 /// Checks if an interrupt has been requested.
 pub fn is_interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
+}
+
+/// Waits until an interrupt is triggered.
+pub async fn wait_for_interrupt() {
+    loop {
+        if is_interrupted() {
+            return;
+        }
+        INTERRUPT_NOTIFY
+            .get_or_init(tokio::sync::Notify::new)
+            .notified()
+            .await;
+    }
 }
 
 /// Resets the interrupt flag.
