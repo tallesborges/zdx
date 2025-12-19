@@ -22,7 +22,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::task::JoinHandle;
 
+use crate::engine::EventRx;
 use crate::paths::sessions_dir;
 
 /// Current schema version for new sessions.
@@ -134,6 +136,35 @@ impl SessionEvent {
             Self::ToolUse { .. } => "tool_use",
             Self::ToolResult { .. } => "tool_result",
             Self::Interrupted { .. } => "interrupted",
+        }
+    }
+
+    /// Converts an `EngineEvent` to a `SessionEvent` if applicable.
+    ///
+    /// Not all engine events are persisted. This returns `None` for events
+    /// that don't need to be saved (e.g., `AssistantDelta`, `ToolStarted`).
+    ///
+    /// Note: `AssistantFinal` and user messages are handled separately by the
+    /// chat/agent modules since they have additional context.
+    pub fn from_engine(event: &crate::events::EngineEvent) -> Option<Self> {
+        use crate::events::EngineEvent;
+
+        match event {
+            EngineEvent::ToolRequested { id, name, input } => {
+                Some(Self::tool_use(id.clone(), name.clone(), input.clone()))
+            }
+            EngineEvent::ToolFinished { id, result } => {
+                let output = serde_json::to_value(result).unwrap_or_default();
+                Some(Self::tool_result(id.clone(), output, result.is_ok()))
+            }
+            EngineEvent::Interrupted => Some(Self::interrupted()),
+            // These are not persisted via this path:
+            // - AssistantDelta: streamed chunks, not final
+            // - AssistantFinal: handled by caller with full context
+            // - ToolStarted: UI-only, not persisted
+            // - Warning: not persisted
+            // - Error: not persisted (may be in future)
+            _ => None,
         }
     }
 }
@@ -296,6 +327,39 @@ fn generate_session_id() -> String {
 }
 
 /// Information about a saved session.
+/// Spawns a session persistence task that consumes events from a channel.
+///
+/// The task owns the `Session` and persists relevant events until the channel closes.
+/// Returns a `JoinHandle` that resolves when all events have been persisted.
+///
+/// Only tool-related and interrupt events are persisted via this task.
+/// User and assistant messages are handled separately by the chat/agent modules.
+///
+/// # Example
+///
+/// ```ignore
+/// let session = Session::new()?;
+/// let (tx, rx) = engine::create_event_channel();
+/// let persist_handle = spawn_persist_task(session, rx);
+///
+/// // ... send events to tx ...
+/// drop(tx); // Close channel
+///
+/// persist_handle.await.unwrap(); // Wait for persistence to finish
+/// ```
+pub fn spawn_persist_task(mut session: Session, mut rx: EventRx) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        while let Some(event) = rx.recv().await {
+            if let Some(session_event) = SessionEvent::from_engine(&event) {
+                // Best-effort persistence - log errors but don't panic
+                if let Err(e) = session.append(&session_event) {
+                    eprintln!("Warning: Failed to persist session event: {}", e);
+                }
+            }
+        }
+    })
+}
+
 #[derive(Debug, Clone)]
 pub struct SessionInfo {
     pub id: String,
