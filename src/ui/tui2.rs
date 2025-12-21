@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, Event, KeyCode, KeyModifiers},
+    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -39,8 +39,23 @@ use crate::providers::anthropic::ChatMessage;
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
 
+/// Height of header area (lines).
+const HEADER_HEIGHT: u16 = 2;
+
 /// Target frame rate for streaming updates (30fps = ~33ms per frame).
 const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(33);
+
+/// Lines to scroll per mouse wheel tick.
+const MOUSE_SCROLL_LINES: usize = 3;
+
+/// Scroll mode for the transcript pane.
+#[derive(Debug, Clone)]
+enum ScrollMode {
+    /// Auto-scroll to show latest content (bottom of transcript).
+    FollowLatest,
+    /// User scrolled manually; offset is line index from top.
+    Anchored { offset: usize },
+}
 
 /// Engine execution state.
 #[derive(Debug)]
@@ -90,6 +105,10 @@ pub struct Tui2App {
     messages: Vec<ChatMessage>,
     /// Current engine state.
     engine_state: EngineState,
+    /// Scroll mode for transcript.
+    scroll_mode: ScrollMode,
+    /// Cached total line count from last render (for scroll calculations).
+    cached_line_count: usize,
 }
 
 impl Tui2App {
@@ -129,6 +148,8 @@ impl Tui2App {
             system_prompt,
             messages: Vec::new(),
             engine_state: EngineState::Idle,
+            scroll_mode: ScrollMode::FollowLatest,
+            cached_line_count: 0,
         })
     }
 
@@ -136,13 +157,21 @@ impl Tui2App {
     ///
     /// This blocks until the user quits (q or Ctrl+C).
     pub fn run(&mut self) -> Result<()> {
-        // Enable bracketed paste for proper paste handling
-        execute!(io::stdout(), event::EnableBracketedPaste)?;
+        // Enable bracketed paste and mouse capture
+        execute!(
+            io::stdout(),
+            event::EnableBracketedPaste,
+            EnableMouseCapture
+        )?;
 
         let result = self.event_loop();
 
-        // Disable bracketed paste
-        execute!(io::stdout(), event::DisableBracketedPaste)?;
+        // Disable mouse capture and bracketed paste
+        execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            event::DisableBracketedPaste
+        )?;
 
         result
     }
@@ -331,8 +360,37 @@ impl Tui2App {
         let size = self.terminal.size()?;
         let transcript_width = size.width.saturating_sub(2) as usize;
 
+        // Calculate transcript pane height
+        let transcript_height = size.height.saturating_sub(HEADER_HEIGHT + INPUT_HEIGHT) as usize;
+
         // Pre-render transcript lines (avoids borrow issues in closure)
-        let transcript_lines = self.render_transcript(transcript_width);
+        let all_lines = self.render_transcript(transcript_width);
+        let total_lines = all_lines.len();
+        self.cached_line_count = total_lines;
+
+        // Calculate scroll offset based on mode
+        let scroll_offset = match &self.scroll_mode {
+            ScrollMode::FollowLatest => {
+                // Show bottom of transcript
+                total_lines.saturating_sub(transcript_height)
+            }
+            ScrollMode::Anchored { offset } => {
+                // Clamp to valid range
+                let max_offset = total_lines.saturating_sub(transcript_height);
+                (*offset).min(max_offset)
+            }
+        };
+
+        // Check if there's content below the viewport (for indicator)
+        let has_content_below = scroll_offset + transcript_height < total_lines;
+
+        // Slice visible lines
+        let visible_end = (scroll_offset + transcript_height).min(total_lines);
+        let visible_lines: Vec<Line<'static>> = all_lines
+            .into_iter()
+            .skip(scroll_offset)
+            .take(visible_end - scroll_offset)
+            .collect();
 
         // Clone textarea for rendering (tui-textarea doesn't impl Copy)
         let textarea = &self.textarea;
@@ -344,34 +402,52 @@ impl Tui2App {
             let chunks = Layout::default()
                 .direction(Direction::Vertical)
                 .constraints([
-                    Constraint::Length(2),            // Header
-                    Constraint::Min(1),               // Transcript
-                    Constraint::Length(INPUT_HEIGHT), // Input
+                    Constraint::Length(HEADER_HEIGHT), // Header
+                    Constraint::Min(1),                // Transcript
+                    Constraint::Length(INPUT_HEIGHT),  // Input
                 ])
                 .split(area);
 
-            // Header
-            let header = Paragraph::new(Line::from(vec![
-                Span::styled(
-                    "ZDX",
-                    Style::default()
-                        .fg(Color::Cyan)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::raw(" — "),
-                Span::styled("q", Style::default().fg(Color::Yellow)),
-                Span::raw(" to quit"),
-            ]))
-            .alignment(Alignment::Center)
-            .block(
-                Block::default()
-                    .borders(Borders::BOTTOM)
-                    .border_style(Style::default().fg(Color::DarkGray)),
-            );
+            // Header with scroll indicator
+            let header_text = if has_content_below {
+                vec![
+                    Span::styled(
+                        "ZDX",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" — "),
+                    Span::styled("q", Style::default().fg(Color::Yellow)),
+                    Span::raw(" to quit"),
+                    Span::raw("  "),
+                    Span::styled("▼ more", Style::default().fg(Color::DarkGray)),
+                ]
+            } else {
+                vec![
+                    Span::styled(
+                        "ZDX",
+                        Style::default()
+                            .fg(Color::Cyan)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                    Span::raw(" — "),
+                    Span::styled("q", Style::default().fg(Color::Yellow)),
+                    Span::raw(" to quit"),
+                ]
+            };
+
+            let header = Paragraph::new(Line::from(header_text))
+                .alignment(Alignment::Center)
+                .block(
+                    Block::default()
+                        .borders(Borders::BOTTOM)
+                        .border_style(Style::default().fg(Color::DarkGray)),
+                );
             frame.render_widget(header, chunks[0]);
 
-            // Transcript area
-            let transcript = Paragraph::new(transcript_lines.clone())
+            // Transcript area (already sliced to visible)
+            let transcript = Paragraph::new(visible_lines)
                 .wrap(Wrap { trim: false })
                 .block(Block::default().borders(Borders::NONE));
             frame.render_widget(transcript, chunks[1]);
@@ -468,6 +544,10 @@ impl Tui2App {
     fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Key(key) => self.handle_key(key),
+            Event::Mouse(mouse) => {
+                self.handle_mouse(mouse);
+                Ok(())
+            }
             Event::Paste(text) => {
                 self.textarea.insert_str(&text);
                 Ok(())
@@ -477,6 +557,20 @@ impl Tui2App {
                 Ok(())
             }
             _ => Ok(()),
+        }
+    }
+
+    /// Handles a mouse event.
+    fn handle_mouse(&mut self, mouse: event::MouseEvent) {
+        match mouse.kind {
+            MouseEventKind::ScrollUp => {
+                self.scroll_lines_up(MOUSE_SCROLL_LINES);
+            }
+            MouseEventKind::ScrollDown => {
+                self.scroll_lines_down(MOUSE_SCROLL_LINES);
+            }
+            // Ignore other mouse events (clicks, drags, etc.)
+            _ => {}
         }
     }
 
@@ -511,6 +605,20 @@ impl Tui2App {
             KeyCode::Esc => {
                 self.clear_input();
             }
+            // Scroll: PageUp/PageDown
+            KeyCode::PageUp => {
+                self.scroll_page_up();
+            }
+            KeyCode::PageDown => {
+                self.scroll_page_down();
+            }
+            // Scroll: Home (top) / End (bottom, re-enables follow-latest)
+            KeyCode::Home if ctrl => {
+                self.scroll_to_top();
+            }
+            KeyCode::End if ctrl => {
+                self.scroll_to_bottom();
+            }
             // Pass everything else to textarea
             _ => {
                 self.textarea.input(key);
@@ -518,6 +626,92 @@ impl Tui2App {
         }
 
         Ok(())
+    }
+
+    /// Returns the visible height of the transcript pane.
+    fn transcript_height(&self) -> usize {
+        self.terminal
+            .size()
+            .map(|s| s.height.saturating_sub(HEADER_HEIGHT + INPUT_HEIGHT) as usize)
+            .unwrap_or(20)
+    }
+
+    /// Scrolls the transcript up by one page.
+    fn scroll_page_up(&mut self) {
+        let page_size = self.transcript_height().max(1);
+        let current_offset = match &self.scroll_mode {
+            ScrollMode::FollowLatest => self.cached_line_count.saturating_sub(page_size),
+            ScrollMode::Anchored { offset } => *offset,
+        };
+
+        let new_offset = current_offset.saturating_sub(page_size);
+        self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
+    }
+
+    /// Scrolls the transcript down by one page.
+    fn scroll_page_down(&mut self) {
+        let page_size = self.transcript_height().max(1);
+        let current_offset = match &self.scroll_mode {
+            ScrollMode::FollowLatest => {
+                // Already at bottom, nothing to do
+                return;
+            }
+            ScrollMode::Anchored { offset } => *offset,
+        };
+
+        let max_offset = self.cached_line_count.saturating_sub(page_size);
+        let new_offset = (current_offset + page_size).min(max_offset);
+
+        // If we've scrolled to the bottom, switch back to FollowLatest
+        if new_offset >= max_offset {
+            self.scroll_mode = ScrollMode::FollowLatest;
+        } else {
+            self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
+        }
+    }
+
+    /// Scrolls to the top of the transcript.
+    fn scroll_to_top(&mut self) {
+        self.scroll_mode = ScrollMode::Anchored { offset: 0 };
+    }
+
+    /// Scrolls to the bottom and re-enables follow-latest.
+    fn scroll_to_bottom(&mut self) {
+        self.scroll_mode = ScrollMode::FollowLatest;
+    }
+
+    /// Scrolls the transcript up by a number of lines.
+    fn scroll_lines_up(&mut self, lines: usize) {
+        let page_size = self.transcript_height().max(1);
+        let current_offset = match &self.scroll_mode {
+            ScrollMode::FollowLatest => self.cached_line_count.saturating_sub(page_size),
+            ScrollMode::Anchored { offset } => *offset,
+        };
+
+        let new_offset = current_offset.saturating_sub(lines);
+        self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
+    }
+
+    /// Scrolls the transcript down by a number of lines.
+    fn scroll_lines_down(&mut self, lines: usize) {
+        let page_size = self.transcript_height().max(1);
+        let current_offset = match &self.scroll_mode {
+            ScrollMode::FollowLatest => {
+                // Already at bottom, nothing to do
+                return;
+            }
+            ScrollMode::Anchored { offset } => *offset,
+        };
+
+        let max_offset = self.cached_line_count.saturating_sub(page_size);
+        let new_offset = (current_offset + lines).min(max_offset);
+
+        // If we've scrolled to the bottom, switch back to FollowLatest
+        if new_offset >= max_offset {
+            self.scroll_mode = ScrollMode::FollowLatest;
+        } else {
+            self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
+        }
     }
 
     /// Gets the current input text.
