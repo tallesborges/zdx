@@ -18,203 +18,207 @@ Treat TUI state updates like a reducer:
 - Tests become: "given events A, B, C → state matches snapshot"
 - Aligns with "resumable conversations" goal (event stream is serializable)
 
+### User journey drives order
+Build in order of user journey: start TUI → type → send → see reply → stream → scroll → tools → selection/copy → markdown polish
+
 ---
+
+# MVP Slices (each must be demoable)
+
+These slices get to "daily-usable" as fast as possible. Each has a clear demo criterion.
+
+## Slice 0: Terminal safety + blank screen
+Goal: Alt-screen + raw mode + restore guard. Never wreck the terminal.
+
+- [ ] Add `src/ui/tui2.rs` with `Tui2App` struct.
+- [ ] Enter alternate screen on start; leave on exit.
+- [ ] Enable raw mode on start; disable on exit.
+- [ ] **Guard pattern:** terminal restore via `Drop` impl.
+- [ ] **Panic hook:** restore terminal before printing panic.
+- [ ] **Signal handling:** ctrl-c restores terminal cleanly.
+- [ ] Quit key (`q` or `Ctrl+C`) exits cleanly.
+- [ ] ✅ **Demo:** start/quit never wrecks terminal, even on panic.
+
+## Slice 1: Input works (even ugly)
+Goal: Functional input editing. Use `tui-textarea` (already in deps).
+
+- [ ] Wire `tui-textarea` into input pane.
+- [ ] Insert/delete characters.
+- [ ] Cursor movement: left/right, home/end, up/down (multiline).
+- [ ] Multiline input support.
+- [ ] Submit vs newline: Enter submits, Ctrl+Enter for newline.
+- [ ] Paste handling (terminal paste works).
+- [ ] On submit: create a `User` cell in transcript (in-memory only, no engine yet).
+- [ ] ✅ **Demo:** type/edit/paste, submit shows "You: ..." in transcript pane.
+
+## Slice 2: Send loop (no streaming yet)
+Goal: Actually call the engine and get a response.
+
+- [ ] On submit: spawn engine turn (non-blocking).
+- [ ] Show "thinking..." or spinner while waiting.
+- [ ] When response arrives: append `Assistant` cell with full text.
+- [ ] No streaming, no markdown, plain text only.
+- [ ] ✅ **Demo:** ask a question, get an answer displayed in TUI.
+
+## Slice 3: Streaming (throttled)
+Goal: Stream responses smoothly without input lag.
+
+- [ ] Create bounded channel from engine to TUI.
+- [ ] Map `AssistantDelta` events into transcript updates.
+- [ ] Coalesce rapid deltas (don't redraw per-character).
+- [ ] Tick-based redraw (e.g., 30fps max during streaming).
+- [ ] Show streaming cursor (▌) during response.
+- [ ] ✅ **Demo:** response streams smoothly, typing stays responsive during stream.
+
+## Slice 4: Scroll (read long answers)
+Goal: Navigate long transcripts.
+
+- [ ] Wrap lines at current terminal width (plain text, no markdown yet).
+- [ ] Flatten wrapped lines into visual-line list.
+- [ ] Track scroll offset over flattened lines.
+- [ ] **FollowLatest:** auto-scroll to bottom on new content (default).
+- [ ] **Anchored:** user scroll (PageUp/Down, arrows) switches to anchored mode.
+- [ ] Press `End` or `G` to re-enable follow-latest.
+- [ ] ✅ **Demo:** long reply, PageUp/PageDown works, auto-scroll resumes.
+
+---
+
+At this point, TUI2 is **daily-usable enough to dogfood**.
+
+---
+
+# Foundations (completed)
 
 ## Phase 1: Transcript foundations (UI-agnostic) ✅
 Goal: define the transcript types and rendering hook that everything else builds on.
 
-Deliverables (small chunks)
-- [x] Add `HistoryCell` (user/assistant/tool/system) in a UI-agnostic module (prefer `src/core/`).
-- [x] Add/choose a minimal `StyledLine` representation (or reuse an existing type) that can be produced without terminal I/O.
-- [x] Implement `HistoryCell::display_lines(width) -> Vec<StyledLine>` for at least one variant (start with plain text).
-- [x] Check-in: confirm `HistoryCell` variants/fields match `docs/SPEC.md` expectations before adding complexity.
+Deliverables
+- [x] Add `HistoryCell` (user/assistant/tool/system) in `src/core/transcript.rs`.
+- [x] Add `StyledLine` representation (UI-agnostic).
+- [x] Implement `HistoryCell::display_lines(width) -> Vec<StyledLine>` (plain text).
 
 **Implementation notes:**
-- Added `src/core/transcript.rs` with `HistoryCell`, `StyledSpan`, `StyledLine`, and `Style` types.
-- `HistoryCell` variants: `User`, `Assistant` (with `is_streaming` flag), `Tool` (with optional `result`), `System`.
-- `Style` is a semantic enum (e.g., `UserPrefix`, `Assistant`, `StreamingCursor`) - renderers translate to terminal styles.
-- `display_lines(width)` implemented with basic word-wrapping; handles multi-line content and streaming cursors.
-- 16 unit tests covering all variants, wrapping, streaming indicators, and cell mutations.
+- `HistoryCell` variants: `User`, `Assistant` (with `is_streaming`), `Tool`, `System`.
+- `Style` is semantic enum; renderers translate to terminal styles.
+- `display_lines(width)` with word-wrapping, streaming cursors.
+- 16 unit tests.
 
-### Phase 1b: Stable IDs + timestamps ✅
-Goal: Add stable identifiers early to avoid surprise refactors later (needed for selection, scroll anchoring, tool status).
+## Phase 1b: Stable IDs + timestamps ✅
+Goal: Stable identifiers for selection, scroll anchoring, tool status.
 
 Deliverables
-- [x] Add `cell_id: CellId` (u64 or UUID) to `HistoryCell`.
-- [x] Add `created_at: Option<DateTime<Utc>>` for ordering/display.
-- [x] For Tool cells: add explicit state enum `ToolState { Running, Done, Error }` with `started_at` timestamp.
-- [x] Update constructors and tests.
+- [x] `CellId(u64)` with atomic counter.
+- [x] `created_at: DateTime<Utc>` on all cells.
+- [x] `ToolState { Running, Done, Error }` with `started_at`.
 
 **Implementation notes:**
-- Added `CellId(u64)` with atomic counter for unique ID generation.
-- Added `ToolState` enum with `Running`, `Done`, `Error` variants and `as_str()` method.
-- All `HistoryCell` variants now have `id: CellId` and `created_at: DateTime<Utc>`.
-- Tool cells have additional `started_at` timestamp and explicit `state: ToolState`.
-- Added helper methods: `id()`, `created_at()`, `tool_state()`.
-- 3 new tests: `test_cell_id_unique`, `test_tool_state_as_str`, `test_cell_has_id_and_timestamp`.
+- All cells have `id` and `created_at`.
+- Tool cells have explicit state enum.
+- 3 new tests.
 
 ---
 
-## Phase 2: Visual-line pipeline (wrap + flatten + scroll + selection)
-Goal: turn a transcript into flattened visual lines that support resize reflow, scrolling, and selection.
+# Polish Phases (after MVP)
 
-### Unicode handling decision
-Define the "unit of indexing" for selection/cursor early:
-- **grapheme index** is best for UI (single user-visible character)
-- Add `unicode-width` and `unicode-segmentation` crates
-- TODO: Handle display width (CJK, emoji) and grapheme clusters
+## Phase 2a: Plain text wrap + scroll
+Goal: Proper line wrapping (already partially done in Slice 4).
 
-### Markdown subset (strict scope)
-Render with a minimal parser; treat everything else as plain text:
+- [ ] Add `unicode-width` for display width (CJK, emoji).
+- [ ] Wrap by display width, not byte length.
+- [ ] Cache wrapped lines per `(cell_id, width)`.
+- [ ] ✅ Check-in: emoji and CJK characters wrap correctly.
+
+## Phase 2b: Markdown rendering (strict subset)
+Goal: Styled markdown output. Keep scope tight.
+
+**Subset (everything else = plain text):**
 - paragraphs + soft wrap
 - inline code (backticks)
 - fenced code blocks
-- bold/italic if cheap
-- **NOT included initially:** lists, tables, links, images
+- bold/italic
 
-Deliverables (small chunks)
-- [ ] Add `unicode-width` + `unicode-segmentation` dependencies.
-- [ ] Define indexing unit: grapheme index for selection, byte index for storage.
-- [ ] Add markdown-to-styled-spans helper for a single cell (strict subset above).
-- [ ] Add span-wrapping helper that handles unicode width correctly.
-- [ ] Add transcript flattener that concatenates per-cell wrapped lines into a single visual-line list.
-- [ ] **Position mapping:** emit optional metadata mapping `(visual_line_index, column)` ↔ `(cell_id, raw_text_range)`.
-- [ ] Check-in: review a small "golden" transcript (user + assistant + tool) and confirm ordering and wrapping.
-- [ ] Add scroll windowing helper: (offset, height) -> visible slice.
-- [ ] Add selection overlay on the visible slice (selection is defined over flattened visual lines, excluding any gutter/prefix).
-- [ ] Check-in: confirm scroll math is based on flattened visual lines (not terminal scrollback) and selection doesn't change scroll math.
+Deliverables
+- [ ] Add minimal markdown parser (or use `pulldown-cmark`).
+- [ ] Convert markdown to styled spans.
+- [ ] Store raw markdown in cells; render styled at display time.
+- [ ] ✅ Check-in: code blocks render with background, bold/italic work.
 
----
+## Phase 2c: Selection + copy
+Goal: Select and copy transcript text.
 
-## Phase 3: Full-screen TUI shell (alt-screen + raw mode + clean restore)
-Goal: run a stable full-screen TUI loop that owns terminal state and redraws from in-memory state.
+### Unicode/grapheme decision
+- **grapheme index** for selection (user-visible character)
+- Add `unicode-segmentation` crate
 
-### Terminal restore safety
-Use a guard pattern so restore happens in `Drop`:
-- Raw mode + alt-screen problems happen on: panics, ctrl-c/SIGINT, task cancellation
-- Install a panic hook that restores terminal before printing panic
-- This is the difference between "safe to use daily" and "occasionally wrecks my terminal"
+### Copy transport decision
+- [ ] **OSC 52** (terminal clipboard): works in many terminals
+- [ ] **System clipboard** fallback (`arboard` crate)
+- [ ] **Internal buffer** fallback if both fail
 
-Deliverables (small chunks)
-- [ ] Add `src/ui/tui2.rs` with a minimal `Tui2App` that can render a frame.
-- [ ] Use `Viewport::Fullscreen` and draw a placeholder layout (transcript pane + input pane).
-- [ ] Enter alternate screen on start; leave it on exit.
-- [ ] Enable raw mode on start; disable it on exit.
-- [ ] **Guard pattern:** terminal restore via `Drop` impl on a guard struct.
-- [ ] **Panic hook:** install hook that restores terminal before printing panic.
-- [ ] **Signal handling:** ensure ctrl-c restores terminal cleanly.
-- [ ] Check-in: manual smoke test start/quit and verify the terminal is not left in raw mode or alt-screen.
+Deliverables
+- [ ] Position mapping: `(visual_line, column)` ↔ `(cell_id, raw_text_range)`.
+- [ ] Selection overlay on visible lines.
+- [ ] Copy reconstructs text with correct wrapping.
+- [ ] ✅ Check-in: select text, copy, paste elsewhere matches.
 
-### Phase 3b: Input editing
-Goal: Functional input editing so the TUI is usable for daily work.
+## Phase 3: Tool UI
+Goal: Show tool execution in transcript.
 
-Approach decision:
-- [ ] **Option A:** Use existing widget/crate (e.g., `tui-textarea`)
-- [ ] **Option B:** Custom minimal editor
+- [ ] "Tool running..." indicator when tool starts.
+- [ ] Show tool name and status (running/done/failed).
+- [ ] Optionally show tool output preview.
+- [ ] ✅ Check-in: tool use shows status in TUI, not stdout.
 
-Minimum requirements:
-- [ ] Insert/delete characters
-- [ ] Cursor movement: left/right, home/end
-- [ ] Multiline input support
-- [ ] Submit vs newline (Enter submits, Shift+Enter or Ctrl+Enter for newline)
-- [ ] History navigation (↑/↓ for previous commands)
-- [ ] Paste handling (Ctrl+V or terminal paste)
-- [ ] Check-in: input feels responsive and supports basic editing workflows.
+## Phase 4: Streaming fidelity + performance
+Goal: Stable streaming under resizes and long outputs.
 
----
+- [ ] Commit cursor: render only committed prefix during stream.
+- [ ] Redraw throttling to reduce flicker.
+- [ ] Wrap cache invalidation on resize.
+- [ ] Avoid whole-transcript rewrap per frame.
+- [ ] ✅ Check-in: stream long response, resize terminal, no flicker or lag.
 
-## Phase 4: Engine ↔ TUI integration (event stream, no stdout transcript)
-Goal: feed engine events into the TUI without printing the transcript to stdout while TUI2 is active.
+## Phase 5: Input polish
+Goal: Quality-of-life input features.
 
-### EngineEvent schema (reducer-friendly)
-Events should be:
-- **Append-only** and ordered
-- **ID-addressable** (e.g., `cell_id`, `span_id`)
-- Avoid "replace the whole transcript" updates
+- [ ] History navigation (↑/↓ for previous commands).
+- [ ] Ctrl+C to cancel current input or interrupt engine.
+- [ ] Status line with mode indicator.
+- [ ] ✅ Check-in: input feels polished for daily use.
 
-Event types needed:
-- `AssistantStart { cell_id }`, `AssistantDelta { cell_id, text }`, `AssistantEnd { cell_id }`
-- `ToolStart { cell_id, name, args_preview }`, `ToolOutput { cell_id, chunk }`, `ToolEnd { cell_id, success }`
-- `Status { message }` (spinner, queued, waiting)
-- `Error { cell_id?, message, details }` (display in transcript, not stdout)
+## Phase 6: Default + cleanup
+Goal: TUI2 becomes the default.
 
-### Backpressure/throttling
-Streaming can produce events faster than UI can draw:
-- Use bounded channel with "latest wins" coalescing for `AssistantDelta`
-- Or coalesce deltas in engine before sending
-- Prevent: input lag, unbounded queue, CPU burn
-
-Deliverables (small chunks)
-- [ ] Define `EngineEvent` enum with cell_id addressing.
-- [ ] Create a bounded channel from engine task to TUI task.
-- [ ] Implement delta coalescing (batch rapid deltas before send or in receiver).
-- [ ] Map engine events into transcript updates via reducer pattern.
-- [ ] Wire `run_chat_loop_tty` to boot into `Tui2App` and run the TUI loop.
-- [ ] On submit: spawn an engine turn without blocking UI input/rendering.
-- [ ] Enforce the contract: no transcript output to stdout while TUI2 is active.
-- [ ] Check-in: run a simple prompt and confirm you see streaming deltas in the TUI and stdout stays clean.
+- [ ] Switch `zdx` interactive path to TUI2 by default.
+- [ ] Deprecate `src/ui/app.rs` (inline TUI).
+- [ ] Integration test: "no stdout transcript while TUI2 is active".
+- [ ] ✅ Check-in: go/no-go for shipping as default.
 
 ---
 
-## Phase 5: Navigation + copy (follow-latest, anchored, selection)
-Goal: make the transcript readable and navigable in long sessions with correct copy semantics.
+# Later / Explicitly Deferred
 
-### Copy mechanism decision
-Choose transport early (don't block on this late):
-- [ ] **OSC 52** (terminal clipboard): works in many terminals, not all
-- [ ] **System clipboard crate:** works in GUI environments, not SSH/headless
-- [ ] **Fallback:** "copied to internal buffer" with save/paste command
+These items are **not** in MVP or Polish phases. Don't build until needed.
 
-Deliverables (small chunks)
-- [ ] Add a status line with scroll position and mode indicator.
-- [ ] Implement `FollowLatest` vs `Anchored` scroll modes (scrolling switches to anchored; follow-latest can be re-enabled).
-- [ ] Implement selection over flattened visual lines (line/col), excluding any left gutter/prefix.
-- [ ] **Copy transport:** implement OSC 52 with system clipboard fallback.
-- [ ] Implement copy that reconstructs text using the same wrapping rules (including code block indentation and wide glyph widths).
-- [ ] Check-in: manually verify scroll mode switching, selection fidelity, and copied text matches what you see.
-
-How to test
-- [ ] `cargo run -- zdx` (manual: long response; scroll; select; copy; paste elsewhere and compare)
+- **Grapheme-perfect selection** — byte index is fine for MVP
+- **Full markdown spec** — lists, tables, links, images
+- **Tool output streaming** — show simple status line first
+- **Bidirectional position mapping** — only if needed for cursor-follow
+- **Session resume in TUI2** — works via existing session system
+- **Mouse selection** — keyboard-only is fine for MVP
 
 ---
 
-## Phase 6: Streaming fidelity + performance (commit cursor, throttling)
-Goal: make streaming stable (no flicker) and correct under resizes and long outputs.
+# Minimal transcript model for MVP
 
-### Cache rewrap by (cell_id, width)
-Prevent O(n) scrolling over entire history:
-- Each `HistoryCell` caches its wrapped visual lines keyed by `width`
-- On resize, invalidate caches (or keep small LRU per cell)
-- Flattener works from cached wrapped lines
+You don't need the full visual-line pipeline up front. MVP uses:
 
-Deliverables (small chunks)
-- [ ] Store assistant raw markdown append-only (no lossy transformations during streaming).
-- [ ] Add a commit cursor and render only the committed prefix (keep uncommitted hidden until committed).
-- [ ] Add redraw throttling during streaming to reduce flicker.
-- [ ] **Wrap cache:** cache wrapped lines per `(cell_id, width)`, invalidate on resize.
-- [ ] Avoid whole-transcript rewrap per frame; scope rewrap to changed/visible content.
-- [ ] Check-in: stream a long response and resize the terminal; confirm stability and acceptable CPU usage.
+```rust
+Vec<HistoryCell { id, role, raw_text, is_streaming }>
+```
 
----
+- Wrapping at render time (basic word-wrap)
+- Scroll offset over flattened wrapped lines
+- Cache per `(cell_id, width)` added in polish phase
 
-## Phase 7: Default behavior + guarded cleanup
-Goal: make TUI2 the default interactive UI and keep the repository tidy without breaking shipped behavior.
-
-Deliverables (small chunks)
-- [ ] Switch `zdx` interactive path to use TUI2 by default.
-- [ ] Deprecate `src/ui/app.rs` (inline TUI) only after TUI2 reaches parity for core flows.
-- [ ] Add a light integration test only when a user-visible contract regresses (example: "no stdout transcript while TUI2 is active").
-- [ ] Check-in: go/no-go decision for shipping TUI2 as default.
-
----
-
-## MVP path (ship-first ordering)
-
-If daily usability matters more than perfect transcript modeling early:
-
-1. **Phase 3** minimal alt-screen shell + input editor (even crude)
-2. **Phase 4** event stream with assistant streaming into a single assistant cell
-3. **Phase 2** scroll + wrap (enough to read long answers)
-4. Then selection/copy and tool indicators
-
-Current plan is sensible; this is just an alternative "ship-first" ordering.
+This supports long-term architecture without blocking sending messages.
