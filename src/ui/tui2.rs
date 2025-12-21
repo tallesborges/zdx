@@ -16,15 +16,20 @@ use crossterm::{
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
 use ratatui::{
-    Frame, Terminal,
+    Terminal,
     backend::CrosstermBackend,
     layout::{Alignment, Constraint, Direction, Layout},
-    style::{Color, Style},
+    style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph},
+    widgets::{Block, Borders, Paragraph, Wrap},
 };
+use tui_textarea::TextArea;
 
 use crate::core::interrupt;
+use crate::core::transcript::{HistoryCell, StyledLine, Style as TranscriptStyle};
+
+/// Height of the input area (lines).
+const INPUT_HEIGHT: u16 = 5;
 
 /// Full-screen TUI application.
 ///
@@ -35,6 +40,10 @@ pub struct Tui2App {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Flag indicating the app should quit.
     should_quit: bool,
+    /// Text area for input.
+    textarea: TextArea<'static>,
+    /// Transcript cells (in-memory, no persistence yet).
+    transcript: Vec<HistoryCell>,
 }
 
 impl Tui2App {
@@ -52,9 +61,21 @@ impl Tui2App {
         // Enter alternate screen and raw mode
         let terminal = setup_terminal().context("Failed to setup terminal")?;
 
+        // Set up textarea with styling
+        let mut textarea = TextArea::default();
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Input (Enter=send, Shift+Enter=newline) "),
+        );
+
         Ok(Self {
             terminal,
             should_quit: false,
+            textarea,
+            transcript: Vec::new(),
         })
     }
 
@@ -62,6 +83,18 @@ impl Tui2App {
     ///
     /// This blocks until the user quits (q or Ctrl+C).
     pub fn run(&mut self) -> Result<()> {
+        // Enable bracketed paste for proper paste handling
+        execute!(io::stdout(), event::EnableBracketedPaste)?;
+
+        let result = self.event_loop();
+
+        // Disable bracketed paste
+        execute!(io::stdout(), event::DisableBracketedPaste)?;
+
+        result
+    }
+
+    fn event_loop(&mut self) -> Result<()> {
         while !self.should_quit {
             // Check for Ctrl+C signal (uses global interrupt flag)
             if interrupt::is_interrupted() {
@@ -70,7 +103,7 @@ impl Tui2App {
             }
 
             // Render
-            self.terminal.draw(Self::render)?;
+            self.render()?;
 
             // Handle events with timeout
             if event::poll(std::time::Duration::from_millis(100))? {
@@ -82,56 +115,128 @@ impl Tui2App {
     }
 
     /// Renders the UI.
-    fn render(frame: &mut Frame) {
-        let area = frame.area();
+    fn render(&mut self) -> Result<()> {
+        // Get terminal size for transcript rendering
+        let size = self.terminal.size()?;
+        let transcript_width = size.width.saturating_sub(2) as usize;
 
-        // Create layout: header, main content, footer
-        let chunks = Layout::default()
-            .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3), // Header
-                Constraint::Min(1),    // Content
-                Constraint::Length(3), // Footer/status
-            ])
-            .split(area);
+        // Pre-render transcript lines (avoids borrow issues in closure)
+        let transcript_lines = self.render_transcript(transcript_width);
 
-        // Header
-        let header = Paragraph::new(Line::from(vec![
-            Span::styled("ZDX", Style::default().fg(Color::Cyan)),
-            Span::raw(" — Full-Screen TUI"),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(header, chunks[0]);
+        // Clone textarea for rendering (tui-textarea doesn't impl Copy)
+        let textarea = &self.textarea;
 
-        // Main content area (blank for Slice 0)
-        let content = Paragraph::new("").block(Block::default().borders(Borders::NONE));
-        frame.render_widget(content, chunks[1]);
+        self.terminal.draw(|frame| {
+            let area = frame.area();
 
-        // Footer with instructions
-        let footer = Paragraph::new(Line::from(vec![
-            Span::styled("q", Style::default().fg(Color::Yellow)),
-            Span::raw(" or "),
-            Span::styled("Ctrl+C", Style::default().fg(Color::Yellow)),
-            Span::raw(" to quit"),
-        ]))
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray)),
-        );
-        frame.render_widget(footer, chunks[2]);
+            // Create layout: header, transcript, input
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(2),            // Header
+                    Constraint::Min(1),               // Transcript
+                    Constraint::Length(INPUT_HEIGHT), // Input
+                ])
+                .split(area);
+
+            // Header
+            let header = Paragraph::new(Line::from(vec![
+                Span::styled(
+                    "ZDX",
+                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" — "),
+                Span::styled("q", Style::default().fg(Color::Yellow)),
+                Span::raw(" to quit"),
+            ]))
+            .alignment(Alignment::Center)
+            .block(
+                Block::default()
+                    .borders(Borders::BOTTOM)
+                    .border_style(Style::default().fg(Color::DarkGray)),
+            );
+            frame.render_widget(header, chunks[0]);
+
+            // Transcript area
+            let transcript = Paragraph::new(transcript_lines.clone())
+                .wrap(Wrap { trim: false })
+                .block(Block::default().borders(Borders::NONE));
+            frame.render_widget(transcript, chunks[1]);
+
+            // Input area
+            frame.render_widget(textarea, chunks[2]);
+        })?;
+
+        Ok(())
+    }
+
+    /// Renders the transcript into ratatui Lines.
+    fn render_transcript(&self, width: usize) -> Vec<Line<'static>> {
+        let mut lines = Vec::new();
+
+        for cell in &self.transcript {
+            let styled_lines = cell.display_lines(width);
+            for styled_line in styled_lines {
+                lines.push(self.convert_styled_line(styled_line));
+            }
+            // Add blank line between cells
+            lines.push(Line::default());
+        }
+
+        // Remove trailing blank line if present
+        if lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+            lines.pop();
+        }
+
+        lines
+    }
+
+    /// Converts a transcript StyledLine to a ratatui Line.
+    fn convert_styled_line(&self, styled_line: StyledLine) -> Line<'static> {
+        let spans: Vec<Span<'static>> = styled_line
+            .spans
+            .into_iter()
+            .map(|s| {
+                let style = self.convert_style(s.style);
+                Span::styled(s.text, style)
+            })
+            .collect();
+        Line::from(spans)
+    }
+
+    /// Converts a transcript Style to a ratatui Style.
+    fn convert_style(&self, style: TranscriptStyle) -> Style {
+        match style {
+            TranscriptStyle::Plain => Style::default(),
+            TranscriptStyle::UserPrefix => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            TranscriptStyle::User => Style::default().fg(Color::White),
+            TranscriptStyle::AssistantPrefix => Style::default()
+                .fg(Color::Blue)
+                .add_modifier(Modifier::BOLD),
+            TranscriptStyle::Assistant => Style::default().fg(Color::White),
+            TranscriptStyle::StreamingCursor => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::SLOW_BLINK),
+            TranscriptStyle::SystemPrefix => Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+            TranscriptStyle::System => Style::default().fg(Color::DarkGray),
+            TranscriptStyle::ToolBracket => Style::default().fg(Color::DarkGray),
+            TranscriptStyle::ToolStatus => Style::default().fg(Color::Yellow),
+            TranscriptStyle::ToolError => Style::default().fg(Color::Red),
+        }
     }
 
     /// Handles a terminal event.
     fn handle_event(&mut self, event: Event) -> Result<()> {
         match event {
             Event::Key(key) => self.handle_key(key),
+            Event::Paste(text) => {
+                self.textarea.insert_str(&text);
+                Ok(())
+            }
             Event::Resize(_, _) => {
                 // Ratatui handles resize automatically
                 Ok(())
@@ -143,20 +248,66 @@ impl Tui2App {
     /// Handles a key event.
     fn handle_key(&mut self, key: event::KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
-            // q: quit
-            KeyCode::Char('q') if !ctrl => {
-                self.should_quit = true;
+            // q without modifiers: quit (only when input is empty)
+            KeyCode::Char('q') if !ctrl && !shift && !alt => {
+                if self.get_input_text().is_empty() {
+                    self.should_quit = true;
+                } else {
+                    self.textarea.input(key);
+                }
             }
             // Ctrl+C: quit
             KeyCode::Char('c') if ctrl => {
                 self.should_quit = true;
             }
-            _ => {}
+            // Enter: submit (unless Shift+Enter or Alt+Enter for newline)
+            KeyCode::Enter if !shift && !alt => {
+                self.submit_input();
+            }
+            // Shift+Enter or Alt+Enter: insert newline
+            KeyCode::Enter if shift || alt => {
+                self.textarea.insert_newline();
+            }
+            // Escape: clear input
+            KeyCode::Esc => {
+                self.clear_input();
+            }
+            // Pass everything else to textarea
+            _ => {
+                self.textarea.input(key);
+            }
         }
 
         Ok(())
+    }
+
+    /// Gets the current input text.
+    fn get_input_text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    /// Clears the input textarea.
+    fn clear_input(&mut self) {
+        self.textarea.select_all();
+        self.textarea.cut();
+    }
+
+    /// Submits the current input.
+    fn submit_input(&mut self) {
+        let text = self.get_input_text();
+        if text.trim().is_empty() {
+            return;
+        }
+
+        // Add user cell to transcript
+        self.transcript.push(HistoryCell::user(&text));
+
+        // Clear input
+        self.clear_input();
     }
 }
 

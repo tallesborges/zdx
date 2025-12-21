@@ -46,17 +46,23 @@ Goal: Alt-screen + raw mode + restore guard. Never wreck the terminal.
 - Panic hook installed before entering alternate screen.
 - `Drop` impl ensures terminal restored even on error paths.
 
-## Slice 1: Input works (even ugly)
+## Slice 1: Input works (even ugly) ✅
 Goal: Functional input editing. Use `tui-textarea` (already in deps).
 
-- [ ] Wire `tui-textarea` into input pane.
-- [ ] Insert/delete characters.
-- [ ] Cursor movement: left/right, home/end, up/down (multiline).
-- [ ] Multiline input support.
-- [ ] Submit vs newline: Enter submits, Ctrl+Enter for newline.
-- [ ] Paste handling (terminal paste works).
-- [ ] On submit: create a `User` cell in transcript (in-memory only, no engine yet).
-- [ ] ✅ **Demo:** type/edit/paste, submit shows "You: ..." in transcript pane.
+- [x] Wire `tui-textarea` into input pane.
+- [x] Insert/delete characters.
+- [x] Cursor movement: left/right, home/end, up/down (multiline).
+- [x] Multiline input support.
+- [x] Submit vs newline: Enter submits, Shift+Enter for newline.
+- [x] Paste handling (terminal paste works via EnableBracketedPaste).
+- [x] On submit: create a `User` cell in transcript (in-memory only, no engine yet).
+- [x] ✅ **Demo:** `cargo run -- dev tui2` — type/edit/paste, submit shows "You: ..." in transcript pane.
+
+**Implementation notes:**
+- Input area at bottom with `tui-textarea`.
+- Transcript renders using `HistoryCell::display_lines()` from Phase 1.
+- Style conversion from transcript `Style` enum to ratatui styles.
+- Escape clears input, q quits (only when input empty).
 
 ## Slice 2: Send loop (no streaming yet)
 Goal: Actually call the engine and get a response.
