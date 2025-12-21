@@ -149,22 +149,31 @@ Goal: Stream responses smoothly without input lag.
 - 30fps frame rate via `FRAME_DURATION` constant (33ms poll timeout).
 - Streaming cell created on first delta, finalized on `AssistantFinal` event.
 
-## Slice 4: Scroll (read long answers)
+## Slice 4: Scroll (read long answers) ✅
 Goal: Navigate long transcripts.
 
-- [ ] Wrap lines at current terminal width (plain text, no markdown yet).
-- [ ] Flatten wrapped lines into visual-line list.
-- [ ] Track scroll offset over flattened lines.
-- [ ] **FollowLatest:** auto-scroll to bottom on new content (default).
-- [ ] **Anchored:** user scroll (PageUp/Down, Ctrl+Up/Down) switches to anchored mode.
-- [ ] Press `End` or `G` to re-enable follow-latest.
-- [ ] ✅ **Demo:** long reply, PageUp/PageDown works, auto-scroll resumes.
+- [x] Wrap lines at current terminal width (plain text, no markdown yet).
+- [x] Flatten wrapped lines into visual-line list.
+- [x] Track scroll offset over flattened lines.
+- [x] **FollowLatest:** auto-scroll to bottom on new content (default).
+- [x] **Anchored:** user scroll (PageUp/Down) switches to anchored mode.
+- [x] Press `Ctrl+End` to re-enable follow-latest.
+- [x] ✅ **Demo:** long reply, PageUp/PageDown works, auto-scroll resumes.
+
+**Implementation notes:**
+- `ScrollMode` enum: `FollowLatest` (default) vs `Anchored { offset }`.
+- `cached_line_count` tracks total lines for scroll calculations.
+- Header shows "▼ more" indicator when content is below viewport.
+- PageUp/PageDown scroll by visible page height.
+- Mouse wheel scrolls by 3 lines (via `EnableMouseCapture`).
+- Ctrl+Home jumps to top (Anchored), Ctrl+End jumps to bottom (FollowLatest).
+- When PageDown or mouse scroll reaches bottom, automatically switches to FollowLatest.
 
 **Anchored mode behavior:**
-- When anchored: don't change scroll offset on new content
-- Show indicator "▼ new messages" (or count) when content below viewport
-- `End`/`G` jumps to bottom and re-enables FollowLatest
-- Prevents jarring "why did it jump?" experience
+- When anchored: scroll offset stays fixed; new content extends line count but viewport doesn't move.
+- Header shows "▼ more" indicator when content is below viewport.
+- `Ctrl+End` jumps to bottom and re-enables FollowLatest.
+- Prevents jarring "why did it jump?" experience.
 
 ---
 
