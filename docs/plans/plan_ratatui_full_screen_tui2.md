@@ -109,14 +109,21 @@ Goal: Functional input editing. Use `tui-textarea` (already in deps).
 - Escape clears input, q quits (only when input empty).
 - Arrow keys always control input cursor (focus model: always input focused).
 
-## Slice 2: Send loop (no streaming yet)
+## Slice 2: Send loop (no streaming yet) ✅
 Goal: Actually call the engine and get a response.
 
-- [ ] On submit: spawn engine turn (non-blocking).
-- [ ] Show "thinking..." or spinner while waiting.
-- [ ] When response arrives: append `Assistant` cell with full text.
-- [ ] No streaming, no markdown, plain text only.
-- [ ] ✅ **Demo:** ask a question, get an answer displayed in TUI.
+- [x] On submit: spawn engine turn (non-blocking).
+- [x] Show "thinking..." or spinner while waiting.
+- [x] When response arrives: append `Assistant` cell with full text.
+- [x] No streaming, no markdown, plain text only.
+- [x] ✅ **Demo:** ask a question, get an answer displayed in TUI.
+
+**Implementation notes:**
+- `EngineState` enum tracks Idle vs Waiting states.
+- Engine task spawned via `tokio::spawn`, polled via `is_finished()`.
+- "thinking..." indicator shown in transcript while waiting.
+- Error handling: shows error in transcript, removes failed user message from history.
+- Ctrl+J added for terminal-reliable newline insertion.
 
 ## Slice 3: Streaming (throttled)
 Goal: Stream responses smoothly without input lag.
