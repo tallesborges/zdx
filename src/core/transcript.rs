@@ -277,27 +277,157 @@ impl HistoryCell {
                 }
                 lines
             }
-            HistoryCell::Tool { name, state, .. } => {
-                let line = StyledLine {
-                    spans: vec![
-                        StyledSpan {
-                            text: format!("[tool: {} ", name),
-                            style: Style::ToolBracket,
-                        },
-                        StyledSpan {
-                            text: state.as_str().to_string(),
-                            style: match state {
-                                ToolState::Error => Style::ToolError,
-                                _ => Style::ToolStatus,
-                            },
-                        },
-                        StyledSpan {
-                            text: "]".to_string(),
-                            style: Style::ToolBracket,
-                        },
-                    ],
+            HistoryCell::Tool {
+                name,
+                state,
+                input,
+                result,
+                ..
+            } => {
+                let mut lines = Vec::new();
+
+                // Determine prefix and command style based on state
+                let (prefix, prefix_style, cmd_style, suffix) = match state {
+                    ToolState::Running => ("⠋ ", Style::ToolRunning, Style::ToolStatus, None),
+                    ToolState::Done => ("$ ", Style::ToolSuccess, Style::ToolStatus, None),
+                    ToolState::Error => (
+                        "$ ",
+                        Style::ToolError,
+                        Style::ToolCancelled,
+                        Some(" (failed)"),
+                    ),
                 };
-                vec![line]
+
+                // Show command for bash tool, or tool name for others
+                if name == "bash" {
+                    if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
+                        let mut spans = vec![
+                            StyledSpan {
+                                text: prefix.to_string(),
+                                style: prefix_style,
+                            },
+                            StyledSpan {
+                                text: cmd.to_string(),
+                                style: cmd_style,
+                            },
+                        ];
+                        if let Some(suf) = suffix {
+                            spans.push(StyledSpan {
+                                text: suf.to_string(),
+                                style: Style::ToolError,
+                            });
+                        }
+                        lines.push(StyledLine { spans });
+                    }
+                } else {
+                    // For other tools, show tool name and key input
+                    let input_preview = match name.as_str() {
+                        "read" => input
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        "write" => input
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        "edit" => input
+                            .get("path")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_string()),
+                        _ => None,
+                    };
+                    let display = if let Some(preview) = input_preview {
+                        format!("{}: {}", name, preview)
+                    } else {
+                        name.to_string()
+                    };
+                    let mut spans = vec![
+                        StyledSpan {
+                            text: prefix.to_string(),
+                            style: prefix_style,
+                        },
+                        StyledSpan {
+                            text: display,
+                            style: cmd_style,
+                        },
+                    ];
+                    if let Some(suf) = suffix {
+                        spans.push(StyledSpan {
+                            text: suf.to_string(),
+                            style: Style::ToolError,
+                        });
+                    }
+                    lines.push(StyledLine { spans });
+                }
+
+                // Show truncated output preview when done
+                if let Some(res) = result
+                    && let Some(data) = res.data()
+                {
+                    // Show stdout for bash tool
+                    if let Some(output) = data.get("stdout").and_then(|v| v.as_str()) {
+                        let output_lines: Vec<&str> = output.lines().collect();
+                        let max_preview_lines = 5;
+                        let truncated = output_lines.len() > max_preview_lines;
+
+                        for line in output_lines.iter().take(max_preview_lines) {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: (*line).to_string(),
+                                    style: Style::Plain,
+                                }],
+                            });
+                        }
+
+                        if truncated {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: format!(
+                                        "[... {} more lines ...]",
+                                        output_lines.len() - max_preview_lines
+                                    ),
+                                    style: Style::ToolBracket,
+                                }],
+                            });
+                        }
+                    }
+                    // Show stderr if present and non-empty
+                    if let Some(stderr) = data.get("stderr").and_then(|v| v.as_str())
+                        && !stderr.is_empty()
+                    {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: format!("stderr: {}", stderr.lines().next().unwrap_or("")),
+                                style: Style::ToolError,
+                            }],
+                        });
+                    }
+                }
+
+                // Status line (only show when running or failed)
+                match state {
+                    ToolState::Running => {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: "Running...".to_string(),
+                                style: Style::ToolStatus,
+                            }],
+                        });
+                    }
+                    ToolState::Error => {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: "Failed".to_string(),
+                                style: Style::ToolError,
+                            }],
+                        });
+                    }
+                    ToolState::Done => {
+                        // No status line when done - output speaks for itself
+                    }
+                }
+
+                lines
             }
             HistoryCell::System { content, .. } => {
                 let prefix = "System: ";
@@ -393,6 +523,12 @@ pub enum Style {
     ToolStatus,
     /// Tool error status.
     ToolError,
+    /// Tool running spinner.
+    ToolRunning,
+    /// Tool success prefix (green $).
+    ToolSuccess,
+    /// Tool cancelled command (strikethrough).
+    ToolCancelled,
 }
 
 /// Renders content with a prefix, handling line wrapping.
@@ -635,13 +771,23 @@ mod tests {
     #[test]
     fn test_tool_running() {
         let cell =
-            HistoryCell::tool_running("123", "read_file", serde_json::json!({"path": "test.txt"}));
+            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
         let lines = cell.display_lines(80);
 
-        assert_eq!(lines.len(), 1);
-        // Should show "running..."
-        let line_text: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
-        assert!(line_text.contains("running..."));
+        // Should have tool info line + status line
+        assert!(lines.len() >= 2);
+        // First line should show tool name/path
+        let first_line: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert!(first_line.contains("read") || first_line.contains("test.txt"));
+        // Last line should show "Running..."
+        let last_line: String = lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert!(last_line.contains("Running"));
 
         // State should be Running
         assert_eq!(cell.tool_state(), Some(&ToolState::Running));
@@ -649,14 +795,21 @@ mod tests {
 
     #[test]
     fn test_tool_success() {
-        let mut cell = HistoryCell::tool_running("123", "read_file", serde_json::json!({}));
+        let mut cell =
+            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
         cell.set_tool_result(ToolOutput::success(
             serde_json::json!({"content": "file data"}),
         ));
 
         let lines = cell.display_lines(80);
-        let line_text: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
-        assert!(line_text.contains("done"));
+        // Should have at least the tool info line (no "Done" status line)
+        assert!(!lines.is_empty());
+        // Should NOT have "Running..." anymore
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(!all_text.contains("Running"));
 
         // State should be Done
         assert_eq!(cell.tool_state(), Some(&ToolState::Done));
@@ -664,12 +817,20 @@ mod tests {
 
     #[test]
     fn test_tool_failure() {
-        let mut cell = HistoryCell::tool_running("123", "read_file", serde_json::json!({}));
+        let mut cell =
+            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
         cell.set_tool_result(ToolOutput::failure("not_found", "File not found"));
 
         let lines = cell.display_lines(80);
-        let line_text: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
-        assert!(line_text.contains("failed"));
+        // Last line should show "Failed"
+        let last_line: String = lines
+            .last()
+            .unwrap()
+            .spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect();
+        assert!(last_line.contains("Failed"));
 
         // State should be Error
         assert_eq!(cell.tool_state(), Some(&ToolState::Error));

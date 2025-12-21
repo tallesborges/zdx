@@ -13,7 +13,9 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use crossterm::{
-    event::{self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind},
+    event::{
+        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -273,10 +275,35 @@ impl Tui2App {
                 self.transcript.push(HistoryCell::system("[Interrupted]"));
                 interrupt::reset();
             }
-            // Tool events will be handled in a later slice
-            EngineEvent::ToolRequested { .. }
-            | EngineEvent::ToolStarted { .. }
-            | EngineEvent::ToolFinished { .. } => {}
+            EngineEvent::ToolRequested { id, name, input } => {
+                // Create a tool cell in running state
+                // Insert BEFORE the streaming assistant cell (if any) so tool appears above its output
+                let tool_cell = HistoryCell::tool_running(id, name, input.clone());
+                if let Some(pos) = self.transcript.iter().position(|c| {
+                    matches!(
+                        c,
+                        HistoryCell::Assistant {
+                            is_streaming: true,
+                            ..
+                        }
+                    )
+                }) {
+                    self.transcript.insert(pos, tool_cell);
+                } else {
+                    self.transcript.push(tool_cell);
+                }
+            }
+            EngineEvent::ToolStarted { .. } => {
+                // Already showing running state from ToolRequested
+            }
+            EngineEvent::ToolFinished { id, result } => {
+                // Find the tool cell and update its state
+                if let Some(cell) = self.transcript.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == id),
+                ) {
+                    cell.set_tool_result(result.clone());
+                }
+            }
         }
     }
 
@@ -535,8 +562,17 @@ impl Tui2App {
                 .add_modifier(Modifier::BOLD),
             TranscriptStyle::System => Style::default().fg(Color::DarkGray),
             TranscriptStyle::ToolBracket => Style::default().fg(Color::DarkGray),
-            TranscriptStyle::ToolStatus => Style::default().fg(Color::Yellow),
+            TranscriptStyle::ToolStatus => Style::default().fg(Color::White),
             TranscriptStyle::ToolError => Style::default().fg(Color::Red),
+            TranscriptStyle::ToolRunning => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+            TranscriptStyle::ToolSuccess => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+            TranscriptStyle::ToolCancelled => Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::CROSSED_OUT),
         }
     }
 
@@ -589,9 +625,15 @@ impl Tui2App {
                     self.textarea.input(key);
                 }
             }
-            // Ctrl+C: quit
+            // Ctrl+C: progressive behavior (interrupt → clear → quit)
             KeyCode::Char('c') if ctrl => {
-                self.should_quit = true;
+                if self.is_engine_running() {
+                    self.interrupt_engine();
+                } else if !self.get_input_text().is_empty() {
+                    self.clear_input();
+                } else {
+                    self.should_quit = true;
+                }
             }
             // Enter: submit (unless Shift+Enter or Alt+Enter for newline)
             KeyCode::Enter if !shift && !alt => {
@@ -601,9 +643,13 @@ impl Tui2App {
             KeyCode::Char('j') if ctrl => {
                 self.textarea.insert_newline();
             }
-            // Escape: clear input
+            // Escape: interrupt if running, else clear input
             KeyCode::Esc => {
-                self.clear_input();
+                if self.is_engine_running() {
+                    self.interrupt_engine();
+                } else {
+                    self.clear_input();
+                }
             }
             // Scroll: PageUp/PageDown
             KeyCode::PageUp => {
@@ -699,6 +745,18 @@ impl Tui2App {
     fn clear_input(&mut self) {
         self.textarea.select_all();
         self.textarea.cut();
+    }
+
+    /// Returns true if the engine is currently running (waiting or streaming).
+    fn is_engine_running(&self) -> bool {
+        !matches!(self.engine_state, EngineState::Idle)
+    }
+
+    /// Interrupts the running engine task.
+    fn interrupt_engine(&mut self) {
+        if self.is_engine_running() {
+            interrupt::trigger_ctrl_c();
+        }
     }
 
     /// Submits the current input.
