@@ -27,17 +27,24 @@ Build in order of user journey: start TUI → type → send → see reply → st
 
 These slices get to "daily-usable" as fast as possible. Each has a clear demo criterion.
 
-## Slice 0: Terminal safety + blank screen
+## Slice 0: Terminal safety + blank screen ✅
 Goal: Alt-screen + raw mode + restore guard. Never wreck the terminal.
 
-- [ ] Add `src/ui/tui2.rs` with `Tui2App` struct.
-- [ ] Enter alternate screen on start; leave on exit.
-- [ ] Enable raw mode on start; disable on exit.
-- [ ] **Guard pattern:** terminal restore via `Drop` impl.
-- [ ] **Panic hook:** restore terminal before printing panic.
-- [ ] **Signal handling:** ctrl-c restores terminal cleanly.
-- [ ] Quit key (`q` or `Ctrl+C`) exits cleanly.
-- [ ] ✅ **Demo:** start/quit never wrecks terminal, even on panic.
+- [x] Add `src/ui/tui2.rs` with `Tui2App` struct.
+- [x] Enter alternate screen on start; leave on exit.
+- [x] Enable raw mode on start; disable on exit.
+- [x] **Guard pattern:** terminal restore via `Drop` impl.
+- [x] **Panic hook:** restore terminal before printing panic.
+- [x] **Signal handling:** ctrl-c restores terminal cleanly.
+- [x] Quit key (`q` or `Ctrl+C`) exits cleanly.
+- [x] ✅ **Demo:** `cargo run -- dev tui2` — start/quit never wrecks terminal.
+
+**Implementation notes:**
+- `Tui2App` struct in `src/ui/tui2.rs`.
+- Hidden `dev tui2` CLI command for testing.
+- Uses existing `core::interrupt` module for Ctrl+C handling (global handler already registered in main).
+- Panic hook installed before entering alternate screen.
+- `Drop` impl ensures terminal restored even on error paths.
 
 ## Slice 1: Input works (even ugly)
 Goal: Functional input editing. Use `tui-textarea` (already in deps).

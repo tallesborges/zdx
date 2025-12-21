@@ -10,7 +10,7 @@ mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, ConfigCommands, SessionCommands};
+use cli::{Cli, Commands, ConfigCommands, DevCommands, SessionCommands};
 use session::SessionOptions;
 
 fn main() {
@@ -96,6 +96,14 @@ fn main_result() -> Result<()> {
                     config::Config::init(&config_path)
                         .with_context(|| format!("init config at {}", config_path.display()))?;
                     println!("Created config at {}", config_path.display());
+                    Ok(())
+                }
+            },
+
+            Commands::Dev { command } => match command {
+                DevCommands::Tui2 => {
+                    let mut app = ui::Tui2App::new().context("create TUI2")?;
+                    app.run().context("run TUI2")?;
                     Ok(())
                 }
             },

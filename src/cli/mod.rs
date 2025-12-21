@@ -63,6 +63,18 @@ pub enum Commands {
         #[command(subcommand)]
         command: ConfigCommands,
     },
+    /// Development/debug commands
+    #[command(hide = true)]
+    Dev {
+        #[command(subcommand)]
+        command: DevCommands,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum DevCommands {
+    /// Test the full-screen TUI2 (work in progress)
+    Tui2,
 }
 
 #[derive(Subcommand)]
