@@ -120,8 +120,8 @@ fn main_result() -> Result<()> {
                         }
                     }
 
-                    let mut app = ui::Tui2App::new(config, root, effective.prompt)
-                        .context("create TUI2")?;
+                    let mut app =
+                        ui::Tui2App::new(config, root, effective.prompt).context("create TUI2")?;
                     app.run().context("run TUI2")?;
                     Ok(())
                 }

@@ -125,21 +125,29 @@ Goal: Actually call the engine and get a response.
 - Error handling: shows error in transcript, removes failed user message from history.
 - Ctrl+J added for terminal-reliable newline insertion.
 
-## Slice 3: Streaming (throttled)
+## Slice 3: Streaming (throttled) ✅
 Goal: Stream responses smoothly without input lag.
 
-- [ ] Create bounded channel from engine to TUI.
-- [ ] Map `AssistantDelta { cell_id, text_chunk }` events into transcript updates.
-- [ ] Coalesce rapid deltas (don't redraw per-character).
-- [ ] Tick-based redraw (e.g., 30fps max during streaming).
-- [ ] Show streaming cursor (▌) during response.
-- [ ] ✅ **Demo:** response streams smoothly, typing stays responsive during stream.
+- [x] Create bounded channel from engine to TUI.
+- [x] Map `AssistantDelta { cell_id, text_chunk }` events into transcript updates.
+- [x] Coalesce rapid deltas (don't redraw per-character).
+- [x] Tick-based redraw (e.g., 30fps max during streaming).
+- [x] Show streaming cursor (▌) during response.
+- [x] ✅ **Demo:** response streams smoothly, typing stays responsive during stream.
 
 **Coalescing strategy:**
 - UI loop buffers deltas per streaming cell (`pending_delta: String`)
 - On each tick (30fps), reducer applies one combined append and clears pending
 - Keeps input responsive and redraw stable
 - Streaming cursor width affects wrapping (account for ▌ in unicode-width later)
+
+**Implementation notes:**
+- `EngineState` enum: `Idle`, `Waiting` (before first delta), `Streaming` (actively receiving).
+- `poll_engine_events()` drains channel with `try_recv()` (non-blocking).
+- `apply_pending_delta()` coalesces all buffered text into single append per tick.
+- `poll_engine_completion()` handles task finish and message history update.
+- 30fps frame rate via `FRAME_DURATION` constant (33ms poll timeout).
+- Streaming cell created on first delta, finalized on `AssistantFinal` event.
 
 ## Slice 4: Scroll (read long answers)
 Goal: Navigate long transcripts.
