@@ -21,6 +21,50 @@ Treat TUI state updates like a reducer:
 ### User journey drives order
 Build in order of user journey: start TUI → type → send → see reply → stream → scroll → tools → selection/copy → markdown polish
 
+### Focus model (resolve arrow key conflicts)
+Two panes compete for arrow keys: input (cursor movement) and transcript (scroll).
+
+**MVP: "Always input focused" approach**
+- Arrow keys always edit input (cursor movement)
+- Scroll only with `PageUp/PageDown`, `Home/End` in transcript
+- Simple, no mode indicator needed
+
+**Later (if needed): Focus toggle**
+- `Tab` toggles focus: `InputFocused` ↔ `TranscriptFocused`
+- `Esc` always returns focus to input
+- Show focus indicator in status line
+
+### Terminal-reliable keybindings
+Many terminals don't send distinct keycodes for Ctrl+Enter.
+
+**Default keymap:**
+- `Enter` = send message
+- `Shift+Enter` or `Ctrl+J` = insert newline (both work; Ctrl+J is fallback for terminals that don't send Shift+Enter)
+- `Ctrl+C` = context-sensitive (see below)
+- `Esc` = clear input
+
+**Ctrl+C behavior (progressive):**
+1. If engine is generating / tool running → **interrupt/cancel**
+2. Else if input is non-empty → **clear input**
+3. Else → **quit**
+
+In raw mode, Ctrl+C arrives as a key event (`KeyCode::Char('c')` + control modifier), not SIGINT. Handle both paths.
+
+### Streaming events with stable IDs
+Each streaming cell gets a stable ID for reducer determinism:
+- `turn_id` — the conversation turn
+- `cell_id` — specific cell being streamed
+- `tool_call_id` — if tool output appears inline
+
+Events are reducer-friendly:
+- `AssistantStart { cell_id }`
+- `AssistantDelta { cell_id, text_chunk }`
+- `AssistantEnd { cell_id }`
+- `ToolStart { cell_id, tool_name }`
+- `ToolEnd { cell_id, status }`
+
+This prevents "which cell am I appending to?" bugs.
+
 ---
 
 # MVP Slices (each must be demoable)
@@ -53,7 +97,7 @@ Goal: Functional input editing. Use `tui-textarea` (already in deps).
 - [x] Insert/delete characters.
 - [x] Cursor movement: left/right, home/end, up/down (multiline).
 - [x] Multiline input support.
-- [x] Submit vs newline: Enter submits, Shift+Enter for newline.
+- [x] Submit vs newline: Enter submits, Shift+Enter or Ctrl+J for newline.
 - [x] Paste handling (terminal paste works via EnableBracketedPaste).
 - [x] On submit: create a `User` cell in transcript (in-memory only, no engine yet).
 - [x] ✅ **Demo:** `cargo run -- dev tui2` — type/edit/paste, submit shows "You: ..." in transcript pane.
@@ -63,6 +107,7 @@ Goal: Functional input editing. Use `tui-textarea` (already in deps).
 - Transcript renders using `HistoryCell::display_lines()` from Phase 1.
 - Style conversion from transcript `Style` enum to ratatui styles.
 - Escape clears input, q quits (only when input empty).
+- Arrow keys always control input cursor (focus model: always input focused).
 
 ## Slice 2: Send loop (no streaming yet)
 Goal: Actually call the engine and get a response.
@@ -77,11 +122,17 @@ Goal: Actually call the engine and get a response.
 Goal: Stream responses smoothly without input lag.
 
 - [ ] Create bounded channel from engine to TUI.
-- [ ] Map `AssistantDelta` events into transcript updates.
+- [ ] Map `AssistantDelta { cell_id, text_chunk }` events into transcript updates.
 - [ ] Coalesce rapid deltas (don't redraw per-character).
 - [ ] Tick-based redraw (e.g., 30fps max during streaming).
 - [ ] Show streaming cursor (▌) during response.
 - [ ] ✅ **Demo:** response streams smoothly, typing stays responsive during stream.
+
+**Coalescing strategy:**
+- UI loop buffers deltas per streaming cell (`pending_delta: String`)
+- On each tick (30fps), reducer applies one combined append and clears pending
+- Keeps input responsive and redraw stable
+- Streaming cursor width affects wrapping (account for ▌ in unicode-width later)
 
 ## Slice 4: Scroll (read long answers)
 Goal: Navigate long transcripts.
@@ -90,9 +141,15 @@ Goal: Navigate long transcripts.
 - [ ] Flatten wrapped lines into visual-line list.
 - [ ] Track scroll offset over flattened lines.
 - [ ] **FollowLatest:** auto-scroll to bottom on new content (default).
-- [ ] **Anchored:** user scroll (PageUp/Down, arrows) switches to anchored mode.
+- [ ] **Anchored:** user scroll (PageUp/Down, Ctrl+Up/Down) switches to anchored mode.
 - [ ] Press `End` or `G` to re-enable follow-latest.
 - [ ] ✅ **Demo:** long reply, PageUp/PageDown works, auto-scroll resumes.
+
+**Anchored mode behavior:**
+- When anchored: don't change scroll offset on new content
+- Show indicator "▼ new messages" (or count) when content below viewport
+- `End`/`G` jumps to bottom and re-enables FollowLatest
+- Prevents jarring "why did it jump?" experience
 
 ---
 
@@ -195,8 +252,8 @@ Goal: Stable streaming under resizes and long outputs.
 Goal: Quality-of-life input features.
 
 - [ ] History navigation (↑/↓ for previous commands).
-- [ ] Ctrl+C to cancel current input or interrupt engine.
-- [ ] Status line with mode indicator.
+- [ ] Ctrl+C progressive behavior (interrupt → clear → quit, per Design Principles).
+- [ ] Status line with mode indicator (streaming, focus state if focus toggle added).
 - [ ] ✅ Check-in: input feels polished for daily use.
 
 ## Phase 6: Default + cleanup
@@ -213,12 +270,13 @@ Goal: TUI2 becomes the default.
 
 These items are **not** in MVP or Polish phases. Don't build until needed.
 
-- **Grapheme-perfect selection** — byte index is fine for MVP
+- **Selection** — MVP has no selection; when added, use grapheme indices from day 1 (no byte-index intermediate state to undo)
 - **Full markdown spec** — lists, tables, links, images
 - **Tool output streaming** — show simple status line first
 - **Bidirectional position mapping** — only if needed for cursor-follow
 - **Session resume in TUI2** — works via existing session system
 - **Mouse selection** — keyboard-only is fine for MVP
+- **Focus toggle mode** — start with "always input focused"; add toggle only if needed
 
 ---
 
