@@ -638,36 +638,12 @@ impl Tui2App {
 
     /// Scrolls the transcript up by one page.
     fn scroll_page_up(&mut self) {
-        let page_size = self.transcript_height().max(1);
-        let current_offset = match &self.scroll_mode {
-            ScrollMode::FollowLatest => self.cached_line_count.saturating_sub(page_size),
-            ScrollMode::Anchored { offset } => *offset,
-        };
-
-        let new_offset = current_offset.saturating_sub(page_size);
-        self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
+        self.scroll_lines_up(self.transcript_height().max(1));
     }
 
     /// Scrolls the transcript down by one page.
     fn scroll_page_down(&mut self) {
-        let page_size = self.transcript_height().max(1);
-        let current_offset = match &self.scroll_mode {
-            ScrollMode::FollowLatest => {
-                // Already at bottom, nothing to do
-                return;
-            }
-            ScrollMode::Anchored { offset } => *offset,
-        };
-
-        let max_offset = self.cached_line_count.saturating_sub(page_size);
-        let new_offset = (current_offset + page_size).min(max_offset);
-
-        // If we've scrolled to the bottom, switch back to FollowLatest
-        if new_offset >= max_offset {
-            self.scroll_mode = ScrollMode::FollowLatest;
-        } else {
-            self.scroll_mode = ScrollMode::Anchored { offset: new_offset };
-        }
+        self.scroll_lines_down(self.transcript_height().max(1));
     }
 
     /// Scrolls to the top of the transcript.
