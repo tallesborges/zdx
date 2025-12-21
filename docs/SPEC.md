@@ -1,719 +1,225 @@
 # ZDX Specification
 
-**Product:** ZDX (terminal-first agentic coding tool)  
-**Spec version:** living document  
-**Status:** Source of truth for *values + contracts*. If `docs/ROADMAP.md` exists, it must not contradict `docs/SPEC.md`.
-**Notation:** Sections labeled **Current (v0.1)** describe shipped behavior in this repo; sections labeled **Planned** describe intended future behavior and are not shipped yet.
+**Product:** ZDX (TUI-first terminal assistant for developers)  
+**Status:** Source of truth for *vision + user-visible contracts*. ADRs explain “why”; plans explain “how”.  
+**Notation:** **Shipped** = present in this repo today. **Target (TUI2)** = intended full-screen TUI behavior.
 
 ---
 
-## 0) Scope (terminal-first, UX-first)
+## 1) Vision
 
-ZDX is a **terminal product first**.
+ZDX is a **daily-driver terminal app** you can keep open all day: calm, fast, and dependable under real work.
 
-- The primary UX is running `zdx` in a terminal:
-  - **Interactive (TTY):** `zdx` provides a fast, keyboard-first experience with a minimal TUI input editor.
-  - **Non-interactive:** `zdx exec ...` (or piping into `zdx`) behaves like a normal UNIX CLI for scripting.
-- Anything that does not improve the terminal UX (interactive or scriptable) is out of scope for the current spec version.
-
-### Success criteria (current)
-
-ZDX is “working” when I can:
-- run a prompt and stream output reliably
-- use tools (`read`, `write`, `bash` now; `edit` planned) to inspect/modify files in a repo
-- save/resume sessions in a predictable format
-- pipe/redirect output like a normal UNIX CLI (via `exec` / non-interactive mode)
-- use multiline input + interrupts in interactive mode
-
-### Non-goals (for now)
-
-- Building an IDE-like workspace (file tree, refactor UI, project indexing, etc.)
-- A “pane zoo” / dashboard-style TUI with lots of modes
-- Plugin systems / provider marketplace
-- “Safety sandbox” / heavy permission systems beyond a simple root dir context
-- Premature abstractions beyond the minimal multi-provider/tool interface
-
-### Design constraints
-
-- Engine is UI-agnostic, and renderers own terminal I/O.
-- **Current (v0.1):** shipped interactive mode uses a minimal TUI input editor; non-interactive commands remain CLI-friendly.
-- Prefer fewer flags and fewer modes; add only when real usage demands it.
-
-## 1) Purpose
-
-ZDX is a **terminal-first** agentic coding tool you can use daily for real work: a **simple, fast, powerful** interactive experience (TUI) with a scriptable CLI surface.
-
-ZDX optimizes for:
-- Fast iteration and "ship small" delivery
-- A great terminal UX (streaming, resumable sessions, clean output, strong defaults)
-- A core architecture that can later power a richer TUI without rewriting the engine
-
-ZDX is **not** trying to be an IDE, a framework, or a safety sandbox product.
+The TUI is the product. A CLI mode exists to support automation and scripting.
 
 ---
 
-## 2) Core values and principles
+## 2) Why
 
-### KISS / YAGNI
-- Implement the smallest thing that creates user value.
-- Prefer **simple data structures + explicit contracts** over "smart" abstractions.
-- Refactor only after usage proves the shape.
+Terminal AI tools often break the parts that matter daily:
+- flicker/jank from naive redraw
+- resize bugs and “lost” history
+- mixed stdout/stderr corrupting the screen
+- weak transcript UX (scroll/select/copy)
+- no durable history you can trust
 
-### UX-first
-- UX is the product: reduce friction, keep flows obvious, and optimize for keyboard-driven speed.
-- Prefer strong defaults and progressive disclosure over configuration knobs.
-- Keep interactive behavior consistent; avoid surprising state/mode switches.
-
-### Terminal-first
-- Designed around UNIX expectations:
-  - stdout/stderr separation
-  - piping
-  - exit codes
-  - predictable output formats
-
-### Daily-driver shipping
-Ship features that I will use this week. Everything else waits.
-
-### YOLO default
-- ZDX prioritizes speed and flow.
-- By default, ZDX assumes the user is operating on their own machine and accepts risk.
-- ZDX does not attempt to be a “safety sandbox”; any guardrails must remain **opt-in** and **low friction**.
-
-### Engine-first (UI-agnostic)
-- ZDX has a core "engine" that emits events.
-- Renderers (TUI/CLI) are just views over the event stream.
-- Future TUI must consume the same engine events (no forked logic).
-
-### UX inspiration
-ZDX aims for an “iOS-like” terminal UX: strong defaults, consistent patterns, minimal configuration, and progressive disclosure of advanced options.
+ZDX solves this with a boring, reliable core:
+- own the viewport (TUI)
+- transcript as the source of truth
+- UI-agnostic engine (events)
+- deterministic tools
+- append-only session log
 
 ---
 
-## 3) Non-goals
+## 3) Goals
 
-These are explicitly *out of scope* for now:
+### Primary: `zdx` (interactive)
 
-- Web UI / server mode
-- Multi-agent orchestration (agent graphs, swarms, etc.)
-- Plugin system with dynamic loading (shared objects, runtime extensions)
-- IDE ambitions (file tree, refactor UI, project indexing) in early versions
-- Security sandboxing as a primary product goal
+- Full-screen terminal chat UI that stays stable under resizes, overlays, long sessions, and continuous streaming.
+- Transcript UX: scroll, select, copy.
+- Sessions persist and replay deterministically.
+
+### Secondary: `zdx exec ...` (non-interactive)
+
+- Script-friendly execution with clean stdout/stderr separation.
+- Same engine, different renderer.
+
+### Current focus (non-contract)
+
+- TUI2 baseline: alt-screen + raw mode + clean restore
+- Transcript cells + width-agnostic rendering + resize-safe reflow
+- Smooth streaming (throttled redraw, no flicker)
+- Scroll model: follow-latest vs anchored
+- Selection + copy that matches what you see (incl. off-screen)
 
 ---
 
-## 4) Architecture overview
+## 4) Non-goals
 
-ZDX follows a layered design:
+- Cooperating with terminal scrollback while the TUI is running.
+- Guaranteeing stdout piping while the TUI is active (use `exec` for that).
+- Terminal-dependent rendering tricks (scroll regions / partial clears) as a correctness mechanism.
+- IDE ambitions (file tree, refactor UI, indexing) in early versions.
+- Safety sandboxing as a primary product goal (YOLO default).
+
+---
+
+## 5) Principles
+
+- **TUI-first UX:** optimize for reading/navigation/editing in a full-screen terminal app.
+- **Own the viewport:** redraw from in-memory state; the terminal is a render target, not a data store.
+- **Engine/UI separation:** engine emits events; renderers do terminal I/O.
+- **KISS/YAGNI:** ship the smallest daily-driver value; refactor only after usage proves shape.
+- **YOLO default:** prioritize speed/flow on the user’s machine; guardrails are opt-in and low friction.
+
+---
+
+## 6) Product surface (CLI)
+
+**Shipped commands (v0.1):**
+- `zdx` — interactive chat (TTY)
+- `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
+- `zdx sessions list|show <ID>|resume [ID]`
+- `zdx config init|path`
+
+**Planned (not shipped):**
+- `zdx chat` — explicit interactive entrypoint (alias of `zdx`)
+
+Exit codes (v0.1): `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.
+
+---
+
+## 7) Output channel contracts
+
+### `zdx exec` (non-interactive, scriptable)
+
+- **stdout:** assistant text only (or JSON if/when `--format json` ships).
+- **stderr:** diagnostics, warnings, tool status, errors.
+
+### `zdx` (interactive)
+
+- **Shipped (v0.1):** transcript streams to stdout; editor/tool status use stderr.
+- **Target (TUI2):** full-screen alt-screen TUI; **does not print transcript to stdout while active**.
+  - Any diagnostics should be shown in the UI; optional file logging is acceptable.
+
+---
+
+## 8) Architecture contract (engine + renderers)
+
+Engine emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 and ADR-0003.
+
+**Hard rule:** engine performs no terminal I/O (`println!`, styling, cursor moves). Renderers own stdout/stderr and raw mode.
+
+### Required engine event types (Shipped)
+
+- `AssistantDelta { text }`, `AssistantFinal { text }`
+- `ToolRequested { id, name, input }`, `ToolStarted { id, name }`, `ToolFinished { id, result }`
+- `Error { kind, message, details? }`
+- `Interrupted`
+
+---
+
+## 9) Transcript model (Target: TUI2)
+
+The transcript is the source of truth and is **width-agnostic**:
 
 ```text
-[Config] -> [Session store (JSONL)]  (durable)
-                  ^
-                  |
-[User] -> [Renderer (TUI/CLI)] <-> [Agent Engine] <-> [Provider (Anthropic)]
-                                   ^
-                                   |
-                                 [Tools]
+Vec<HistoryCell>
 ```
 
-### Separation rule
+Each cell is a logical unit: user block, assistant block (streaming/final), tool block, system/info banner.
 
-* **Engine**: no printing, no terminal formatting.
-* **Renderer** (CLI/TUI): displays events, reads user input, chooses output format.
+### Rendering contract
 
----
+- Each cell can render display lines for a given width: `display_lines(width) -> Vec<StyledLine>`.
+- Wrapping happens at display time for the current width.
+- Per draw: flatten rendered lines → apply scroll → render visible slice → apply selection overlay.
 
-## 5) Provider contract
+### Scroll / selection / copy (Target: TUI2)
 
-### Provider(s)
+- Scrolling operates on flattened visual lines (not terminal scrollback).
+- Two scroll states: `FollowLatest` and `Anchored`.
+- Selection is defined over the flattened transcript (line/col), excluding any left gutter/prefix.
+- Copy reconstructs text using the same wrapping rules (including code block indentation and emoji/wide glyph widths).
 
-**Current (v0.1):** Anthropic Claude.
+### Streaming (Target: TUI2)
 
-**Planned:** OpenAI, Gemini, OpenRouter.
-
-### Provider interface (contract)
-
-Regardless of provider, ZDX requires:
-
-  * Non-streaming responses (baseline)
-  * Streaming responses (SSE / incremental tokens)
-  * Tool calling loop (`tool_use` → execute tool → `tool_result`)
-
-### Key management
-
-* API keys or access tokens are **never stored** in config files.
-
-**Current (v0.1):** API keys are provided via environment variables:
-
-  * `ANTHROPIC_API_KEY`
-
-**Planned:** provider API keys use environment variables:
-
-  * `OPENAI_API_KEY`
-  * `GEMINI_API_KEY`
-  * `OPENROUTER_API_KEY`
-
-**Planned:** subscription-based login (OpenAI / Gemini / Claude) stores access tokens in an OS credential store (never in config/session files).
-
-### Provider configuration surface (user-visible)
-
-**Current (v0.1):**
-* `model`
-* `max_tokens`
-
-**Planned:**
-* `provider`
-* `temperature`
-
-Tool calling mode is always allowed if tools are enabled.
-
-### Testability requirement
-
-* Provider calls must be testable without network by allowing:
-
-  * a base URL override (env or config)
-  * deterministic fixture-driven stream parsing tests
-
-**Current (v0.1):** Anthropic base URL override precedence is:
-1) `ANTHROPIC_BASE_URL` env var (if set and non-empty)
-2) `anthropic_base_url` in `config.toml` (if set and non-empty)
+- Store raw markdown (append-only) + a logical “commit cursor”.
+- Render by parsing markdown → styling spans → wrapping at current width → revealing committed prefix.
+- Throttle redraw during streaming; avoid flicker and whole-transcript rewrap per frame.
 
 ---
 
-## 6) Tools contract
+## 10) Sessions (persistence contract)
 
-### Tool philosophy
+Sessions are append-only **JSONL** event logs (ADR-0001).
 
-* Tools are intentionally few, stable, and predictable.
-* Tools are exposed to the model as JSON-schema definitions.
-* Tool results must be deterministic and easy to parse.
+### Storage
 
-### Tool set (current)
+- Base dir: `$ZDX_HOME` (preferred) else `$XDG_CONFIG_HOME/zdx` else `~/.config/zdx`
+- Sessions dir: `<base>/sessions/`
 
-* `read` (filesystem)
-* `write` (filesystem)
-* `bash` (shell)
-* `edit` (filesystem)
+### Format (Shipped)
 
-### Path resolution rules
+- First line is `meta` with `schema_version`.
+- Timestamps are RFC3339 UTC.
+- Minimum event set includes: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`.
+- Sessions remain readable even if interrupted mid-stream.
 
-* If a `path` is **absolute**, use it as-is.
-* If a `path` is **relative**, resolve relative to `--root` (default: current working directory).
-* Path canonicalization is allowed for correctness, not for sandboxing guarantees.
-* `--root` is treated as a **working directory context**, not a security boundary (YOLO).
+---
 
-### Tool result envelope (all tools)
+## 11) Tools (deterministic contract)
 
-All tool outputs use a consistent JSON envelope:
+Tools are intentionally few, stable, and machine-parseable.
 
-**Success:**
+### Envelope (Shipped)
+
+Success:
 ```json
 { "ok": true, "data": { ... } }
 ```
 
-**Error:**
+Error:
 ```json
-{ "ok": false, "error": { "code": "ENOENT", "message": "File not found" } }
+{ "ok": false, "error": { "code": "...", "message": "..." } }
 ```
 
-This ensures tool results are deterministic and parseable.
+### Semantics (Shipped)
 
-### Tool definitions (current)
-
-#### `read`
-
-* **Purpose:** Read file contents.
-* **Input schema:**
-
-  ```json
-  { "path": "string" }
-  ```
-
-* **Output schema:**
-
-  ```json
-  {
-    "ok": true,
-    "data": {
-      "path": "...",
-      "content": "...",
-      "truncated": false,
-      "bytes": 12345
-    }
-  }
-  ```
-
-* **Path:** `data.path` is the canonicalized absolute path on disk.
-* **Truncation (v0.1):** If the file content exceeds 50 KiB (51200 bytes), `content` is truncated to the first 50 KiB and `truncated: true`.
-
-#### `write`
-
-* **Purpose:** Write content to a file, creating or overwriting.
-* **Input schema:**
-
-  ```json
-  { "path": "string", "content": "string" }
-  ```
-
-* **Output schema:**
-
-  ```json
-  {
-    "ok": true,
-    "data": {
-      "path": "...",
-      "bytes": 12345,
-      "created": true
-    }
-  }
-  ```
-
-* **Path:** `data.path` is the resolved absolute path on disk.
-* **Behavior:** Creates the file if it doesn't exist, overwrites if it does. Automatically creates parent directories if needed (mkdir -p).
-* **`created`:** `true` if the file did not exist before, `false` if overwritten.
-* **Error codes:**
-  - `invalid_input`: Missing or malformed input fields.
-  - `mkdir_error`: Failed to create parent directories.
-  - `write_error`: I/O or permission failure.
-
-#### `bash`
-
-* **Purpose:** Execute a shell command.
-* **Input schema:**
-
-  ```json
-  { "command": "string" }
-  ```
-
-* **Output schema:**
-
-  ```json
-  {
-    "ok": true,
-    "data": {
-      "stdout": "...",
-      "stderr": "...",
-      "exit_code": 0,
-      "timed_out": false
-    }
-  }
-  ```
-
-* **Shell invocation:** Commands run via `sh -c "<command>"` for POSIX portability.
-* **Execution context:** Runs in the `--root` directory (default: current directory).
-* **Timeout:** Controlled by `tool_timeout_secs` (config). If exceeded, `timed_out: true`, `exit_code: -1`, and `stderr` contains a one-line timeout message.
-* **Output limits (v0.1):** stdout/stderr are not truncated.
-
-#### `edit`
-
-* **Purpose:** Edit an existing file by performing an exact string replacement.
-* **Input schema:**
-
-  ```json
-  {
-    "path": "string",
-    "old": "string",
-    "new": "string",
-    "expected_replacements": 1
-  }
-  ```
-
-  - `expected_replacements` defaults to `1` if omitted.
-
-* **Output schema:**
-
-  ```json
-  {
-    "ok": true,
-    "data": {
-      "path": "...",
-      "replacements": 1
-    }
-  }
-  ```
-
-* **Path:** `data.path` is the resolved absolute path on disk.
-* **Behavior:**
-  - Reads the file as UTF-8 text (no newline normalization).
-  - `old` must be non-empty.
-  - Counts non-overlapping occurrences of `old` in the file.
-  - If `count == 0`, returns `old_not_found`.
-  - If `count != expected_replacements`, returns `replacement_count_mismatch`.
-  - Otherwise replaces the text (exact match) and writes the updated file back.
-* **Error codes:**
-  - `invalid_input`: Missing/malformed fields; `old` is empty; or `expected_replacements < 1`.
-  - `path_error`: Path does not exist (or cannot be resolved/canonicalized).
-  - `read_error`: I/O failure reading the file (including non-UTF-8).
-  - `write_error`: I/O failure writing the file.
-  - `old_not_found`: No occurrences of `old` were found.
-  - `replacement_count_mismatch`: Found occurrences != `expected_replacements`.
-
-### Tool loop correctness requirements
-
-* When the model requests a tool, ZDX must:
-
-  1. Execute the tool
-  2. Return a `tool_result` that corresponds to the correct `tool_use_id`
-  3. Continue until the model ends the turn
+- Tool results are deterministic and correspond to the correct `tool_use_id`.
+- Relative paths resolve against `--root` (default `.`).
+- `--root` is a working directory context, not a security boundary (YOLO).
 
 ---
 
-## 7) Engine event stream contract
+## 12) Providers (Shipped + planned)
 
-The engine emits events for renderers (interactive TUI and non-interactive CLI today; richer UI later). See [ADR-0002](./adr/0002-engine-emits-events-to-renderer-sink.md).
+**Shipped:** Anthropic Claude (streaming + tool loop).  
+API keys are env-only and never stored in config (`ANTHROPIC_API_KEY`).
 
-### Required event types (current)
-
-* `AssistantDelta { text }` — incremental text chunk
-* `AssistantFinal { text }` — completed message
-* `ToolRequested { id, name, input }` — model decided to call a tool
-* `ToolStarted { id, name }` — tool execution begins
-* `ToolFinished { id, result }` — tool execution complete
-* `Error { kind, message, details? }` — structured error for renderers
-* `Interrupted`
-
-### Renderer rules
-
-* The renderer must be able to:
-
-  * render streaming text as it arrives
-  * render tool activity indicators
-  * render errors cleanly
-  * resume sessions from persisted events/messages
-
-### Persistence mapping
-
-* Engine events that affect model context or user-visible history must be persistable as JSONL session events.
-  * Minimum persisted set (current):
-    - `meta` (schema header)
-    - `message`
-    - `tool_use`
-    - `tool_result`
-    - `interrupted`
-  * Additional event types may be added later, but backward readability should be preserved where possible.
+**Testability requirement (Shipped):** provider calls support a base URL override for offline fixture tests.
 
 ---
 
-## 8) Session and persistence contract
+## 13) Configuration (Shipped)
 
-### Storage location
-
-* Default base directory: `$XDG_CONFIG_HOME/zdx/` if set, otherwise `~/.config/zdx/`
-* Override base directory: `$ZDX_HOME` (takes precedence over XDG)
-* Sessions directory:
-
-  * `<base>/sessions/`
-  * Note: Sessions are technically state/data, but kept under config dir for simplicity.
-
-### File format
-
-* Sessions are **JSONL (append-only)** event logs. See [ADR-0001](./adr/0001-session-format-jsonl.md).
-
-### Timestamp format
-
-* All timestamps (`ts`) are **RFC3339 UTC** (e.g., `2025-12-17T03:21:09Z`).
-
-### Schema versioning
-
-* First line of every session file must be a meta event:
-
-  ```json
-  { "type": "meta", "schema_version": 1, "ts": "..." }
-  ```
-
-* Schema version increments when event shapes change incompatibly.
-
-### Minimum event schema (current)
-
-* **Meta** (first line):
-
-  ```json
-  { "type": "meta", "schema_version": 1, "ts": "..." }
-  ```
-
-* **Message:**
-
-  ```json
-  { "type": "message", "role": "user", "text": "...", "ts": "..." }
-  { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
-  ```
-
-* **Tool use** (model requests a tool):
-
-  ```json
-  { "type": "tool_use", "id": "...", "name": "read", "input": { "path": "..." }, "ts": "..." }
-  ```
-
-* **Tool result** (tool execution output):
-
-  ```json
-  { "type": "tool_result", "tool_use_id": "...", "output": { ... }, "ok": true, "ts": "..." }
-  ```
-
-* **Interrupted:**
-
-  ```json
-  { "type": "interrupted", "role": "system", "text": "Interrupted", "ts": "..." }
-  ```
-
-### Session IDs
-
-* Session IDs are UUID v4 in hyphenated lowercase form (e.g., `550e8400-e29b-41d4-a716-446655440000`).
-
-### Session UX requirements
-
-* Resuming a session must continue from the full prior message history.
-* Sessions must remain readable even if the process is interrupted mid-stream.
+- Location: `<base>/config.toml` (see §10 storage rules)
+- Format: TOML
+- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `anthropic_base_url`
 
 ---
 
-## 9) Configuration contract
+## 14) Tests (minimum bar)
 
-### Location
+Tests protect contracts, not internals.
 
-* `~/.config/zdx/config.toml` or `$ZDX_HOME/config.toml`
-
-### Format
-
-* TOML
-
-### Current keys (v0.1)
-
-* `model` (string)
-* `max_tokens` (int)
-* `tool_timeout_secs` (int; `0` disables timeouts)
-* `system_prompt` (string, optional)
-* `system_prompt_file` (string, optional)
-* `anthropic_base_url` (string, optional; empty string treated as unset)
-
-### Planned keys
-
-* `provider` (string)
-* `temperature` (float)
-* `openai_base_url` / `gemini_base_url` / `openrouter_base_url` (string, optional)
-
-### Prompt resolution rules
-
-* If both `system_prompt` and `system_prompt_file` exist:
-
-  * **file wins** (explicitly)
-* CLI flags override config file values.
-* API key is env-only.
+- Tool loop sequencing (`tool_use` ↔ `tool_result`) and offline provider fixtures
+- Session JSONL read/write resilience (incl. interrupts)
+- Target (TUI2): wrapping + resize reflow, scroll model, selection/copy fidelity, streaming invariants
 
 ---
 
-## 10) CLI contract
+## 15) Project context (AGENTS.md) (Shipped)
 
-### Commands (v0.1)
-
-* `zdx` — interactive chat (default when no subcommand is provided)
-* `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
-* `zdx sessions list`
-* `zdx sessions show <SESSION_ID>`
-* `zdx sessions resume [SESSION_ID]` — resume by id, or latest if omitted
-* `zdx config path`
-* `zdx config init`
-
-### Global options (v0.1)
-
-* `--root <ROOT>` (default: `.`): working directory context for tools and engine
-* `--system-prompt <PROMPT>`: overrides config system prompt; an empty string clears both `system_prompt` and `system_prompt_file` for that run
-* `--session <ID>`: append to an existing session id
-* `--no-save`: disable session persistence
-
-### Planned commands (not shipped)
-
-* `zdx auth login` — login for subscription-based provider access
-* `zdx handoff` — emit a handoff bundle for continuing work elsewhere
-
-### Planned options (not shipped)
-
-* `--provider <anthropic|openai|gemini|openrouter>`
-* `--model <MODEL>`
-* `--format <text|json>`
-
-### Output channel rules (terminal-first)
-
-**Agent commands (non-interactive)** (`zdx exec`, or `zdx` when stdin is piped):
-* **stdout**: assistant text only (streaming)
-* **stderr**: diagnostics, warnings, errors, tool status (human-readable)
-
-**Agent commands (interactive / TTY)** (`zdx`, `zdx sessions resume`):
-* **stdout**: transcript (user lines prefixed with `> `; assistant text streamed)
-* **stderr**: TUI input editor, banner/warnings, tool status, diagnostics/errors
-
-**Utility commands** (`zdx sessions list/show`, `zdx config path/init`):
-* **stdout**: command output
-* **stderr**: errors/warnings
-
-**Tool status details (v0.1):**
-* Tool completion lines include duration: `Done. (X.XXs)`
-* Bash tool debug lines:
-  - On request: `Tool requested: bash command="<command>"`
-  - On finish: `Tool finished: bash exit=<code>` or `Tool finished: bash timed_out=true`
-
-### Interactive input and interruption (TTY-only)
-
-When `stdin` is a TTY, the interactive chat uses a multiline-capable editor and supports responsive interruption via keyboard events. (See ADR-0004).
-
-#### Keybindings (Input Phase)
-* **Enter**: Submit message.
-* **Shift+Enter** or **Alt+Enter**: Insert a newline.
-* **Option+Left / Option+Right**: Word-level navigation (back/forward).
-* **Backspace / Delete**: Character deletion.
-* **Option+Backspace**: Delete previous word.
-* **Cmd+Backspace** (or **Ctrl+U**): Delete the entire current line.
-* **Left / Right Arrows**: Move cursor within the buffer.
-* **Up / Down Arrows**: 
-  - Move cursor between lines in the multiline buffer.
-  - Navigate session history if the cursor is at the first or last line (user messages only).
-* **Home / End** (or **Ctrl+A / Ctrl+E**): Move cursor to the start or end of the current line.
-* **Ctrl+K**: Clear text from the cursor to the end of the line.
-* **Ctrl+C** or **Esc**: Clear the current input buffer.
-* **Ctrl+C** (twice): Exit the chat.
-
-#### Feature Support
-* **Bracketed Paste**: Enabled to allow pasting blocks of code without accidental submission.
-
-#### Interrupt Behavior (Execution Phase)
-While the engine is streaming a response or executing a tool:
-* **Ctrl+C** or **Esc**: Signal an interrupt to the engine. This stops the current tool execution or streaming turn gracefully.
-* **Ctrl+C** (twice): Force exit the application immediately.
-
-### Planned: JSON output mode
-
-* `--format json` emits a versioned stream of structured events to stdout suitable for piping and scripting.
-
-### Planned: Handoff bundles
-
-Handoff is the replacement for “compaction”: it does not overwrite history with a lossy summary.
-Instead, it creates a focused starter prompt for the next thread/session.
-
-* **Command:** `zdx handoff --goal "<GOAL>" [--from-session <SESSION_ID>] [--out <PATH>]`
-* **Purpose:** Extract the minimum context needed to achieve `<GOAL>` and package it for starting fresh.
-* **Default output:** Markdown to stdout (pipeable); `--out <PATH>` writes the same markdown to a file.
-* **Source selection (contract):**
-  - If `--from-session` is provided, handoff uses that saved session as the source.
-  - Otherwise, handoff uses the latest saved session.
-* **Bundle contents (contract):**
-  - `Goal`: the exact goal string passed by the user
-  - `Starter prompt`: a single prompt suitable to paste into a new `zdx exec -p ...` / new chat session
-  - `Relevant files`: a short, explicit list of paths relative to `--root`
-  - `Open tasks`: concrete next actions (checklist style)
-  - `Repro commands`: copy/paste shell commands that reproduce current state or continue work
-* **Reviewability:** The output is intended to be edited by the user before use (draft-first).
-
-### Exit codes (v0.1)
-
-* `0` success
-* `1` runtime error (provider/tool/session)
-* `2` CLI usage error (argument parsing)
-* `130` interrupted (Ctrl+C)
-
----
-
-## 11) Reliability and UX requirements
-
-### Streaming UX
-
-* When streaming is enabled:
-
-  * tokens must be printed as they arrive
-  * flushing behavior should make the output feel immediate
-
-### Cancellation
-
-* Ctrl+C must not corrupt session files:
-
-  * interruption should be recorded as a structured session event
-
-### Timeouts
-
-* Tool timeouts must return clean, structured results and allow the agent loop to continue or stop gracefully.
-* Timeout semantics are tool-specific (v0.1):
-  - `bash`: `ok: true` with `timed_out: true`
-  - `read`: `ok: false` with `error.code: "timeout"`
-
----
-
-## 12) Versioning and compatibility promises
-
-### v0.x rule
-
-* ZDX may change quickly, but should avoid breaking user workflows without reason.
-
-### What should remain stable as early as possible
-
-* Session JSONL event types (or at least backward-readable)
-* Core CLI commands (`exec`, default chat, `sessions`, `config`)
-* Output channel rules (stdout vs stderr)
-* Engine event stream types (additive changes preferred)
-
-Breaking changes, if necessary, should:
-
-* be called out in release notes (with a migration note where feasible)
-* optionally be reflected in `docs/ROADMAP.md` (if the project is using it)
-
----
-
-## 13) How SPEC, ROADMAP, and PLAN documents relate
-
-* **SPEC.md**: values + contracts + non-goals (this document)
-* **docs/ROADMAP.md**: optional priorities list (what's next and why)
-* **docs/plans/plan_<short_slug>.md**: concrete, commit-level delivery plan (how to build it)
-* **docs/adr/NNNN-*.md**: decision rationale over time (the “why”)
-
-**Rule:** If present, `docs/ROADMAP.md` and `docs/plans/plan_<short_slug>.md` must not violate SPEC values (KISS/YAGNI, terminal-first, engine-first, YOLO default).
-**Rule:** When a notable decision changes, add a new ADR that supersedes the old one; avoid rewriting past ADRs.
-
----
-
-## 14) Glossary
-
-* **Engine**: core agent loop producing events (no UI)
-* **Renderer**: CLI/TUI that consumes engine events and displays them
-* **Session (JSONL)**: append-only record of conversation and events
-* **Tool loop**: model requests tool → tool runs → tool_result returned → model continues
-* **YOLO mode**: permissive operation prioritizing speed and flow over guardrails
-
----
-
-## 15) Project context (AGENTS.md)
-
-### Purpose
-
-ZDX automatically loads `AGENTS.md` files to provide project-specific guidelines to the model.
-This enables per-project customization without modifying the global config.
-
-### Loading order
-
-AGENTS.md files are loaded hierarchically and concatenated in this order:
-
-1. `$ZDX_HOME/AGENTS.md` — global user guidelines (always checked)
-2. `~/AGENTS.md` — user home (only if project root is under home)
-3. Ancestor directories from `~` to project root (only if project root is under home)
-4. Project root (`--root` or cwd) — most specific
-
-### Behavior
-
-* Empty files are skipped silently.
-* Unreadable files log a warning to stderr but don't fail.
-* Loaded file paths are logged to stderr (per §10 output channel rules).
-* Content is concatenated with path headers for clarity:
-
-  ```markdown
-  # Project Context
-
-  ## /path/to/AGENTS.md
-
-  <content>
-
-  ## /another/path/AGENTS.md
-
-  <content>
-  ```
-
-### Integration with system prompt
-
-* Project context is appended to the system prompt (config or flag).
-* If no system prompt is configured, project context becomes the system prompt.
-* Content order: system prompt first, then project context.
+ZDX loads `AGENTS.md` hierarchically and appends the content to the system prompt (project-specific guidance). Unreadable files warn; empty files are skipped.
