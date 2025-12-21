@@ -32,24 +32,37 @@ use tui_textarea::TextArea;
 use crate::config::Config;
 use crate::core::events::EngineEvent;
 use crate::core::interrupt;
-use crate::core::transcript::{HistoryCell, Style as TranscriptStyle, StyledLine};
+use crate::core::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
 use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
 
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
 
+/// Target frame rate for streaming updates (30fps = ~33ms per frame).
+const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(33);
+
 /// Engine execution state.
 #[derive(Debug)]
 enum EngineState {
     /// No engine task running, ready for input.
     Idle,
-    /// Waiting for engine response (shows "thinking...").
+    /// Streaming response in progress.
+    Streaming {
+        /// Handle to the spawned engine task.
+        handle: JoinHandle<Result<(String, Vec<ChatMessage>)>>,
+        /// Receiver for engine events.
+        rx: mpsc::Receiver<Arc<EngineEvent>>,
+        /// ID of the streaming assistant cell in transcript.
+        cell_id: CellId,
+        /// Buffered delta text to apply on next tick (coalescing).
+        pending_delta: String,
+    },
+    /// Waiting for first response (shows "thinking...").
     Waiting {
         /// Handle to the spawned engine task.
         handle: JoinHandle<Result<(String, Vec<ChatMessage>)>>,
-        /// Receiver for engine events (used in Slice 3 for streaming).
-        #[allow(dead_code)]
+        /// Receiver for engine events.
         rx: mpsc::Receiver<Arc<EngineEvent>>,
     },
 }
@@ -142,14 +155,20 @@ impl Tui2App {
                 break;
             }
 
-            // Check for engine completion
-            self.poll_engine();
+            // Poll engine events (streaming deltas, completion, etc.)
+            self.poll_engine_events();
+
+            // Apply any pending deltas before render (coalescing)
+            self.apply_pending_delta();
+
+            // Check for engine task completion
+            self.poll_engine_completion();
 
             // Render
             self.render()?;
 
-            // Handle events with timeout
-            if event::poll(std::time::Duration::from_millis(100))? {
+            // Handle terminal events with short timeout for responsive streaming
+            if event::poll(FRAME_DURATION)? {
                 self.handle_event(event::read()?)?;
             }
         }
@@ -157,52 +176,151 @@ impl Tui2App {
         Ok(())
     }
 
-    /// Polls the engine task for completion (non-blocking).
-    fn poll_engine(&mut self) {
-        // Check if we have a running engine task
-        let should_handle = matches!(&self.engine_state, EngineState::Waiting { handle, .. } if handle.is_finished());
+    /// Polls the engine event channel for streaming events (non-blocking).
+    fn poll_engine_events(&mut self) {
+        // Drain all available events from the channel
+        while let EngineState::Waiting { rx, .. } | EngineState::Streaming { rx, .. } =
+            &mut self.engine_state
+        {
+            let event = match rx.try_recv() {
+                Ok(ev) => ev,
+                Err(mpsc::error::TryRecvError::Empty) => break,
+                Err(mpsc::error::TryRecvError::Disconnected) => break,
+            };
 
-        if !should_handle {
+            // Must clone event before calling handle_engine_event to avoid borrow conflict
+            let event = event.clone();
+            self.handle_engine_event(&event);
+        }
+    }
+
+    /// Handles a single engine event, updating state as needed.
+    fn handle_engine_event(&mut self, event: &EngineEvent) {
+        match event {
+            EngineEvent::AssistantDelta { text } => {
+                // Transition from Waiting to Streaming on first delta
+                match &mut self.engine_state {
+                    EngineState::Waiting { .. } => {
+                        // Create streaming cell and transition to Streaming state
+                        let cell = HistoryCell::assistant_streaming("");
+                        let cell_id = cell.id();
+                        self.transcript.push(cell);
+
+                        // Take ownership and transition state
+                        let old_state =
+                            std::mem::replace(&mut self.engine_state, EngineState::Idle);
+                        if let EngineState::Waiting { handle, rx } = old_state {
+                            self.engine_state = EngineState::Streaming {
+                                handle,
+                                rx,
+                                cell_id,
+                                pending_delta: text.clone(),
+                            };
+                        }
+                    }
+                    EngineState::Streaming { pending_delta, .. } => {
+                        // Buffer the delta for coalescing
+                        pending_delta.push_str(text);
+                    }
+                    EngineState::Idle => {}
+                }
+            }
+            EngineEvent::AssistantFinal { .. } => {
+                // Finalize the streaming cell
+                if let EngineState::Streaming { cell_id, .. } = &self.engine_state {
+                    // Find and finalize the streaming cell
+                    if let Some(cell) = self.transcript.iter_mut().find(|c| c.id() == *cell_id) {
+                        cell.finalize_assistant();
+                    }
+                }
+                // Note: completion handled by poll_engine_completion
+            }
+            EngineEvent::Error { message, .. } => {
+                // Show error in transcript
+                self.transcript
+                    .push(HistoryCell::system(format!("Error: {}", message)));
+            }
+            EngineEvent::Interrupted => {
+                self.transcript.push(HistoryCell::system("[Interrupted]"));
+                interrupt::reset();
+            }
+            // Tool events will be handled in a later slice
+            EngineEvent::ToolRequested { .. }
+            | EngineEvent::ToolStarted { .. }
+            | EngineEvent::ToolFinished { .. } => {}
+        }
+    }
+
+    /// Applies any pending delta to the streaming cell (coalescing).
+    fn apply_pending_delta(&mut self) {
+        if let EngineState::Streaming {
+            cell_id,
+            pending_delta,
+            ..
+        } = &mut self.engine_state
+            && !pending_delta.is_empty()
+        {
+            // Find the streaming cell and append the delta
+            if let Some(cell) = self.transcript.iter_mut().find(|c| c.id() == *cell_id) {
+                cell.append_assistant_delta(pending_delta);
+            }
+            pending_delta.clear();
+        }
+    }
+
+    /// Polls the engine task for completion (non-blocking).
+    fn poll_engine_completion(&mut self) {
+        // Check if we have a finished engine task
+        let is_finished = match &self.engine_state {
+            EngineState::Waiting { handle, .. } | EngineState::Streaming { handle, .. } => {
+                handle.is_finished()
+            }
+            EngineState::Idle => false,
+        };
+
+        if !is_finished {
             return;
         }
 
-        // Take ownership of the state to handle it
+        // Take ownership of the state to handle completion
         let old_state = std::mem::replace(&mut self.engine_state, EngineState::Idle);
 
-        if let EngineState::Waiting { handle, .. } = old_state {
-            // Task is finished, get the result
-            match futures_util::FutureExt::now_or_never(handle) {
-                Some(Ok(Ok((final_text, new_messages)))) => {
-                    // Success - add assistant cell and update messages
-                    if !final_text.is_empty() {
-                        self.transcript
-                            .push(HistoryCell::assistant_final(&final_text));
-                    }
-                    self.messages = new_messages;
-                }
-                Some(Ok(Err(e))) => {
-                    // Engine error - show in transcript
-                    if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
-                        .is_some()
-                    {
-                        self.transcript.push(HistoryCell::system("[Interrupted]"));
-                        interrupt::reset();
-                    } else {
-                        self.transcript
-                            .push(HistoryCell::system(format!("Error: {}", e)));
-                    }
-                    // Remove the failed user message from history
-                    self.messages.pop();
-                }
-                Some(Err(e)) => {
-                    // Join error (panic in task)
+        let (handle, had_streaming_cell) = match old_state {
+            EngineState::Waiting { handle, .. } => (handle, false),
+            EngineState::Streaming { handle, .. } => (handle, true),
+            EngineState::Idle => return,
+        };
+
+        // Get the result
+        match futures_util::FutureExt::now_or_never(handle) {
+            Some(Ok(Ok((_final_text, new_messages)))) => {
+                // Success - update messages
+                // Note: streaming cell was already finalized via AssistantFinal event
+                // If we never got a streaming cell (empty response), don't add anything
+                self.messages = new_messages;
+            }
+            Some(Ok(Err(e))) => {
+                // Engine error
+                if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
+                    .is_some()
+                {
+                    // Already handled by Interrupted event
+                } else if !had_streaming_cell {
+                    // Only show error if we haven't already via event
                     self.transcript
-                        .push(HistoryCell::system(format!("Internal error: {}", e)));
-                    self.messages.pop();
+                        .push(HistoryCell::system(format!("Error: {}", e)));
                 }
-                None => {
-                    // Shouldn't happen since we checked is_finished()
-                }
+                // Remove the failed user message from history
+                self.messages.pop();
+            }
+            Some(Err(e)) => {
+                // Join error (panic in task)
+                self.transcript
+                    .push(HistoryCell::system(format!("Internal error: {}", e)));
+                self.messages.pop();
+            }
+            None => {
+                // Shouldn't happen since we checked is_finished()
             }
         }
     }
@@ -278,7 +396,7 @@ impl Tui2App {
             lines.push(Line::default());
         }
 
-        // Show "thinking..." indicator when engine is waiting
+        // Show "thinking..." indicator when engine is waiting (before first delta)
         if matches!(self.engine_state, EngineState::Waiting { .. }) {
             lines.push(Line::from(vec![
                 Span::styled(
@@ -296,11 +414,13 @@ impl Tui2App {
             ]));
         }
 
-        // Remove trailing blank line if present (but not the thinking indicator)
-        if !matches!(self.engine_state, EngineState::Waiting { .. }) {
-            if lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-                lines.pop();
-            }
+        // Remove trailing blank line if not waiting or streaming
+        let is_active = matches!(
+            self.engine_state,
+            EngineState::Waiting { .. } | EngineState::Streaming { .. }
+        );
+        if !is_active && lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+            lines.pop();
         }
 
         lines
