@@ -1,14 +1,9 @@
-mod chat;
 mod cli;
 mod config;
-mod context;
+mod core;
 mod engine;
-mod events;
-mod exec;
-mod interrupt;
-mod paths;
 mod providers;
-mod renderer;
+mod renderers;
 mod session;
 mod tools;
 mod ui;
@@ -20,7 +15,9 @@ use session::SessionOptions;
 
 fn main() {
     if let Err(e) = main_result() {
-        if e.downcast_ref::<interrupt::InterruptedError>().is_some() {
+        if e.downcast_ref::<core::interrupt::InterruptedError>()
+            .is_some()
+        {
             std::process::exit(130);
         }
         eprintln!("{:#}", e); // pretty anyhow chain
@@ -31,7 +28,7 @@ fn main() {
 fn main_result() -> Result<()> {
     let cli = Cli::parse();
 
-    interrupt::init();
+    core::interrupt::init();
 
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
@@ -91,11 +88,11 @@ fn main_result() -> Result<()> {
 
             Commands::Config { command } => match command {
                 ConfigCommands::Path => {
-                    println!("{}", paths::config_path().display());
+                    println!("{}", config::paths::config_path().display());
                     Ok(())
                 }
                 ConfigCommands::Init => {
-                    let config_path = paths::config_path();
+                    let config_path = config::paths::config_path();
                     config::Config::init(&config_path)
                         .with_context(|| format!("init config at {}", config_path.display()))?;
                     println!("Created config at {}", config_path.display());
@@ -128,7 +125,7 @@ async fn run_chat(
     let session = session_opts.resolve().context("resolve session")?;
 
     let root_path = std::path::PathBuf::from(root);
-    chat::run_interactive_chat(config, session, root_path)
+    ui::chat::run_interactive_chat(config, session, root_path)
         .await
         .context("interactive chat failed")?;
 
@@ -144,12 +141,12 @@ async fn run_exec(
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
-    let exec_opts = exec::ExecOptions {
+    let exec_opts = renderers::ExecOptions {
         root: std::path::PathBuf::from(root),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    exec::execute_prompt_streaming(prompt, config, session, &exec_opts)
+    renderers::execute_prompt_streaming(prompt, config, session, &exec_opts)
         .await
         .context("execute prompt")?;
 
@@ -171,7 +168,7 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
         .with_context(|| format!("open session '{session_id}'"))?;
 
     let root_path = std::path::PathBuf::from(".");
-    chat::run_interactive_chat_with_history(config, Some(session), history, root_path)
+    ui::chat::run_interactive_chat_with_history(config, Some(session), history, root_path)
         .await
         .context("resume chat failed")?;
 

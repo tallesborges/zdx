@@ -11,8 +11,8 @@ use std::time::Instant;
 
 use tokio::task::JoinHandle;
 
+use crate::core::events::{EngineEvent, ToolOutput};
 use crate::engine::EventRx;
-use crate::events::{EngineEvent, ToolOutput};
 
 /// CLI renderer that writes engine events to stdout/stderr.
 ///

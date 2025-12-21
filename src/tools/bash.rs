@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
-use crate::events::ToolOutput;
+use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the bash tool.
 pub fn definition() -> ToolDefinition {

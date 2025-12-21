@@ -16,7 +16,7 @@ use anyhow::Result;
 use crate::config::Config;
 use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
-use crate::renderer;
+use crate::renderers;
 use crate::session::{self, Session, SessionEvent};
 use crate::ui::{InputResult, TuiApp};
 
@@ -47,7 +47,7 @@ pub async fn run_interactive_chat_with_history(
         );
     }
 
-    let effective = crate::context::build_effective_system_prompt_with_paths(config, &root)?;
+    let effective = crate::core::context::build_effective_system_prompt_with_paths(config, &root)?;
 
     let engine_opts = EngineOptions { root };
 
@@ -126,7 +126,7 @@ async fn run_chat_loop_tty(
 
     loop {
         // Reset interrupt state before reading input
-        crate::interrupt::reset();
+        crate::core::interrupt::reset();
 
         // Read input using the TUI
         let result = match tui.read_input() {
@@ -237,11 +237,11 @@ async fn process_user_message(
             *history = new_history;
         }
         Err(e) => {
-            if e.downcast_ref::<crate::interrupt::InterruptedError>()
+            if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
                 .is_some()
             {
                 // Interrupted event is already persisted via the persist task
-                crate::interrupt::reset();
+                crate::core::interrupt::reset();
             } else {
                 writeln!(err, "Error: {}", e)?;
             }
@@ -269,7 +269,7 @@ async fn run_chat_turn_async(
     let (render_tx, render_rx) = engine::create_event_channel();
 
     // Spawn renderer task
-    let renderer_handle = renderer::spawn_renderer_task(render_rx);
+    let renderer_handle = renderers::spawn_renderer_task(render_rx);
 
     // Spawn persist task if session exists, otherwise create a dummy receiver
     let persist_handle = if let Some(sess) = session {
