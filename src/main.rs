@@ -102,7 +102,26 @@ fn main_result() -> Result<()> {
 
             Commands::Dev { command } => match command {
                 DevCommands::Tui2 => {
-                    let mut app = ui::Tui2App::new().context("create TUI2")?;
+                    // Get root path (current directory)
+                    let root = std::env::current_dir().context("get current dir")?;
+
+                    // Build effective system prompt
+                    let effective =
+                        core::context::build_effective_system_prompt_with_paths(&config, &root)?;
+
+                    // Print warnings like the normal chat does
+                    for warning in &effective.warnings {
+                        eprintln!("Warning: {}", warning.message);
+                    }
+                    if !effective.loaded_agents_paths.is_empty() {
+                        eprintln!("Loaded AGENTS.md from:");
+                        for path in &effective.loaded_agents_paths {
+                            eprintln!("  - {}", path.display());
+                        }
+                    }
+
+                    let mut app = ui::Tui2App::new(config, root, effective.prompt)
+                        .context("create TUI2")?;
                     app.run().context("run TUI2")?;
                     Ok(())
                 }

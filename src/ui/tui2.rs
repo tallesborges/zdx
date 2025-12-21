@@ -8,6 +8,8 @@
 
 use std::io::{self, Stdout};
 use std::panic;
+use std::path::PathBuf;
+use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use crossterm::{
@@ -23,13 +25,34 @@ use ratatui::{
     text::{Line, Span},
     widgets::{Block, Borders, Paragraph, Wrap},
 };
+use tokio::sync::mpsc;
+use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
+use crate::config::Config;
+use crate::core::events::EngineEvent;
 use crate::core::interrupt;
-use crate::core::transcript::{HistoryCell, StyledLine, Style as TranscriptStyle};
+use crate::core::transcript::{HistoryCell, Style as TranscriptStyle, StyledLine};
+use crate::engine::{self, EngineOptions};
+use crate::providers::anthropic::ChatMessage;
 
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
+
+/// Engine execution state.
+#[derive(Debug)]
+enum EngineState {
+    /// No engine task running, ready for input.
+    Idle,
+    /// Waiting for engine response (shows "thinking...").
+    Waiting {
+        /// Handle to the spawned engine task.
+        handle: JoinHandle<Result<(String, Vec<ChatMessage>)>>,
+        /// Receiver for engine events (used in Slice 3 for streaming).
+        #[allow(dead_code)]
+        rx: mpsc::Receiver<Arc<EngineEvent>>,
+    },
+}
 
 /// Full-screen TUI application.
 ///
@@ -44,6 +67,16 @@ pub struct Tui2App {
     textarea: TextArea<'static>,
     /// Transcript cells (in-memory, no persistence yet).
     transcript: Vec<HistoryCell>,
+    /// Engine configuration.
+    config: Config,
+    /// Engine options (root path, etc).
+    engine_opts: EngineOptions,
+    /// System prompt for the engine.
+    system_prompt: Option<String>,
+    /// Message history for the engine.
+    messages: Vec<ChatMessage>,
+    /// Current engine state.
+    engine_state: EngineState,
 }
 
 impl Tui2App {
@@ -51,7 +84,7 @@ impl Tui2App {
     ///
     /// This enters the alternate screen and enables raw mode.
     /// Terminal state will be restored when the app is dropped.
-    pub fn new() -> Result<Self> {
+    pub fn new(config: Config, root: PathBuf, system_prompt: Option<String>) -> Result<Self> {
         // Set up panic hook BEFORE entering alternate screen
         install_panic_hook();
 
@@ -68,14 +101,21 @@ impl Tui2App {
             Block::default()
                 .borders(Borders::TOP)
                 .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Input (Enter=send, Shift+Enter=newline) "),
+                .title(" Input (Enter=send, Shift+Enter=newline, Ctrl+J=newline) "),
         );
+
+        let engine_opts = EngineOptions { root };
 
         Ok(Self {
             terminal,
             should_quit: false,
             textarea,
             transcript: Vec::new(),
+            config,
+            engine_opts,
+            system_prompt,
+            messages: Vec::new(),
+            engine_state: EngineState::Idle,
         })
     }
 
@@ -102,6 +142,9 @@ impl Tui2App {
                 break;
             }
 
+            // Check for engine completion
+            self.poll_engine();
+
             // Render
             self.render()?;
 
@@ -112,6 +155,56 @@ impl Tui2App {
         }
 
         Ok(())
+    }
+
+    /// Polls the engine task for completion (non-blocking).
+    fn poll_engine(&mut self) {
+        // Check if we have a running engine task
+        let should_handle = matches!(&self.engine_state, EngineState::Waiting { handle, .. } if handle.is_finished());
+
+        if !should_handle {
+            return;
+        }
+
+        // Take ownership of the state to handle it
+        let old_state = std::mem::replace(&mut self.engine_state, EngineState::Idle);
+
+        if let EngineState::Waiting { handle, .. } = old_state {
+            // Task is finished, get the result
+            match futures_util::FutureExt::now_or_never(handle) {
+                Some(Ok(Ok((final_text, new_messages)))) => {
+                    // Success - add assistant cell and update messages
+                    if !final_text.is_empty() {
+                        self.transcript
+                            .push(HistoryCell::assistant_final(&final_text));
+                    }
+                    self.messages = new_messages;
+                }
+                Some(Ok(Err(e))) => {
+                    // Engine error - show in transcript
+                    if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
+                        .is_some()
+                    {
+                        self.transcript.push(HistoryCell::system("[Interrupted]"));
+                        interrupt::reset();
+                    } else {
+                        self.transcript
+                            .push(HistoryCell::system(format!("Error: {}", e)));
+                    }
+                    // Remove the failed user message from history
+                    self.messages.pop();
+                }
+                Some(Err(e)) => {
+                    // Join error (panic in task)
+                    self.transcript
+                        .push(HistoryCell::system(format!("Internal error: {}", e)));
+                    self.messages.pop();
+                }
+                None => {
+                    // Shouldn't happen since we checked is_finished()
+                }
+            }
+        }
     }
 
     /// Renders the UI.
@@ -143,7 +236,9 @@ impl Tui2App {
             let header = Paragraph::new(Line::from(vec![
                 Span::styled(
                     "ZDX",
-                    Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
                 ),
                 Span::raw(" — "),
                 Span::styled("q", Style::default().fg(Color::Yellow)),
@@ -183,9 +278,29 @@ impl Tui2App {
             lines.push(Line::default());
         }
 
-        // Remove trailing blank line if present
-        if lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-            lines.pop();
+        // Show "thinking..." indicator when engine is waiting
+        if matches!(self.engine_state, EngineState::Waiting { .. }) {
+            lines.push(Line::from(vec![
+                Span::styled(
+                    "Assistant: ",
+                    Style::default()
+                        .fg(Color::Blue)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(
+                    "thinking...",
+                    Style::default()
+                        .fg(Color::DarkGray)
+                        .add_modifier(Modifier::ITALIC),
+                ),
+            ]));
+        }
+
+        // Remove trailing blank line if present (but not the thinking indicator)
+        if !matches!(self.engine_state, EngineState::Waiting { .. }) {
+            if lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
+                lines.pop();
+            }
         }
 
         lines
@@ -268,8 +383,8 @@ impl Tui2App {
             KeyCode::Enter if !shift && !alt => {
                 self.submit_input();
             }
-            // Shift+Enter or Alt+Enter: insert newline
-            KeyCode::Enter if shift || alt => {
+            // Ctrl+J: insert newline (terminal-reliable alternative)
+            KeyCode::Char('j') if ctrl => {
                 self.textarea.insert_newline();
             }
             // Escape: clear input
@@ -298,6 +413,11 @@ impl Tui2App {
 
     /// Submits the current input.
     fn submit_input(&mut self) {
+        // Don't submit if engine is already running
+        if !matches!(self.engine_state, EngineState::Idle) {
+            return;
+        }
+
         let text = self.get_input_text();
         if text.trim().is_empty() {
             return;
@@ -306,8 +426,38 @@ impl Tui2App {
         // Add user cell to transcript
         self.transcript.push(HistoryCell::user(&text));
 
+        // Add user message to engine history
+        self.messages.push(ChatMessage::user(&text));
+
         // Clear input
         self.clear_input();
+
+        // Spawn engine task
+        self.spawn_engine_turn();
+    }
+
+    /// Spawns an engine turn in the background.
+    fn spawn_engine_turn(&mut self) {
+        let (tx, rx) = engine::create_event_channel();
+
+        // Clone what we need for the async task
+        let messages = self.messages.clone();
+        let config = self.config.clone();
+        let engine_opts = self.engine_opts.clone();
+        let system_prompt = self.system_prompt.clone();
+
+        let handle = tokio::spawn(async move {
+            engine::run_turn(
+                messages,
+                &config,
+                &engine_opts,
+                system_prompt.as_deref(),
+                tx,
+            )
+            .await
+        });
+
+        self.engine_state = EngineState::Waiting { handle, rx };
     }
 }
 
