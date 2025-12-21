@@ -255,13 +255,20 @@ Deliverables
 - [ ] Copy reconstructs text with correct wrapping.
 - [ ] ✅ Check-in: select text, copy, paste elsewhere matches.
 
-## Phase 3: Tool UI
+## Phase 3: Tool UI ✅
 Goal: Show tool execution in transcript.
 
-- [ ] "Tool running..." indicator when tool starts.
-- [ ] Show tool name and status (running/done/failed).
-- [ ] Optionally show tool output preview.
-- [ ] ✅ Check-in: tool use shows status in TUI, not stdout.
+- [x] "Tool running..." indicator when tool starts.
+- [x] Show tool name and status (running/done/failed).
+- [x] ESC or Ctrl+C interrupts running engine/tool.
+- [ ] Optionally show tool output preview (deferred).
+- [x] ✅ Check-in: tool use shows status in TUI, not stdout.
+
+**Implementation notes:**
+- Handle `ToolRequested` → create `HistoryCell::tool_running()` in transcript.
+- Handle `ToolFinished` → update tool cell with `set_tool_result()`.
+- ESC/Ctrl+C when engine running → `interrupt::trigger_ctrl_c()`.
+- Ctrl+C progressive: interrupt → clear input → quit.
 
 ## Phase 4: Streaming fidelity + performance
 Goal: Stable streaming under resizes and long outputs.

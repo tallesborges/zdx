@@ -121,6 +121,14 @@ impl ToolOutput {
         matches!(self, ToolOutput::Success { .. })
     }
 
+    /// Returns the data if this is a successful output.
+    pub fn data(&self) -> Option<&Value> {
+        match self {
+            ToolOutput::Success { data, .. } => Some(data),
+            ToolOutput::Failure { .. } => None,
+        }
+    }
+
     /// Converts the tool output to a JSON string for sending to the model.
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string())
