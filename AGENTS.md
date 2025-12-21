@@ -5,13 +5,15 @@
 ## Where things are
 
 - `src/main.rs`: CLI entrypoint; wires commands to implementations
-- `src/cli.rs`: `clap` CLI definitions
-- `src/engine.rs`: engine loop + event stream (no terminal I/O)
-- `src/renderer.rs`: stdout/stderr renderer for `exec` and non-TUI flows
-- `src/chat.rs`: interactive chat orchestration
-- `src/ui/`: terminal UI input/editor bits
-- `src/session.rs`: JSONL sessions (read/write)
+- `src/cli/`: `clap` CLI definitions
+- `src/engine/`: engine loop + event stream (no terminal I/O)
+- `src/renderers/`: stdout/stderr renderer + exec wrapper
+- `src/ui/`: terminal UI app + chat loop
+- `src/session/`: JSONL sessions (read/write)
 - `src/tools/`: tool implementations + schemas
+- `src/providers/`: provider clients (Anthropic, etc.)
+- `src/config/`: config loading + paths
+- `src/core/`: shared types (events, context, interrupt)
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
 ## Keep this file up to date

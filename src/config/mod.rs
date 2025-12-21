@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-use crate::paths;
+pub mod paths;
 
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]

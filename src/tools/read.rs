@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
-use crate::events::ToolOutput;
+use crate::core::events::ToolOutput;
 
 /// Maximum file size before truncation (50KB).
 const MAX_BYTES: usize = 50 * 1024;

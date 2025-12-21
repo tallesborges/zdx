@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use crate::config::Config;
 use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
-use crate::renderer;
+use crate::renderers;
 use crate::session::{self, Session, SessionEvent};
 
 /// Options for exec execution.
@@ -42,7 +42,7 @@ pub async fn execute_prompt_streaming(
     options: &ExecOptions,
 ) -> Result<String> {
     let effective =
-        crate::context::build_effective_system_prompt_with_paths(config, &options.root)?;
+        crate::core::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
     // Emit warnings from context loading to stderr
     for warning in &effective.warnings {
@@ -78,7 +78,7 @@ pub async fn execute_prompt_streaming(
     let (render_tx, render_rx) = engine::create_event_channel();
 
     // Spawn renderer task
-    let renderer_handle = renderer::spawn_renderer_task(render_rx);
+    let renderer_handle = renderers::spawn_renderer_task(render_rx);
 
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {

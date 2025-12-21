@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
+use crate::config::paths::sessions_dir;
 use crate::engine::EventRx;
-use crate::paths::sessions_dir;
 
 /// Current schema version for new sessions.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -135,8 +135,8 @@ impl SessionEvent {
     ///
     /// Note: `AssistantFinal` and user messages are handled separately by the
     /// chat/agent modules since they have additional context.
-    pub fn from_engine(event: &crate::events::EngineEvent) -> Option<Self> {
-        use crate::events::EngineEvent;
+    pub fn from_engine(event: &crate::core::events::EngineEvent) -> Option<Self> {
+        use crate::core::events::EngineEvent;
 
         match event {
             EngineEvent::ToolRequested { id, name, input } => {
@@ -369,7 +369,9 @@ pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthro
 }
 
 /// Converts session events to chat messages for API replay.
-pub fn events_to_messages(events: Vec<SessionEvent>) -> Vec<crate::providers::anthropic::ChatMessage> {
+pub fn events_to_messages(
+    events: Vec<SessionEvent>,
+) -> Vec<crate::providers::anthropic::ChatMessage> {
     use crate::providers::anthropic::{ChatContentBlock, ChatMessage, MessageContent};
 
     let mut messages: Vec<ChatMessage> = Vec::new();

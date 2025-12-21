@@ -1,8 +1,9 @@
 //! UI components for ZDX.
 //!
 //! This module provides terminal-based UI components:
-//! - `tui`: Ratatui-based TUI with tui-textarea (inline viewport, fixed input at bottom)
+//! - `app`: Ratatui-based TUI with tui-textarea (inline viewport, fixed input at bottom)
 
-pub mod tui;
+pub mod app;
+pub mod chat;
 
-pub use tui::{InputResult, TuiApp};
+pub use app::{InputResult, TuiApp};
