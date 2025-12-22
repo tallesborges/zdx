@@ -3,9 +3,9 @@
 //! This module provides a full-screen terminal UI using ratatui.
 //! Uses the alternate screen buffer for a persistent, scrollable interface.
 //!
-//! See docs/plans/plan_ratatui_full_screen_tui2.md for the implementation plan.
+//! See docs/plans/plan_ratatui_full_screen_tui.md for the implementation plan.
 
-use std::io::{self, Stdout};
+use std::io::{self, IsTerminal, Stdout, Write, stderr};
 use std::panic;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -36,7 +36,76 @@ use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
 use crate::shared::events::EngineEvent;
 use crate::shared::interrupt;
-use crate::shared::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
+use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
+
+/// Runs the interactive chat loop.
+pub async fn run_interactive_chat(
+    config: &Config,
+    session: Option<Session>,
+    root: PathBuf,
+) -> Result<()> {
+    run_interactive_chat_with_history(config, session, Vec::new(), root).await
+}
+
+/// Runs the interactive chat loop with pre-loaded history.
+pub async fn run_interactive_chat_with_history(
+    config: &Config,
+    session: Option<Session>,
+    history: Vec<ChatMessage>,
+    root: PathBuf,
+) -> Result<()> {
+    // Chat mode requires a terminal to render the TUI
+    if !stderr().is_terminal() {
+        anyhow::bail!(
+            "Chat mode requires a terminal.\n\
+             Use `zdx exec --prompt '...'` for non-interactive execution."
+        );
+    }
+
+    let effective =
+        crate::shared::context::build_effective_system_prompt_with_paths(config, &root)?;
+
+    // Print pre-TUI info to stderr (will be replaced by alternate screen)
+    let mut err = stderr();
+    writeln!(err, "ZDX Chat")?;
+    writeln!(err, "Model: {}", config.model)?;
+    if let Some(ref s) = session {
+        writeln!(err, "Session: {}", s.id)?;
+    }
+    if !history.is_empty() {
+        writeln!(err, "Loaded {} previous messages", history.len())?;
+    }
+
+    // Emit warnings from context loading (per SPEC §10)
+    for warning in &effective.warnings {
+        writeln!(err, "Warning: {}", warning.message)?;
+    }
+
+    // Show loaded AGENTS.md files
+    if !effective.loaded_agents_paths.is_empty() {
+        writeln!(err, "Loaded AGENTS.md from:")?;
+        for path in &effective.loaded_agents_paths {
+            writeln!(err, "  - {}", path.display())?;
+        }
+    }
+
+    // Small delay so user can see the info before TUI takes over
+    // (alternate screen will hide all this output)
+    err.flush()?;
+
+    // Create and run the TUI
+    let mut app = if history.is_empty() {
+        TuiApp::new(config.clone(), root, effective.prompt, session)?
+    } else {
+        TuiApp::with_history(config.clone(), root, effective.prompt, session, history)?
+    };
+    app.run()?;
+
+    // Print goodbye after TUI exits (terminal restored)
+    writeln!(stderr(), "Goodbye!")?;
+
+    Ok(())
+}
 
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
@@ -88,7 +157,7 @@ enum EngineState {
 ///
 /// Uses the alternate screen buffer for a persistent interface.
 /// Terminal state is guaranteed to be restored on drop, panic, or Ctrl+C.
-pub struct Tui2App {
+pub struct TuiApp {
     /// Terminal instance.
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Flag indicating the app should quit.
@@ -115,7 +184,7 @@ pub struct Tui2App {
     session: Option<Session>,
 }
 
-impl Tui2App {
+impl TuiApp {
     /// Creates a new TUI2 application.
     ///
     /// This enters the alternate screen and enables raw mode.
@@ -903,7 +972,7 @@ impl Tui2App {
     }
 }
 
-impl Drop for Tui2App {
+impl Drop for TuiApp {
     fn drop(&mut self) {
         // Restore terminal state
         let _ = restore_terminal();

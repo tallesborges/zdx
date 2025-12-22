@@ -1,12 +1,12 @@
 //! UI components for ZDX.
 //!
 //! This module provides terminal-based UI components:
-//! - `tui2`: Full-screen alternate-screen TUI
-//! - `chat`: Interactive chat interface using TUI2
+//! - `tui`: Full-screen alternate-screen TUI for interactive chat
 //! - `stream`: Streaming renderer for exec mode
+//! - `transcript`: Virtual transcript model for chat cells
 
-pub mod chat;
 pub mod stream;
-pub mod tui2;
+pub mod transcript;
+pub mod tui;
 
-pub use tui2::Tui2App;
+pub use tui::{run_interactive_chat, run_interactive_chat_with_history};
