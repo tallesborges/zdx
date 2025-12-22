@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
-use crate::core::events::ToolOutput;
+use crate::shared::events::ToolOutput;
 
 /// Returns the tool definition for the edit tool.
 pub fn definition() -> ToolDefinition {

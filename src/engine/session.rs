@@ -25,7 +25,7 @@ use serde_json::Value;
 use tokio::task::JoinHandle;
 
 use crate::config::paths::sessions_dir;
-use crate::engine::EventRx;
+use super::EventRx;
 
 /// Current schema version for new sessions.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -135,8 +135,8 @@ impl SessionEvent {
     ///
     /// Note: `AssistantFinal` and user messages are handled separately by the
     /// chat/agent modules since they have additional context.
-    pub fn from_engine(event: &crate::core::events::EngineEvent) -> Option<Self> {
-        use crate::core::events::EngineEvent;
+    pub fn from_engine(event: &crate::shared::events::EngineEvent) -> Option<Self> {
+        use crate::shared::events::EngineEvent;
 
         match event {
             EngineEvent::ToolRequested { id, name, input } => {

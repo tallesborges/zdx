@@ -4,16 +4,14 @@
 
 ## Where things are
 
-- `src/main.rs`: CLI entrypoint; wires commands to implementations
-- `src/cli/`: `clap` CLI definitions
-- `src/engine/`: engine loop + event stream (no terminal I/O)
-- `src/renderers/`: stdout/stderr renderer + exec wrapper
-- `src/ui/`: terminal UI app + chat loop
-- `src/session/`: JSONL sessions (read/write)
+- `src/main.rs`: CLI entrypoint + `clap` args
+- `src/lib.rs`: module exports for the library crate
+- `src/engine/`: engine loop + event stream (no terminal I/O) + session persistence
+- `src/ui/`: terminal UI app + chat loop + stdout/stderr streaming
 - `src/tools/`: tool implementations + schemas
 - `src/providers/`: provider clients (Anthropic, etc.)
-- `src/config/`: config loading + paths
-- `src/core/`: shared types (events, context, interrupt)
+- `src/config.rs`: config loading + paths
+- `src/shared/`: shared primitives (events, context, interrupt, transcript)
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
 ## Keep this file up to date

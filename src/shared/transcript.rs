@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::core::events::ToolOutput;
+use crate::shared::events::ToolOutput;
 
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -49,17 +49,6 @@ pub enum ToolState {
     Done,
     /// Tool failed with an error.
     Error,
-}
-
-impl ToolState {
-    /// Returns the display string for this state.
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            ToolState::Running => "running...",
-            ToolState::Done => "done",
-            ToolState::Error => "failed",
-        }
-    }
 }
 
 /// A logical unit in the transcript.
@@ -124,15 +113,6 @@ impl HistoryCell {
         }
     }
 
-    /// Returns the cell's creation timestamp.
-    pub fn created_at(&self) -> DateTime<Utc> {
-        match self {
-            HistoryCell::User { created_at, .. } => *created_at,
-            HistoryCell::Assistant { created_at, .. } => *created_at,
-            HistoryCell::Tool { created_at, .. } => *created_at,
-            HistoryCell::System { created_at, .. } => *created_at,
-        }
-    }
 
     /// Creates a new user cell.
     pub fn user(content: impl Into<String>) -> Self {
@@ -153,15 +133,6 @@ impl HistoryCell {
         }
     }
 
-    /// Creates a finalized assistant cell.
-    pub fn assistant_final(content: impl Into<String>) -> Self {
-        HistoryCell::Assistant {
-            id: CellId::new(),
-            created_at: Utc::now(),
-            content: content.into(),
-            is_streaming: false,
-        }
-    }
 
     /// Creates a new tool cell (running state).
     pub fn tool_running(
@@ -232,13 +203,6 @@ impl HistoryCell {
         }
     }
 
-    /// Returns the tool state if this is a tool cell.
-    pub fn tool_state(&self) -> Option<&ToolState> {
-        match self {
-            HistoryCell::Tool { state, .. } => Some(state),
-            _ => None,
-        }
-    }
 
     /// Renders this cell into display lines for the given width.
     ///
@@ -447,16 +411,6 @@ pub struct StyledSpan {
     pub style: Style,
 }
 
-impl StyledSpan {
-    /// Creates a plain (unstyled) span.
-    pub fn plain(text: impl Into<String>) -> Self {
-        StyledSpan {
-            text: text.into(),
-            style: Style::Plain,
-        }
-    }
-}
-
 /// A line of styled spans.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StyledLine {
@@ -467,31 +421,6 @@ impl StyledLine {
     /// Creates an empty line.
     pub fn empty() -> Self {
         StyledLine { spans: vec![] }
-    }
-
-    /// Creates a line from a single plain text string.
-    pub fn plain(text: impl Into<String>) -> Self {
-        StyledLine {
-            spans: vec![StyledSpan::plain(text)],
-        }
-    }
-
-    /// Creates a line from a single styled span.
-    pub fn styled(text: impl Into<String>, style: Style) -> Self {
-        StyledLine {
-            spans: vec![StyledSpan {
-                text: text.into(),
-                style,
-            }],
-        }
-    }
-
-    /// Returns the total display width of this line.
-    ///
-    /// Note: This currently counts bytes, not grapheme clusters.
-    /// TODO: Use unicode-width for proper width calculation.
-    pub fn display_width(&self) -> usize {
-        self.spans.iter().map(|s| s.text.len()).sum()
     }
 }
 
@@ -698,25 +627,12 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_state_as_str() {
-        assert_eq!(ToolState::Running.as_str(), "running...");
-        assert_eq!(ToolState::Done.as_str(), "done");
-        assert_eq!(ToolState::Error.as_str(), "failed");
-    }
-
-    #[test]
-    fn test_cell_has_id_and_timestamp() {
+    fn test_cell_has_id() {
         let cell = HistoryCell::user("test");
         let id = cell.id();
-        let ts = cell.created_at();
 
         // ID should be valid
         assert!(id.0 > 0);
-
-        // Timestamp should be recent (within last second)
-        let now = Utc::now();
-        let diff = now.signed_duration_since(ts);
-        assert!(diff.num_seconds() < 1);
     }
 
     #[test]
@@ -759,7 +675,8 @@ mod tests {
 
     #[test]
     fn test_assistant_final() {
-        let cell = HistoryCell::assistant_final("Done!");
+        let mut cell = HistoryCell::assistant_streaming("Done!");
+        cell.finalize_assistant();
         let lines = cell.display_lines(80);
 
         // Should NOT have streaming cursor
@@ -790,7 +707,10 @@ mod tests {
         assert!(last_line.contains("Running"));
 
         // State should be Running
-        assert_eq!(cell.tool_state(), Some(&ToolState::Running));
+        match cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Running),
+            _ => panic!("Expected tool cell"),
+        }
     }
 
     #[test]
@@ -812,7 +732,10 @@ mod tests {
         assert!(!all_text.contains("Running"));
 
         // State should be Done
-        assert_eq!(cell.tool_state(), Some(&ToolState::Done));
+        match cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Done),
+            _ => panic!("Expected tool cell"),
+        }
     }
 
     #[test]
@@ -833,7 +756,10 @@ mod tests {
         assert!(last_line.contains("Failed"));
 
         // State should be Error
-        assert_eq!(cell.tool_state(), Some(&ToolState::Error));
+        match cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Error),
+            _ => panic!("Expected tool cell"),
+        }
     }
 
     #[test]
@@ -883,18 +809,6 @@ mod tests {
     fn test_wrap_text_long_word() {
         let wrapped = wrap_text("supercalifragilistic", 10);
         assert_eq!(wrapped, vec!["supercalif", "ragilistic"]);
-    }
-
-    #[test]
-    fn test_styled_line_width() {
-        let line = StyledLine {
-            spans: vec![
-                StyledSpan::plain("Hello"),
-                StyledSpan::plain(", "),
-                StyledSpan::plain("world!"),
-            ],
-        };
-        assert_eq!(line.display_width(), 13);
     }
 
     #[test]

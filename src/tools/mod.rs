@@ -14,7 +14,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::core::events::ToolOutput;
+use crate::shared::events::ToolOutput;
 
 /// Tool definition for the Anthropic API.
 #[derive(Debug, Clone, Serialize)]

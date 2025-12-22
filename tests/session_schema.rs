@@ -15,7 +15,7 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use fixtures::{sse_response, text_sse, tool_use_sse};
 use predicates::prelude::*;
 use tempfile::TempDir;
-use wiremock::matchers::{body_string_contains, method, path};
+use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request, ResponseTemplate};
 
 fn streaming_text_response(text: &str) -> ResponseTemplate {

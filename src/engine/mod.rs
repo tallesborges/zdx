@@ -3,6 +3,8 @@
 //! The engine drives the provider + tool loop and emits `EngineEvent`s
 //! via async channels. No direct stdout/stderr writes occur in this module.
 
+pub mod session;
+
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,7 +16,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
-use crate::core::events::{EngineEvent, ErrorKind};
+use crate::shared::events::{EngineEvent, ErrorKind};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
@@ -196,9 +198,9 @@ pub async fn run_turn(
 
     // Tool loop - keep going until we get a final response
     loop {
-        if crate::core::interrupt::is_interrupted() {
+        if crate::shared::interrupt::is_interrupted() {
             sink.important(EngineEvent::Interrupted).await;
-            return Err(crate::core::interrupt::InterruptedError.into());
+            return Err(crate::shared::interrupt::InterruptedError.into());
         }
 
         let mut stream = match client
@@ -218,9 +220,9 @@ pub async fn run_turn(
 
         // Process stream events with periodic interrupt checking
         loop {
-            if crate::core::interrupt::is_interrupted() {
+            if crate::shared::interrupt::is_interrupted() {
                 sink.important(EngineEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                return Err(crate::shared::interrupt::InterruptedError.into());
             }
 
             // Use timeout to periodically check for interrupts even if stream stalls
@@ -355,9 +357,9 @@ async fn execute_tools_async(
     let mut results = Vec::with_capacity(tool_uses.len());
 
     for tu in tool_uses {
-        if crate::core::interrupt::is_interrupted() {
+        if crate::shared::interrupt::is_interrupted() {
             sink.important(EngineEvent::Interrupted).await;
-            return Err(crate::core::interrupt::InterruptedError.into());
+            return Err(crate::shared::interrupt::InterruptedError.into());
         }
 
         // Emit ToolStarted
@@ -369,9 +371,9 @@ async fn execute_tools_async(
 
         let (output, result) = tokio::select! {
             biased;
-            _ = crate::core::interrupt::wait_for_interrupt() => {
+            _ = crate::shared::interrupt::wait_for_interrupt() => {
                 sink.important(EngineEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                return Err(crate::shared::interrupt::InterruptedError.into());
             }
             res = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx) => res,
         };

@@ -1,18 +1,129 @@
-//! CLI renderer for engine events.
+//! Streamed stdout/stderr rendering and exec wrapper.
 //!
-//! The renderer is responsible for all output formatting. It consumes
-//! `EngineEvent`s and writes them to stdout/stderr following the contract:
-//! - Assistant text (deltas/final) → stdout only
-//! - Tool status, diagnostics, errors → stderr only
+//! This module provides:
+//! - `CliRenderer` + `spawn_renderer_task` for engine events
+//! - `execute_prompt_streaming` for single-shot exec mode
 
 use std::collections::HashMap;
 use std::io::{Stderr, Stdout, Write, stderr, stdout};
+use std::path::PathBuf;
 use std::time::Instant;
 
+use anyhow::Result;
 use tokio::task::JoinHandle;
 
-use crate::core::events::{EngineEvent, ToolOutput};
-use crate::engine::EventRx;
+use crate::config::Config;
+use crate::engine::{self, EngineOptions};
+use crate::engine::session::{self, Session, SessionEvent};
+use crate::shared::events::{EngineEvent, ToolOutput};
+use crate::providers::anthropic::ChatMessage;
+
+/// Options for exec execution.
+#[derive(Debug, Clone)]
+pub struct ExecOptions {
+    /// Root directory for file operations.
+    pub root: PathBuf,
+}
+
+impl From<&ExecOptions> for EngineOptions {
+    fn from(opts: &ExecOptions) -> Self {
+        EngineOptions {
+            root: opts.root.clone(),
+        }
+    }
+}
+
+/// Sends a prompt to the LLM and streams text response to stdout.
+///
+/// If a session is provided, logs the user prompt and final assistant response,
+/// plus tool_use and tool_result events for full history.
+/// Implements tool loop - if the model requests tools, executes them and continues.
+/// Returns the complete response text.
+///
+/// This is a backward-compatible wrapper that uses the engine internally.
+pub async fn execute_prompt_streaming(
+    prompt: &str,
+    config: &Config,
+    mut session: Option<Session>,
+    options: &ExecOptions,
+) -> Result<String> {
+    let effective = crate::shared::context::build_effective_system_prompt_with_paths(config, &options.root)?;
+
+    // Emit warnings from context loading to stderr
+    for warning in &effective.warnings {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
+    }
+
+    // Emit loaded AGENTS.md paths info (per SPEC §10)
+    if !effective.loaded_agents_paths.is_empty() {
+        let paths_str: Vec<String> = effective
+            .loaded_agents_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        use std::io::Write;
+        let _ = writeln!(
+            std::io::stderr(),
+            "Loaded AGENTS.md from: {}",
+            paths_str.join(", ")
+        );
+    }
+
+    // Log user message to session (ensures meta is written for new sessions)
+    if let Some(ref mut s) = session {
+        s.append(&SessionEvent::user_message(prompt))?;
+    }
+
+    let messages = vec![ChatMessage::user(prompt)];
+    let engine_opts = EngineOptions::from(options);
+
+    // Create channels for fan-out
+    let (engine_tx, engine_rx) = engine::create_event_channel();
+    let (render_tx, render_rx) = engine::create_event_channel();
+
+    // Spawn renderer task
+    let renderer_handle = spawn_renderer_task(render_rx);
+
+    // Spawn persist task if session exists
+    let persist_handle = if let Some(sess) = session.clone() {
+        let (persist_tx, persist_rx) = engine::create_event_channel();
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+        let persist = session::spawn_persist_task(sess, persist_rx);
+        Some((fanout, persist))
+    } else {
+        // No session - just fan out to renderer
+        let fanout = engine::spawn_fanout_task(engine_rx, vec![render_tx]);
+        Some((fanout, tokio::spawn(async {}))) // Dummy persist task
+    };
+
+    // Run the engine turn
+    let result = engine::run_turn(
+        messages,
+        config,
+        &engine_opts,
+        effective.prompt.as_deref(),
+        engine_tx,
+    )
+    .await;
+
+    // Wait for all tasks to complete (even on error, to flush error events)
+    if let Some((fanout, persist)) = persist_handle {
+        let _ = fanout.await;
+        let _ = persist.await;
+    }
+    let _ = renderer_handle.await;
+
+    // Propagate error after tasks complete
+    let (final_text, _messages) = result?;
+
+    // Log assistant response to session
+    if let Some(ref mut s) = session {
+        s.append(&SessionEvent::assistant_message(&final_text))?;
+    }
+
+    Ok(final_text)
+}
 
 /// CLI renderer that writes engine events to stdout/stderr.
 ///
@@ -157,19 +268,7 @@ impl CliRenderer {
 ///
 /// The task owns the `CliRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-///
-/// # Example
-///
-/// ```ignore
-/// let (tx, rx) = engine::create_event_channel();
-/// let renderer_handle = spawn_renderer_task(rx);
-///
-/// // ... send events to tx ...
-/// drop(tx); // Close channel
-///
-/// renderer_handle.await.unwrap(); // Wait for renderer to finish
-/// ```
-pub fn spawn_renderer_task(mut rx: EventRx) -> JoinHandle<()> {
+pub fn spawn_renderer_task(mut rx: engine::EventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut renderer = CliRenderer::new();
 
