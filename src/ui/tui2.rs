@@ -1,8 +1,7 @@
-//! Full-screen alternate-screen TUI (TUI2).
+//! Full-screen alternate-screen TUI.
 //!
 //! This module provides a full-screen terminal UI using ratatui.
-//! Unlike the inline-viewport TUI in `app.rs`, this uses the alternate
-//! screen buffer for a persistent, scrollable interface.
+//! Uses the alternate screen buffer for a persistent, scrollable interface.
 //!
 //! See docs/plans/plan_ratatui_full_screen_tui2.md for the implementation plan.
 
@@ -32,11 +31,12 @@ use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
+use crate::engine::session::{self, Session, SessionEvent};
+use crate::engine::{self, EngineOptions};
+use crate::providers::anthropic::ChatMessage;
 use crate::shared::events::EngineEvent;
 use crate::shared::interrupt;
 use crate::shared::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
-use crate::engine::{self, EngineOptions};
-use crate::providers::anthropic::ChatMessage;
 
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
@@ -95,7 +95,7 @@ pub struct Tui2App {
     should_quit: bool,
     /// Text area for input.
     textarea: TextArea<'static>,
-    /// Transcript cells (in-memory, no persistence yet).
+    /// Transcript cells (in-memory display).
     transcript: Vec<HistoryCell>,
     /// Engine configuration.
     config: Config,
@@ -111,6 +111,8 @@ pub struct Tui2App {
     scroll_mode: ScrollMode,
     /// Cached total line count from last render (for scroll calculations).
     cached_line_count: usize,
+    /// Session for persistence (if enabled).
+    session: Option<Session>,
 }
 
 impl Tui2App {
@@ -118,7 +120,25 @@ impl Tui2App {
     ///
     /// This enters the alternate screen and enables raw mode.
     /// Terminal state will be restored when the app is dropped.
-    pub fn new(config: Config, root: PathBuf, system_prompt: Option<String>) -> Result<Self> {
+    pub fn new(
+        config: Config,
+        root: PathBuf,
+        system_prompt: Option<String>,
+        session: Option<Session>,
+    ) -> Result<Self> {
+        Self::with_history(config, root, system_prompt, session, Vec::new())
+    }
+
+    /// Creates a TUI2 application with pre-loaded message history.
+    ///
+    /// Used for resuming previous sessions.
+    pub fn with_history(
+        config: Config,
+        root: PathBuf,
+        system_prompt: Option<String>,
+        session: Option<Session>,
+        history: Vec<ChatMessage>,
+    ) -> Result<Self> {
         // Set up panic hook BEFORE entering alternate screen
         install_panic_hook();
 
@@ -140,19 +160,63 @@ impl Tui2App {
 
         let engine_opts = EngineOptions { root };
 
+        // Build transcript from history
+        let transcript = Self::build_transcript_from_history(&history);
+
         Ok(Self {
             terminal,
             should_quit: false,
             textarea,
-            transcript: Vec::new(),
+            transcript,
             config,
             engine_opts,
             system_prompt,
-            messages: Vec::new(),
+            messages: history,
             engine_state: EngineState::Idle,
             scroll_mode: ScrollMode::FollowLatest,
             cached_line_count: 0,
+            session,
         })
+    }
+
+    /// Builds transcript cells from message history.
+    fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
+        use crate::providers::anthropic::MessageContent;
+
+        let mut transcript = Vec::new();
+
+        for msg in messages {
+            let text = match &msg.content {
+                MessageContent::Text(t) => t.clone(),
+                MessageContent::Blocks(blocks) => {
+                    // Extract text blocks, ignore tool use/result for display
+                    blocks
+                        .iter()
+                        .filter_map(|b| {
+                            if let crate::providers::anthropic::ChatContentBlock::Text(t) = b {
+                                Some(t.as_str())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                }
+            };
+
+            if text.is_empty() {
+                continue;
+            }
+
+            let cell = match msg.role.as_str() {
+                "user" => HistoryCell::user(&text),
+                "assistant" => HistoryCell::assistant(&text),
+                _ => continue,
+            };
+            transcript.push(cell);
+        }
+
+        transcript
     }
 
     /// Runs the main event loop.
@@ -349,11 +413,22 @@ impl Tui2App {
 
         // Get the result
         match futures_util::FutureExt::now_or_never(handle) {
-            Some(Ok(Ok((_final_text, new_messages)))) => {
+            Some(Ok(Ok((final_text, new_messages)))) => {
                 // Success - update messages
                 // Note: streaming cell was already finalized via AssistantFinal event
                 // If we never got a streaming cell (empty response), don't add anything
                 self.messages = new_messages;
+
+                // Log assistant response to session
+                if !final_text.is_empty()
+                    && let Some(ref mut s) = self.session
+                    && let Err(e) = s.append(&SessionEvent::assistant_message(&final_text))
+                {
+                    self.transcript.push(HistoryCell::system(format!(
+                        "Warning: Failed to save session: {}",
+                        e
+                    )));
+                }
             }
             Some(Ok(Err(e))) => {
                 // Engine error
@@ -777,6 +852,17 @@ impl Tui2App {
         // Add user message to engine history
         self.messages.push(ChatMessage::user(&text));
 
+        // Log user message to session
+        if let Some(ref mut s) = self.session
+            && let Err(e) = s.append(&SessionEvent::user_message(&text))
+        {
+            // Best-effort: show warning in transcript
+            self.transcript.push(HistoryCell::system(format!(
+                "Warning: Failed to save session: {}",
+                e
+            )));
+        }
+
         // Clear input
         self.clear_input();
 
@@ -786,7 +872,7 @@ impl Tui2App {
 
     /// Spawns an engine turn in the background.
     fn spawn_engine_turn(&mut self) {
-        let (tx, rx) = engine::create_event_channel();
+        let (engine_tx, engine_rx) = engine::create_event_channel();
 
         // Clone what we need for the async task
         let messages = self.messages.clone();
@@ -794,18 +880,31 @@ impl Tui2App {
         let engine_opts = self.engine_opts.clone();
         let system_prompt = self.system_prompt.clone();
 
+        // Set up event receivers: one for TUI updates, optionally one for session persistence
+        let (tui_tx, tui_rx) = engine::create_event_channel();
+
+        // If session exists, spawn persist task
+        if let Some(sess) = self.session.clone() {
+            let (persist_tx, persist_rx) = engine::create_event_channel();
+            let _fanout = engine::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
+            let _persist = session::spawn_persist_task(sess, persist_rx);
+        } else {
+            // No session - just fan out to TUI
+            let _fanout = engine::spawn_fanout_task(engine_rx, vec![tui_tx]);
+        }
+
         let handle = tokio::spawn(async move {
             engine::run_turn(
                 messages,
                 &config,
                 &engine_opts,
                 system_prompt.as_deref(),
-                tx,
+                engine_tx,
             )
             .await
         });
 
-        self.engine_state = EngineState::Waiting { handle, rx };
+        self.engine_state = EngineState::Waiting { handle, rx: tui_rx };
     }
 }
 

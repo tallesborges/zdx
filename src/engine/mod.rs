@@ -16,10 +16,10 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
-use crate::shared::events::{EngineEvent, ErrorKind};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
+use crate::shared::events::{EngineEvent, ErrorKind};
 use crate::tools::{self, ToolContext, ToolResult};
 
 /// Options for engine execution.

@@ -287,13 +287,15 @@ Goal: Quality-of-life input features.
 - [ ] Status line with mode indicator (streaming, focus state if focus toggle added).
 - [ ] ✅ Check-in: input feels polished for daily use.
 
-## Phase 6: Default + cleanup
+## Phase 6: Default + cleanup ✅
 Goal: TUI2 becomes the default.
 
-- [ ] Switch `zdx` interactive path to TUI2 by default.
-- [ ] Deprecate `src/ui/app.rs` (inline TUI).
-- [ ] Integration test: "no stdout transcript while TUI2 is active".
-- [ ] ✅ Check-in: go/no-go for shipping as default.
+- [x] Switch `zdx` interactive path to TUI2 by default.
+- [x] Removed `src/ui/app.rs` (inline TUI).
+- [x] Integration test: "no stdout transcript while TUI2 is active" (tests/tui_chat.rs).
+- [x] Added session persistence support to TUI2.
+- [x] Added `with_history` constructor for session resume support.
+- [x] ✅ Check-in: TUI2 is now the default for interactive mode.
 
 ---
 
