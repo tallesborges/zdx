@@ -275,9 +275,12 @@ impl HistoryCell {
                             None,
                         )
                     }
-                    ToolState::Done => {
-                        ("$ ".to_string(), Style::ToolSuccess, Style::ToolStatus, None)
-                    }
+                    ToolState::Done => (
+                        "$ ".to_string(),
+                        Style::ToolSuccess,
+                        Style::ToolStatus,
+                        None,
+                    ),
                     ToolState::Error => (
                         "$ ".to_string(),
                         Style::ToolError,
