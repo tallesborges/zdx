@@ -1,6 +1,6 @@
-//! Orchestrator module for UI-agnostic execution.
+//! Engine module for UI-agnostic execution.
 //!
-//! The orchestrator drives the provider + tool loop and emits `EngineEvent`s
+//! The engine drives the provider + tool loop and emits `EngineEvent`s
 //! via async channels. No direct stdout/stderr writes occur in this module.
 
 use std::path::PathBuf;

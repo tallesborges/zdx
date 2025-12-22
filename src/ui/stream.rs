@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 
 use crate::config::Config;
 use crate::core::events::{EngineEvent, ToolOutput};
-use crate::core::orchestrator::EngineOptions;
+use crate::core::engine::EngineOptions;
 use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
 
@@ -80,27 +80,27 @@ pub async fn execute_prompt_streaming(
     let engine_opts = EngineOptions::from(options);
 
     // Create channels for fan-out
-    let (engine_tx, engine_rx) = crate::core::orchestrator::create_event_channel();
-    let (render_tx, render_rx) = crate::core::orchestrator::create_event_channel();
+    let (engine_tx, engine_rx) = crate::core::engine::create_event_channel();
+    let (render_tx, render_rx) = crate::core::engine::create_event_channel();
 
     // Spawn renderer task
     let renderer_handle = spawn_renderer_task(render_rx);
 
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {
-        let (persist_tx, persist_rx) = crate::core::orchestrator::create_event_channel();
+        let (persist_tx, persist_rx) = crate::core::engine::create_event_channel();
         let fanout =
-            crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+            crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
         let persist = session::spawn_persist_task(sess, persist_rx);
         Some((fanout, persist))
     } else {
         // No session - just fan out to renderer
-        let fanout = crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![render_tx]);
+        let fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx]);
         Some((fanout, tokio::spawn(async {}))) // Dummy persist task
     };
 
     // Run the engine turn
-    let result = crate::core::orchestrator::run_turn(
+    let result = crate::core::engine::run_turn(
         messages,
         config,
         &engine_opts,
@@ -270,7 +270,7 @@ impl CliRenderer {
 ///
 /// The task owns the `CliRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-pub fn spawn_renderer_task(mut rx: crate::core::orchestrator::EventRx) -> JoinHandle<()> {
+pub fn spawn_renderer_task(mut rx: crate::core::engine::EventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut renderer = CliRenderer::new();
 

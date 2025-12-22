@@ -9,7 +9,7 @@
   - `src/core/events.rs`: engine event types for streaming
   - `src/core/context.rs`: project context loading (AGENTS.md files)
   - `src/core/interrupt.rs`: signal handling
-  - `src/core/orchestrator.rs`: engine loop + event channels
+  - `src/core/engine.rs`: engine loop + event channels
   - `src/core/session.rs`: session persistence
 - `src/ui/`: terminal UI app + chat loop + stdout/stderr streaming
   - `src/ui/transcript.rs`: TUI view model (styles, wrapping, rendering)
