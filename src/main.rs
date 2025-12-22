@@ -1,15 +1,14 @@
 mod config;
-mod engine;
+mod core;
 mod providers;
-mod shared;
 mod tools;
 mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
 
-use crate::engine::session::{self, SessionOptions};
-use crate::shared::interrupt;
+use crate::core::interrupt;
+use crate::core::session::{self, SessionOptions};
 
 #[derive(Parser)]
 #[command(name = "zdx")]
