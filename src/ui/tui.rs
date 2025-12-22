@@ -440,21 +440,9 @@ impl TuiApp {
             }
             EngineEvent::ToolRequested { id, name, input } => {
                 // Create a tool cell in running state
-                // Insert BEFORE the streaming assistant cell (if any) so tool appears above its output
+                // Tools are appended after assistant text since Claude streams text before tool_use blocks
                 let tool_cell = HistoryCell::tool_running(id, name, input.clone());
-                if let Some(pos) = self.transcript.iter().position(|c| {
-                    matches!(
-                        c,
-                        HistoryCell::Assistant {
-                            is_streaming: true,
-                            ..
-                        }
-                    )
-                }) {
-                    self.transcript.insert(pos, tool_cell);
-                } else {
-                    self.transcript.push(tool_cell);
-                }
+                self.transcript.push(tool_cell);
             }
             EngineEvent::ToolStarted { .. } => {
                 // Already showing running state from ToolRequested
