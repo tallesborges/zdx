@@ -4,11 +4,11 @@
 //! - `events`: Engine event types for streaming
 //! - `context`: Project context loading (AGENTS.md files)
 //! - `interrupt`: Signal handling for graceful interruption
-//! - `orchestrator`: Engine loop and event channels
+//! - `engine`: Engine loop and event channels
 //! - `session`: Session persistence
 
 pub mod context;
+pub mod engine;
 pub mod events;
 pub mod interrupt;
-pub mod orchestrator;
 pub mod session;

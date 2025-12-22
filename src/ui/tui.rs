@@ -33,7 +33,7 @@ use tui_textarea::TextArea;
 use crate::config::Config;
 use crate::core::events::EngineEvent;
 use crate::core::interrupt;
-use crate::core::orchestrator::EngineOptions;
+use crate::core::engine::EngineOptions;
 use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
@@ -1088,7 +1088,7 @@ impl TuiApp {
 
     /// Spawns an engine turn in the background.
     fn spawn_engine_turn(&mut self) {
-        let (engine_tx, engine_rx) = crate::core::orchestrator::create_event_channel();
+        let (engine_tx, engine_rx) = crate::core::engine::create_event_channel();
 
         // Clone what we need for the async task
         let messages = self.messages.clone();
@@ -1097,21 +1097,21 @@ impl TuiApp {
         let system_prompt = self.system_prompt.clone();
 
         // Set up event receivers: one for TUI updates, optionally one for session persistence
-        let (tui_tx, tui_rx) = crate::core::orchestrator::create_event_channel();
+        let (tui_tx, tui_rx) = crate::core::engine::create_event_channel();
 
         // If session exists, spawn persist task
         if let Some(sess) = self.session.clone() {
-            let (persist_tx, persist_rx) = crate::core::orchestrator::create_event_channel();
+            let (persist_tx, persist_rx) = crate::core::engine::create_event_channel();
             let _fanout =
-                crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
+                crate::core::engine::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
             let _persist = session::spawn_persist_task(sess, persist_rx);
         } else {
             // No session - just fan out to TUI
-            let _fanout = crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![tui_tx]);
+            let _fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![tui_tx]);
         }
 
         let handle = tokio::spawn(async move {
-            crate::core::orchestrator::run_turn(
+            crate::core::engine::run_turn(
                 messages,
                 &config,
                 &engine_opts,
