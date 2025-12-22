@@ -285,15 +285,15 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
 
 fn run_login_anthropic() -> Result<()> {
     use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
-    use std::io::{self, BufRead, IsTerminal, Write};
+    use std::io::{self, BufRead, Write};
 
     // Check if already logged in
-    if let Some(existing) = oauth_anthropic::load_token()? {
+    if let Some(existing) = oauth_anthropic::load_credentials()? {
         println!(
             "Already logged in to Anthropic (token: {})",
-            oauth_anthropic::mask_token(&existing)
+            oauth_anthropic::mask_token(&existing.access)
         );
-        print!("Do you want to replace the existing token? [y/N] ");
+        print!("Do you want to replace the existing credentials? [y/N] ");
         io::stdout().flush()?;
 
         let mut response = String::new();
@@ -304,45 +304,54 @@ fn run_login_anthropic() -> Result<()> {
         }
     }
 
+    // Generate PKCE challenge
+    let pkce = oauth_anthropic::generate_pkce();
+    let auth_url = oauth_anthropic::build_auth_url(&pkce);
+
     // Show instructions
-    println!("To log in to Anthropic:");
+    println!("To log in to Anthropic with OAuth:");
     println!();
-    println!("  1. Visit: {}", oauth_anthropic::AUTH_URL);
-    println!("  2. Create or copy an API key");
-    println!("  3. Paste it below");
+    println!("  1. A browser window will open (or visit the URL below)");
+    println!("  2. Log in to your Anthropic account and authorize access");
+    println!("  3. After authorization, you'll see a code - copy it");
+    println!("  4. Paste the code below (format: code#state)");
+    println!();
+    println!("Authorization URL:");
+    println!("  {}", auth_url);
     println!();
 
     // Try to open browser (best effort, skip in tests)
     if std::env::var("ZDX_NO_BROWSER").is_err() {
-        let _ = open::that(oauth_anthropic::AUTH_URL);
+        let _ = open::that(&auth_url);
     }
 
-    // Read token
-    print!("Paste your Anthropic API key: ");
+    // Read authorization code
+    print!("Paste authorization code: ");
     io::stdout().flush()?;
 
-    let token = if io::stdin().is_terminal() {
-        // Read securely without echo if possible
-        rpassword::read_password().context("Failed to read token")?
-    } else {
-        let mut token = String::new();
-        io::stdin().lock().read_line(&mut token)?;
-        token.trim().to_string()
-    };
+    let mut auth_code = String::new();
+    io::stdin().lock().read_line(&mut auth_code)?;
+    let auth_code = auth_code.trim();
 
-    // Validate
-    oauth_anthropic::validate_token_format(&token)?;
+    if auth_code.is_empty() {
+        anyhow::bail!("Authorization code cannot be empty");
+    }
 
-    // Save
-    oauth_anthropic::save_token(&token)?;
+    // Exchange code for tokens (need async runtime)
+    println!("Exchanging code for tokens...");
+    let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
+    let credentials = rt.block_on(oauth_anthropic::exchange_code(auth_code, &pkce))?;
+
+    // Save credentials
+    oauth_anthropic::save_credentials(&credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
         "✓ Logged in to Anthropic (token: {})",
-        oauth_anthropic::mask_token(&token)
+        oauth_anthropic::mask_token(&credentials.access)
     );
-    println!("  Token saved to: {}", cache_path.display());
+    println!("  Credentials saved to: {}", cache_path.display());
 
     Ok(())
 }
@@ -350,14 +359,14 @@ fn run_login_anthropic() -> Result<()> {
 fn run_logout_anthropic() -> Result<()> {
     use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
 
-    let had_token = oauth_anthropic::clear_token()?;
+    let had_creds = oauth_anthropic::clear_credentials()?;
 
-    if had_token {
+    if had_creds {
         let cache_path = OAuthCache::cache_path();
         println!("✓ Logged out from Anthropic");
-        println!("  Token removed from: {}", cache_path.display());
+        println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to Anthropic (no token found).");
+        println!("Not logged in to Anthropic (no credentials found).");
     }
 
     Ok(())
