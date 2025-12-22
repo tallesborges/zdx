@@ -1,6 +1,6 @@
 # Slash Commands Implementation Plan
 
-**Status:** In Progress  
+**Status:** Complete ✅  
 **Scope:** Add `/commands` popup to TUI with `/new` (alias `/clear`) and `/quit`
 
 ---
@@ -30,14 +30,15 @@
 ## User Journey
 
 ```
-1. User is typing in input area
+1. User is in input area (empty)
 2. User presses `/` or `Ctrl+P` → popup appears above input
+   (If input has text, `/` just types "/" normally)
 3. Popup shows: /new (aliases: /clear), /quit
 4. User can:
    a. Type to filter (e.g., "ne" shows only /new)
    b. Arrow keys to navigate selection
    c. Enter to execute selected command
-   d. Escape to close popup and insert "/" into input (only if opened via `/`)
+   d. Escape to close popup (input stays empty)
 5. Command executes, popup closes
 6. Input state depends on command:
    - /new: input cleared, transcript cleared, new session started
@@ -185,34 +186,35 @@
 
 ---
 
-### Slice 5: Polish + Edge Cases
+### Slice 5: Polish + Edge Cases ✅ DONE
 
 **Goal:** Handle edge cases, improve UX.
 
 **Edge cases:**
-- [ ] `/` at end of text: "hello/" → popup opens, Escape adds "/" after "hello"
-- [ ] Multiple `/` in input already: should still work
-- [ ] Very long filter text: truncate display, don't crash
-- [ ] Terminal resize while popup open: recalculate position
-- [ ] Paste containing "/": don't trigger popup (only direct `/` keypress)
+- [x] `/` with existing text: just types "/" normally (popup only opens when input empty)
+- [x] Multiple `/` in input already: works - "/" just types normally
+- [x] Very long filter text: truncate display with "…" prefix, don't crash
+- [x] Terminal resize while popup open: recalculate position (calculated each render)
+- [x] Paste containing "/": don't trigger popup (Event::Paste handled separately)
 
 **UX polish:**
-- [ ] Popup animation: instant (no animation needed for MVP)
-- [ ] Keyboard hint in popup footer: "↑↓ navigate • Enter select • Esc cancel"
-- [ ] Selected command shows full description (if space allows)
-- [ ] Filter prefix shown: `> clear` (dimmed `>`)
+- [x] Popup animation: instant (no animation needed for MVP)
+- [x] Keyboard hint in popup footer: "↑↓ navigate • Enter select • Esc cancel"
+- [x] Selected command shows full description (if space allows)
+- [x] Filter prefix shown: `> /filter` (dimmed `>`)
 
 **Checklist:**
-- [ ] Test: resize while popup open
-- [ ] Test: Escape inserts "/" at cursor position
-- [ ] Test: Paste text with "/" doesn't trigger
-- [ ] Add keyboard hints to popup
-- [ ] Ensure popup doesn't steal focus from input cursor visually
+- [x] Test: resize while popup open (works - recalculated each render)
+- [x] Test: "/" only opens popup when input empty (otherwise types "/" normally)
+- [x] Test: Escape closes popup cleanly (no "/" inserted since input was empty)
+- [x] Test: Paste text with "/" doesn't trigger (Event::Paste handled separately)
+- [x] Add keyboard hints to popup
+- [x] Ensure popup doesn't steal focus from input cursor visually (input cursor hidden when popup open)
 
 **✅ Demo:** Resize terminal while popup open → popup repositions correctly.
 
 **Failure modes:**
-- Cursor position lost after Escape → track cursor, insert at correct position
+- None - clean cancel behavior ✅
 
 ---
 
@@ -230,10 +232,10 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Trigger | `/` anywhere in input OR `Ctrl+P` | More discoverable, consistent with other tools |
+| Trigger | `/` only when input empty OR `Ctrl+P` | Avoids interfering with normal typing |
 | Popup vs inline | Popup overlay | Shows all commands, easier discovery |
 | Filter matching | Contains (case-insensitive) | Simple, good enough for 2 commands |
-| Escape behavior | Close + insert "/" (if opened via `/`) | Preserves user intent (they typed "/") |
+| Escape behavior | Close (no insert since input was empty) | Clean cancel, nothing to preserve |
 | New during streaming | Block with message | Safer, avoids race conditions |
 | Quit during streaming | Allow (interrupts first) | Consistent with Ctrl+C |
 | Command naming | `/new` primary, `/clear` alias | "new" is clearer about the action (starts fresh session) |

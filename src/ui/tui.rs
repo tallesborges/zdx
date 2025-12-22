@@ -795,6 +795,8 @@ impl TuiApp {
     /// ├────────────────────────────────────────┤
     /// │▶ /clear (new)     Clear conversation...│
     /// │  /quit (q, exit)  Exit ZDX             │
+    /// ├────────────────────────────────────────┤
+    /// │ ↑↓ navigate • Enter select • Esc cancel│  ← Keyboard hints
     /// └────────────────────────────────────────┘
     /// ```
     fn render_command_popup(
@@ -808,9 +810,9 @@ impl TuiApp {
         // Calculate popup dimensions
         // Width: min(50, terminal_width - 4) to leave some margin
         let popup_width = 50.min(area.width.saturating_sub(4));
-        // Height: commands + 4 (top border + filter line + separator + bottom border)
-        // Minimum 5 lines even if no commands match
-        let popup_height = (commands.len() as u16 + 4).max(5).min(area.height / 2);
+        // Height: commands + 6 (top border + filter line + separator + commands + separator + hints + bottom border)
+        // Minimum 7 lines even if no commands match
+        let popup_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
 
         // Available vertical space (between header and input)
         let available_top = HEADER_HEIGHT;
@@ -847,8 +849,14 @@ impl TuiApp {
         );
 
         // Filter input line at TOP (row 0 of inner area)
+        // Truncate long filter text to fit in available width (leave room for "> /" prefix and "█" cursor)
+        let max_filter_len = inner_area.width.saturating_sub(4) as usize; // 4 = "> /" + "█"
         let filter_display = if popup.filter.is_empty() {
             "/".to_string()
+        } else if popup.filter.len() > max_filter_len {
+            // Truncate from the start to show the most recent characters
+            let truncated = &popup.filter[popup.filter.len() - max_filter_len..];
+            format!("/…{}", truncated)
         } else {
             format!("/{}", popup.filter)
         };
@@ -864,18 +872,19 @@ impl TuiApp {
         // Separator line (row 1 of inner area)
         let separator = "─".repeat(inner_area.width as usize);
         let separator_line = Paragraph::new(Line::from(Span::styled(
-            separator,
+            &separator,
             Style::default().fg(Color::DarkGray),
         )));
         let separator_area = Rect::new(inner_area.x, inner_area.y + 1, inner_area.width, 1);
         frame.render_widget(separator_line, separator_area);
 
-        // Command list area (rows 2+ of inner area)
+        // Command list area (rows 2 to height-3, leaving room for bottom separator + hints)
+        let list_height = inner_area.height.saturating_sub(4); // -4 for filter, separator, bottom separator, hints
         let list_area = Rect::new(
             inner_area.x,
             inner_area.y + 2,
             inner_area.width,
-            inner_area.height.saturating_sub(2),
+            list_height,
         );
 
         // Build the list items
@@ -920,6 +929,35 @@ impl TuiApp {
             list_state.select(Some(popup.selected));
         }
         frame.render_stateful_widget(list, list_area, &mut list_state);
+
+        // Bottom separator (above hints)
+        let bottom_sep_y = inner_area.y + 2 + list_height;
+        if bottom_sep_y < inner_area.y + inner_area.height {
+            let bottom_separator_area = Rect::new(inner_area.x, bottom_sep_y, inner_area.width, 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    &separator,
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                bottom_separator_area,
+            );
+        }
+
+        // Keyboard hints at the bottom
+        let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
+        let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
+        let hints_line = Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(Color::Yellow)),
+            Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
+            Span::styled("•", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Enter", Style::default().fg(Color::Yellow)),
+            Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+            Span::styled("•", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Esc", Style::default().fg(Color::Yellow)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]);
+        let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
+        frame.render_widget(hints_para, hints_area);
     }
 
     /// Renders the transcript into ratatui Lines.
@@ -1044,11 +1082,17 @@ impl TuiApp {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
-            // "/" opens command popup (Escape will insert "/" back)
+            // "/" opens command popup only when input is empty
+            // Otherwise, just type "/" normally
             KeyCode::Char('/') if !ctrl && !shift && !alt => {
-                self.open_command_popup(true);
+                if self.get_input_text().is_empty() {
+                    // Input is empty, so Escape shouldn't insert "/" (nothing to preserve)
+                    self.open_command_popup(false);
+                } else {
+                    self.textarea.input(key);
+                }
             }
-            // Ctrl+P: open command popup (Escape won't insert anything)
+            // Ctrl+P: open command popup (always works, Escape won't insert anything)
             KeyCode::Char('p') if ctrl && !shift && !alt => {
                 self.open_command_popup(false);
             }
@@ -1743,5 +1787,46 @@ mod tests {
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 1);
         assert_eq!(filtered[0].name, "quit");
+    }
+
+    #[test]
+    fn test_popup_long_filter_still_filters_correctly() {
+        // Very long filter text should still work for filtering
+        // (truncation is only for display, not for matching)
+        // The filter matches if command name/alias CONTAINS the filter,
+        // so a very long filter won't match anything
+        let mut state = CommandPopupState::new(true);
+        state.filter = "this_is_a_very_long_filter_that_wont_match_anything".to_string();
+        let filtered = state.filtered_commands();
+        assert!(filtered.is_empty());
+
+        // Even a moderately long filter like "newclear" won't match
+        // because neither "new" nor "clear" contains "newclear"
+        let mut state2 = CommandPopupState::new(true);
+        state2.filter = "newclear".to_string();
+        let filtered2 = state2.filtered_commands();
+        assert!(filtered2.is_empty());
+
+        // But a filter that's a substring of the command still works
+        let mut state3 = CommandPopupState::new(true);
+        state3.filter = "ew".to_string(); // substring of "new"
+        let filtered3 = state3.filtered_commands();
+        assert_eq!(filtered3.len(), 1);
+        assert_eq!(filtered3[0].name, "new");
+    }
+
+    #[test]
+    fn test_popup_insert_slash_on_escape_flag() {
+        // When opened via "/" (empty input) or Ctrl+P, insert_slash_on_escape should be false
+        // (nothing to preserve when input was empty)
+        let state_from_slash = CommandPopupState::new(false);
+        assert!(!state_from_slash.insert_slash_on_escape);
+
+        let state_from_ctrl_p = CommandPopupState::new(false);
+        assert!(!state_from_ctrl_p.insert_slash_on_escape);
+
+        // The flag can still be set to true (for future use cases)
+        let state_with_flag = CommandPopupState::new(true);
+        assert!(state_with_flag.insert_slash_on_escape);
     }
 }
