@@ -159,6 +159,7 @@ Sessions are append-only **JSONL** event logs (ADR-0001).
 
 - Base dir: `$ZDX_HOME` (preferred) else `$XDG_CONFIG_HOME/zdx` else `~/.config/zdx`
 - Sessions dir: `<base>/sessions/`
+- OAuth cache: `<base>/oauth.json` (0600 perms)
 
 ### Format (Shipped)
 
@@ -197,6 +198,8 @@ Error:
 
 **Shipped:** Anthropic Claude (streaming + tool loop).  
 API keys are env-only and never stored in config (`ANTHROPIC_API_KEY`).
+OAuth tokens (Anthropic account login) may be cached in `<base>/oauth.json`.
+Auth precedence: `oauth.json` > `ANTHROPIC_API_KEY`.
 
 **Testability requirement (Shipped):** provider calls support a base URL override for offline fixture tests.
 
