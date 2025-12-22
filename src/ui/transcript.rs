@@ -51,6 +51,9 @@ pub enum ToolState {
     Error,
 }
 
+/// Spinner frames for animated tool running indicator.
+const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+
 /// A logical unit in the transcript.
 ///
 /// Each cell represents a complete conceptual block:
@@ -216,7 +219,10 @@ impl HistoryCell {
     /// This is the core rendering contract from SPEC.md §9:
     /// - Each cell can render display lines for a given width
     /// - Wrapping happens at display time for the current width
-    pub fn display_lines(&self, width: usize) -> Vec<StyledLine> {
+    ///
+    /// The `spinner_frame` parameter controls which frame of the spinner animation
+    /// to display for running tools (0-9). Callers should increment this at ~10Hz.
+    pub fn display_lines(&self, width: usize, spinner_frame: usize) -> Vec<StyledLine> {
         match self {
             HistoryCell::User { content, .. } => {
                 let prefix = "| ";
@@ -259,10 +265,21 @@ impl HistoryCell {
 
                 // Determine prefix and command style based on state
                 let (prefix, prefix_style, cmd_style, suffix) = match state {
-                    ToolState::Running => ("⠋ ", Style::ToolRunning, Style::ToolStatus, None),
-                    ToolState::Done => ("$ ", Style::ToolSuccess, Style::ToolStatus, None),
+                    ToolState::Running => {
+                        let frame = SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()];
+                        // Need to allocate since we're selecting from array
+                        (
+                            format!("{} ", frame),
+                            Style::ToolRunning,
+                            Style::ToolStatus,
+                            None,
+                        )
+                    }
+                    ToolState::Done => {
+                        ("$ ".to_string(), Style::ToolSuccess, Style::ToolStatus, None)
+                    }
                     ToolState::Error => (
-                        "$ ",
+                        "$ ".to_string(),
                         Style::ToolError,
                         Style::ToolCancelled,
                         Some(" (failed)"),
@@ -274,7 +291,7 @@ impl HistoryCell {
                     if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
                         let mut spans = vec![
                             StyledSpan {
-                                text: prefix.to_string(),
+                                text: prefix.clone(),
                                 style: prefix_style,
                             },
                             StyledSpan {
@@ -314,7 +331,7 @@ impl HistoryCell {
                     };
                     let mut spans = vec![
                         StyledSpan {
-                            text: prefix.to_string(),
+                            text: prefix.clone(),
                             style: prefix_style,
                         },
                         StyledSpan {
@@ -375,27 +392,14 @@ impl HistoryCell {
                     }
                 }
 
-                // Status line (only show when running or failed)
-                match state {
-                    ToolState::Running => {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: "Running...".to_string(),
-                                style: Style::ToolStatus,
-                            }],
-                        });
-                    }
-                    ToolState::Error => {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: "Failed".to_string(),
-                                style: Style::ToolError,
-                            }],
-                        });
-                    }
-                    ToolState::Done => {
-                        // No status line when done - output speaks for itself
-                    }
+                // Status line (only show when failed - spinner indicates running)
+                if *state == ToolState::Error {
+                    lines.push(StyledLine {
+                        spans: vec![StyledSpan {
+                            text: "Failed".to_string(),
+                            style: Style::ToolError,
+                        }],
+                    });
                 }
 
                 lines
@@ -647,7 +651,7 @@ mod tests {
     #[test]
     fn test_user_cell_display() {
         let cell = HistoryCell::user("Hello, world!");
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
@@ -658,7 +662,7 @@ mod tests {
     #[test]
     fn test_user_cell_wrapping() {
         let cell = HistoryCell::user("This is a longer message that should wrap");
-        let lines = cell.display_lines(25);
+        let lines = cell.display_lines(25, 0);
 
         // "| " is 2 bytes, leaving 23 for content
         assert!(lines.len() > 1, "Should wrap to multiple lines");
@@ -673,7 +677,7 @@ mod tests {
     #[test]
     fn test_assistant_streaming() {
         let cell = HistoryCell::assistant_streaming("Thinking...");
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         // Should have streaming cursor
         let last_line = lines.last().unwrap();
@@ -686,7 +690,7 @@ mod tests {
     fn test_assistant_final() {
         let mut cell = HistoryCell::assistant_streaming("Done!");
         cell.finalize_assistant();
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         // Should NOT have streaming cursor
         let last_line = lines.last().unwrap();
@@ -698,22 +702,15 @@ mod tests {
     fn test_tool_running() {
         let cell =
             HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
-        // Should have tool info line + status line
-        assert!(lines.len() >= 2);
-        // First line should show tool name/path
+        // Should have tool info line (spinner indicates running, no separate status line)
+        assert!(!lines.is_empty());
+        // First line should show spinner + tool name/path
         let first_line: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
         assert!(first_line.contains("read") || first_line.contains("test.txt"));
-        // Last line should show "Running..."
-        let last_line: String = lines
-            .last()
-            .unwrap()
-            .spans
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(last_line.contains("Running"));
+        // Should have spinner prefix (first frame is ⠋)
+        assert!(first_line.starts_with("⠋"));
 
         // State should be Running
         match cell {
@@ -730,7 +727,7 @@ mod tests {
             serde_json::json!({"content": "file data"}),
         ));
 
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
         // Should have at least the tool info line (no "Done" status line)
         assert!(!lines.is_empty());
         // Should NOT have "Running..." anymore
@@ -753,7 +750,7 @@ mod tests {
             HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
         cell.set_tool_result(ToolOutput::failure("not_found", "File not found"));
 
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
         // Last line should show "Failed"
         let last_line: String = lines
             .last()
@@ -774,7 +771,7 @@ mod tests {
     #[test]
     fn test_system_cell() {
         let cell = HistoryCell::system("Welcome to ZDX!");
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].text, "System: ");
@@ -783,7 +780,7 @@ mod tests {
     #[test]
     fn test_multiline_content() {
         let cell = HistoryCell::user("Line 1\nLine 2\nLine 3");
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 3);
         // First line has prefix
@@ -796,7 +793,7 @@ mod tests {
     #[test]
     fn test_empty_content() {
         let cell = HistoryCell::user("");
-        let lines = cell.display_lines(80);
+        let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans[0].text, "| ");
