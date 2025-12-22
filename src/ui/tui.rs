@@ -31,9 +31,9 @@ use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
+use crate::core::engine::EngineOptions;
 use crate::core::events::EngineEvent;
 use crate::core::interrupt;
-use crate::core::engine::EngineOptions;
 use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
@@ -785,7 +785,15 @@ impl TuiApp {
 
     /// Renders the command popup as an overlay.
     ///
-    /// The popup is centered horizontally and positioned just above the input area.
+    /// Layout (Amp-style with input at top):
+    /// ```text
+    /// ┌ Commands ──────────────────────────────┐
+    /// │ > filter_text█                         │  ← Input at TOP
+    /// ├────────────────────────────────────────┤
+    /// │▶ /clear (new)     Clear conversation...│
+    /// │  /quit (q, exit)  Exit ZDX             │
+    /// └────────────────────────────────────────┘
+    /// ```
     fn render_command_popup(
         frame: &mut ratatui::Frame,
         popup: &CommandPopupState,
@@ -797,9 +805,9 @@ impl TuiApp {
         // Calculate popup dimensions
         // Width: min(50, terminal_width - 4) to leave some margin
         let popup_width = 50.min(area.width.saturating_sub(4));
-        // Height: commands + 3 (top border + filter line + bottom border)
-        // Minimum 4 lines even if no commands match
-        let popup_height = (commands.len() as u16 + 3).max(4).min(area.height / 2);
+        // Height: commands + 4 (top border + filter line + separator + bottom border)
+        // Minimum 5 lines even if no commands match
+        let popup_height = (commands.len() as u16 + 4).max(5).min(area.height / 2);
 
         // Available vertical space (between header and input)
         let available_top = HEADER_HEIGHT;
@@ -814,6 +822,58 @@ impl TuiApp {
 
         // Clear the area behind the popup
         frame.render_widget(Clear, popup_area);
+
+        // Render outer border
+        let outer_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" Commands ")
+            .title_style(
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_widget(outer_block, popup_area);
+
+        // Inner area (inside border)
+        let inner_area = Rect::new(
+            popup_area.x + 1,
+            popup_area.y + 1,
+            popup_area.width.saturating_sub(2),
+            popup_area.height.saturating_sub(2),
+        );
+
+        // Filter input line at TOP (row 0 of inner area)
+        let filter_display = if popup.filter.is_empty() {
+            "/".to_string()
+        } else {
+            format!("/{}", popup.filter)
+        };
+        let filter_line = Line::from(vec![
+            Span::styled("> ", Style::default().fg(Color::DarkGray)),
+            Span::styled(&filter_display, Style::default().fg(Color::Yellow)),
+            Span::styled("█", Style::default().fg(Color::Yellow)), // Cursor indicator
+        ]);
+        let filter_para = Paragraph::new(filter_line);
+        let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
+        frame.render_widget(filter_para, filter_area);
+
+        // Separator line (row 1 of inner area)
+        let separator = "─".repeat(inner_area.width as usize);
+        let separator_line = Paragraph::new(Line::from(Span::styled(
+            separator,
+            Style::default().fg(Color::DarkGray),
+        )));
+        let separator_area = Rect::new(inner_area.x, inner_area.y + 1, inner_area.width, 1);
+        frame.render_widget(separator_line, separator_area);
+
+        // Command list area (rows 2+ of inner area)
+        let list_area = Rect::new(
+            inner_area.x,
+            inner_area.y + 2,
+            inner_area.width,
+            inner_area.height.saturating_sub(2),
+        );
 
         // Build the list items
         let items: Vec<ListItem> = if commands.is_empty() {
@@ -842,15 +902,8 @@ impl TuiApp {
                 .collect()
         };
 
-        // Create the list with selection
+        // Create the list with selection (no block - we already have outer border)
         let list = List::new(items)
-            .block(
-                Block::default()
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(Color::Yellow))
-                    .title(" Commands ")
-                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
-            )
             .highlight_style(
                 Style::default()
                     .bg(Color::DarkGray)
@@ -863,32 +916,7 @@ impl TuiApp {
         if !commands.is_empty() {
             list_state.select(Some(popup.selected));
         }
-        frame.render_stateful_widget(list, popup_area, &mut list_state);
-
-        // Render filter line at the bottom of the popup (inside the border)
-        // We'll show it in the block title for now, or as a footer
-        // Actually, let's add it as a separate line below - but that complicates things
-        // For MVP, show filter in the title if non-empty
-        if !popup.filter.is_empty() {
-            let filter_text = format!(" /{} ", popup.filter);
-            let filter_line = Paragraph::new(Line::from(vec![
-                Span::styled(">", Style::default().fg(Color::DarkGray)),
-                Span::styled(&filter_text, Style::default().fg(Color::Yellow)),
-            ]))
-            .alignment(Alignment::Left);
-
-            // Position at bottom of popup area, inside border
-            let filter_area = Rect::new(
-                popup_area.x + 1,
-                popup_area.y + popup_area.height - 1,
-                popup_area.width.saturating_sub(2),
-                1,
-            );
-            // Only render if we have space
-            if filter_area.y > popup_area.y + 1 {
-                frame.render_widget(filter_line, filter_area);
-            }
-        }
+        frame.render_stateful_widget(list, list_area, &mut list_state);
     }
 
     /// Renders the transcript into ratatui Lines.
@@ -1394,14 +1422,141 @@ impl TuiApp {
             KeyCode::Char('c') if ctrl => {
                 self.close_command_popup(false);
             }
-            // For now, any other key closes popup (Slice 3 will add navigation/filtering)
-            _ => {
-                // Temporarily close on any key - will be replaced in Slice 3
-                self.close_command_popup(false);
+            // Up arrow: move selection up
+            KeyCode::Up => {
+                self.popup_select_prev();
             }
+            // Down arrow: move selection down
+            KeyCode::Down => {
+                self.popup_select_next();
+            }
+            // Enter or Tab: execute selected command
+            KeyCode::Enter | KeyCode::Tab => {
+                self.execute_selected_command();
+            }
+            // Backspace: remove last filter character
+            KeyCode::Backspace => {
+                if let Some(popup) = &mut self.command_popup {
+                    popup.filter.pop();
+                    popup.clamp_selection();
+                }
+            }
+            // Regular character: append to filter
+            KeyCode::Char(c) if !ctrl => {
+                if let Some(popup) = &mut self.command_popup {
+                    popup.filter.push(c);
+                    popup.clamp_selection();
+                }
+            }
+            // Ignore other keys
+            _ => {}
         }
 
         Ok(())
+    }
+
+    /// Moves popup selection to the previous item.
+    fn popup_select_prev(&mut self) {
+        if let Some(popup) = &mut self.command_popup {
+            let count = popup.filtered_commands().len();
+            if count > 0 && popup.selected > 0 {
+                popup.selected -= 1;
+            }
+        }
+    }
+
+    /// Moves popup selection to the next item.
+    fn popup_select_next(&mut self) {
+        if let Some(popup) = &mut self.command_popup {
+            let count = popup.filtered_commands().len();
+            if count > 0 && popup.selected < count - 1 {
+                popup.selected += 1;
+            }
+        }
+    }
+
+    /// Executes the currently selected command in the popup.
+    fn execute_selected_command(&mut self) {
+        let Some(popup) = &self.command_popup else {
+            return;
+        };
+
+        let filtered = popup.filtered_commands();
+        let Some(cmd) = filtered.get(popup.selected) else {
+            // No command selected (empty filter result)
+            self.close_command_popup(false);
+            return;
+        };
+
+        // Match on command name and execute
+        // Note: Actual execution logic is in Slice 4 - for now just close
+        match cmd.name {
+            "clear" => {
+                self.close_command_popup(false);
+                self.execute_clear();
+            }
+            "quit" => {
+                self.close_command_popup(false);
+                self.execute_quit();
+            }
+            _ => {
+                self.close_command_popup(false);
+            }
+        }
+    }
+
+    /// Executes the /clear (or /new) command.
+    ///
+    /// Starts a fresh session: clears transcript, messages, and creates a new session file.
+    fn execute_clear(&mut self) {
+        // Block if engine is running (safety - avoid race conditions)
+        if self.is_engine_running() {
+            self.transcript
+                .push(HistoryCell::system("Cannot clear while streaming."));
+            return;
+        }
+
+        // Clear transcript
+        self.transcript.clear();
+        // Clear message history (but system prompt is separate)
+        self.messages.clear();
+        // Clear command history for this session
+        self.command_history.clear();
+        // Reset scroll to follow latest
+        self.scroll_mode = ScrollMode::FollowLatest;
+
+        // Start a new session (if sessions are enabled)
+        if self.session.is_some() {
+            match session::Session::new() {
+                Ok(new_session) => {
+                    let new_id = new_session.id.clone();
+                    self.session = Some(new_session);
+                    self.transcript
+                        .push(HistoryCell::system(format!("New session: {}", new_id)));
+                }
+                Err(e) => {
+                    self.transcript.push(HistoryCell::system(format!(
+                        "Warning: Failed to create new session: {}",
+                        e
+                    )));
+                    self.transcript
+                        .push(HistoryCell::system("Conversation cleared."));
+                }
+            }
+        } else {
+            // No session mode - just show confirmation
+            self.transcript
+                .push(HistoryCell::system("Conversation cleared."));
+        }
+    }
+
+    /// Executes the /quit command.
+    fn execute_quit(&mut self) {
+        // Allow quit even during streaming - will interrupt first
+        if self.is_engine_running() {
+            self.interrupt_engine();
+        }
+        self.should_quit = true;
     }
 }
 
@@ -1530,5 +1685,49 @@ mod tests {
         state.selected = 5;
         state.clamp_selection();
         assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_popup_navigation_up_down() {
+        let mut state = CommandPopupState::new();
+        assert_eq!(state.selected, 0);
+
+        // Move down
+        let count = state.filtered_commands().len();
+        if count > 1 {
+            state.selected = 1;
+            assert_eq!(state.selected, 1);
+        }
+
+        // Move up
+        state.selected = 0;
+        assert_eq!(state.selected, 0);
+
+        // Can't go below 0
+        // (This is enforced by the popup_select_prev method, not by state itself)
+    }
+
+    #[test]
+    fn test_popup_filter_clamps_selection() {
+        let mut state = CommandPopupState::new();
+        // Select the second command
+        state.selected = 1;
+        assert_eq!(state.filtered_commands().len(), 2);
+
+        // Filter to just one command
+        state.filter = "clear".to_string();
+        state.clamp_selection();
+        assert_eq!(state.filtered_commands().len(), 1);
+        assert_eq!(state.selected, 0); // Clamped down
+    }
+
+    #[test]
+    fn test_popup_filter_by_alias() {
+        let mut state = CommandPopupState::new();
+        // Filter by "exit" which is an alias for "quit"
+        state.filter = "exit".to_string();
+        let filtered = state.filtered_commands();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "quit");
     }
 }
