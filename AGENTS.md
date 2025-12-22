@@ -11,7 +11,7 @@
 - `src/tools/`: tool implementations + schemas
 - `src/providers/`: provider clients (Anthropic, etc.)
 - `src/config.rs`: config loading + paths
-- `src/shared/`: shared primitives (events, context, interrupt, transcript)
+- `src/shared/`: shared primitives (events, context, interrupt)
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
 ## Keep this file up to date

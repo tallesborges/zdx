@@ -206,7 +206,7 @@ async fn run_chat(root: &str, session_args: &SessionArgs, config: &config::Confi
     let session = session_opts.resolve().context("resolve session")?;
 
     let root_path = std::path::PathBuf::from(root);
-    ui::chat::run_interactive_chat(config, session, root_path)
+    ui::run_interactive_chat(config, session, root_path)
         .await
         .context("interactive chat failed")?;
 
@@ -249,7 +249,7 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
         .with_context(|| format!("open session '{session_id}'"))?;
 
     let root_path = std::path::PathBuf::from(".");
-    ui::chat::run_interactive_chat_with_history(config, Some(session), history, root_path)
+    ui::run_interactive_chat_with_history(config, Some(session), history, root_path)
         .await
         .context("resume chat failed")?;
 
