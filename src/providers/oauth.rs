@@ -128,26 +128,21 @@ impl OAuthCache {
 /// Anthropic-specific OAuth helpers.
 pub mod anthropic {
     use super::*;
-    use base64::prelude::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use base64::Engine;
     use sha2::{Digest, Sha256};
 
     /// Provider key for Anthropic in the OAuth cache.
     pub const PROVIDER_KEY: &str = "anthropic";
 
-    /// Anthropic OAuth client ID (base64 decoded at runtime)
-    const CLIENT_ID_B64: &str = "OWQxYzI1MGEtZTYxYi00NGQ5LTg4ZWQtNTk0NGQxOTYyZjVl";
+    /// Anthropic OAuth client ID (public, not a secret)
+    const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
 
     /// Anthropic OAuth URLs
     const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
     const TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
     const REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
     const SCOPES: &str = "org:create_api_key user:profile user:inference";
-
-    /// Get the decoded client ID
-    fn client_id() -> String {
-        String::from_utf8(BASE64_STANDARD.decode(CLIENT_ID_B64).unwrap_or_default())
-            .unwrap_or_default()
-    }
 
     /// PKCE code verifier and challenge
     pub struct Pkce {
@@ -157,14 +152,17 @@ pub mod anthropic {
 
     /// Generate PKCE code verifier and challenge
     pub fn generate_pkce() -> Pkce {
-        use rand::Rng;
-        let mut rng = rand::rng();
-        let verifier_bytes: [u8; 32] = rng.random();
-        let verifier = BASE64_URL_SAFE_NO_PAD.encode(verifier_bytes);
+        // Use two UUIDs (16 bytes each) to get 32 random bytes
+        let uuid1 = uuid::Uuid::new_v4();
+        let uuid2 = uuid::Uuid::new_v4();
+        let mut verifier_bytes = [0u8; 32];
+        verifier_bytes[..16].copy_from_slice(uuid1.as_bytes());
+        verifier_bytes[16..].copy_from_slice(uuid2.as_bytes());
+        let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
 
         let mut hasher = Sha256::new();
         hasher.update(verifier.as_bytes());
-        let challenge = BASE64_URL_SAFE_NO_PAD.encode(hasher.finalize());
+        let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
 
         Pkce {
             verifier,
@@ -176,7 +174,7 @@ pub mod anthropic {
     pub fn build_auth_url(pkce: &Pkce) -> String {
         let params = [
             ("code", "true"),
-            ("client_id", &client_id()),
+            ("client_id", &CLIENT_ID),
             ("response_type", "code"),
             ("redirect_uri", REDIRECT_URI),
             ("scope", SCOPES),
@@ -185,11 +183,9 @@ pub mod anthropic {
             ("state", &pkce.verifier),
         ];
 
-        let query = params
-            .iter()
-            .map(|(k, v)| format!("{}={}", k, urlencoding::encode(v)))
-            .collect::<Vec<_>>()
-            .join("&");
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
 
         format!("{}?{}", AUTHORIZE_URL, query)
     }
@@ -217,7 +213,7 @@ pub mod anthropic {
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({
                 "grant_type": "authorization_code",
-                "client_id": client_id(),
+                "client_id": CLIENT_ID,
                 "code": code,
                 "state": state,
                 "redirect_uri": REDIRECT_URI,
@@ -261,7 +257,7 @@ pub mod anthropic {
             .header("Content-Type", "application/json")
             .json(&serde_json::json!({
                 "grant_type": "refresh_token",
-                "client_id": client_id(),
+                "client_id": CLIENT_ID,
                 "refresh_token": refresh_token,
             }))
             .send()
