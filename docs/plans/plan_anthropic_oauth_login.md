@@ -14,17 +14,19 @@ User journey
 
 MVP Slices
 0) Terminal safety + restore (only if raw/alt-screen is used)
-- [ ] Verify whether TUI uses raw mode/alt-screen; if yes, add a guard to always restore on panic/interrupt.
-- [ ] Add a smoke path to enter/exit TUI safely.
+- [x] Verify whether TUI uses raw mode/alt-screen; if yes, add a guard to always restore on panic/interrupt.
+- [x] Add a smoke path to enter/exit TUI safely.
 - ✅ Demo: start TUI, trigger Ctrl+C/panic, terminal restores cleanly.
 - Failure modes: terminal stuck in raw/alt-screen; cleanup not run on panic.
+- **DONE**: TUI already has panic hook + Drop impl that restores terminal.
 
 1) OAuth core + CLI login/logout
-- [ ] Add `zdx login --anthropic` and `zdx logout --anthropic`.
-- [ ] Implement OAuth core: open auth URL, accept pasted token/code; store token in `~/.zdx/oauth.json` (0600 perms).
-- [ ] Document/decide whether we accept pasted OAuth token only or exchange code; keep it minimal and explicit.
+- [x] Add `zdx login --anthropic` and `zdx logout --anthropic`.
+- [x] Implement OAuth core: open auth URL, accept pasted token/code; store token in `~/.zdx/oauth.json` (0600 perms).
+- [x] Document/decide whether we accept pasted OAuth token only or exchange code; keep it minimal and explicit.
 - ✅ Demo: login writes token cache; logout clears it.
 - Failure modes: invalid token/code, file permission errors, malformed JSON, network errors.
+- **DONE**: `src/core/oauth.rs` + login/logout commands in main.rs. Tests in `tests/login_logout.rs`.
 
 2) Provider wiring + first prompt
 - [ ] Load OAuth token from `~/.zdx/oauth.json` and prefer it over `ANTHROPIC_API_KEY`.
