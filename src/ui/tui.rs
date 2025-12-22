@@ -118,6 +118,10 @@ const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(33)
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 3;
 
+/// Spinner speed divisor (render frames per spinner frame).
+/// At 30fps render rate, 3 gives ~10fps spinner animation.
+const SPINNER_SPEED_DIVISOR: usize = 3;
+
 /// Scroll mode for the transcript pane.
 #[derive(Debug, Clone)]
 enum ScrollMode {
@@ -187,6 +191,8 @@ pub struct TuiApp {
     history_index: Option<usize>,
     /// Draft text saved when navigating history.
     input_draft: Option<String>,
+    /// Spinner animation frame counter (for running tools).
+    spinner_frame: usize,
 }
 
 impl TuiApp {
@@ -265,6 +271,7 @@ impl TuiApp {
             command_history,
             history_index: None,
             input_draft: None,
+            spinner_frame: 0,
         })
     }
 
@@ -347,6 +354,9 @@ impl TuiApp {
 
             // Check for engine task completion
             self.poll_engine_completion();
+
+            // Advance spinner animation frame
+            self.spinner_frame = self.spinner_frame.wrapping_add(1);
 
             // Render
             self.render()?;
@@ -672,22 +682,12 @@ impl TuiApp {
         let mut lines = Vec::new();
 
         for cell in &self.transcript {
-            let styled_lines = cell.display_lines(width);
+            let styled_lines = cell.display_lines(width, self.spinner_frame / SPINNER_SPEED_DIVISOR);
             for styled_line in styled_lines {
                 lines.push(self.convert_styled_line(styled_line));
             }
             // Add blank line between cells
             lines.push(Line::default());
-        }
-
-        // Show "thinking..." indicator when engine is waiting (before first delta)
-        if matches!(self.engine_state, EngineState::Waiting { .. }) {
-            lines.push(Line::from(vec![Span::styled(
-                "thinking...",
-                Style::default()
-                    .fg(Color::DarkGray)
-                    .add_modifier(Modifier::ITALIC),
-            )]));
         }
 
         // Remove trailing blank line if not waiting or streaming
