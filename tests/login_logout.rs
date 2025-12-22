@@ -100,10 +100,7 @@ fn test_login_shows_oauth_instructions() {
         stdout.contains("claude.ai"),
         "Should show claude.ai authorization URL"
     );
-    assert!(
-        stdout.contains("code"),
-        "Should mention authorization code"
-    );
+    assert!(stdout.contains("code"), "Should mention authorization code");
 }
 
 /// Test: login --anthropic prompts for re-login when already logged in.

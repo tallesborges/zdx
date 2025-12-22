@@ -18,8 +18,14 @@ use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request};
 
+/// Creates a temp ZDX_HOME directory for test isolation.
+fn temp_zdx_home() -> TempDir {
+    TempDir::new().expect("create temp zdx home")
+}
+
 #[tokio::test]
 async fn test_tool_use_loop_reads_file() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("test.txt");
     fs::write(&test_file, "Hello from file!").unwrap();
@@ -52,6 +58,7 @@ async fn test_tool_use_loop_reads_file() {
         .await;
 
     cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([

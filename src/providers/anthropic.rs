@@ -12,6 +12,8 @@ use crate::tools::{ToolDefinition, ToolResult};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
+/// Beta header required for OAuth authentication
+const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
 
 // === Structured Provider Errors ===
 
@@ -111,20 +113,36 @@ impl fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// Authentication type for Anthropic API.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AuthType {
+    /// API key authentication (uses `x-api-key` header)
+    ApiKey,
+    /// OAuth token authentication (uses `Authorization: Bearer` header)
+    OAuth,
+}
+
 /// Configuration for the Anthropic client.
 #[derive(Debug, Clone)]
 pub struct AnthropicConfig {
-    pub api_key: String,
+    /// The authentication token (API key or OAuth access token)
+    pub auth_token: String,
+    /// The type of authentication
+    pub auth_type: AuthType,
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
 }
 
 impl AnthropicConfig {
-    /// Creates a new config from environment and provided settings.
+    /// Creates a new config from environment and OAuth cache.
+    ///
+    /// Authentication resolution order:
+    /// 1. OAuth token from `~/.zdx/oauth.json` (if present and valid)
+    /// 2. `ANTHROPIC_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `ANTHROPIC_API_KEY`: Required API key
+    /// - `ANTHROPIC_API_KEY`: API key (used if no OAuth token)
     /// - `ANTHROPIC_BASE_URL`: Optional base URL override
     ///
     /// Base URL resolution order:
@@ -132,18 +150,80 @@ impl AnthropicConfig {
     /// 2. `config_base_url` parameter (if Some and non-empty)
     /// 3. Default: `https://api.anthropic.com`
     pub fn from_env(model: String, max_tokens: u32, config_base_url: Option<&str>) -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .context("ANTHROPIC_API_KEY environment variable is not set")?;
+        let (auth_token, auth_type) = Self::resolve_auth()?;
 
         // Resolution order: env > config > default
         let base_url = Self::resolve_base_url(config_base_url)?;
 
         Ok(Self {
-            api_key,
+            auth_token,
+            auth_type,
             base_url,
             model,
             max_tokens,
         })
+    }
+
+    /// Resolves authentication credentials.
+    /// Precedence: OAuth token > ANTHROPIC_API_KEY
+    fn resolve_auth() -> Result<(String, AuthType)> {
+        use crate::providers::oauth::anthropic as oauth_anthropic;
+
+        // Try OAuth token first
+        match oauth_anthropic::load_credentials() {
+            Ok(Some(creds)) => {
+                if creds.is_expired() {
+                    // Token expired, try to refresh synchronously
+                    // Note: This blocks, but is acceptable at startup
+                    let rt = tokio::runtime::Handle::try_current();
+                    let refreshed = if let Ok(handle) = rt {
+                        // We're already in a tokio context, spawn blocking
+                        tokio::task::block_in_place(|| {
+                            handle.block_on(oauth_anthropic::refresh_token(&creds.refresh))
+                        })
+                    } else {
+                        // Not in tokio context, create a small runtime
+                        tokio::runtime::Runtime::new()
+                            .context("create runtime for token refresh")?
+                            .block_on(oauth_anthropic::refresh_token(&creds.refresh))
+                    };
+
+                    match refreshed {
+                        Ok(new_creds) => {
+                            oauth_anthropic::save_credentials(&new_creds)?;
+                            return Ok((new_creds.access, AuthType::OAuth));
+                        }
+                        Err(e) => {
+                            // Refresh failed, clear credentials and fall through to API key
+                            let _ = oauth_anthropic::clear_credentials();
+                            eprintln!(
+                                "OAuth token expired and refresh failed: {}. Falling back to ANTHROPIC_API_KEY.",
+                                e
+                            );
+                        }
+                    }
+                } else {
+                    // Token is valid
+                    return Ok((creds.access, AuthType::OAuth));
+                }
+            }
+            Ok(None) => {
+                // No OAuth credentials, fall through to API key
+            }
+            Err(e) => {
+                // Error loading OAuth cache, log and fall through
+                eprintln!(
+                    "Warning: Failed to load OAuth cache: {}. Using ANTHROPIC_API_KEY.",
+                    e
+                );
+            }
+        }
+
+        // Fall back to API key
+        let api_key = std::env::var("ANTHROPIC_API_KEY")
+            .context("No authentication available. Either run `zdx login --anthropic` or set ANTHROPIC_API_KEY environment variable.")?;
+
+        Ok((api_key, AuthType::ApiKey))
     }
 
     /// Resolves the base URL with precedence: env > config > default.
@@ -221,12 +301,25 @@ impl AnthropicClient {
 
         let url = format!("{}/v1/messages", self.config.base_url);
 
-        let response = self
+        let mut request_builder = self
             .http
             .post(&url)
-            .header("x-api-key", &self.config.api_key)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json")
+            .header("content-type", "application/json");
+
+        // Set authentication header based on auth type
+        // OAuth requires the oauth-2025-04-20 beta header
+        request_builder = match self.config.auth_type {
+            AuthType::ApiKey => request_builder.header("x-api-key", &self.config.auth_token),
+            AuthType::OAuth => request_builder
+                .header(
+                    "Authorization",
+                    format!("Bearer {}", self.config.auth_token),
+                )
+                .header("anthropic-beta", OAUTH_BETA_HEADER),
+        };
+
+        let response = request_builder
             .json(&request)
             .send()
             .await

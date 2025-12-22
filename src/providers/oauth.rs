@@ -128,8 +128,8 @@ impl OAuthCache {
 /// Anthropic-specific OAuth helpers.
 pub mod anthropic {
     use super::*;
-    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
 
     /// Provider key for Anthropic in the OAuth cache.
@@ -174,7 +174,7 @@ pub mod anthropic {
     pub fn build_auth_url(pkce: &Pkce) -> String {
         let params = [
             ("code", "true"),
-            ("client_id", &CLIENT_ID),
+            ("client_id", CLIENT_ID),
             ("response_type", "code"),
             ("redirect_uri", REDIRECT_URI),
             ("scope", SCOPES),
@@ -316,30 +316,6 @@ pub mod anthropic {
         let had_creds = cache.remove(PROVIDER_KEY).is_some();
         cache.save()?;
         Ok(had_creds)
-    }
-
-    /// Get a valid access token, refreshing if necessary.
-    pub async fn get_valid_token() -> Result<Option<String>> {
-        let creds = match load_credentials()? {
-            Some(c) => c,
-            None => return Ok(None),
-        };
-
-        if creds.is_expired() {
-            // Try to refresh
-            match refresh_token(&creds.refresh).await {
-                Ok(new_creds) => {
-                    save_credentials(&new_creds)?;
-                    Ok(Some(new_creds.access))
-                }
-                Err(e) => {
-                    // Refresh failed, credentials are invalid
-                    anyhow::bail!("OAuth token expired and refresh failed: {}. Please run `zdx login --anthropic` again.", e);
-                }
-            }
-        } else {
-            Ok(Some(creds.access))
-        }
     }
 
     /// Returns a masked version of a token for display (first 12 chars + ...).

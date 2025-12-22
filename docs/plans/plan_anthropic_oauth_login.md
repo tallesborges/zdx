@@ -29,11 +29,14 @@ MVP Slices
 - **DONE**: `src/core/oauth.rs` + login/logout commands in main.rs. Tests in `tests/login_logout.rs`.
 
 2) Provider wiring + first prompt
-- [ ] Load OAuth token from `~/.zdx/oauth.json` and prefer it over `ANTHROPIC_API_KEY`.
-- [ ] Detect OAuth token prefix (`sk-ant-oat`) and set Anthropic OAuth headers accordingly.
-- [ ] Run a prompt and verify streaming output works with OAuth token.
+- [x] Load OAuth token from `~/.zdx/oauth.json` and prefer it over `ANTHROPIC_API_KEY`.
+- [x] Detect OAuth token type and set Anthropic OAuth headers accordingly (`Authorization: Bearer` for OAuth vs `x-api-key` for API key).
+- [x] Include required `anthropic-beta: oauth-2025-04-20` header for OAuth requests.
+- [x] Auto-refresh expired OAuth tokens; fallback to API key if refresh fails.
+- [x] Run a prompt and verify streaming output works with OAuth token.
 - ✅ Demo: login → prompt → streaming response.
 - Failure modes: header rejection, token prefix mismatch, streaming regression.
+- **DONE**: `AnthropicConfig::resolve_auth()` checks OAuth first, falls back to API key. `AuthType` enum controls header selection. OAuth requires beta header.
 
 3) TUI `/login` flow (reducer pattern)
 - [ ] Add events: `LoginRequested`, `AuthUrlOpened`, `AuthCodeEntered`, `LoginSucceeded`, `LoginFailed`.

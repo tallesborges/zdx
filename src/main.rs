@@ -284,7 +284,7 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
 }
 
 async fn run_login_anthropic() -> Result<()> {
-    use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
+    use crate::providers::oauth::{OAuthCache, anthropic as oauth_anthropic};
     use std::io::{self, BufRead, Write};
 
     // Check if already logged in
@@ -356,7 +356,7 @@ async fn run_login_anthropic() -> Result<()> {
 }
 
 fn run_logout_anthropic() -> Result<()> {
-    use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
+    use crate::providers::oauth::{OAuthCache, anthropic as oauth_anthropic};
 
     let had_creds = oauth_anthropic::clear_credentials()?;
 
