@@ -682,7 +682,8 @@ impl TuiApp {
         let mut lines = Vec::new();
 
         for cell in &self.transcript {
-            let styled_lines = cell.display_lines(width, self.spinner_frame / SPINNER_SPEED_DIVISOR);
+            let styled_lines =
+                cell.display_lines(width, self.spinner_frame / SPINNER_SPEED_DIVISOR);
             for styled_line in styled_lines {
                 lines.push(self.convert_styled_line(styled_line));
             }
@@ -738,7 +739,7 @@ impl TuiApp {
             TranscriptStyle::System => Style::default().fg(Color::DarkGray),
             TranscriptStyle::ToolBracket => Style::default().fg(Color::DarkGray),
             TranscriptStyle::ToolStatus => Style::default()
-                .fg(Color::Cyan)
+                .fg(Color::White)
                 .add_modifier(Modifier::BOLD),
             TranscriptStyle::ToolError => Style::default().fg(Color::Red),
             TranscriptStyle::ToolRunning => Style::default().fg(Color::Cyan),
