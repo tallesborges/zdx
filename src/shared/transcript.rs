@@ -219,7 +219,7 @@ impl HistoryCell {
     pub fn display_lines(&self, width: usize) -> Vec<StyledLine> {
         match self {
             HistoryCell::User { content, .. } => {
-                let prefix = "You: ";
+                let prefix = "| ";
                 render_prefixed_content(prefix, content, width, Style::UserPrefix, Style::User)
             }
             HistoryCell::Assistant {
@@ -227,7 +227,7 @@ impl HistoryCell {
                 is_streaming,
                 ..
             } => {
-                let prefix = "Assistant: ";
+                let prefix = "";
                 let mut lines = render_prefixed_content(
                     prefix,
                     content,
@@ -345,7 +345,7 @@ impl HistoryCell {
                             lines.push(StyledLine {
                                 spans: vec![StyledSpan {
                                     text: (*line).to_string(),
-                                    style: Style::Plain,
+                                    style: Style::ToolOutput,
                                 }],
                             });
                         }
@@ -439,11 +439,11 @@ impl StyledLine {
 pub enum Style {
     /// No styling.
     Plain,
-    /// User message prefix ("You: ").
+    /// User message prefix ("| ").
     UserPrefix,
-    /// User message content.
+    /// User message content (italic).
     User,
-    /// Assistant message prefix ("Assistant: ").
+    /// Assistant message prefix (none).
     AssistantPrefix,
     /// Assistant message content.
     Assistant,
@@ -465,6 +465,8 @@ pub enum Style {
     ToolSuccess,
     /// Tool cancelled command (strikethrough).
     ToolCancelled,
+    /// Tool output (stdout from bash, etc).
+    ToolOutput,
 }
 
 /// Renders content with a prefix, handling line wrapping.
@@ -649,7 +651,7 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
-        assert_eq!(lines[0].spans[0].text, "You: ");
+        assert_eq!(lines[0].spans[0].text, "| ");
         assert_eq!(lines[0].spans[1].text, "Hello, world!");
     }
 
@@ -658,14 +660,14 @@ mod tests {
         let cell = HistoryCell::user("This is a longer message that should wrap");
         let lines = cell.display_lines(25);
 
-        // "You: " is 5 chars, leaving 20 for content
+        // "| " is 2 bytes, leaving 23 for content
         assert!(lines.len() > 1, "Should wrap to multiple lines");
 
         // First line has prefix
-        assert_eq!(lines[0].spans[0].text, "You: ");
+        assert_eq!(lines[0].spans[0].text, "| ");
 
-        // Continuation lines have indent
-        assert_eq!(lines[1].spans[0].text, "     "); // 5 spaces
+        // Continuation lines have indent (2 spaces)
+        assert_eq!(lines[1].spans[0].text, "  ");
     }
 
     #[test]
@@ -785,10 +787,10 @@ mod tests {
 
         assert_eq!(lines.len(), 3);
         // First line has prefix
-        assert_eq!(lines[0].spans[0].text, "You: ");
-        // Other lines have indent
-        assert_eq!(lines[1].spans[0].text, "     ");
-        assert_eq!(lines[2].spans[0].text, "     ");
+        assert_eq!(lines[0].spans[0].text, "| ");
+        // Other lines have indent (2 spaces)
+        assert_eq!(lines[1].spans[0].text, "  ");
+        assert_eq!(lines[2].spans[0].text, "  ");
     }
 
     #[test]
@@ -797,7 +799,7 @@ mod tests {
         let lines = cell.display_lines(80);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].spans[0].text, "You: ");
+        assert_eq!(lines[0].spans[0].text, "| ");
     }
 
     #[test]

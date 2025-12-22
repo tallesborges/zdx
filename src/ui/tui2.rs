@@ -576,20 +576,12 @@ impl Tui2App {
 
         // Show "thinking..." indicator when engine is waiting (before first delta)
         if matches!(self.engine_state, EngineState::Waiting { .. }) {
-            lines.push(Line::from(vec![
-                Span::styled(
-                    "Assistant: ",
-                    Style::default()
-                        .fg(Color::Blue)
-                        .add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(
-                    "thinking...",
-                    Style::default()
-                        .fg(Color::DarkGray)
-                        .add_modifier(Modifier::ITALIC),
-                ),
-            ]));
+            lines.push(Line::from(vec![Span::styled(
+                "thinking...",
+                Style::default()
+                    .fg(Color::DarkGray)
+                    .add_modifier(Modifier::ITALIC),
+            )]));
         }
 
         // Remove trailing blank line if not waiting or streaming
@@ -624,7 +616,9 @@ impl Tui2App {
             TranscriptStyle::UserPrefix => Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
-            TranscriptStyle::User => Style::default().fg(Color::White),
+            TranscriptStyle::User => Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::ITALIC),
             TranscriptStyle::AssistantPrefix => Style::default()
                 .fg(Color::Blue)
                 .add_modifier(Modifier::BOLD),
@@ -648,6 +642,7 @@ impl Tui2App {
             TranscriptStyle::ToolCancelled => Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::CROSSED_OUT),
+            TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
         }
     }
 
