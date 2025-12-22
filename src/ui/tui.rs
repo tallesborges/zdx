@@ -21,10 +21,10 @@ use crossterm::{
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
-    layout::{Alignment, Constraint, Direction, Layout},
+    layout::{Alignment, Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
     text::{Line, Span},
-    widgets::{Block, Borders, Paragraph, Wrap},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph, Wrap},
 };
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -122,6 +122,105 @@ const MOUSE_SCROLL_LINES: usize = 3;
 /// At 30fps render rate, 3 gives ~10fps spinner animation.
 const SPINNER_SPEED_DIVISOR: usize = 3;
 
+// ============================================================================
+// Slash Commands
+// ============================================================================
+
+/// Definition of a slash command.
+#[derive(Debug, Clone)]
+struct SlashCommand {
+    /// Primary name (e.g., "clear") - without the leading slash.
+    name: &'static str,
+    /// Aliases (e.g., ["new"]) - without leading slashes.
+    aliases: &'static [&'static str],
+    /// Short description shown in popup.
+    description: &'static str,
+}
+
+impl SlashCommand {
+    /// Returns true if this command matches the given filter (case-insensitive).
+    /// Matches against name and all aliases.
+    fn matches(&self, filter: &str) -> bool {
+        let filter_lower = filter.to_lowercase();
+        self.name.to_lowercase().contains(&filter_lower)
+            || self
+                .aliases
+                .iter()
+                .any(|a| a.to_lowercase().contains(&filter_lower))
+    }
+
+    /// Returns the display name with aliases, e.g., "clear (new)".
+    fn display_name(&self) -> String {
+        if self.aliases.is_empty() {
+            format!("/{}", self.name)
+        } else {
+            format!("/{} ({})", self.name, self.aliases.join(", "))
+        }
+    }
+}
+
+/// Available slash commands.
+const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "clear",
+        aliases: &["new"],
+        description: "Clear conversation and start fresh",
+    },
+    SlashCommand {
+        name: "quit",
+        aliases: &["q", "exit"],
+        description: "Exit ZDX",
+    },
+];
+
+/// State for the slash command popup.
+///
+/// This is `Option<T>` in TuiApp, so it's trivially droppable.
+/// Terminal restore (panic hook, Drop) doesn't need special handling.
+#[derive(Debug, Clone)]
+struct CommandPopupState {
+    /// Filter text (characters typed after `/`).
+    filter: String,
+    /// Currently selected command index (into filtered list).
+    selected: usize,
+}
+
+impl CommandPopupState {
+    /// Creates a new popup state with empty filter.
+    fn new() -> Self {
+        Self {
+            filter: String::new(),
+            selected: 0,
+        }
+    }
+
+    /// Returns commands matching the current filter.
+    fn filtered_commands(&self) -> Vec<&'static SlashCommand> {
+        if self.filter.is_empty() {
+            SLASH_COMMANDS.iter().collect()
+        } else {
+            SLASH_COMMANDS
+                .iter()
+                .filter(|cmd| cmd.matches(&self.filter))
+                .collect()
+        }
+    }
+
+    /// Clamps the selected index to valid range for current filter.
+    fn clamp_selection(&mut self) {
+        let count = self.filtered_commands().len();
+        if count == 0 {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(count - 1);
+        }
+    }
+}
+
+// ============================================================================
+// Scroll Mode
+// ============================================================================
+
 /// Scroll mode for the transcript pane.
 #[derive(Debug, Clone)]
 enum ScrollMode {
@@ -193,6 +292,9 @@ pub struct TuiApp {
     input_draft: Option<String>,
     /// Spinner animation frame counter (for running tools).
     spinner_frame: usize,
+    /// Command popup state (None = closed).
+    /// Using Option<T> ensures trivial cleanup on drop/panic.
+    command_popup: Option<CommandPopupState>,
 }
 
 impl TuiApp {
@@ -272,6 +374,7 @@ impl TuiApp {
             history_index: None,
             input_draft: None,
             spinner_frame: 0,
+            command_popup: None,
         })
     }
 
@@ -598,6 +701,8 @@ impl TuiApp {
         } else {
             None
         };
+        let popup_open = self.command_popup.is_some();
+        let popup_state = self.command_popup.clone();
 
         self.terminal.draw(|frame| {
             let area = frame.area();
@@ -629,7 +734,7 @@ impl TuiApp {
                 title_spans.push(Span::styled("▼ more", Style::default().fg(Color::DarkGray)));
             }
 
-            // Header line 2: Status line (model, state, history indicator)
+            // Header line 2: Status line (model, state, history indicator, popup indicator)
             let mut status_spans = vec![
                 Span::styled(&model_name, Style::default().fg(Color::DarkGray)),
                 Span::raw(" │ "),
@@ -640,6 +745,14 @@ impl TuiApp {
                 status_spans.push(Span::styled(
                     hist.as_str(),
                     Style::default().fg(Color::DarkGray),
+                ));
+            }
+            // Show popup indicator (temporary - will be replaced by actual popup in Slice 2)
+            if popup_open {
+                status_spans.push(Span::raw(" │ "));
+                status_spans.push(Span::styled(
+                    "/ Commands (Esc to cancel)",
+                    Style::default().fg(Color::Yellow),
                 ));
             }
 
@@ -660,9 +773,122 @@ impl TuiApp {
 
             // Input area
             frame.render_widget(textarea, chunks[2]);
+
+            // Command popup overlay (rendered last to be on top)
+            if let Some(popup) = &popup_state {
+                Self::render_command_popup(frame, popup, area, chunks[2].y);
+            }
         })?;
 
         Ok(())
+    }
+
+    /// Renders the command popup as an overlay.
+    ///
+    /// The popup is centered horizontally and positioned just above the input area.
+    fn render_command_popup(
+        frame: &mut ratatui::Frame,
+        popup: &CommandPopupState,
+        area: Rect,
+        input_top_y: u16,
+    ) {
+        let commands = popup.filtered_commands();
+
+        // Calculate popup dimensions
+        // Width: min(50, terminal_width - 4) to leave some margin
+        let popup_width = 50.min(area.width.saturating_sub(4));
+        // Height: commands + 3 (top border + filter line + bottom border)
+        // Minimum 4 lines even if no commands match
+        let popup_height = (commands.len() as u16 + 3).max(4).min(area.height / 2);
+
+        // Available vertical space (between header and input)
+        let available_top = HEADER_HEIGHT;
+        let available_bottom = input_top_y;
+        let available_height = available_bottom.saturating_sub(available_top);
+
+        // Position: centered both horizontally and vertically
+        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+        let popup_y = available_top + (available_height.saturating_sub(popup_height)) / 2;
+
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+        // Clear the area behind the popup
+        frame.render_widget(Clear, popup_area);
+
+        // Build the list items
+        let items: Vec<ListItem> = if commands.is_empty() {
+            vec![ListItem::new(Line::from(Span::styled(
+                "  No matching commands",
+                Style::default().fg(Color::DarkGray),
+            )))]
+        } else {
+            commands
+                .iter()
+                .map(|cmd| {
+                    let name = cmd.display_name();
+                    let desc = cmd.description;
+                    // Format: "/clear (new)  Clear conversation..."
+                    let line = Line::from(vec![
+                        Span::styled(
+                            format!("{:<16}", name),
+                            Style::default()
+                                .fg(Color::Cyan)
+                                .add_modifier(Modifier::BOLD),
+                        ),
+                        Span::styled(desc, Style::default().fg(Color::White)),
+                    ]);
+                    ListItem::new(line)
+                })
+                .collect()
+        };
+
+        // Create the list with selection
+        let list = List::new(items)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .border_style(Style::default().fg(Color::Yellow))
+                    .title(" Commands ")
+                    .title_style(Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD)),
+            )
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        // Render with selection state
+        let mut list_state = ListState::default();
+        if !commands.is_empty() {
+            list_state.select(Some(popup.selected));
+        }
+        frame.render_stateful_widget(list, popup_area, &mut list_state);
+
+        // Render filter line at the bottom of the popup (inside the border)
+        // We'll show it in the block title for now, or as a footer
+        // Actually, let's add it as a separate line below - but that complicates things
+        // For MVP, show filter in the title if non-empty
+        if !popup.filter.is_empty() {
+            let filter_text = format!(" /{} ", popup.filter);
+            let filter_line = Paragraph::new(Line::from(vec![
+                Span::styled(">", Style::default().fg(Color::DarkGray)),
+                Span::styled(&filter_text, Style::default().fg(Color::Yellow)),
+            ]))
+            .alignment(Alignment::Left);
+
+            // Position at bottom of popup area, inside border
+            let filter_area = Rect::new(
+                popup_area.x + 1,
+                popup_area.y + popup_area.height - 1,
+                popup_area.width.saturating_sub(2),
+                1,
+            );
+            // Only render if we have space
+            if filter_area.y > popup_area.y + 1 {
+                frame.render_widget(filter_line, filter_area);
+            }
+        }
     }
 
     /// Renders the transcript into ratatui Lines.
@@ -777,11 +1003,20 @@ impl TuiApp {
 
     /// Handles a key event.
     fn handle_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        // If command popup is open, route all keys to popup handler
+        if self.command_popup.is_some() {
+            return self.handle_popup_key(key);
+        }
+
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
+            // "/" opens command popup
+            KeyCode::Char('/') if !ctrl && !shift && !alt => {
+                self.open_command_popup();
+            }
             // q without modifiers: quit (only when input is empty)
             KeyCode::Char('q') if !ctrl && !shift && !alt => {
                 if self.get_input_text().is_empty() {
@@ -1123,6 +1358,51 @@ impl TuiApp {
 
         self.engine_state = EngineState::Waiting { handle, rx: tui_rx };
     }
+
+    // ========================================================================
+    // Command Popup
+    // ========================================================================
+
+    /// Opens the command popup.
+    fn open_command_popup(&mut self) {
+        if self.command_popup.is_none() {
+            self.command_popup = Some(CommandPopupState::new());
+        }
+    }
+
+    /// Closes the command popup.
+    ///
+    /// If `insert_slash` is true, inserts "/" into the input at cursor position.
+    /// This preserves user intent when they press Escape (they typed "/" expecting to type it).
+    fn close_command_popup(&mut self, insert_slash: bool) {
+        self.command_popup = None;
+        if insert_slash {
+            self.textarea.insert_char('/');
+        }
+    }
+
+    /// Handles key events when the command popup is open.
+    fn handle_popup_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            // Escape: close popup and insert "/" (user intended to type "/")
+            KeyCode::Esc => {
+                self.close_command_popup(true);
+            }
+            // Ctrl+C: close popup without inserting "/" (user wants to cancel)
+            KeyCode::Char('c') if ctrl => {
+                self.close_command_popup(false);
+            }
+            // For now, any other key closes popup (Slice 3 will add navigation/filtering)
+            _ => {
+                // Temporarily close on any key - will be replaced in Slice 3
+                self.close_command_popup(false);
+            }
+        }
+
+        Ok(())
+    }
 }
 
 impl Drop for TuiApp {
@@ -1170,6 +1450,8 @@ fn install_panic_hook() {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
     // Note: Terminal tests are difficult to run in CI since they require a real TTY.
     // Integration tests for TUI2 should spawn the CLI and verify stdout/stderr behavior.
     //
@@ -1178,4 +1460,75 @@ mod tests {
     // - Terminal is restored on panic
     // - Terminal is restored on Ctrl+C
     // - Resize events don't break the UI
+
+    // ========================================================================
+    // Slash Command Tests
+    // ========================================================================
+
+    #[test]
+    fn test_slash_command_matches_name() {
+        let cmd = &SLASH_COMMANDS[0]; // clear
+        assert!(cmd.matches("clear"));
+        assert!(cmd.matches("cle"));
+        assert!(cmd.matches("CLEAR")); // case-insensitive
+        assert!(!cmd.matches("quit"));
+    }
+
+    #[test]
+    fn test_slash_command_matches_alias() {
+        let cmd = &SLASH_COMMANDS[0]; // clear (alias: new)
+        assert!(cmd.matches("new"));
+        assert!(cmd.matches("ne"));
+        assert!(cmd.matches("NEW")); // case-insensitive
+    }
+
+    #[test]
+    fn test_slash_command_display_name() {
+        let clear = &SLASH_COMMANDS[0];
+        assert_eq!(clear.display_name(), "/clear (new)");
+
+        let quit = &SLASH_COMMANDS[1];
+        assert_eq!(quit.display_name(), "/quit (q, exit)");
+    }
+
+    #[test]
+    fn test_popup_state_filtered_commands_empty_filter() {
+        let state = CommandPopupState::new();
+        let filtered = state.filtered_commands();
+        assert_eq!(filtered.len(), SLASH_COMMANDS.len());
+    }
+
+    #[test]
+    fn test_popup_state_filtered_commands_with_filter() {
+        let mut state = CommandPopupState::new();
+        state.filter = "cl".to_string();
+        let filtered = state.filtered_commands();
+        assert_eq!(filtered.len(), 1);
+        assert_eq!(filtered[0].name, "clear");
+    }
+
+    #[test]
+    fn test_popup_state_filtered_commands_no_match() {
+        let mut state = CommandPopupState::new();
+        state.filter = "xyz".to_string();
+        let filtered = state.filtered_commands();
+        assert!(filtered.is_empty());
+    }
+
+    #[test]
+    fn test_popup_state_clamp_selection() {
+        let mut state = CommandPopupState::new();
+        state.selected = 10; // way out of bounds
+        state.clamp_selection();
+        assert_eq!(state.selected, SLASH_COMMANDS.len() - 1);
+    }
+
+    #[test]
+    fn test_popup_state_clamp_selection_empty_filter() {
+        let mut state = CommandPopupState::new();
+        state.filter = "xyz".to_string(); // no matches
+        state.selected = 5;
+        state.clamp_selection();
+        assert_eq!(state.selected, 0);
+    }
 }

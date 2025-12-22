@@ -1,0 +1,354 @@
+# Slash Commands Implementation Plan
+
+**Status:** Draft  
+**Scope:** Add `/commands` popup to TUI with `/clear` (alias `/new`) and `/quit`
+
+---
+
+## Goals
+
+1. Users can type `/` anywhere in input to open a command popup
+2. Popup shows available commands with fuzzy filtering
+3. Commands execute immediately on selection
+4. `/clear` resets conversation (same as "new session")
+5. `/quit` exits the TUI cleanly
+
+---
+
+## Non-Goals / Deferred
+
+- **Deferred:** Slash commands that take arguments (e.g., `/model gpt-4`)
+- **Deferred:** Custom user-defined commands
+- **Deferred:** Command history / recent commands
+- **Deferred:** `/help` command (use popup descriptions instead)
+- **Deferred:** Inline command execution (typing `/quit` + Enter without popup)
+- **Deferred:** Autocomplete in input (only popup for now)
+
+---
+
+## User Journey
+
+```
+1. User is typing in input area
+2. User presses `/` → popup appears above input
+3. Popup shows: /clear (aliases: /new), /quit
+4. User can:
+   a. Type to filter (e.g., "cl" shows only /clear)
+   b. Arrow keys to navigate selection
+   c. Enter to execute selected command
+   d. Escape to close popup and insert "/" into input
+5. Command executes, popup closes
+6. Input state depends on command:
+   - /clear: input cleared, transcript cleared
+   - /quit: TUI exits
+```
+
+---
+
+## MVP Slices
+
+### Slice 0: Terminal Safety (Foundation) ✅ DONE
+
+**Goal:** Ensure popup can't corrupt terminal state.
+
+- [x] Verify existing panic hook handles popup state (already exists in `install_panic_hook`)
+- [x] Add `CommandPopup` to `TuiApp` state (Option<CommandPopupState>)
+- [x] Popup state cleared on any terminal restore path
+
+**Checklist:**
+- [x] Popup state is `Option<T>` so it's trivially droppable
+- [x] No new raw mode or alt-screen changes needed (reuses existing setup)
+- [x] Test: Force panic while popup is open → terminal restores cleanly
+- [x] Unit tests for `SlashCommand` and `CommandPopupState` (8 tests)
+
+**✅ Demo:** Open popup, `panic!()` via debug key → terminal restores.
+
+**Failure modes:**
+- Panic leaves popup state orphaned → mitigated by Drop impl
+- Raw mode not restored → existing panic hook handles this
+
+---
+
+### Slice 1: State + Trigger ✅ DONE
+
+**Goal:** `/` opens popup, Escape closes it, state tracks visibility.
+
+**Checklist:**
+- [x] Add `SlashCommand` struct and `SLASH_COMMANDS` constant (done in Slice 0)
+- [x] Add `CommandPopupState` struct (done in Slice 0)
+- [x] Add `command_popup: Option<CommandPopupState>` to `TuiApp` (done in Slice 0)
+- [x] Add `open_command_popup()` method
+- [x] Add `close_command_popup(insert_slash: bool)` method
+- [x] Add `handle_popup_key()` to route keys when popup open
+- [x] Handle `/` key to open popup
+- [x] Handle `Escape` in popup to close (insert "/" into input)
+- [x] Handle `Ctrl+C` in popup to close (don't insert "/")
+- [x] Add temporary status indicator "/ Commands (Esc to cancel)" in header
+
+**✅ Demo:** Type `/` → status shows "/ Commands". Press `Escape` → popup closes, "/" appears in input.
+
+**Failure modes:**
+- Double `/` opens popup twice → guarded with `if self.command_popup.is_none()`
+- Popup open during engine streaming → works (popup is overlay)
+
+---
+
+### Slice 2: Popup Rendering ✅ DONE
+
+**Goal:** Render popup as floating box above input area.
+
+**Checklist:**
+- [x] Add `render_command_popup()` method
+- [x] Calculate popup dimensions and position (centered, above input)
+- [x] Render command list with `List` widget and selection highlight
+- [x] Show aliases in parentheses: `/clear (new)`
+- [x] Show description on same line
+- [x] Render filter text at bottom when non-empty
+- [x] Use `Clear` widget to clear area behind popup
+- [x] Yellow border with "Commands" title
+- [x] Selection indicator "▶ " with dark gray background
+
+**✅ Demo:** Type `/` → see popup with both commands, first one selected with "▶".
+
+**Failure modes:**
+- Small terminal clips popup → capped at half terminal height
+- Popup overlaps header → positioned relative to input area
+
+---
+
+### Slice 3: Navigation + Filtering
+
+**Goal:** Arrow keys navigate, typing filters, Enter/Tab selects.
+
+**Key handling in popup:**
+```rust
+fn handle_popup_key(&mut self, key: KeyEvent) -> Result<()> {
+    match key.code {
+        KeyCode::Esc => self.close_command_popup(true),  // insert "/"
+        KeyCode::Char('c') if ctrl => self.close_command_popup(false),
+        KeyCode::Up => self.popup_select_prev(),
+        KeyCode::Down => self.popup_select_next(),
+        KeyCode::Enter | KeyCode::Tab => self.execute_selected_command(),
+        KeyCode::Backspace => self.popup_backspace(),
+        KeyCode::Char(c) => self.popup_type_char(c),
+        _ => {} // ignore other keys
+    }
+    Ok(())
+}
+```
+
+**Filtering logic:**
+```rust
+fn update_popup_filter(&mut self) {
+    let filter = &self.command_popup.as_ref().unwrap().filter;
+    let filtered: Vec<_> = SLASH_COMMANDS
+        .iter()
+        .filter(|cmd| {
+            cmd.name.contains(filter) ||
+            cmd.aliases.iter().any(|a| a.contains(filter))
+        })
+        .collect();
+    
+    // Update filtered list and clamp selection
+    let popup = self.command_popup.as_mut().unwrap();
+    popup.filtered_commands = filtered;
+    popup.selected = popup.selected.min(popup.filtered_commands.len().saturating_sub(1));
+}
+```
+
+**Checklist:**
+- [ ] `handle_popup_key()` routes all keys when popup open
+- [ ] Up/Down arrows move selection (wrap around optional)
+- [ ] Enter executes selected command
+- [ ] Tab also executes (common shortcut)
+- [ ] Typing appends to filter
+- [ ] Backspace removes from filter (empty filter shows all)
+- [ ] Filter matches name OR aliases (case-insensitive)
+- [ ] Empty filter result shows "No matching commands"
+
+**✅ Demo:** Type `/cl` → only `/clear` shown. Press Enter → command executes.
+
+**Failure modes:**
+- Filter to empty → show "no matches", disable Enter
+- Navigate past bounds → clamp or wrap selection index
+
+---
+
+### Slice 4: Command Execution
+
+**Goal:** `/clear` and `/quit` work correctly.
+
+**Command enum for dispatch:**
+```rust
+fn execute_selected_command(&mut self) {
+    let Some(popup) = &self.command_popup else { return };
+    let Some(cmd) = popup.filtered_commands.get(popup.selected) else {
+        self.close_command_popup(false);
+        return;
+    };
+    
+    match cmd.name {
+        "clear" => self.execute_clear(),
+        "quit" => self.execute_quit(),
+        _ => {}
+    }
+    
+    self.close_command_popup(false);
+}
+
+fn execute_clear(&mut self) {
+    // Clear transcript
+    self.transcript.clear();
+    // Clear message history (but keep system prompt)
+    self.messages.clear();
+    // Clear command history for this session
+    self.command_history.clear();
+    // Reset scroll to follow latest
+    self.scroll_mode = ScrollMode::FollowLatest;
+    // Show confirmation
+    self.transcript.push(HistoryCell::system("Conversation cleared."));
+    // Note: Session file keeps history (append-only), but UI is fresh
+}
+
+fn execute_quit(&mut self) {
+    self.should_quit = true;
+}
+```
+
+**Checklist:**
+- [ ] `/quit` sets `should_quit = true`
+- [ ] `/clear` clears transcript, messages, resets scroll
+- [ ] `/clear` shows system message "Conversation cleared"
+- [ ] Engine state check: if streaming, interrupt first? Or block clear?
+  - Decision: Block `/clear` while engine running (show message)
+- [ ] Clear doesn't affect session file (append-only log)
+
+**✅ Demo:** 
+1. Have a conversation, type `/clear` → transcript empty, "Conversation cleared" shown
+2. Type `/quit` → TUI exits cleanly
+
+**Failure modes:**
+- Clear during streaming → block with "Cannot clear while streaming"
+- Quit during streaming → interrupt first, then quit (existing Ctrl+C behavior)
+
+---
+
+### Slice 5: Polish + Edge Cases
+
+**Goal:** Handle edge cases, improve UX.
+
+**Edge cases:**
+- [ ] `/` at end of text: "hello/" → popup opens, Escape adds "/" after "hello"
+- [ ] Multiple `/` in input already: should still work
+- [ ] Very long filter text: truncate display, don't crash
+- [ ] Terminal resize while popup open: recalculate position
+- [ ] Paste containing "/": don't trigger popup (only direct `/` keypress)
+
+**UX polish:**
+- [ ] Popup animation: instant (no animation needed for MVP)
+- [ ] Keyboard hint in popup footer: "↑↓ navigate • Enter select • Esc cancel"
+- [ ] Selected command shows full description (if space allows)
+- [ ] Filter prefix shown: `> clear` (dimmed `>`)
+
+**Checklist:**
+- [ ] Test: resize while popup open
+- [ ] Test: Escape inserts "/" at cursor position
+- [ ] Test: Paste text with "/" doesn't trigger
+- [ ] Add keyboard hints to popup
+- [ ] Ensure popup doesn't steal focus from input cursor visually
+
+**✅ Demo:** Resize terminal while popup open → popup repositions correctly.
+
+**Failure modes:**
+- Cursor position lost after Escape → track cursor, insert at correct position
+
+---
+
+## Contracts (Guardrails)
+
+1. **Popup is ephemeral overlay:** Never affects terminal state beyond TuiApp
+2. **Escape always closes:** User can always dismiss popup with Escape
+3. **Commands are idempotent:** Running `/clear` twice is safe
+4. **No data loss without intent:** `/clear` only affects UI state, not session files
+5. **Input preserved on cancel:** Escape inserts "/" so user input isn't lost
+
+---
+
+## Key Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Trigger | `/` anywhere in input | More discoverable, consistent with other tools |
+| Popup vs inline | Popup overlay | Shows all commands, easier discovery |
+| Filter matching | Contains (case-insensitive) | Simple, good enough for 2 commands |
+| Escape behavior | Close + insert "/" | Preserves user intent (they typed "/") |
+| Clear during streaming | Block with message | Safer, avoids race conditions |
+| Quit during streaming | Allow (interrupts first) | Consistent with Ctrl+C |
+
+---
+
+## Testing
+
+### Unit tests (in `tui.rs` or new `commands.rs`)
+- [ ] `SlashCommand` filtering logic
+- [ ] Selection wrapping/clamping
+- [ ] Filter matching (name and aliases)
+
+### Integration tests (manual for now)
+- [ ] Open/close popup cycle
+- [ ] Execute each command
+- [ ] Resize during popup
+- [ ] Panic recovery with popup open
+
+---
+
+## Polish Phases
+
+### Phase 1 (MVP - Slices 0-4)
+- Basic popup, navigation, both commands work
+- Minimum viable UX
+
+### Phase 2 (Post-MVP)
+- Keyboard hints in popup
+- Better styling (rounded corners if terminal supports)
+- Animation/fade (optional)
+
+### Phase 3 (Future)
+- More commands: `/model`, `/session`, `/help`
+- Command arguments
+- Fuzzy matching (fzf-style)
+
+---
+
+## Later / Deferred
+
+- **Command arguments:** `/model sonnet-3.5` - needs input field in popup
+- **Custom commands:** User-defined in config
+- **Recent commands:** Show recently used at top
+- **Inline execution:** Type `/quit` + Enter without popup
+- **Tab completion:** Complete command inline without popup
+- **Command palette:** Ctrl+Shift+P style (separate from `/`)
+- **Confirmation dialogs:** "/clear" confirm before clearing long conversation
+
+---
+
+## File Changes Summary
+
+| File | Changes |
+|------|---------|
+| `src/ui/tui.rs` | Add popup state, key handling, rendering |
+| `src/ui/mod.rs` | No changes (unless extracting to module) |
+| `docs/SPEC.md` | Add §16 for slash commands contract (optional) |
+
+---
+
+## Implementation Order
+
+```
+Slice 0 → Slice 1 → Slice 2 → Slice 3 → Slice 4 → Slice 5
+  ↓          ↓          ↓          ↓          ↓          ↓
+Safety    State     Render     Navigate   Execute   Polish
+          + Trigger            + Filter
+```
+
+Each slice is independently testable and demoable.
