@@ -71,6 +71,20 @@ enum Commands {
         #[command(subcommand)]
         command: ConfigCommands,
     },
+
+    /// Log in to a provider (authenticate)
+    Login {
+        /// Provider to log in to
+        #[arg(long)]
+        anthropic: bool,
+    },
+
+    /// Log out from a provider (clear cached token)
+    Logout {
+        /// Provider to log out from
+        #[arg(long)]
+        anthropic: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -183,6 +197,20 @@ fn main_result() -> Result<()> {
                     Ok(())
                 }
             },
+
+            Commands::Login { anthropic } => {
+                if !anthropic {
+                    anyhow::bail!("Please specify a provider: --anthropic");
+                }
+                run_login_anthropic()
+            }
+
+            Commands::Logout { anthropic } => {
+                if !anthropic {
+                    anyhow::bail!("Please specify a provider: --anthropic");
+                }
+                run_logout_anthropic()
+            }
         }
     })
 }
@@ -251,6 +279,86 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
     ui::run_interactive_chat_with_history(config, Some(session), history, root_path)
         .await
         .context("resume chat failed")?;
+
+    Ok(())
+}
+
+fn run_login_anthropic() -> Result<()> {
+    use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
+    use std::io::{self, BufRead, IsTerminal, Write};
+
+    // Check if already logged in
+    if let Some(existing) = oauth_anthropic::load_token()? {
+        println!(
+            "Already logged in to Anthropic (token: {})",
+            oauth_anthropic::mask_token(&existing)
+        );
+        print!("Do you want to replace the existing token? [y/N] ");
+        io::stdout().flush()?;
+
+        let mut response = String::new();
+        io::stdin().lock().read_line(&mut response)?;
+        if !response.trim().eq_ignore_ascii_case("y") {
+            println!("Login cancelled.");
+            return Ok(());
+        }
+    }
+
+    // Show instructions
+    println!("To log in to Anthropic:");
+    println!();
+    println!("  1. Visit: {}", oauth_anthropic::AUTH_URL);
+    println!("  2. Create or copy an API key");
+    println!("  3. Paste it below");
+    println!();
+
+    // Try to open browser (best effort, skip in tests)
+    if std::env::var("ZDX_NO_BROWSER").is_err() {
+        let _ = open::that(oauth_anthropic::AUTH_URL);
+    }
+
+    // Read token
+    print!("Paste your Anthropic API key: ");
+    io::stdout().flush()?;
+
+    let token = if io::stdin().is_terminal() {
+        // Read securely without echo if possible
+        rpassword::read_password().context("Failed to read token")?
+    } else {
+        let mut token = String::new();
+        io::stdin().lock().read_line(&mut token)?;
+        token.trim().to_string()
+    };
+
+    // Validate
+    oauth_anthropic::validate_token_format(&token)?;
+
+    // Save
+    oauth_anthropic::save_token(&token)?;
+
+    let cache_path = OAuthCache::cache_path();
+    println!();
+    println!(
+        "✓ Logged in to Anthropic (token: {})",
+        oauth_anthropic::mask_token(&token)
+    );
+    println!("  Token saved to: {}", cache_path.display());
+
+    Ok(())
+}
+
+fn run_logout_anthropic() -> Result<()> {
+    use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
+
+    let had_token = oauth_anthropic::clear_token()?;
+
+    if had_token {
+        let cache_path = OAuthCache::cache_path();
+        println!("✓ Logged out from Anthropic");
+        println!("  Token removed from: {}", cache_path.display());
+    } else {
+        println!("Not logged in to Anthropic (no token found).");
+    }
 
     Ok(())
 }
