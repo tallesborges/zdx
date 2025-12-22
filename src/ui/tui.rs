@@ -162,9 +162,9 @@ impl SlashCommand {
 /// Available slash commands.
 const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
-        name: "clear",
-        aliases: &["new"],
-        description: "Clear conversation and start fresh",
+        name: "new",
+        aliases: &["clear"],
+        description: "Start a new conversation",
     },
     SlashCommand {
         name: "quit",
@@ -183,14 +183,17 @@ struct CommandPopupState {
     filter: String,
     /// Currently selected command index (into filtered list).
     selected: usize,
+    /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
+    insert_slash_on_escape: bool,
 }
 
 impl CommandPopupState {
     /// Creates a new popup state with empty filter.
-    fn new() -> Self {
+    fn new(insert_slash_on_escape: bool) -> Self {
         Self {
             filter: String::new(),
             selected: 0,
+            insert_slash_on_escape,
         }
     }
 
@@ -1041,9 +1044,13 @@ impl TuiApp {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
-            // "/" opens command popup
+            // "/" opens command popup (Escape will insert "/" back)
             KeyCode::Char('/') if !ctrl && !shift && !alt => {
-                self.open_command_popup();
+                self.open_command_popup(true);
+            }
+            // Ctrl+P: open command popup (Escape won't insert anything)
+            KeyCode::Char('p') if ctrl && !shift && !alt => {
+                self.open_command_popup(false);
             }
             // q without modifiers: quit (only when input is empty)
             KeyCode::Char('q') if !ctrl && !shift && !alt => {
@@ -1392,9 +1399,12 @@ impl TuiApp {
     // ========================================================================
 
     /// Opens the command popup.
-    fn open_command_popup(&mut self) {
+    ///
+    /// `insert_slash_on_escape`: if true, Escape will insert "/" into input.
+    /// Pass `true` when opened via "/" key, `false` when opened via Ctrl+P.
+    fn open_command_popup(&mut self, insert_slash_on_escape: bool) {
         if self.command_popup.is_none() {
-            self.command_popup = Some(CommandPopupState::new());
+            self.command_popup = Some(CommandPopupState::new(insert_slash_on_escape));
         }
     }
 
@@ -1414,9 +1424,13 @@ impl TuiApp {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
-            // Escape: close popup and insert "/" (user intended to type "/")
+            // Escape: close popup, insert "/" only if opened via "/" key
             KeyCode::Esc => {
-                self.close_command_popup(true);
+                let insert_slash = self
+                    .command_popup
+                    .as_ref()
+                    .is_some_and(|p| p.insert_slash_on_escape);
+                self.close_command_popup(insert_slash);
             }
             // Ctrl+C: close popup without inserting "/" (user wants to cancel)
             KeyCode::Char('c') if ctrl => {
@@ -1491,9 +1505,9 @@ impl TuiApp {
         // Match on command name and execute
         // Note: Actual execution logic is in Slice 4 - for now just close
         match cmd.name {
-            "clear" => {
+            "new" => {
                 self.close_command_popup(false);
-                self.execute_clear();
+                self.execute_new();
             }
             "quit" => {
                 self.close_command_popup(false);
@@ -1505,10 +1519,10 @@ impl TuiApp {
         }
     }
 
-    /// Executes the /clear (or /new) command.
+    /// Executes the /new (or /clear) command.
     ///
     /// Starts a fresh session: clears transcript, messages, and creates a new session file.
-    fn execute_clear(&mut self) {
+    fn execute_new(&mut self) {
         // Block if engine is running (safety - avoid race conditions)
         if self.is_engine_running() {
             self.transcript
@@ -1622,25 +1636,25 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_name() {
-        let cmd = &SLASH_COMMANDS[0]; // clear
-        assert!(cmd.matches("clear"));
-        assert!(cmd.matches("cle"));
-        assert!(cmd.matches("CLEAR")); // case-insensitive
+        let cmd = &SLASH_COMMANDS[0]; // new
+        assert!(cmd.matches("new"));
+        assert!(cmd.matches("ne"));
+        assert!(cmd.matches("NEW")); // case-insensitive
         assert!(!cmd.matches("quit"));
     }
 
     #[test]
     fn test_slash_command_matches_alias() {
-        let cmd = &SLASH_COMMANDS[0]; // clear (alias: new)
-        assert!(cmd.matches("new"));
-        assert!(cmd.matches("ne"));
-        assert!(cmd.matches("NEW")); // case-insensitive
+        let cmd = &SLASH_COMMANDS[0]; // new (alias: clear)
+        assert!(cmd.matches("clear"));
+        assert!(cmd.matches("cle"));
+        assert!(cmd.matches("CLEAR")); // case-insensitive
     }
 
     #[test]
     fn test_slash_command_display_name() {
-        let clear = &SLASH_COMMANDS[0];
-        assert_eq!(clear.display_name(), "/clear (new)");
+        let new_cmd = &SLASH_COMMANDS[0];
+        assert_eq!(new_cmd.display_name(), "/new (clear)");
 
         let quit = &SLASH_COMMANDS[1];
         assert_eq!(quit.display_name(), "/quit (q, exit)");
@@ -1648,23 +1662,23 @@ mod tests {
 
     #[test]
     fn test_popup_state_filtered_commands_empty_filter() {
-        let state = CommandPopupState::new();
+        let state = CommandPopupState::new(true);
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), SLASH_COMMANDS.len());
     }
 
     #[test]
     fn test_popup_state_filtered_commands_with_filter() {
-        let mut state = CommandPopupState::new();
-        state.filter = "cl".to_string();
+        let mut state = CommandPopupState::new(true);
+        state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "clear");
+        assert_eq!(filtered[0].name, "new");
     }
 
     #[test]
     fn test_popup_state_filtered_commands_no_match() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
@@ -1672,7 +1686,7 @@ mod tests {
 
     #[test]
     fn test_popup_state_clamp_selection() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         state.selected = 10; // way out of bounds
         state.clamp_selection();
         assert_eq!(state.selected, SLASH_COMMANDS.len() - 1);
@@ -1680,7 +1694,7 @@ mod tests {
 
     #[test]
     fn test_popup_state_clamp_selection_empty_filter() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         state.filter = "xyz".to_string(); // no matches
         state.selected = 5;
         state.clamp_selection();
@@ -1689,7 +1703,7 @@ mod tests {
 
     #[test]
     fn test_popup_navigation_up_down() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         assert_eq!(state.selected, 0);
 
         // Move down
@@ -1709,13 +1723,13 @@ mod tests {
 
     #[test]
     fn test_popup_filter_clamps_selection() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         // Select the second command
         state.selected = 1;
         assert_eq!(state.filtered_commands().len(), 2);
 
         // Filter to just one command
-        state.filter = "clear".to_string();
+        state.filter = "new".to_string();
         state.clamp_selection();
         assert_eq!(state.filtered_commands().len(), 1);
         assert_eq!(state.selected, 0); // Clamped down
@@ -1723,7 +1737,7 @@ mod tests {
 
     #[test]
     fn test_popup_filter_by_alias() {
-        let mut state = CommandPopupState::new();
+        let mut state = CommandPopupState::new(true);
         // Filter by "exit" which is an alias for "quit"
         state.filter = "exit".to_string();
         let filtered = state.filtered_commands();
