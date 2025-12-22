@@ -1,17 +1,18 @@
 # Slash Commands Implementation Plan
 
-**Status:** Draft  
-**Scope:** Add `/commands` popup to TUI with `/clear` (alias `/new`) and `/quit`
+**Status:** In Progress  
+**Scope:** Add `/commands` popup to TUI with `/new` (alias `/clear`) and `/quit`
 
 ---
 
 ## Goals
 
 1. Users can type `/` anywhere in input to open a command popup
-2. Popup shows available commands with fuzzy filtering
-3. Commands execute immediately on selection
-4. `/clear` resets conversation (same as "new session")
-5. `/quit` exits the TUI cleanly
+2. Users can press `Ctrl+P` to open the command popup (command palette)
+3. Popup shows available commands with fuzzy filtering
+4. Commands execute immediately on selection
+5. `/new` starts a new conversation (creates new session)
+6. `/quit` exits the TUI cleanly
 
 ---
 
@@ -30,16 +31,16 @@
 
 ```
 1. User is typing in input area
-2. User presses `/` → popup appears above input
-3. Popup shows: /clear (aliases: /new), /quit
+2. User presses `/` or `Ctrl+P` → popup appears above input
+3. Popup shows: /new (aliases: /clear), /quit
 4. User can:
-   a. Type to filter (e.g., "cl" shows only /clear)
+   a. Type to filter (e.g., "ne" shows only /new)
    b. Arrow keys to navigate selection
    c. Enter to execute selected command
-   d. Escape to close popup and insert "/" into input
+   d. Escape to close popup and insert "/" into input (only if opened via `/`)
 5. Command executes, popup closes
 6. Input state depends on command:
-   - /clear: input cleared, transcript cleared
+   - /new: input cleared, transcript cleared, new session started
    - /quit: TUI exits
 ```
 
@@ -101,7 +102,7 @@
 - [x] Add `render_command_popup()` method
 - [x] Calculate popup dimensions and position (centered, above input)
 - [x] Render command list with `List` widget and selection highlight
-- [x] Show aliases in parentheses: `/clear (new)`
+- [x] Show aliases in parentheses: `/new (clear)`
 - [x] Show description on same line
 - [x] Render filter text at bottom when non-empty
 - [x] Use `Clear` widget to clear area behind popup
@@ -125,7 +126,7 @@
 ┌ Commands ──────────────────────────────┐
 │ > filter_text█                         │  ← Input at TOP
 ├────────────────────────────────────────┤
-│▶ /clear (new)     Clear conversation...│
+│▶ /new (clear)   Start a new convers... │
 │  /quit (q, exit)  Exit ZDX             │
 └────────────────────────────────────────┘
 ```
@@ -150,7 +151,7 @@
 - [x] Empty filter result shows "No matching commands"
 - [x] Clamp selection when filter changes
 
-**✅ Demo:** Type `/cl` → filter shows "cl", only `/clear` shown. Press Enter → command executes.
+**✅ Demo:** Type `/ne` → filter shows "ne", only `/new` shown. Press Enter → command executes.
 
 **Failure modes:**
 - Filter to empty → show "no matches", disable Enter
@@ -160,26 +161,26 @@
 
 ### Slice 4: Command Execution ✅ DONE
 
-**Goal:** `/clear` and `/quit` work correctly.
+**Goal:** `/new` and `/quit` work correctly.
 
 **Implementation notes:**
-- `/clear` now starts a fresh session (creates new session file) rather than just clearing UI
+- `/new` now starts a fresh session (creates new session file) rather than just clearing UI
 - `/quit` interrupts any running engine before exiting
 
 **Checklist:**
 - [x] `/quit` sets `should_quit = true`
-- [x] `/clear` clears transcript, messages, resets scroll
-- [x] `/clear` starts a new session (if sessions enabled)
-- [x] `/clear` shows system message with new session ID
-- [x] Engine state check: block `/clear` while streaming (show message)
+- [x] `/new` clears transcript, messages, resets scroll
+- [x] `/new` starts a new session (if sessions enabled)
+- [x] `/new` shows system message with new session ID
+- [x] Engine state check: block `/new` while streaming (show message)
 - [x] `/quit` during streaming: interrupt first, then quit
 
 **✅ Demo:** 
-1. Have a conversation, type `/clear` → transcript empty, new session ID shown
+1. Have a conversation, type `/new` → transcript empty, new session ID shown
 2. Type `/quit` → TUI exits cleanly
 
 **Failure modes:**
-- Clear during streaming → block with "Cannot clear while streaming"
+- New during streaming → block with "Cannot start new while streaming"
 - Quit during streaming → interrupt first, then quit (existing Ctrl+C behavior)
 
 ---
@@ -219,9 +220,9 @@
 
 1. **Popup is ephemeral overlay:** Never affects terminal state beyond TuiApp
 2. **Escape always closes:** User can always dismiss popup with Escape
-3. **Commands are idempotent:** Running `/clear` twice is safe
-4. **No data loss without intent:** `/clear` only affects UI state, not session files
-5. **Input preserved on cancel:** Escape inserts "/" so user input isn't lost
+3. **Commands are idempotent:** Running `/new` twice is safe
+4. **No data loss without intent:** `/new` only affects UI state, not session files
+5. **Input preserved on cancel:** Escape inserts "/" so user input isn't lost (if opened via `/`)
 
 ---
 
@@ -229,12 +230,13 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Trigger | `/` anywhere in input | More discoverable, consistent with other tools |
+| Trigger | `/` anywhere in input OR `Ctrl+P` | More discoverable, consistent with other tools |
 | Popup vs inline | Popup overlay | Shows all commands, easier discovery |
 | Filter matching | Contains (case-insensitive) | Simple, good enough for 2 commands |
-| Escape behavior | Close + insert "/" | Preserves user intent (they typed "/") |
-| Clear during streaming | Block with message | Safer, avoids race conditions |
+| Escape behavior | Close + insert "/" (if opened via `/`) | Preserves user intent (they typed "/") |
+| New during streaming | Block with message | Safer, avoids race conditions |
 | Quit during streaming | Allow (interrupts first) | Consistent with Ctrl+C |
+| Command naming | `/new` primary, `/clear` alias | "new" is clearer about the action (starts fresh session) |
 
 ---
 
@@ -279,7 +281,7 @@
 - **Inline execution:** Type `/quit` + Enter without popup
 - **Tab completion:** Complete command inline without popup
 - **Command palette:** Ctrl+Shift+P style (separate from `/`)
-- **Confirmation dialogs:** "/clear" confirm before clearing long conversation
+- **Confirmation dialogs:** "/new" confirm before clearing long conversation
 
 ---
 
