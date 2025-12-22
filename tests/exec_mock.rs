@@ -5,12 +5,20 @@ use fixtures::{
     error_sse, multi_chunk_text_sse, sse_response, text_response, text_sse_with_pings, tool_use_sse,
 };
 use predicates::prelude::*;
+use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
+
+/// Creates a temp ZDX_HOME directory for test isolation.
+/// Returns the TempDir (must be kept alive for the duration of the test).
+fn temp_zdx_home() -> TempDir {
+    TempDir::new().expect("create temp zdx home")
+}
 
 #[tokio::test]
 async fn test_exec_streams_text_response() {
     let mock_server = MockServer::start().await;
+    let zdx_home = temp_zdx_home();
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -21,6 +29,7 @@ async fn test_exec_streams_text_response() {
         .await;
 
     cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["exec", "-p", "hello"])
@@ -75,7 +84,10 @@ async fn test_exec_handles_empty_delta_events() {
 
 #[tokio::test]
 async fn test_exec_fails_without_api_key() {
+    let zdx_home = temp_zdx_home();
+
     cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", zdx_home.path())
         .env_remove("ANTHROPIC_API_KEY")
         .args(["exec", "-p", "hello"])
         .assert()
@@ -696,4 +708,75 @@ async fn test_exec_error_exit_code_is_one() {
         .assert()
         .failure()
         .code(1);
+}
+
+/// Test: OAuth authentication uses Bearer header instead of x-api-key (SPEC §OAuth).
+#[tokio::test]
+async fn test_exec_uses_oauth_bearer_header_when_logged_in() {
+    let mock_server = MockServer::start().await;
+    let zdx_home = temp_zdx_home();
+
+    // Create OAuth credentials file in temp ZDX_HOME
+    let oauth_json = serde_json::json!({
+        "anthropic": {
+            "type": "oauth",
+            "refresh": "test-refresh-token",
+            "access": "test-oauth-access-token",
+            // Expires far in the future (year 2100)
+            "expires": 4102444800000u64
+        }
+    });
+    std::fs::write(
+        zdx_home.path().join("oauth.json"),
+        serde_json::to_string(&oauth_json).unwrap(),
+    )
+    .unwrap();
+
+    // Mock expects Authorization: Bearer header (OAuth) instead of x-api-key
+    // Also requires anthropic-beta header with oauth-2025-04-20
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("Authorization", "Bearer test-oauth-access-token"))
+        .and(header("anthropic-version", "2023-06-01"))
+        .and(header("anthropic-beta", "oauth-2025-04-20"))
+        .respond_with(text_response("Hello from OAuth!"))
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        // Note: No ANTHROPIC_API_KEY needed when OAuth is available
+        .env_remove("ANTHROPIC_API_KEY")
+        .args(["exec", "-p", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hello from OAuth!"));
+}
+
+/// Test: API key takes precedence when no OAuth credentials exist.
+#[tokio::test]
+async fn test_exec_uses_api_key_when_no_oauth() {
+    let mock_server = MockServer::start().await;
+    let zdx_home = temp_zdx_home();
+
+    // No OAuth file created in zdx_home
+
+    // Mock expects x-api-key header (API key auth)
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .and(header("x-api-key", "my-api-key"))
+        .and(header("anthropic-version", "2023-06-01"))
+        .respond_with(text_response("Hello from API key!"))
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx-cli")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "my-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["exec", "-p", "hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Hello from API key!"));
 }
