@@ -116,7 +116,7 @@
 
 ---
 
-### Slice 3: Navigation + Filtering
+### Slice 3: Navigation + Filtering ✅ DONE
 
 **Goal:** Arrow keys navigate, typing filters, Enter/Tab selects. Input at top like Amp's command palette.
 
@@ -139,16 +139,16 @@
 - `Ctrl+C` → close (no insert)
 
 **Checklist:**
-- [ ] Move filter input to TOP of popup (below title, above list)
-- [ ] Show `> ` prompt with filter text and cursor indicator
-- [ ] Up/Down arrows move selection (wrap around optional)
-- [ ] Enter executes selected command
-- [ ] Tab also executes (common shortcut)
-- [ ] Typing appends to filter
-- [ ] Backspace removes from filter (empty filter shows all)
-- [ ] Filter matches name OR aliases (case-insensitive)
-- [ ] Empty filter result shows "No matching commands"
-- [ ] Clamp selection when filter changes
+- [x] Move filter input to TOP of popup (below title, above list)
+- [x] Show `> ` prompt with filter text and cursor indicator
+- [x] Up/Down arrows move selection (wrap around optional)
+- [x] Enter executes selected command
+- [x] Tab also executes (common shortcut)
+- [x] Typing appends to filter
+- [x] Backspace removes from filter (empty filter shows all)
+- [x] Filter matches name OR aliases (case-insensitive)
+- [x] Empty filter result shows "No matching commands"
+- [x] Clamp selection when filter changes
 
 **✅ Demo:** Type `/cl` → filter shows "cl", only `/clear` shown. Press Enter → command executes.
 
@@ -158,57 +158,24 @@
 
 ---
 
-### Slice 4: Command Execution
+### Slice 4: Command Execution ✅ DONE
 
 **Goal:** `/clear` and `/quit` work correctly.
 
-**Command enum for dispatch:**
-```rust
-fn execute_selected_command(&mut self) {
-    let Some(popup) = &self.command_popup else { return };
-    let Some(cmd) = popup.filtered_commands.get(popup.selected) else {
-        self.close_command_popup(false);
-        return;
-    };
-    
-    match cmd.name {
-        "clear" => self.execute_clear(),
-        "quit" => self.execute_quit(),
-        _ => {}
-    }
-    
-    self.close_command_popup(false);
-}
-
-fn execute_clear(&mut self) {
-    // Clear transcript
-    self.transcript.clear();
-    // Clear message history (but keep system prompt)
-    self.messages.clear();
-    // Clear command history for this session
-    self.command_history.clear();
-    // Reset scroll to follow latest
-    self.scroll_mode = ScrollMode::FollowLatest;
-    // Show confirmation
-    self.transcript.push(HistoryCell::system("Conversation cleared."));
-    // Note: Session file keeps history (append-only), but UI is fresh
-}
-
-fn execute_quit(&mut self) {
-    self.should_quit = true;
-}
-```
+**Implementation notes:**
+- `/clear` now starts a fresh session (creates new session file) rather than just clearing UI
+- `/quit` interrupts any running engine before exiting
 
 **Checklist:**
-- [ ] `/quit` sets `should_quit = true`
-- [ ] `/clear` clears transcript, messages, resets scroll
-- [ ] `/clear` shows system message "Conversation cleared"
-- [ ] Engine state check: if streaming, interrupt first? Or block clear?
-  - Decision: Block `/clear` while engine running (show message)
-- [ ] Clear doesn't affect session file (append-only log)
+- [x] `/quit` sets `should_quit = true`
+- [x] `/clear` clears transcript, messages, resets scroll
+- [x] `/clear` starts a new session (if sessions enabled)
+- [x] `/clear` shows system message with new session ID
+- [x] Engine state check: block `/clear` while streaming (show message)
+- [x] `/quit` during streaming: interrupt first, then quit
 
 **✅ Demo:** 
-1. Have a conversation, type `/clear` → transcript empty, "Conversation cleared" shown
+1. Have a conversation, type `/clear` → transcript empty, new session ID shown
 2. Type `/quit` → TUI exits cleanly
 
 **Failure modes:**
