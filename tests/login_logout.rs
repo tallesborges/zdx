@@ -1,11 +1,10 @@
 //! Integration tests for login/logout commands.
 
 use std::fs;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
+use std::process::Command;
 use tempfile::tempdir;
 
 /// Test: logout without --anthropic shows error.
@@ -45,63 +44,16 @@ fn test_logout_when_not_logged_in() {
         .stdout(predicate::str::contains("Not logged in to Anthropic"));
 }
 
-/// Test: login --anthropic writes token to oauth.json.
+/// Test: logout --anthropic clears credentials from oauth.json.
 #[test]
-fn test_login_stores_token() {
+fn test_logout_clears_credentials() {
     let temp = tempdir().unwrap();
     let oauth_path = temp.path().join("oauth.json");
 
-    // Simulate pasting a token via stdin
-    let mut child = Command::cargo_bin("zdx-cli")
-        .unwrap()
-        .env("ZDX_HOME", temp.path())
-        .env("ZDX_NO_BROWSER", "1")
-        .arg("login")
-        .arg("--anthropic")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn command");
-
-    // Write the token to stdin
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(b"sk-ant-test-token-12345678901234567890\n")
-            .expect("Failed to write to stdin");
-    }
-
-    let output = child.wait_with_output().expect("Failed to read output");
-    assert!(output.status.success(), "Command failed: {:?}", output);
-
-    // Check the token was saved
-    assert!(oauth_path.exists(), "oauth.json should exist");
-
-    let contents = fs::read_to_string(&oauth_path).unwrap();
-    assert!(
-        contents.contains("sk-ant-test-token-12345678901234567890"),
-        "Token should be in oauth.json"
-    );
-
-    // Check output mentions success
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert!(
-        stdout.contains("Logged in to Anthropic"),
-        "Should show success message"
-    );
-}
-
-/// Test: logout --anthropic clears token from oauth.json.
-#[test]
-fn test_logout_clears_token() {
-    let temp = tempdir().unwrap();
-    let oauth_path = temp.path().join("oauth.json");
-
-    // First, create an oauth.json with a token
+    // Create an oauth.json with credentials in the new format
     fs::write(
         &oauth_path,
-        r#"{"anthropic": {"access_token": "sk-ant-test-token"}}"#,
+        r#"{"anthropic": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
     )
     .unwrap();
 
@@ -114,112 +66,114 @@ fn test_logout_clears_token() {
         .success()
         .stdout(predicate::str::contains("Logged out from Anthropic"));
 
-    // Check the token was removed
+    // Check the credentials were removed
     let contents = fs::read_to_string(&oauth_path).unwrap();
     assert!(
-        !contents.contains("sk-ant-test-token"),
+        !contents.contains("access-token"),
         "Token should be removed from oauth.json"
     );
 }
 
-/// Test: login validates token format (rejects empty).
+/// Test: login --anthropic shows OAuth instructions.
 #[test]
-fn test_login_rejects_empty_token() {
+fn test_login_shows_oauth_instructions() {
     let temp = tempdir().unwrap();
 
-    let mut child = Command::cargo_bin("zdx-cli")
+    // Start login but don't provide input - it will fail but we can check the output
+    let output = Command::cargo_bin("zdx-cli")
         .unwrap()
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
         .arg("--anthropic")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn command");
+        .output()
+        .expect("Failed to run command");
 
-    // Write empty token
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin.write_all(b"\n").expect("Failed to write to stdin");
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let output = child.wait_with_output().expect("Failed to read output");
-    assert!(!output.status.success(), "Should fail with empty token");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should show OAuth flow instructions
     assert!(
-        stderr.contains("empty") || stderr.contains("Token"),
-        "Should mention token issue"
+        stdout.contains("OAuth") || stdout.contains("oauth"),
+        "Should mention OAuth in instructions"
+    );
+    assert!(
+        stdout.contains("claude.ai"),
+        "Should show claude.ai authorization URL"
+    );
+    assert!(
+        stdout.contains("code"),
+        "Should mention authorization code"
     );
 }
 
-/// Test: login validates token format (rejects short token).
+/// Test: login --anthropic prompts for re-login when already logged in.
 #[test]
-fn test_login_rejects_short_token() {
+fn test_login_prompts_when_already_logged_in() {
     let temp = tempdir().unwrap();
+    let oauth_path = temp.path().join("oauth.json");
 
-    let mut child = Command::cargo_bin("zdx-cli")
+    // Create existing credentials
+    fs::write(
+        &oauth_path,
+        r#"{"anthropic": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
+    )
+    .unwrap();
+
+    // Run login without providing confirmation
+    let output = Command::cargo_bin("zdx-cli")
         .unwrap()
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
         .arg("--anthropic")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn command");
+        .output()
+        .expect("Failed to run command");
 
-    {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin.write_all(b"short\n").expect("Failed to write to stdin");
-    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
 
-    let output = child.wait_with_output().expect("Failed to read output");
-    assert!(!output.status.success(), "Should fail with short token");
-
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    // Should mention already logged in
     assert!(
-        stderr.contains("short"),
-        "Should mention token is too short"
+        stdout.contains("Already logged in"),
+        "Should mention already logged in"
     );
 }
 
 /// Test: oauth.json has restricted permissions on Unix.
 #[cfg(unix)]
 #[test]
-fn test_oauth_file_permissions() {
+fn test_oauth_file_permissions_on_logout() {
+    use std::os::unix::fs::OpenOptionsExt;
     use std::os::unix::fs::PermissionsExt;
 
     let temp = tempdir().unwrap();
     let oauth_path = temp.path().join("oauth.json");
 
-    // Login to create the file
-    let mut child = Command::cargo_bin("zdx-cli")
-        .unwrap()
-        .env("ZDX_HOME", temp.path())
-        .env("ZDX_NO_BROWSER", "1")
-        .arg("login")
-        .arg("--anthropic")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("Failed to spawn command");
-
+    // Create credentials with proper permissions (simulating what login would do)
     {
-        let stdin = child.stdin.as_mut().expect("Failed to open stdin");
-        stdin
-            .write_all(b"sk-ant-test-token-12345678901234567890\n")
-            .expect("Failed to write to stdin");
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&oauth_path)
+            .unwrap();
+        file.write_all(
+            br#"{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 0}}"#,
+        )
+        .unwrap();
     }
 
-    let output = child.wait_with_output().expect("Failed to read output");
-    assert!(output.status.success(), "Command should succeed");
+    // Logout triggers save which should preserve permissions
+    Command::cargo_bin("zdx-cli")
+        .unwrap()
+        .env("ZDX_HOME", temp.path())
+        .arg("logout")
+        .arg("--anthropic")
+        .assert()
+        .success();
 
-    // Check permissions
+    // Check permissions are preserved
     let metadata = fs::metadata(&oauth_path).expect("Should be able to read metadata");
     let mode = metadata.permissions().mode();
     assert_eq!(
