@@ -737,18 +737,18 @@ impl TuiApp {
                 .add_modifier(Modifier::BOLD),
             TranscriptStyle::System => Style::default().fg(Color::DarkGray),
             TranscriptStyle::ToolBracket => Style::default().fg(Color::DarkGray),
-            TranscriptStyle::ToolStatus => Style::default().fg(Color::White),
-            TranscriptStyle::ToolError => Style::default().fg(Color::Red),
-            TranscriptStyle::ToolRunning => Style::default()
-                .fg(Color::Yellow)
+            TranscriptStyle::ToolStatus => Style::default()
+                .fg(Color::Cyan)
                 .add_modifier(Modifier::BOLD),
+            TranscriptStyle::ToolError => Style::default().fg(Color::Red),
+            TranscriptStyle::ToolRunning => Style::default().fg(Color::Cyan),
             TranscriptStyle::ToolSuccess => Style::default()
                 .fg(Color::Green)
                 .add_modifier(Modifier::BOLD),
             TranscriptStyle::ToolCancelled => Style::default()
                 .fg(Color::Yellow)
                 .add_modifier(Modifier::CROSSED_OUT),
-            TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
+            TranscriptStyle::ToolOutput => Style::default().fg(Color::Gray),
         }
     }
 
