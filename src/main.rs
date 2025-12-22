@@ -202,7 +202,7 @@ fn main_result() -> Result<()> {
                 if !anthropic {
                     anyhow::bail!("Please specify a provider: --anthropic");
                 }
-                run_login_anthropic()
+                run_login_anthropic().await
             }
 
             Commands::Logout { anthropic } => {
@@ -283,7 +283,7 @@ async fn run_resume(id: Option<String>, config: &config::Config) -> Result<()> {
     Ok(())
 }
 
-fn run_login_anthropic() -> Result<()> {
+async fn run_login_anthropic() -> Result<()> {
     use crate::providers::oauth::{anthropic as oauth_anthropic, OAuthCache};
     use std::io::{self, BufRead, Write};
 
@@ -337,10 +337,9 @@ fn run_login_anthropic() -> Result<()> {
         anyhow::bail!("Authorization code cannot be empty");
     }
 
-    // Exchange code for tokens (need async runtime)
+    // Exchange code for tokens
     println!("Exchanging code for tokens...");
-    let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
-    let credentials = rt.block_on(oauth_anthropic::exchange_code(auth_code, &pkce))?;
+    let credentials = oauth_anthropic::exchange_code(auth_code, &pkce).await?;
 
     // Save credentials
     oauth_anthropic::save_credentials(&credentials)?;
