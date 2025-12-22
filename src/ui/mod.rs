@@ -6,6 +6,7 @@
 
 pub mod app;
 pub mod chat;
+pub mod stream;
 pub mod tui2;
 
 pub use app::{InputResult, TuiApp};

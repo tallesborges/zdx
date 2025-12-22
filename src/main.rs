@@ -1,21 +1,121 @@
-mod cli;
 mod config;
-mod core;
 mod engine;
 mod providers;
-mod renderers;
-mod session;
+mod shared;
 mod tools;
 mod ui;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use cli::{Cli, Commands, ConfigCommands, DevCommands, SessionCommands};
-use session::SessionOptions;
+
+use crate::engine::session::{self, SessionOptions};
+use crate::shared::context;
+use crate::shared::interrupt;
+
+#[derive(Parser)]
+#[command(name = "zdx")]
+#[command(version = "0.1")]
+#[command(author = "Talles Borges <talles.borges92@gmail.com>")]
+#[command(about = "ZDX Agentic CLI Tool")]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+
+    /// Root directory for file operations (default: current directory)
+    #[arg(long, default_value = ".")]
+    root: String,
+
+    /// Override the system prompt from config
+    #[arg(long)]
+    system_prompt: Option<String>,
+
+    #[command(flatten)]
+    session_args: SessionArgs,
+}
+
+/// Common session arguments for commands that support session persistence.
+#[derive(clap::Args, Debug, Clone, Default)]
+struct SessionArgs {
+    /// Append to an existing session by ID
+    #[arg(long, value_name = "ID")]
+    session: Option<String>,
+
+    /// Do not save the session
+    #[arg(long)]
+    no_save: bool,
+}
+
+impl From<&SessionArgs> for SessionOptions {
+    fn from(args: &SessionArgs) -> Self {
+        SessionOptions {
+            session_id: args.session.clone(),
+            no_save: args.no_save,
+        }
+    }
+}
+
+#[derive(clap::Subcommand)]
+enum Commands {
+    /// Executes a command with a prompt
+    Exec {
+        /// The prompt to send to the agent
+        #[arg(short, long)]
+        prompt: String,
+    },
+
+    /// Manage saved sessions
+    Sessions {
+        #[command(subcommand)]
+        command: SessionCommands,
+    },
+    /// Manage configuration
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommands,
+    },
+    /// Development/debug commands
+    #[command(hide = true)]
+    Dev {
+        #[command(subcommand)]
+        command: DevCommands,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum DevCommands {
+    /// Test the full-screen TUI2 (work in progress)
+    Tui2,
+}
+
+#[derive(clap::Subcommand)]
+enum SessionCommands {
+    /// Lists saved sessions
+    List,
+    /// Shows a specific session
+    Show {
+        /// The ID of the session to show
+        #[arg(value_name = "SESSION_ID")]
+        id: String,
+    },
+    /// Resume a previous session
+    Resume {
+        /// The ID of the session to resume (uses latest if not provided)
+        #[arg(value_name = "SESSION_ID")]
+        id: Option<String>,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum ConfigCommands {
+    /// Show the path to the config file
+    Path,
+    /// Initialize a default config file (if not present)
+    Init,
+}
 
 fn main() {
     if let Err(e) = main_result() {
-        if e.downcast_ref::<core::interrupt::InterruptedError>()
+        if e.downcast_ref::<interrupt::InterruptedError>()
             .is_some()
         {
             std::process::exit(130);
@@ -28,7 +128,7 @@ fn main() {
 fn main_result() -> Result<()> {
     let cli = Cli::parse();
 
-    core::interrupt::init();
+    interrupt::init();
 
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
@@ -107,7 +207,7 @@ fn main_result() -> Result<()> {
 
                     // Build effective system prompt
                     let effective =
-                        core::context::build_effective_system_prompt_with_paths(&config, &root)?;
+                        context::build_effective_system_prompt_with_paths(&config, &root)?;
 
                     // Print warnings like the normal chat does
                     for warning in &effective.warnings {
@@ -132,7 +232,7 @@ fn main_result() -> Result<()> {
 
 async fn run_chat(
     root: &str,
-    session_args: &cli::SessionArgs,
+    session_args: &SessionArgs,
     config: &config::Config,
 ) -> Result<()> {
     use std::io::{IsTerminal, Read};
@@ -161,19 +261,19 @@ async fn run_chat(
 
 async fn run_exec(
     root: &str,
-    session_args: &cli::SessionArgs,
+    session_args: &SessionArgs,
     prompt: &str,
     config: &config::Config,
 ) -> Result<()> {
     let session_opts: SessionOptions = session_args.into();
     let session = session_opts.resolve().context("resolve session")?;
 
-    let exec_opts = renderers::ExecOptions {
+    let exec_opts = ui::stream::ExecOptions {
         root: std::path::PathBuf::from(root),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    renderers::execute_prompt_streaming(prompt, config, session, &exec_opts)
+    ui::stream::execute_prompt_streaming(prompt, config, session, &exec_opts)
         .await
         .context("execute prompt")?;
 

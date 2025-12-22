@@ -32,9 +32,9 @@ use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
-use crate::core::events::EngineEvent;
-use crate::core::interrupt;
-use crate::core::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
+use crate::shared::events::EngineEvent;
+use crate::shared::interrupt;
+use crate::shared::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
 use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
 
@@ -357,7 +357,7 @@ impl Tui2App {
             }
             Some(Ok(Err(e))) => {
                 // Engine error
-                if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
+                if e.downcast_ref::<crate::shared::interrupt::InterruptedError>()
                     .is_some()
                 {
                     // Already handled by Interrupted event
