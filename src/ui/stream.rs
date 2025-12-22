@@ -13,10 +13,10 @@ use anyhow::Result;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::engine::{self, EngineOptions};
 use crate::engine::session::{self, Session, SessionEvent};
-use crate::shared::events::{EngineEvent, ToolOutput};
+use crate::engine::{self, EngineOptions};
 use crate::providers::anthropic::ChatMessage;
+use crate::shared::events::{EngineEvent, ToolOutput};
 
 /// Options for exec execution.
 #[derive(Debug, Clone)]
@@ -47,7 +47,8 @@ pub async fn execute_prompt_streaming(
     mut session: Option<Session>,
     options: &ExecOptions,
 ) -> Result<String> {
-    let effective = crate::shared::context::build_effective_system_prompt_with_paths(config, &options.root)?;
+    let effective =
+        crate::shared::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
     // Emit warnings from context loading to stderr
     for warning in &effective.warnings {

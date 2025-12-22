@@ -9,7 +9,6 @@ use anyhow::{Context, Result};
 use clap::Parser;
 
 use crate::engine::session::{self, SessionOptions};
-use crate::shared::context;
 use crate::shared::interrupt;
 
 #[derive(Parser)]
@@ -73,18 +72,6 @@ enum Commands {
         #[command(subcommand)]
         command: ConfigCommands,
     },
-    /// Development/debug commands
-    #[command(hide = true)]
-    Dev {
-        #[command(subcommand)]
-        command: DevCommands,
-    },
-}
-
-#[derive(clap::Subcommand)]
-enum DevCommands {
-    /// Test the full-screen TUI2 (work in progress)
-    Tui2,
 }
 
 #[derive(clap::Subcommand)]
@@ -115,9 +102,7 @@ enum ConfigCommands {
 
 fn main() {
     if let Err(e) = main_result() {
-        if e.downcast_ref::<interrupt::InterruptedError>()
-            .is_some()
-        {
+        if e.downcast_ref::<interrupt::InterruptedError>().is_some() {
             std::process::exit(130);
         }
         eprintln!("{:#}", e); // pretty anyhow chain
@@ -199,42 +184,11 @@ fn main_result() -> Result<()> {
                     Ok(())
                 }
             },
-
-            Commands::Dev { command } => match command {
-                DevCommands::Tui2 => {
-                    // Get root path (current directory)
-                    let root = std::env::current_dir().context("get current dir")?;
-
-                    // Build effective system prompt
-                    let effective =
-                        context::build_effective_system_prompt_with_paths(&config, &root)?;
-
-                    // Print warnings like the normal chat does
-                    for warning in &effective.warnings {
-                        eprintln!("Warning: {}", warning.message);
-                    }
-                    if !effective.loaded_agents_paths.is_empty() {
-                        eprintln!("Loaded AGENTS.md from:");
-                        for path in &effective.loaded_agents_paths {
-                            eprintln!("  - {}", path.display());
-                        }
-                    }
-
-                    let mut app =
-                        ui::Tui2App::new(config, root, effective.prompt).context("create TUI2")?;
-                    app.run().context("run TUI2")?;
-                    Ok(())
-                }
-            },
         }
     })
 }
 
-async fn run_chat(
-    root: &str,
-    session_args: &SessionArgs,
-    config: &config::Config,
-) -> Result<()> {
+async fn run_chat(root: &str, session_args: &SessionArgs, config: &config::Config) -> Result<()> {
     use std::io::{IsTerminal, Read};
 
     // If stdin is piped, run exec mode instead

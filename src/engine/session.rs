@@ -24,8 +24,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use crate::config::paths::sessions_dir;
 use super::EventRx;
+use crate::config::paths::sessions_dir;
 
 /// Current schema version for new sessions.
 pub const SCHEMA_VERSION: u32 = 1;

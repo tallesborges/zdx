@@ -113,13 +113,22 @@ impl HistoryCell {
         }
     }
 
-
     /// Creates a new user cell.
     pub fn user(content: impl Into<String>) -> Self {
         HistoryCell::User {
             id: CellId::new(),
             created_at: Utc::now(),
             content: content.into(),
+        }
+    }
+
+    /// Creates a new assistant cell (finalized, not streaming).
+    pub fn assistant(content: impl Into<String>) -> Self {
+        HistoryCell::Assistant {
+            id: CellId::new(),
+            created_at: Utc::now(),
+            content: content.into(),
+            is_streaming: false,
         }
     }
 
@@ -132,7 +141,6 @@ impl HistoryCell {
             is_streaming: true,
         }
     }
-
 
     /// Creates a new tool cell (running state).
     pub fn tool_running(
@@ -202,7 +210,6 @@ impl HistoryCell {
             _ => panic!("set_tool_result called on non-tool cell"),
         }
     }
-
 
     /// Renders this cell into display lines for the given width.
     ///
