@@ -13,8 +13,8 @@ use anyhow::Result;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::core::events::{EngineEvent, ToolOutput};
 use crate::core::engine::EngineOptions;
+use crate::core::events::{EngineEvent, ToolOutput};
 use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
 
@@ -89,8 +89,7 @@ pub async fn execute_prompt_streaming(
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {
         let (persist_tx, persist_rx) = crate::core::engine::create_event_channel();
-        let fanout =
-            crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+        let fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
         let persist = session::spawn_persist_task(sess, persist_rx);
         Some((fanout, persist))
     } else {
