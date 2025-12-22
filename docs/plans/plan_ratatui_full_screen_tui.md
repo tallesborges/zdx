@@ -279,13 +279,20 @@ Goal: Stable streaming under resizes and long outputs.
 - [ ] Avoid whole-transcript rewrap per frame.
 - [ ] ✅ Check-in: stream long response, resize terminal, no flicker or lag.
 
-## Phase 5: Input polish
+## Phase 5: Input polish ✅
 Goal: Quality-of-life input features.
 
-- [ ] History navigation (↑/↓ for previous commands).
-- [ ] Ctrl+C progressive behavior (interrupt → clear → quit, per Design Principles).
-- [ ] Status line with mode indicator (streaming, focus state if focus toggle added).
-- [ ] ✅ Check-in: input feels polished for daily use.
+- [x] History navigation (↑/↓ for previous commands).
+- [x] Ctrl+C progressive behavior (interrupt → clear → quit, per Design Principles).
+- [x] Status line with mode indicator (streaming, focus state if focus toggle added).
+- [x] ✅ Check-in: input feels polished for daily use.
+
+**Implementation notes:**
+- Command history stored per session, persisted across resumed sessions.
+- ↑/↓ navigation when cursor at first/last line or input empty.
+- Draft text saved when entering history navigation, restored when exiting.
+- Status line shows: model name, state (Ready/Thinking/Streaming), history position when navigating.
+- Header height increased to 3 lines (title + status + border).
 
 ## Phase 6: Default + cleanup ✅
 Goal: TUI2 becomes the default.

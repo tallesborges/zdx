@@ -109,8 +109,8 @@ pub async fn run_interactive_chat_with_history(
 /// Height of the input area (lines).
 const INPUT_HEIGHT: u16 = 5;
 
-/// Height of header area (lines).
-const HEADER_HEIGHT: u16 = 2;
+/// Height of header area (lines: title + status + border).
+const HEADER_HEIGHT: u16 = 3;
 
 /// Target frame rate for streaming updates (30fps = ~33ms per frame).
 const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(33);
@@ -181,6 +181,12 @@ pub struct TuiApp {
     cached_line_count: usize,
     /// Session for persistence (if enabled).
     session: Option<Session>,
+    /// Command history for ↑/↓ navigation.
+    command_history: Vec<String>,
+    /// Current position in command history (None = not navigating).
+    history_index: Option<usize>,
+    /// Draft text saved when navigating history.
+    input_draft: Option<String>,
 }
 
 impl TuiApp {
@@ -231,6 +237,18 @@ impl TuiApp {
         // Build transcript from history
         let transcript = Self::build_transcript_from_history(&history);
 
+        // Build command history from previous user messages
+        let command_history: Vec<String> = transcript
+            .iter()
+            .filter_map(|cell| {
+                if let HistoryCell::User { content, .. } = cell {
+                    Some(content.clone())
+                } else {
+                    None
+                }
+            })
+            .collect();
+
         Ok(Self {
             terminal,
             should_quit: false,
@@ -244,6 +262,9 @@ impl TuiApp {
             scroll_mode: ScrollMode::FollowLatest,
             cached_line_count: 0,
             session,
+            command_history,
+            history_index: None,
+            input_draft: None,
         })
     }
 
@@ -565,6 +586,21 @@ impl TuiApp {
         // Clone textarea for rendering (tui-textarea doesn't impl Copy)
         let textarea = &self.textarea;
 
+        // Prepare status line info (before closure to avoid borrow issues)
+        let status_state = match &self.engine_state {
+            EngineState::Idle => ("Ready", Color::Green),
+            EngineState::Waiting { .. } => ("Thinking...", Color::Yellow),
+            EngineState::Streaming { .. } => ("Streaming...", Color::Yellow),
+        };
+        let model_name = self.config.model.clone();
+        let history_indicator = if self.history_index.is_some() {
+            let idx = self.history_index.unwrap();
+            let total = self.command_history.len();
+            Some(format!("history {}/{}", idx + 1, total))
+        } else {
+            None
+        };
+
         self.terminal.draw(|frame| {
             let area = frame.area();
 
@@ -578,36 +614,38 @@ impl TuiApp {
                 ])
                 .split(area);
 
-            // Header with scroll indicator
-            let header_text = if has_content_below {
-                vec![
-                    Span::styled(
-                        "ZDX",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" — "),
-                    Span::styled("q", Style::default().fg(Color::Yellow)),
-                    Span::raw(" to quit"),
-                    Span::raw("  "),
-                    Span::styled("▼ more", Style::default().fg(Color::DarkGray)),
-                ]
-            } else {
-                vec![
-                    Span::styled(
-                        "ZDX",
-                        Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
-                    ),
-                    Span::raw(" — "),
-                    Span::styled("q", Style::default().fg(Color::Yellow)),
-                    Span::raw(" to quit"),
-                ]
-            };
+            // Header line 1: Title and scroll indicator
+            let mut title_spans = vec![
+                Span::styled(
+                    "ZDX",
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" — "),
+                Span::styled("q", Style::default().fg(Color::Yellow)),
+                Span::raw(" to quit"),
+            ];
+            if has_content_below {
+                title_spans.push(Span::raw("  "));
+                title_spans.push(Span::styled("▼ more", Style::default().fg(Color::DarkGray)));
+            }
 
-            let header = Paragraph::new(Line::from(header_text))
+            // Header line 2: Status line (model, state, history indicator)
+            let mut status_spans = vec![
+                Span::styled(&model_name, Style::default().fg(Color::DarkGray)),
+                Span::raw(" │ "),
+                Span::styled(status_state.0, Style::default().fg(status_state.1)),
+            ];
+            if let Some(hist) = &history_indicator {
+                status_spans.push(Span::raw(" │ "));
+                status_spans.push(Span::styled(
+                    hist.as_str(),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            let header = Paragraph::new(vec![Line::from(title_spans), Line::from(status_spans)])
                 .alignment(Alignment::Center)
                 .block(
                     Block::default()
@@ -803,8 +841,26 @@ impl TuiApp {
             KeyCode::End if ctrl => {
                 self.scroll_to_bottom();
             }
+            // History navigation: Up arrow
+            KeyCode::Up if !ctrl && !shift && !alt => {
+                if self.should_navigate_history_up() {
+                    self.navigate_history_up();
+                } else {
+                    self.textarea.input(key);
+                }
+            }
+            // History navigation: Down arrow
+            KeyCode::Down if !ctrl && !shift && !alt => {
+                if self.should_navigate_history_down() {
+                    self.navigate_history_down();
+                } else {
+                    self.textarea.input(key);
+                }
+            }
             // Pass everything else to textarea
             _ => {
+                // Any other key resets history navigation state
+                self.reset_history_navigation();
                 self.textarea.input(key);
             }
         }
@@ -883,6 +939,7 @@ impl TuiApp {
     fn clear_input(&mut self) {
         self.textarea.select_all();
         self.textarea.cut();
+        self.reset_history_navigation();
     }
 
     /// Returns true if the engine is currently running (waiting or streaming).
@@ -897,6 +954,109 @@ impl TuiApp {
         }
     }
 
+    /// Returns true if we should navigate to the previous history entry.
+    ///
+    /// History navigation activates when:
+    /// - Input is empty, OR
+    /// - Already navigating history, OR
+    /// - Cursor is at the first line of the input
+    fn should_navigate_history_up(&self) -> bool {
+        if self.command_history.is_empty() {
+            return false;
+        }
+
+        // Already navigating history
+        if self.history_index.is_some() {
+            return true;
+        }
+
+        // Input is empty - start navigation
+        if self.get_input_text().is_empty() {
+            return true;
+        }
+
+        // Cursor at first line - start navigation
+        let (row, _col) = self.textarea.cursor();
+        row == 0
+    }
+
+    /// Returns true if we should navigate to the next history entry.
+    ///
+    /// Only active when already navigating history and cursor at last line.
+    fn should_navigate_history_down(&self) -> bool {
+        // Only navigate if we're already in history navigation mode
+        if self.history_index.is_none() {
+            return false;
+        }
+
+        // Check if cursor is at last line
+        let (row, _col) = self.textarea.cursor();
+        let line_count = self.textarea.lines().len();
+        row >= line_count.saturating_sub(1)
+    }
+
+    /// Navigates to the previous entry in command history.
+    fn navigate_history_up(&mut self) {
+        if self.command_history.is_empty() {
+            return;
+        }
+
+        // Save current input as draft on first navigation
+        if self.history_index.is_none() {
+            let current = self.get_input_text();
+            self.input_draft = Some(current);
+            // Start at the most recent entry
+            self.history_index = Some(self.command_history.len() - 1);
+        } else if let Some(idx) = self.history_index {
+            // Navigate backwards (older entries)
+            if idx > 0 {
+                self.history_index = Some(idx - 1);
+            }
+        }
+
+        // Load history entry into textarea
+        if let Some(idx) = self.history_index
+            && let Some(entry) = self.command_history.get(idx).cloned()
+        {
+            self.set_input_text(&entry);
+        }
+    }
+
+    /// Navigates to the next entry in command history.
+    fn navigate_history_down(&mut self) {
+        let Some(idx) = self.history_index else {
+            return;
+        };
+
+        if idx + 1 < self.command_history.len() {
+            // Move to more recent entry
+            self.history_index = Some(idx + 1);
+            if let Some(entry) = self.command_history.get(idx + 1).cloned() {
+                self.set_input_text(&entry);
+            }
+        } else {
+            // Past the end - restore draft and exit history mode
+            let draft = self.input_draft.take().unwrap_or_default();
+            self.history_index = None;
+            self.set_input_text(&draft);
+        }
+    }
+
+    /// Resets history navigation state.
+    fn reset_history_navigation(&mut self) {
+        self.history_index = None;
+        self.input_draft = None;
+    }
+
+    /// Sets the input textarea to the given text.
+    fn set_input_text(&mut self, text: &str) {
+        // Clear current content
+        self.textarea.select_all();
+        self.textarea.cut();
+        // Insert new text
+        self.textarea.insert_str(text);
+    }
+
     /// Submits the current input.
     fn submit_input(&mut self) {
         // Don't submit if engine is already running
@@ -908,6 +1068,10 @@ impl TuiApp {
         if text.trim().is_empty() {
             return;
         }
+
+        // Add to command history for ↑/↓ navigation
+        self.command_history.push(text.clone());
+        self.reset_history_navigation();
 
         // Add user cell to transcript
         self.transcript.push(HistoryCell::user(&text));
