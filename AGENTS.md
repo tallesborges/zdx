@@ -5,13 +5,17 @@
 ## Where things are
 
 - `src/main.rs`: CLI entrypoint + `clap` args
-- `src/lib.rs`: module exports for the library crate
-- `src/engine/`: engine loop + event stream (no terminal I/O) + session persistence
+- `src/core/`: UI-agnostic domain + runtime
+  - `src/core/events.rs`: engine event types for streaming
+  - `src/core/context.rs`: project context loading (AGENTS.md files)
+  - `src/core/interrupt.rs`: signal handling
+  - `src/core/orchestrator.rs`: engine loop + event channels
+  - `src/core/session.rs`: session persistence
 - `src/ui/`: terminal UI app + chat loop + stdout/stderr streaming
+  - `src/ui/transcript.rs`: TUI view model (styles, wrapping, rendering)
 - `src/tools/`: tool implementations + schemas
 - `src/providers/`: provider clients (Anthropic, etc.)
 - `src/config.rs`: config loading + paths
-- `src/shared/`: shared primitives (events, context, interrupt)
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
 ## Keep this file up to date
@@ -33,7 +37,7 @@
 - Rust edition: 2024 (see `Cargo.toml`)
 - Formatting: rustfmt defaults
 - Errors: prefer `anyhow::Result` + `Context` at I/O boundaries
-- Keep the engine UI-agnostic: terminal I/O belongs in renderers/UI only
+- Keep `src/core/` UI-agnostic: terminal I/O belongs in `src/ui/` only
 
 ## Tests (keep it light)
 

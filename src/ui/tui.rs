@@ -31,11 +31,11 @@ use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
-use crate::engine::session::{self, Session, SessionEvent};
-use crate::engine::{self, EngineOptions};
+use crate::core::events::EngineEvent;
+use crate::core::interrupt;
+use crate::core::orchestrator::EngineOptions;
+use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
-use crate::shared::events::EngineEvent;
-use crate::shared::interrupt;
 use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
 
 /// Runs the interactive chat loop.
@@ -62,8 +62,7 @@ pub async fn run_interactive_chat_with_history(
         );
     }
 
-    let effective =
-        crate::shared::context::build_effective_system_prompt_with_paths(config, &root)?;
+    let effective = crate::core::context::build_effective_system_prompt_with_paths(config, &root)?;
 
     // Print pre-TUI info to stderr (will be replaced by alternate screen)
     let mut err = stderr();
@@ -501,7 +500,7 @@ impl TuiApp {
             }
             Some(Ok(Err(e))) => {
                 // Engine error
-                if e.downcast_ref::<crate::shared::interrupt::InterruptedError>()
+                if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
                     .is_some()
                 {
                     // Already handled by Interrupted event
@@ -936,7 +935,7 @@ impl TuiApp {
 
     /// Spawns an engine turn in the background.
     fn spawn_engine_turn(&mut self) {
-        let (engine_tx, engine_rx) = engine::create_event_channel();
+        let (engine_tx, engine_rx) = crate::core::orchestrator::create_event_channel();
 
         // Clone what we need for the async task
         let messages = self.messages.clone();
@@ -945,20 +944,21 @@ impl TuiApp {
         let system_prompt = self.system_prompt.clone();
 
         // Set up event receivers: one for TUI updates, optionally one for session persistence
-        let (tui_tx, tui_rx) = engine::create_event_channel();
+        let (tui_tx, tui_rx) = crate::core::orchestrator::create_event_channel();
 
         // If session exists, spawn persist task
         if let Some(sess) = self.session.clone() {
-            let (persist_tx, persist_rx) = engine::create_event_channel();
-            let _fanout = engine::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
+            let (persist_tx, persist_rx) = crate::core::orchestrator::create_event_channel();
+            let _fanout =
+                crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
             let _persist = session::spawn_persist_task(sess, persist_rx);
         } else {
             // No session - just fan out to TUI
-            let _fanout = engine::spawn_fanout_task(engine_rx, vec![tui_tx]);
+            let _fanout = crate::core::orchestrator::spawn_fanout_task(engine_rx, vec![tui_tx]);
         }
 
         let handle = tokio::spawn(async move {
-            engine::run_turn(
+            crate::core::orchestrator::run_turn(
                 messages,
                 &config,
                 &engine_opts,

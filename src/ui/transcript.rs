@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 
-use crate::shared::events::ToolOutput;
+use crate::core::events::ToolOutput;
 
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
