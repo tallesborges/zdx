@@ -118,46 +118,29 @@
 
 ### Slice 3: Navigation + Filtering
 
-**Goal:** Arrow keys navigate, typing filters, Enter/Tab selects.
+**Goal:** Arrow keys navigate, typing filters, Enter/Tab selects. Input at top like Amp's command palette.
+
+**Updated popup layout (Amp-style):**
+```
+┌ Commands ──────────────────────────────┐
+│ > filter_text█                         │  ← Input at TOP
+├────────────────────────────────────────┤
+│▶ /clear (new)     Clear conversation...│
+│  /quit (q, exit)  Exit ZDX             │
+└────────────────────────────────────────┘
+```
 
 **Key handling in popup:**
-```rust
-fn handle_popup_key(&mut self, key: KeyEvent) -> Result<()> {
-    match key.code {
-        KeyCode::Esc => self.close_command_popup(true),  // insert "/"
-        KeyCode::Char('c') if ctrl => self.close_command_popup(false),
-        KeyCode::Up => self.popup_select_prev(),
-        KeyCode::Down => self.popup_select_next(),
-        KeyCode::Enter | KeyCode::Tab => self.execute_selected_command(),
-        KeyCode::Backspace => self.popup_backspace(),
-        KeyCode::Char(c) => self.popup_type_char(c),
-        _ => {} // ignore other keys
-    }
-    Ok(())
-}
-```
-
-**Filtering logic:**
-```rust
-fn update_popup_filter(&mut self) {
-    let filter = &self.command_popup.as_ref().unwrap().filter;
-    let filtered: Vec<_> = SLASH_COMMANDS
-        .iter()
-        .filter(|cmd| {
-            cmd.name.contains(filter) ||
-            cmd.aliases.iter().any(|a| a.contains(filter))
-        })
-        .collect();
-    
-    // Update filtered list and clamp selection
-    let popup = self.command_popup.as_mut().unwrap();
-    popup.filtered_commands = filtered;
-    popup.selected = popup.selected.min(popup.filtered_commands.len().saturating_sub(1));
-}
-```
+- `Up/Down` → move selection
+- `Enter/Tab` → execute selected command
+- `Backspace` → remove last filter char
+- `Char(c)` → append to filter
+- `Escape` → close + insert "/"
+- `Ctrl+C` → close (no insert)
 
 **Checklist:**
-- [ ] `handle_popup_key()` routes all keys when popup open
+- [ ] Move filter input to TOP of popup (below title, above list)
+- [ ] Show `> ` prompt with filter text and cursor indicator
 - [ ] Up/Down arrows move selection (wrap around optional)
 - [ ] Enter executes selected command
 - [ ] Tab also executes (common shortcut)
@@ -165,8 +148,9 @@ fn update_popup_filter(&mut self) {
 - [ ] Backspace removes from filter (empty filter shows all)
 - [ ] Filter matches name OR aliases (case-insensitive)
 - [ ] Empty filter result shows "No matching commands"
+- [ ] Clamp selection when filter changes
 
-**✅ Demo:** Type `/cl` → only `/clear` shown. Press Enter → command executes.
+**✅ Demo:** Type `/cl` → filter shows "cl", only `/clear` shown. Press Enter → command executes.
 
 **Failure modes:**
 - Filter to empty → show "no matches", disable Enter
