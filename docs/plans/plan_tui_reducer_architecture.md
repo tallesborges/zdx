@@ -361,41 +361,60 @@ impl TuiRuntime {
 
 ---
 
-### Slice 5: Scroll State Extraction
+### Slice 5: Scroll State Extraction ✅
 
 **Goal:** Keep scroll stable under streaming and reduce render complexity.
 
 **Scope checklist:**
-- [ ] Create `ScrollState` helper struct:
+- [x] Create `ScrollState` helper struct:
     ```rust
     pub struct ScrollState {
-        pub offset: usize,
-        pub follow_output: bool,
+        pub mode: ScrollMode,           // FollowLatest | Anchored { offset }
+        pub cached_line_count: usize,
     }
     
     impl ScrollState {
-        pub fn scroll_up(&mut self, lines: usize, max_offset: usize);
-        pub fn scroll_down(&mut self, lines: usize);
-        pub fn scroll_to_top(&mut self, max_offset: usize);
+        pub fn scroll_up(&mut self, lines: usize, viewport_height: usize);
+        pub fn scroll_down(&mut self, lines: usize, viewport_height: usize);
+        pub fn scroll_to_top(&mut self);
         pub fn scroll_to_bottom(&mut self);
-        pub fn maybe_follow(&mut self, content_changed: bool);
+        pub fn page_up(&mut self, viewport_height: usize);
+        pub fn page_down(&mut self, viewport_height: usize);
+        pub fn get_offset(&self, viewport_height: usize) -> usize;
+        pub fn is_following(&self) -> bool;
+        pub fn has_content_below(&self, viewport_height: usize) -> bool;
+        pub fn update_line_count(&mut self, line_count: usize);
+        pub fn reset(&mut self);
     }
     ```
-- [ ] Move viewport/offset math into `ScrollState`
-- [ ] Move "visible lines" calculation into view layer (or a `TranscriptViewModel`)
+- [x] Move viewport/offset math into `ScrollState`
+- [x] Visible lines calculation remains in view layer (uses fresh `total_lines`)
+- [x] Replace `TuiState.scroll_mode` + `cached_line_count` with single `TuiState.scroll: ScrollState`
+- [x] Update all scroll-related handlers in `update.rs` to use `ScrollState` methods
+- [x] Add comprehensive unit tests for `ScrollState` (17 new tests)
 
 **✅ Demo:**
-- Scrolling during streaming doesn't jump
-- Home/End/PageUp/PageDown behave as before
-- Resize doesn't break scroll position
+- Scrolling during streaming doesn't jump ✓
+- Home/End/PageUp/PageDown behave as before ✓
+- Resize doesn't break scroll position ✓
+- All 120+ tests pass ✓
 
 **Failure modes / guardrails:**
-- Off-by-one scroll bugs on resize
-- Scroll jumps when new content arrives while scrolled up
+- Off-by-one scroll bugs on resize ✓ (clamping in get_offset handles this)
+- Scroll jumps when new content arrives while scrolled up ✓ (Anchored mode preserved)
 
-**Files touched:** `src/ui/state.rs`, `src/ui/update.rs`, `src/ui/view.rs`
+**Implementation notes:**
+- Kept `ScrollMode` enum (FollowLatest | Anchored) as internal state - more type-safe than separate bool
+- `scroll_down()` automatically transitions to `FollowLatest` when reaching bottom
+- `reset()` used by `/new` command to reset scroll state with transcript
 
-**Estimated size:** ~100 lines reorganized
+**Files touched:**
+- `src/ui/state.rs`: Added `ScrollState` struct with all methods, replaced separate fields
+- `src/ui/update.rs`: Replaced standalone scroll functions with `state.scroll.*` method calls
+- `src/ui/view.rs`: Updated to use `state.scroll.is_following()` and `get_offset()`
+- `src/ui/tui.rs`: Updated to use `state.scroll.update_line_count()`
+
+**Actual size:** ~100 lines in `ScrollState`, 17 new tests
 
 ---
 

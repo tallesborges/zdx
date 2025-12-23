@@ -189,8 +189,8 @@ impl TuiRuntime {
             // Update cached line count for scroll calculations
             let size = self.terminal.size()?;
             let transcript_width = size.width.saturating_sub(2) as usize;
-            self.state.cached_line_count =
-                view::calculate_line_count(&self.state, transcript_width);
+            let line_count = view::calculate_line_count(&self.state, transcript_width);
+            self.state.scroll.update_line_count(line_count);
 
             // Render - state is a separate field, no borrow conflict
             self.terminal.draw(|frame| {
