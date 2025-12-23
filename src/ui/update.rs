@@ -459,6 +459,8 @@ pub fn handle_engine_event(
             state
                 .transcript
                 .push(HistoryCell::system(format!("Error: {}", message)));
+            // Reset engine state - the turn is over due to the error
+            state.engine_state = EngineState::Idle;
             vec![]
         }
         EngineEvent::Interrupted => {
