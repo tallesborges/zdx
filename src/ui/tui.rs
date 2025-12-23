@@ -27,7 +27,7 @@ use crate::ui::state::{EngineState, TuiState};
 use crate::ui::terminal;
 use crate::ui::transcript::HistoryCell;
 use crate::ui::update;
-use crate::ui::view::{self, INPUT_HEIGHT, STATUS_HEIGHT};
+use crate::ui::view;
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(
@@ -161,7 +161,7 @@ impl TuiRuntime {
     fn transcript_height(&self) -> usize {
         self.terminal
             .size()
-            .map(|s| s.height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize)
+            .map(|s| view::calculate_transcript_height(s.height))
             .unwrap_or(20)
     }
 
@@ -190,8 +190,7 @@ impl TuiRuntime {
 
             // Update cached line count for scroll calculations
             let size = self.terminal.size()?;
-            let transcript_width = size.width.saturating_sub(2) as usize;
-            let line_count = view::calculate_line_count(&self.state, transcript_width);
+            let line_count = view::calculate_line_count(&self.state, size.width as usize);
             self.state.scroll.update_line_count(line_count);
 
             // Render - state is a separate field, no borrow conflict

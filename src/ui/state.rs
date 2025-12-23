@@ -99,6 +99,33 @@ impl OverlayState {
 }
 
 // ============================================================================
+// Startup Helpers (one-shot I/O, not called during render)
+// ============================================================================
+
+/// Gets the current git branch name from .git/HEAD.
+fn get_git_branch(root: &std::path::Path) -> Option<String> {
+    let head_path = root.join(".git/HEAD");
+    if let Ok(content) = std::fs::read_to_string(head_path)
+        && let Some(branch) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(branch.trim().to_string());
+    }
+    None
+}
+
+/// Shortens a path for display, using ~ for home directory.
+fn shorten_path(path: &std::path::Path) -> String {
+    // Canonicalize to resolve "." and ".." to absolute path
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(home) = dirs::home_dir()
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    path.display().to_string()
+}
+
+// ============================================================================
 // Scroll State
 // ============================================================================
 
@@ -336,6 +363,10 @@ pub struct TuiState {
     pub login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
     /// Current auth type indicator (cached, refreshed on login/logout).
     pub auth_type: AuthType,
+    /// Git branch name (cached at startup).
+    pub git_branch: Option<String>,
+    /// Shortened display path (cached at startup).
+    pub display_path: String,
 }
 
 impl TuiState {
@@ -372,6 +403,10 @@ impl TuiState {
 
         let engine_opts = EngineOptions { root };
 
+        // Cache display values at startup (avoids I/O during render)
+        let git_branch = get_git_branch(&engine_opts.root);
+        let display_path = shorten_path(&engine_opts.root);
+
         // Build transcript from history
         let transcript = Self::build_transcript_from_history(&history);
 
@@ -405,6 +440,8 @@ impl TuiState {
             overlay: OverlayState::None,
             login_exchange_rx: None,
             auth_type: AuthType::detect(),
+            git_branch,
+            display_path,
         }
     }
 
