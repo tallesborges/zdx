@@ -211,12 +211,18 @@ impl TuiRuntime {
     - `login_state: LoginState`
     - `engine_state: EngineState`
     - `config`, `session`, `messages`, `command_history`, etc.
+- [ ] Migrate initialization logic from `TuiApp::new()` and `with_history()` to `TuiState::new()` / `TuiState::with_history()`
+    - Transcript building, command history setup, textarea styling
+    - `TuiRuntime` should only handle terminal setup, then initialize state
+- [ ] Move `SLASH_COMMANDS` const and `SlashCommand` struct to `src/ui/commands.rs`
 - [ ] Rename `TuiApp` to `TuiRuntime`, keep only:
     - `terminal: Terminal<CrosstermBackend<Stdout>>`
     - `state: TuiState`
     - Event loop, effect execution
 - [ ] Change render to: `self.terminal.draw(|f| view(&self.state, f))`
 - [ ] Remove all `.clone()` calls that existed only for borrow-checker appeasement
+
+**Note:** `TextArea` is not `Clone`, so `TuiState` cannot derive `Clone`. This is intentional — the plan eliminates render-time clones.
 
 **✅ Demo:**
 - All overlays render identically (palette/model/login)
@@ -263,6 +269,8 @@ impl TuiRuntime {
     }
     ```
 - [ ] Migrate existing `handle_key`, `handle_mouse`, `handle_engine_event` logic into reducer
+- [ ] Handle `tui-textarea` input in reducer: `state.textarea.input(event)` for text input keys
+    - Note: `tui-textarea` manages its own undo/redo history internally
 - [ ] Subsume existing `LoginEvent` into `UiEvent::LoginResult` or keep as internal
 
 **✅ Demo:**
@@ -418,6 +426,7 @@ src/ui/
 ├── effects.rs          # UiEffect enum
 ├── update.rs           # The reducer: update(state, event) -> effects
 ├── view.rs             # Pure render: view(&state, frame)
+├── commands.rs         # SLASH_COMMANDS const + SlashCommand struct
 ├── transcript.rs       # (existing) Transcript model + styling
 └── overlays/           # (optional) Per-overlay modules
     ├── mod.rs
@@ -434,6 +443,14 @@ src/ui/
 - High-volume deltas never block the UI thread (coalescing preserved)
 - All state mutations go through `update()` — one grep to find all changes
 - `view()` never mutates state or returns effects
+
+## Known Risks
+
+| Risk | Mitigation |
+|------|------------|
+| **`JoinHandle` drop semantics** — `EngineState` owns the `JoinHandle`. When moved to `TuiState`, dropping the state aborts the running task. | Preserve current drop behavior. Be careful in reducer not to accidentally drop `EngineState` (and thus the running task) when transitioning states unless intended. |
+| **`TextArea` is not `Clone`** — Cannot derive `Clone` for `TuiState`. | This is fine and intended. Plan eliminates render-time clones. No part of the design relies on cloning `TuiState`. |
+| **Effect ordering** — If effect A must happen before effect B, need explicit sequencing. | For now, effects execute in returned order. Add explicit deps if needed later. |
 
 ## Key Decisions
 
