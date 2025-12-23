@@ -6,7 +6,6 @@
 
 use std::path::PathBuf;
 
-use anyhow::Result;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 use tokio::sync::mpsc;
@@ -15,50 +14,11 @@ use tui_textarea::TextArea;
 use crate::config::Config;
 use crate::core::engine::EngineOptions;
 use crate::core::session::Session;
-use crate::models::AVAILABLE_MODELS;
 use crate::providers::anthropic::ChatMessage;
-use crate::ui::commands::SLASH_COMMANDS;
 use crate::ui::transcript::HistoryCell;
 
-// ============================================================================
-// Login State
-// ============================================================================
-
-/// Events for the login flow (reducer pattern).
-///
-/// These events drive the login overlay state machine.
-#[derive(Debug, Clone)]
-pub enum LoginEvent {
-    /// User requested login (e.g., via `/login` command).
-    LoginRequested,
-    /// User entered the auth code.
-    AuthCodeEntered { code: String },
-    /// Login succeeded.
-    LoginSucceeded,
-    /// Login failed with an error message.
-    LoginFailed { message: String },
-    /// User cancelled the login flow.
-    LoginCancelled,
-}
-
-/// State for the login overlay.
-#[derive(Debug, Clone)]
-pub enum LoginState {
-    /// Showing auth URL, waiting for user to paste code.
-    AwaitingCode {
-        /// The auth URL to display.
-        url: String,
-        /// PKCE verifier for code exchange.
-        pkce_verifier: String,
-        /// User's input (the auth code).
-        input: String,
-        /// Error message from previous attempt (if any).
-        error: Option<String>,
-    },
-    /// Exchanging code for tokens (async operation in progress).
-    /// The code and verifier are passed to the effect, not stored here.
-    Exchanging,
-}
+// Re-export overlay types for backwards compatibility
+pub use crate::ui::overlays::{CommandPaletteState, LoginState, ModelPickerState};
 
 // ============================================================================
 // Overlay State (Unified)
@@ -134,76 +94,6 @@ impl OverlayState {
         match self {
             OverlayState::Login(l) => Some(l),
             _ => None,
-        }
-    }
-}
-
-// ============================================================================
-// Model Picker State
-// ============================================================================
-
-/// State for the model picker overlay.
-#[derive(Debug, Clone)]
-pub struct ModelPickerState {
-    /// Currently selected index.
-    pub selected: usize,
-}
-
-impl ModelPickerState {
-    /// Creates a new picker state, selecting the current model if found.
-    pub fn new(current_model: &str) -> Self {
-        let selected = AVAILABLE_MODELS
-            .iter()
-            .position(|m| m.id == current_model)
-            .unwrap_or(0);
-        Self { selected }
-    }
-}
-
-// ============================================================================
-// Command Palette State
-// ============================================================================
-
-/// State for the slash command palette.
-#[derive(Debug, Clone)]
-pub struct CommandPaletteState {
-    /// Filter text (characters typed after `/`).
-    pub filter: String,
-    /// Currently selected command index (into filtered list).
-    pub selected: usize,
-    /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
-    pub insert_slash_on_escape: bool,
-}
-
-impl CommandPaletteState {
-    /// Creates a new palette state with empty filter.
-    pub fn new(insert_slash_on_escape: bool) -> Self {
-        Self {
-            filter: String::new(),
-            selected: 0,
-            insert_slash_on_escape,
-        }
-    }
-
-    /// Returns commands matching the current filter.
-    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::commands::SlashCommand> {
-        if self.filter.is_empty() {
-            SLASH_COMMANDS.iter().collect()
-        } else {
-            SLASH_COMMANDS
-                .iter()
-                .filter(|cmd| cmd.matches(&self.filter))
-                .collect()
-        }
-    }
-
-    /// Clamps the selected index to valid range for current filter.
-    pub fn clamp_selection(&mut self) {
-        let count = self.filtered_commands().len();
-        if count == 0 {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(count - 1);
         }
     }
 }
@@ -760,51 +650,6 @@ mod tests {
 
         assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
         assert_eq!(scroll.cached_line_count, 0);
-    }
-
-    // ========================================================================
-    // CommandPaletteState Tests
-    // ========================================================================
-
-    #[test]
-    fn test_palette_state_filtered_commands_empty_filter() {
-        let state = CommandPaletteState::new(true);
-        let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), SLASH_COMMANDS.len());
-    }
-
-    #[test]
-    fn test_palette_state_filtered_commands_with_filter() {
-        let mut state = CommandPaletteState::new(true);
-        state.filter = "ne".to_string();
-        let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "new");
-    }
-
-    #[test]
-    fn test_palette_state_filtered_commands_no_match() {
-        let mut state = CommandPaletteState::new(true);
-        state.filter = "xyz".to_string();
-        let filtered = state.filtered_commands();
-        assert!(filtered.is_empty());
-    }
-
-    #[test]
-    fn test_palette_state_clamp_selection() {
-        let mut state = CommandPaletteState::new(true);
-        state.selected = 10; // way out of bounds
-        state.clamp_selection();
-        assert_eq!(state.selected, SLASH_COMMANDS.len() - 1);
-    }
-
-    #[test]
-    fn test_palette_state_clamp_selection_empty_filter() {
-        let mut state = CommandPaletteState::new(true);
-        state.filter = "xyz".to_string(); // no matches
-        state.selected = 5;
-        state.clamp_selection();
-        assert_eq!(state.selected, 0);
     }
 
     // ========================================================================

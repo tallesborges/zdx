@@ -7,6 +7,7 @@
 //! - `effects`: Effect types returned by the reducer
 //! - `update`: The reducer - all state mutations happen here
 //! - `view`: Pure render functions (read-only, no mutations)
+//! - `overlays`: Overlay components (command palette, model picker, login)
 //! - `commands`: Slash command definitions
 //! - `stream`: Streaming renderer for exec mode
 //! - `transcript`: Virtual transcript model for chat cells
@@ -15,6 +16,7 @@
 pub mod commands;
 pub mod effects;
 pub mod events;
+pub mod overlays;
 pub mod state;
 pub mod stream;
 pub mod terminal;
