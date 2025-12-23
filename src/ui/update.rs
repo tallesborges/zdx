@@ -462,7 +462,10 @@ pub fn handle_engine_event(
             vec![]
         }
         EngineEvent::Interrupted => {
-            state.transcript.push(HistoryCell::system("[Interrupted]"));
+            // Mark any running tools as cancelled
+            for cell in &mut state.transcript {
+                cell.mark_cancelled();
+            }
             interrupt::reset();
             state.engine_state = EngineState::Idle;
             vec![]

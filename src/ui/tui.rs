@@ -167,8 +167,10 @@ impl TuiRuntime {
 
     fn event_loop(&mut self) -> Result<()> {
         while !self.state.should_quit {
-            // Check for Ctrl+C signal
-            if interrupt::is_interrupted() {
+            // Check for Ctrl+C signal (only quit if engine is idle)
+            // If engine is running, the interrupt is meant to cancel it, not quit the app.
+            // The engine will send an Interrupted event which resets the flag.
+            if interrupt::is_interrupted() && !self.state.engine_state.is_running() {
                 self.state.should_quit = true;
                 break;
             }

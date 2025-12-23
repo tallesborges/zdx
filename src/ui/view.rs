@@ -320,7 +320,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
             .add_modifier(Modifier::BOLD),
         TranscriptStyle::ToolCancelled => Style::default()
             .fg(Color::Yellow)
-            .add_modifier(Modifier::CROSSED_OUT),
+            .add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD),
         TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
     }
 }
