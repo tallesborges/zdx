@@ -39,11 +39,12 @@ MVP Slices
 - **DONE**: `AnthropicConfig::resolve_auth()` checks OAuth first, falls back to API key. `AuthType` enum controls header selection. OAuth requires beta header.
 
 3) TUI `/login` flow (reducer pattern)
-- [ ] Add events: `LoginRequested`, `AuthUrlOpened`, `AuthCodeEntered`, `LoginSucceeded`, `LoginFailed`.
-- [ ] Minimal overlay or prompt input for token/code; avoid complex UI.
-- [ ] Ensure `update(state, event)` is the only state mutator; render reads state only.
+- [x] Add events: `LoginRequested`, `AuthCodeEntered`, `LoginSucceeded`, `LoginFailed`, `LoginCancelled`.
+- [x] Minimal overlay or prompt input for token/code; avoid complex UI.
+- [x] Ensure `update(state, event)` is the only state mutator; render reads state only.
 - ✅ Demo: `/login` in TUI, paste token/code, see success, continue chat.
 - Failure modes: keybinding conflicts, stuck overlay, focus/scroll regression.
+- **DONE**: Added `/login` slash command, login overlay with reducer pattern, async token exchange.
 
 Contracts (guardrails)
 - UI-agnostic core: OAuth logic + token storage live in core/config, not TUI.
