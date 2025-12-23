@@ -5,24 +5,32 @@
 ## Where things are
 
 - `src/main.rs`: CLI entrypoint + `clap` args
+- `src/config.rs`: config loading + paths
+- `src/models.rs`: model registry for TUI model picker
+- `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
+- `src/bin/generate_models.rs`: binary to generate model data from API
 - `src/core/`: UI-agnostic domain + runtime
   - `src/core/events.rs`: engine event types for streaming
   - `src/core/context.rs`: project context loading (AGENTS.md files)
   - `src/core/interrupt.rs`: signal handling
   - `src/core/engine.rs`: engine loop + event channels
   - `src/core/session.rs`: session persistence
-- `src/ui/`: terminal UI app + chat loop + stdout/stderr streaming
-  - `src/ui/transcript.rs`: TUI view model (styles, wrapping, rendering)
-- `src/tools/`: tool implementations + schemas
-- `src/providers/`: provider clients (Anthropic, etc.)
-- `src/config.rs`: config loading + paths
+- `src/ui/`: terminal UI (Elm-like architecture)
+  - `src/ui/tui.rs`: TuiRuntime - owns terminal, runs event loop, executes effects
+  - `src/ui/state.rs`: TuiState - all app state (no terminal)
+  - `src/ui/update.rs`: reducer - all state mutations happen here
+  - `src/ui/view.rs`: pure render functions (no mutations)
+  - `src/ui/effects.rs`: effect types returned by reducer for runtime to execute
+  - `src/ui/events.rs`: UI event types
+  - `src/ui/commands.rs`: slash command definitions for command palette
+  - `src/ui/transcript.rs`: transcript view model (styles, wrapping, rendering)
+  - `src/ui/stream.rs`: streamed stdout/stderr rendering + exec mode wrapper
+  - `src/ui/terminal.rs`: terminal setup, restore, panic hooks
+- `src/tools/`: tool implementations + schemas (bash, edit, read, write)
+- `src/providers/`: provider clients
+  - `src/providers/anthropic.rs`: Anthropic API client
+  - `src/providers/oauth.rs`: OAuth token storage + retrieval
 - `tests/`: integration tests (`assert_cmd`, fixtures)
-
-## Keep this file up to date
-
-- If you add/move a major module, update **Where things are** so future-you can find it fast.
-- If you change workflows (build/run/test), update **Build / run**.
-- If you add new conventions/boundaries (e.g., new renderer/UI split), add a one-liner here or in scoped `AGENTS.md` files.
 
 ## Build / run
 
@@ -50,3 +58,13 @@
 - `docs/SPEC.md`: contracts (what/behavior)
 - `docs/adr/`: durable decisions (why)
 - `docs/plans/`: optional commit-sized plans (how)
+
+## ⚠️ IMPORTANT: Keep this file up to date
+
+**This is mandatory, not optional.** When you:
+
+- **Add a new `.rs` file** → Add it to "Where things are" with a one-line description
+- **Move/rename a module** → Update the path in "Where things are"
+- **Delete a file** → Remove it from "Where things are"
+- **Change build/run/test workflows** → Update "Build / run"
+- **Add new conventions** → Document here or in scoped `AGENTS.md` files
