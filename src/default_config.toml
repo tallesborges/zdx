@@ -1,0 +1,22 @@
+# ZDX Configuration
+#
+# This file is auto-generated. Edit as needed.
+# Documentation: https://github.com/user/zdx-cli#configuration
+
+# The Claude model to use
+model = "claude-haiku-4-5"
+
+# Maximum tokens for responses
+max_tokens = 1024
+
+# Timeout for tool execution in seconds (0 disables timeout)
+tool_timeout_secs = 30
+
+# System prompt (inline)
+# system_prompt = "You are a helpful assistant."
+
+# System prompt from file (takes precedence over inline)
+# system_prompt_file = "/path/to/system_prompt.md"
+
+# Custom Anthropic API base URL (for proxies or test rigs)
+# anthropic_base_url = "https://api.anthropic.com"
