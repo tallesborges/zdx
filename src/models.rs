@@ -9,4 +9,4 @@ mod generated;
 
 // ModelOption is re-exported for future use (e.g., filtering, grouping)
 #[allow(unused_imports)]
-pub use generated::{ModelOption, AVAILABLE_MODELS};
+pub use generated::{AVAILABLE_MODELS, ModelOption};

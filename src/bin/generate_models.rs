@@ -179,7 +179,9 @@ async fn fetch_and_filter_models(url: &str, provider: &str) -> Result<Vec<ModelO
 
             let best = if latest_models.is_empty() {
                 // No "(latest)" model, fall back to first alphabetically
-                family_models.first().expect("family should have at least one model")
+                family_models
+                    .first()
+                    .expect("family should have at least one model")
             } else {
                 // Pick the "(latest)" model with the most recent release_date
                 latest_models
@@ -240,7 +242,10 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
     for model in models {
         output.push_str("    ModelOption {\n");
         output.push_str(&format!("        id: {:?},\n", model.id));
-        output.push_str(&format!("        display_name: {:?},\n", model.display_name));
+        output.push_str(&format!(
+            "        display_name: {:?},\n",
+            model.display_name
+        ));
         output.push_str(&format!("        family: {:?},\n", model.family));
         output.push_str("    },\n");
     }

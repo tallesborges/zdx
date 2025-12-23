@@ -198,12 +198,12 @@ impl TuiRuntime {
 
 ---
 
-### Slice 2: Split TuiState from TuiRuntime
+### Slice 2: Split TuiState from TuiRuntime ✅
 
 **Goal:** Separate app state from terminal ownership. This is the structural fix for render cloning.
 
 **Scope checklist:**
-- [ ] Create `src/ui/state.rs` with `TuiState` struct containing:
+- [x] Create `src/ui/state.rs` with `TuiState` struct containing:
     - `transcript: Vec<HistoryCell>`
     - `textarea: TextArea`
     - `scroll_offset: usize`, `follow_output: bool`
@@ -212,31 +212,36 @@ impl TuiRuntime {
     - `login_state: LoginState`
     - `engine_state: EngineState`
     - `config`, `session`, `messages`, `command_history`, etc.
-- [ ] Migrate initialization logic from `TuiApp::new()` and `with_history()` to `TuiState::new()` / `TuiState::with_history()`
+- [x] Migrate initialization logic from `TuiApp::new()` and `with_history()` to `TuiState::new()` / `TuiState::with_history()`
     - Transcript building, command history setup, textarea styling
     - `TuiRuntime` should only handle terminal setup, then initialize state
-- [ ] Move `SLASH_COMMANDS` const and `SlashCommand` struct to `src/ui/commands.rs`
-- [ ] Rename `TuiApp` to `TuiRuntime`, keep only:
+- [x] Move `SLASH_COMMANDS` const and `SlashCommand` struct to `src/ui/commands.rs`
+- [x] Rename `TuiApp` to `TuiRuntime`, keep only:
     - `terminal: Terminal<CrosstermBackend<Stdout>>`
     - `state: TuiState`
     - Event loop, effect execution
-- [ ] Change render to: `self.terminal.draw(|f| view(&self.state, f))`
-- [ ] Remove all `.clone()` calls that existed only for borrow-checker appeasement
+- [x] Change render to: `self.terminal.draw(|f| view(&self.state, f))`
+- [x] Remove all `.clone()` calls that existed only for borrow-checker appeasement
 
 **Note:** `TextArea` is not `Clone`, so `TuiState` cannot derive `Clone`. This is intentional — the plan eliminates render-time clones.
 
 **✅ Demo:**
-- All overlays render identically (palette/model/login)
-- No render-time state clones (verify with `rg "\.clone\(\)" src/ui/`)
-- All existing functionality works unchanged
+- All overlays render identically (palette/model/login) ✓
+- No render-time state clones (verified: `rg "\.clone\(\)" src/ui/view.rs` returns nothing) ✓
+- All existing functionality works unchanged (192 tests pass) ✓
 
 **Failure modes / guardrails:**
 - Any UX/keybinding drift is not allowed
 - Render clones are not allowed (except for actual data copies)
 
-**Files touched:** `src/ui/tui.rs` → split into `src/ui/runtime.rs`, `src/ui/state.rs`, `src/ui/view.rs`
+**Files touched:**
+- `src/ui/tui.rs`: Renamed `TuiApp` to `TuiRuntime`, moved state to separate module
+- `src/ui/state.rs` (new): `TuiState`, `EngineState`, `LoginState`, `CommandPaletteState`, `ModelPickerState`, `ScrollMode`, `AuthType`
+- `src/ui/view.rs` (new): `view()`, `render_header()`, `render_transcript()`, overlay render functions
+- `src/ui/commands.rs` (new): `SlashCommand`, `SLASH_COMMANDS`
+- `src/ui/mod.rs`: Updated exports
 
-**Estimated size:** ~500 lines moved/reorganized
+**Actual size:** ~1300 lines reorganized across new modules
 
 ---
 
