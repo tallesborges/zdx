@@ -169,18 +169,19 @@ impl TuiRuntime {
 
 ## MVP Slices
 
-### Slice 1: Terminal Lifecycle Extraction
+### Slice 1: Terminal Lifecycle Extraction ✅
 
 **Goal:** Extract terminal setup/restore into a dedicated module. Guarantee terminal restore on normal exit, ctrl-c, and panic.
 
 **Scope checklist:**
-- [ ] Create `src/ui/terminal.rs` with:
+- [x] Create `src/ui/terminal.rs` with:
     - `setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>>`
     - `restore_terminal() -> Result<()>` (now also disables bracketed paste + mouse)
     - `install_panic_hook()`
-- [ ] Move terminal lifecycle code from `tui.rs` to new module
-- [ ] Fix gap: `restore_terminal()` must disable bracketed paste + mouse capture
-- [ ] Verify ctrl-c path always exits cleanly
+    - `enable_input_features()` / `disable_input_features()` for bracketed paste + mouse
+- [x] Move terminal lifecycle code from `tui.rs` to new module
+- [x] Fix gap: `restore_terminal()` must disable bracketed paste + mouse capture
+- [x] Verify ctrl-c path always exits cleanly (restore_terminal handles all cleanup)
 
 **✅ Demo:**
 - Quit via `q` → terminal restored

@@ -5,19 +5,12 @@
 //!
 //! See docs/plans/plan_ratatui_full_screen_tui.md for the implementation plan.
 
-use std::io::{self, IsTerminal, Stdout, Write, stderr};
-use std::panic;
+use std::io::{IsTerminal, Stdout, Write, stderr};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use crossterm::{
-    event::{
-        self, DisableMouseCapture, EnableMouseCapture, Event, KeyCode, KeyModifiers, MouseEventKind,
-    },
-    execute,
-    terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
-};
+use crossterm::event::{self, Event, KeyCode, KeyModifiers, MouseEventKind};
 use ratatui::{
     Terminal,
     backend::CrosstermBackend,
@@ -37,6 +30,7 @@ use crate::core::interrupt;
 use crate::core::session::{self, Session, SessionEvent};
 use crate::models::AVAILABLE_MODELS;
 use crate::providers::anthropic::ChatMessage;
+use crate::ui::terminal;
 use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
 
 /// Runs the interactive chat loop.
@@ -436,13 +430,13 @@ impl TuiApp {
         history: Vec<ChatMessage>,
     ) -> Result<Self> {
         // Set up panic hook BEFORE entering alternate screen
-        install_panic_hook();
+        terminal::install_panic_hook();
 
         // Reset interrupt flag in case it was set from a previous run
         interrupt::reset();
 
         // Enter alternate screen and raw mode
-        let terminal = setup_terminal().context("Failed to setup terminal")?;
+        let terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
 
         // Set up textarea with styling
         let mut textarea = TextArea::default();
@@ -563,20 +557,12 @@ impl TuiApp {
     /// This blocks until the user quits (q or Ctrl+C).
     pub fn run(&mut self) -> Result<()> {
         // Enable bracketed paste and mouse capture
-        execute!(
-            io::stdout(),
-            event::EnableBracketedPaste,
-            EnableMouseCapture
-        )?;
+        terminal::enable_input_features()?;
 
         let result = self.event_loop();
 
-        // Disable mouse capture and bracketed paste
-        execute!(
-            io::stdout(),
-            DisableMouseCapture,
-            event::DisableBracketedPaste
-        )?;
+        // Disable mouse capture and bracketed paste (also done in restore_terminal for safety)
+        let _ = terminal::disable_input_features();
 
         result
     }
@@ -2295,45 +2281,9 @@ fn truncate_middle(s: &str, max_len: usize) -> String {
 
 impl Drop for TuiApp {
     fn drop(&mut self) {
-        // Restore terminal state
-        let _ = restore_terminal();
+        // Restore terminal state (includes mouse/paste cleanup)
+        let _ = terminal::restore_terminal();
     }
-}
-
-/// Sets up the terminal for the TUI.
-///
-/// - Enables raw mode
-/// - Enters alternate screen
-/// - Creates the terminal instance
-fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
-    enable_raw_mode().context("Failed to enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("Failed to enter alternate screen")?;
-    let backend = CrosstermBackend::new(stdout);
-    let terminal = Terminal::new(backend).context("Failed to create terminal")?;
-    Ok(terminal)
-}
-
-/// Restores terminal state.
-///
-/// - Leaves alternate screen
-/// - Disables raw mode
-fn restore_terminal() -> Result<()> {
-    // Leave alternate screen first (while still in raw mode)
-    execute!(io::stdout(), LeaveAlternateScreen).context("Failed to leave alternate screen")?;
-    disable_raw_mode().context("Failed to disable raw mode")?;
-    Ok(())
-}
-
-/// Installs a panic hook that restores the terminal before printing the panic.
-fn install_panic_hook() {
-    let original_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |panic_info| {
-        // Restore terminal first
-        let _ = restore_terminal();
-        // Then call the original panic hook
-        original_hook(panic_info);
-    }));
 }
 
 #[cfg(test)]
