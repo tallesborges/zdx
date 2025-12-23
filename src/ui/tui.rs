@@ -187,7 +187,7 @@ struct SlashCommand {
     name: &'static str,
     /// Aliases (e.g., ["new"]) - without leading slashes.
     aliases: &'static [&'static str],
-    /// Short description shown in popup.
+    /// Short description shown in palette.
     description: &'static str,
 }
 
@@ -237,12 +237,12 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
     },
 ];
 
-/// State for the slash command popup.
+/// State for the slash command palette.
 ///
 /// This is `Option<T>` in TuiApp, so it's trivially droppable.
 /// Terminal restore (panic hook, Drop) doesn't need special handling.
 #[derive(Debug, Clone)]
-struct CommandPopupState {
+struct CommandPaletteState {
     /// Filter text (characters typed after `/`).
     filter: String,
     /// Currently selected command index (into filtered list).
@@ -251,8 +251,8 @@ struct CommandPopupState {
     insert_slash_on_escape: bool,
 }
 
-impl CommandPopupState {
-    /// Creates a new popup state with empty filter.
+impl CommandPaletteState {
+    /// Creates a new palette state with empty filter.
     fn new(insert_slash_on_escape: bool) -> Self {
         Self {
             filter: String::new(),
@@ -359,9 +359,9 @@ pub struct TuiApp {
     input_draft: Option<String>,
     /// Spinner animation frame counter (for running tools).
     spinner_frame: usize,
-    /// Command popup state (None = closed).
+    /// Command palette state (None = closed).
     /// Using Option<T> ensures trivial cleanup on drop/panic.
-    command_popup: Option<CommandPopupState>,
+    command_palette: Option<CommandPaletteState>,
     /// Login overlay state.
     login_state: LoginState,
     /// Receiver for async login token exchange result.
@@ -458,7 +458,7 @@ impl TuiApp {
             history_index: None,
             input_draft: None,
             spinner_frame: 0,
-            command_popup: None,
+            command_palette: None,
             login_state: LoginState::Idle,
             login_exchange_rx: None,
             auth_type: Self::detect_auth_type(),
@@ -813,8 +813,8 @@ impl TuiApp {
         } else {
             None
         };
-        let popup_open = self.command_popup.is_some();
-        let popup_state = self.command_popup.clone();
+        let palette_open = self.command_palette.is_some();
+        let palette_state = self.command_palette.clone();
         let login_state = self.login_state.clone();
         let auth_type = self.auth_type;
 
@@ -848,7 +848,7 @@ impl TuiApp {
                 title_spans.push(Span::styled("▼ more", Style::default().fg(Color::DarkGray)));
             }
 
-            // Header line 2: Status line (model, auth, state, history indicator, popup indicator)
+            // Header line 2: Status line (model, auth, state, history indicator, palette indicator)
             let auth_indicator = match auth_type {
                 AuthType::OAuth => ("●", Color::Green, "OAuth"),
                 AuthType::ApiKey => ("●", Color::Blue, "API"),
@@ -872,8 +872,8 @@ impl TuiApp {
                     Style::default().fg(Color::DarkGray),
                 ));
             }
-            // Show popup indicator (temporary - will be replaced by actual popup in Slice 2)
-            if popup_open {
+            // Show palette indicator (temporary - will be replaced by actual palette in Slice 2)
+            if palette_open {
                 status_spans.push(Span::raw(" │ "));
                 status_spans.push(Span::styled(
                     "/ Commands (Esc to cancel)",
@@ -899,9 +899,9 @@ impl TuiApp {
             // Input area
             frame.render_widget(textarea, chunks[2]);
 
-            // Command popup overlay (rendered last to be on top)
-            if let Some(popup) = &popup_state {
-                Self::render_command_popup(frame, popup, area, chunks[2].y);
+            // Command palette overlay (rendered last to be on top)
+            if let Some(palette) = &palette_state {
+                Self::render_command_palette(frame, palette, area, chunks[2].y);
             }
 
             // Login overlay (rendered on top of everything)
@@ -913,7 +913,7 @@ impl TuiApp {
         Ok(())
     }
 
-    /// Renders the command popup as an overlay.
+    /// Renders the command palette as an overlay.
     ///
     /// Layout (Amp-style with input at top):
     /// ```text
@@ -926,20 +926,20 @@ impl TuiApp {
     /// │ ↑↓ navigate • Enter select • Esc cancel│  ← Keyboard hints
     /// └────────────────────────────────────────┘
     /// ```
-    fn render_command_popup(
+    fn render_command_palette(
         frame: &mut ratatui::Frame,
-        popup: &CommandPopupState,
+        palette: &CommandPaletteState,
         area: Rect,
         input_top_y: u16,
     ) {
-        let commands = popup.filtered_commands();
+        let commands = palette.filtered_commands();
 
-        // Calculate popup dimensions
+        // Calculate palette dimensions
         // Width: min(50, terminal_width - 4) to leave some margin
-        let popup_width = 50.min(area.width.saturating_sub(4));
+        let palette_width = 50.min(area.width.saturating_sub(4));
         // Height: commands + 6 (top border + filter line + separator + commands + separator + hints + bottom border)
         // Minimum 7 lines even if no commands match
-        let popup_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
+        let palette_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
 
         // Available vertical space (between header and input)
         let available_top = HEADER_HEIGHT;
@@ -947,13 +947,13 @@ impl TuiApp {
         let available_height = available_bottom.saturating_sub(available_top);
 
         // Position: centered both horizontally and vertically
-        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-        let popup_y = available_top + (available_height.saturating_sub(popup_height)) / 2;
+        let palette_x = (area.width.saturating_sub(palette_width)) / 2;
+        let palette_y = available_top + (available_height.saturating_sub(palette_height)) / 2;
 
-        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+        let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
 
-        // Clear the area behind the popup
-        frame.render_widget(Clear, popup_area);
+        // Clear the area behind the palette
+        frame.render_widget(Clear, palette_area);
 
         // Render outer border
         let outer_block = Block::default()
@@ -965,27 +965,27 @@ impl TuiApp {
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             );
-        frame.render_widget(outer_block, popup_area);
+        frame.render_widget(outer_block, palette_area);
 
         // Inner area (inside border)
         let inner_area = Rect::new(
-            popup_area.x + 1,
-            popup_area.y + 1,
-            popup_area.width.saturating_sub(2),
-            popup_area.height.saturating_sub(2),
+            palette_area.x + 1,
+            palette_area.y + 1,
+            palette_area.width.saturating_sub(2),
+            palette_area.height.saturating_sub(2),
         );
 
         // Filter input line at TOP (row 0 of inner area)
         // Truncate long filter text to fit in available width (leave room for "> /" prefix and "█" cursor)
         let max_filter_len = inner_area.width.saturating_sub(4) as usize; // 4 = "> /" + "█"
-        let filter_display = if popup.filter.is_empty() {
+        let filter_display = if palette.filter.is_empty() {
             "/".to_string()
-        } else if popup.filter.len() > max_filter_len {
+        } else if palette.filter.len() > max_filter_len {
             // Truncate from the start to show the most recent characters
-            let truncated = &popup.filter[popup.filter.len() - max_filter_len..];
+            let truncated = &palette.filter[palette.filter.len() - max_filter_len..];
             format!("/…{}", truncated)
         } else {
-            format!("/{}", popup.filter)
+            format!("/{}", palette.filter)
         };
         let filter_line = Line::from(vec![
             Span::styled("> ", Style::default().fg(Color::DarkGray)),
@@ -1053,7 +1053,7 @@ impl TuiApp {
         // Render with selection state
         let mut list_state = ListState::default();
         if !commands.is_empty() {
-            list_state.select(Some(popup.selected));
+            list_state.select(Some(palette.selected));
         }
         frame.render_stateful_widget(list, list_area, &mut list_state);
 
@@ -1209,9 +1209,9 @@ impl TuiApp {
             return self.handle_login_key(key);
         }
 
-        // If command popup is open, route all keys to popup handler
-        if self.command_popup.is_some() {
-            return self.handle_popup_key(key);
+        // If command palette is open, route all keys to palette handler
+        if self.command_palette.is_some() {
+            return self.handle_palette_key(key);
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1219,19 +1219,19 @@ impl TuiApp {
         let alt = key.modifiers.contains(KeyModifiers::ALT);
 
         match key.code {
-            // "/" opens command popup only when input is empty
+            // "/" opens command palette only when input is empty
             // Otherwise, just type "/" normally
             KeyCode::Char('/') if !ctrl && !shift && !alt => {
                 if self.get_input_text().is_empty() {
                     // Input is empty, so Escape shouldn't insert "/" (nothing to preserve)
-                    self.open_command_popup(false);
+                    self.open_command_palette(false);
                 } else {
                     self.textarea.input(key);
                 }
             }
-            // Ctrl+P: open command popup (always works, Escape won't insert anything)
+            // Ctrl+P: open command palette (always works, Escape won't insert anything)
             KeyCode::Char('p') if ctrl && !shift && !alt => {
-                self.open_command_popup(false);
+                self.open_command_palette(false);
             }
             // q without modifiers: quit (only when input is empty)
             KeyCode::Char('q') if !ctrl && !shift && !alt => {
@@ -1579,51 +1579,51 @@ impl TuiApp {
     // Command Popup
     // ========================================================================
 
-    /// Opens the command popup.
+    /// Opens the command palette.
     ///
     /// `insert_slash_on_escape`: if true, Escape will insert "/" into input.
     /// Pass `true` when opened via "/" key, `false` when opened via Ctrl+P.
-    fn open_command_popup(&mut self, insert_slash_on_escape: bool) {
-        if self.command_popup.is_none() {
-            self.command_popup = Some(CommandPopupState::new(insert_slash_on_escape));
+    fn open_command_palette(&mut self, insert_slash_on_escape: bool) {
+        if self.command_palette.is_none() {
+            self.command_palette = Some(CommandPaletteState::new(insert_slash_on_escape));
         }
     }
 
-    /// Closes the command popup.
+    /// Closes the command palette.
     ///
     /// If `insert_slash` is true, inserts "/" into the input at cursor position.
     /// This preserves user intent when they press Escape (they typed "/" expecting to type it).
-    fn close_command_popup(&mut self, insert_slash: bool) {
-        self.command_popup = None;
+    fn close_command_palette(&mut self, insert_slash: bool) {
+        self.command_palette = None;
         if insert_slash {
             self.textarea.insert_char('/');
         }
     }
 
-    /// Handles key events when the command popup is open.
-    fn handle_popup_key(&mut self, key: event::KeyEvent) -> Result<()> {
+    /// Handles key events when the command palette is open.
+    fn handle_palette_key(&mut self, key: event::KeyEvent) -> Result<()> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
-            // Escape: close popup, insert "/" only if opened via "/" key
+            // Escape: close palette, insert "/" only if opened via "/" key
             KeyCode::Esc => {
                 let insert_slash = self
-                    .command_popup
+                    .command_palette
                     .as_ref()
                     .is_some_and(|p| p.insert_slash_on_escape);
-                self.close_command_popup(insert_slash);
+                self.close_command_palette(insert_slash);
             }
-            // Ctrl+C: close popup without inserting "/" (user wants to cancel)
+            // Ctrl+C: close palette without inserting "/" (user wants to cancel)
             KeyCode::Char('c') if ctrl => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
             }
             // Up arrow: move selection up
             KeyCode::Up => {
-                self.popup_select_prev();
+                self.palette_select_prev();
             }
             // Down arrow: move selection down
             KeyCode::Down => {
-                self.popup_select_next();
+                self.palette_select_next();
             }
             // Enter or Tab: execute selected command
             KeyCode::Enter | KeyCode::Tab => {
@@ -1631,16 +1631,16 @@ impl TuiApp {
             }
             // Backspace: remove last filter character
             KeyCode::Backspace => {
-                if let Some(popup) = &mut self.command_popup {
-                    popup.filter.pop();
-                    popup.clamp_selection();
+                if let Some(palette) = &mut self.command_palette {
+                    palette.filter.pop();
+                    palette.clamp_selection();
                 }
             }
             // Regular character: append to filter
             KeyCode::Char(c) if !ctrl => {
-                if let Some(popup) = &mut self.command_popup {
-                    popup.filter.push(c);
-                    popup.clamp_selection();
+                if let Some(palette) = &mut self.command_palette {
+                    palette.filter.push(c);
+                    palette.clamp_selection();
                 }
             }
             // Ignore other keys
@@ -1650,59 +1650,59 @@ impl TuiApp {
         Ok(())
     }
 
-    /// Moves popup selection to the previous item.
-    fn popup_select_prev(&mut self) {
-        if let Some(popup) = &mut self.command_popup {
-            let count = popup.filtered_commands().len();
-            if count > 0 && popup.selected > 0 {
-                popup.selected -= 1;
+    /// Moves palette selection to the previous item.
+    fn palette_select_prev(&mut self) {
+        if let Some(palette) = &mut self.command_palette {
+            let count = palette.filtered_commands().len();
+            if count > 0 && palette.selected > 0 {
+                palette.selected -= 1;
             }
         }
     }
 
-    /// Moves popup selection to the next item.
-    fn popup_select_next(&mut self) {
-        if let Some(popup) = &mut self.command_popup {
-            let count = popup.filtered_commands().len();
-            if count > 0 && popup.selected < count - 1 {
-                popup.selected += 1;
+    /// Moves palette selection to the next item.
+    fn palette_select_next(&mut self) {
+        if let Some(palette) = &mut self.command_palette {
+            let count = palette.filtered_commands().len();
+            if count > 0 && palette.selected < count - 1 {
+                palette.selected += 1;
             }
         }
     }
 
-    /// Executes the currently selected command in the popup.
+    /// Executes the currently selected command in the palette.
     fn execute_selected_command(&mut self) {
-        let Some(popup) = &self.command_popup else {
+        let Some(palette) = &self.command_palette else {
             return;
         };
 
-        let filtered = popup.filtered_commands();
-        let Some(cmd) = filtered.get(popup.selected) else {
+        let filtered = palette.filtered_commands();
+        let Some(cmd) = filtered.get(palette.selected) else {
             // No command selected (empty filter result)
-            self.close_command_popup(false);
+            self.close_command_palette(false);
             return;
         };
 
         // Match on command name and execute
         match cmd.name {
             "login" => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
                 self.update(LoginEvent::LoginRequested);
             }
             "logout" => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
                 self.execute_logout();
             }
             "new" => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
                 self.execute_new();
             }
             "quit" => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
                 self.execute_quit();
             }
             _ => {
-                self.close_command_popup(false);
+                self.close_command_palette(false);
             }
         }
     }
@@ -2112,15 +2112,15 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_state_filtered_commands_empty_filter() {
-        let state = CommandPopupState::new(true);
+    fn test_palette_state_filtered_commands_empty_filter() {
+        let state = CommandPaletteState::new(true);
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), SLASH_COMMANDS.len());
     }
 
     #[test]
-    fn test_popup_state_filtered_commands_with_filter() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_state_filtered_commands_with_filter() {
+        let mut state = CommandPaletteState::new(true);
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 1);
@@ -2128,24 +2128,24 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_state_filtered_commands_no_match() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_state_filtered_commands_no_match() {
+        let mut state = CommandPaletteState::new(true);
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
     }
 
     #[test]
-    fn test_popup_state_clamp_selection() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_state_clamp_selection() {
+        let mut state = CommandPaletteState::new(true);
         state.selected = 10; // way out of bounds
         state.clamp_selection();
         assert_eq!(state.selected, SLASH_COMMANDS.len() - 1);
     }
 
     #[test]
-    fn test_popup_state_clamp_selection_empty_filter() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_state_clamp_selection_empty_filter() {
+        let mut state = CommandPaletteState::new(true);
         state.filter = "xyz".to_string(); // no matches
         state.selected = 5;
         state.clamp_selection();
@@ -2153,8 +2153,8 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_navigation_up_down() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_navigation_up_down() {
+        let mut state = CommandPaletteState::new(true);
         assert_eq!(state.selected, 0);
 
         // Move down
@@ -2169,12 +2169,12 @@ mod tests {
         assert_eq!(state.selected, 0);
 
         // Can't go below 0
-        // (This is enforced by the popup_select_prev method, not by state itself)
+        // (This is enforced by the palette_select_prev method, not by state itself)
     }
 
     #[test]
-    fn test_popup_filter_clamps_selection() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_filter_clamps_selection() {
+        let mut state = CommandPaletteState::new(true);
         // Select the second command
         state.selected = 1;
         assert_eq!(state.filtered_commands().len(), 4); // login, logout, new, quit
@@ -2187,8 +2187,8 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_filter_by_alias() {
-        let mut state = CommandPopupState::new(true);
+    fn test_palette_filter_by_alias() {
+        let mut state = CommandPaletteState::new(true);
         // Filter by "exit" which is an alias for "quit"
         state.filter = "exit".to_string();
         let filtered = state.filtered_commands();
@@ -2197,25 +2197,25 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_long_filter_still_filters_correctly() {
+    fn test_palette_long_filter_still_filters_correctly() {
         // Very long filter text should still work for filtering
         // (truncation is only for display, not for matching)
         // The filter matches if command name/alias CONTAINS the filter,
         // so a very long filter won't match anything
-        let mut state = CommandPopupState::new(true);
+        let mut state = CommandPaletteState::new(true);
         state.filter = "this_is_a_very_long_filter_that_wont_match_anything".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
 
         // Even a moderately long filter like "newclear" won't match
         // because neither "new" nor "clear" contains "newclear"
-        let mut state2 = CommandPopupState::new(true);
+        let mut state2 = CommandPaletteState::new(true);
         state2.filter = "newclear".to_string();
         let filtered2 = state2.filtered_commands();
         assert!(filtered2.is_empty());
 
         // But a filter that's a substring of the command still works
-        let mut state3 = CommandPopupState::new(true);
+        let mut state3 = CommandPaletteState::new(true);
         state3.filter = "ew".to_string(); // substring of "new"
         let filtered3 = state3.filtered_commands();
         assert_eq!(filtered3.len(), 1);
@@ -2223,17 +2223,17 @@ mod tests {
     }
 
     #[test]
-    fn test_popup_insert_slash_on_escape_flag() {
+    fn test_palette_insert_slash_on_escape_flag() {
         // When opened via "/" (empty input) or Ctrl+P, insert_slash_on_escape should be false
         // (nothing to preserve when input was empty)
-        let state_from_slash = CommandPopupState::new(false);
+        let state_from_slash = CommandPaletteState::new(false);
         assert!(!state_from_slash.insert_slash_on_escape);
 
-        let state_from_ctrl_p = CommandPopupState::new(false);
+        let state_from_ctrl_p = CommandPaletteState::new(false);
         assert!(!state_from_ctrl_p.insert_slash_on_escape);
 
         // The flag can still be set to true (for future use cases)
-        let state_with_flag = CommandPopupState::new(true);
+        let state_with_flag = CommandPaletteState::new(true);
         assert!(state_with_flag.insert_slash_on_escape);
     }
 }
