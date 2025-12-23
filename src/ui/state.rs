@@ -140,16 +140,129 @@ impl CommandPaletteState {
 }
 
 // ============================================================================
-// Scroll Mode
+// Scroll State
 // ============================================================================
 
 /// Scroll mode for the transcript pane.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScrollMode {
     /// Auto-scroll to show latest content (bottom of transcript).
     FollowLatest,
     /// User scrolled manually; offset is line index from top.
     Anchored { offset: usize },
+}
+
+/// Scroll state for the transcript pane.
+///
+/// Encapsulates scroll mode, cached line count, and all scroll navigation logic.
+/// This keeps scroll math in one place and simplifies the reducer.
+#[derive(Debug, Clone)]
+pub struct ScrollState {
+    /// Current scroll mode (follow latest or anchored at offset).
+    pub mode: ScrollMode,
+    /// Cached total line count from last render (for scroll calculations).
+    pub cached_line_count: usize,
+}
+
+impl Default for ScrollState {
+    fn default() -> Self {
+        Self {
+            mode: ScrollMode::FollowLatest,
+            cached_line_count: 0,
+        }
+    }
+}
+
+impl ScrollState {
+    /// Creates a new ScrollState in follow mode.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if currently following output (auto-scroll).
+    pub fn is_following(&self) -> bool {
+        matches!(self.mode, ScrollMode::FollowLatest)
+    }
+
+    /// Returns the current scroll offset for rendering.
+    ///
+    /// In FollowLatest mode, calculates offset to show bottom of content.
+    /// In Anchored mode, returns the stored offset (clamped to valid range).
+    pub fn get_offset(&self, viewport_height: usize) -> usize {
+        match &self.mode {
+            ScrollMode::FollowLatest => self.cached_line_count.saturating_sub(viewport_height),
+            ScrollMode::Anchored { offset } => {
+                let max_offset = self.cached_line_count.saturating_sub(viewport_height);
+                (*offset).min(max_offset)
+            }
+        }
+    }
+
+    /// Returns true if there's content below the current viewport.
+    #[allow(dead_code)] // Public API for external use
+    pub fn has_content_below(&self, viewport_height: usize) -> bool {
+        let offset = self.get_offset(viewport_height);
+        offset + viewport_height < self.cached_line_count
+    }
+
+    /// Scrolls up by the given number of lines.
+    pub fn scroll_up(&mut self, lines: usize, viewport_height: usize) {
+        let current_offset = self.get_offset(viewport_height);
+        let new_offset = current_offset.saturating_sub(lines);
+        self.mode = ScrollMode::Anchored { offset: new_offset };
+    }
+
+    /// Scrolls down by the given number of lines.
+    ///
+    /// Transitions to FollowLatest mode when reaching the bottom.
+    pub fn scroll_down(&mut self, lines: usize, viewport_height: usize) {
+        if matches!(self.mode, ScrollMode::FollowLatest) {
+            return; // Already at bottom
+        }
+
+        let current_offset = self.get_offset(viewport_height);
+        let max_offset = self.cached_line_count.saturating_sub(viewport_height);
+        let new_offset = (current_offset + lines).min(max_offset);
+
+        if new_offset >= max_offset {
+            self.mode = ScrollMode::FollowLatest;
+        } else {
+            self.mode = ScrollMode::Anchored { offset: new_offset };
+        }
+    }
+
+    /// Scrolls to the top of the transcript.
+    pub fn scroll_to_top(&mut self) {
+        self.mode = ScrollMode::Anchored { offset: 0 };
+    }
+
+    /// Scrolls to the bottom of the transcript (enables follow mode).
+    pub fn scroll_to_bottom(&mut self) {
+        self.mode = ScrollMode::FollowLatest;
+    }
+
+    /// Scrolls up by one page.
+    pub fn page_up(&mut self, viewport_height: usize) {
+        self.scroll_up(viewport_height.max(1), viewport_height);
+    }
+
+    /// Scrolls down by one page.
+    pub fn page_down(&mut self, viewport_height: usize) {
+        self.scroll_down(viewport_height.max(1), viewport_height);
+    }
+
+    /// Updates the cached line count.
+    ///
+    /// Call this after rendering to keep scroll calculations accurate.
+    pub fn update_line_count(&mut self, line_count: usize) {
+        self.cached_line_count = line_count;
+    }
+
+    /// Resets scroll state to follow mode (e.g., after clearing transcript).
+    pub fn reset(&mut self) {
+        self.mode = ScrollMode::FollowLatest;
+        self.cached_line_count = 0;
+    }
 }
 
 // ============================================================================
@@ -246,10 +359,8 @@ pub struct TuiState {
     pub messages: Vec<ChatMessage>,
     /// Current engine state.
     pub engine_state: EngineState,
-    /// Scroll mode for transcript.
-    pub scroll_mode: ScrollMode,
-    /// Cached total line count from last render (for scroll calculations).
-    pub cached_line_count: usize,
+    /// Scroll state for transcript (mode, offset, cached line count).
+    pub scroll: ScrollState,
     /// Session for persistence (if enabled).
     pub session: Option<Session>,
     /// Command history for ↑/↓ navigation.
@@ -330,8 +441,7 @@ impl TuiState {
             system_prompt,
             messages: history,
             engine_state: EngineState::Idle,
-            scroll_mode: ScrollMode::FollowLatest,
-            cached_line_count: 0,
+            scroll: ScrollState::new(),
             session,
             command_history,
             history_index: None,
@@ -420,6 +530,179 @@ impl TuiState {
 mod tests {
     use super::*;
 
+    // ========================================================================
+    // ScrollState Tests
+    // ========================================================================
+
+    #[test]
+    fn test_scroll_state_default() {
+        let scroll = ScrollState::default();
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+        assert_eq!(scroll.cached_line_count, 0);
+        assert!(scroll.is_following());
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_follow_mode() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        // In follow mode, offset should show the bottom
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 80); // 100 - 20 = 80
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_anchored_mode() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 30 };
+
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 30);
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_clamps_to_max() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 95 }; // Too close to bottom
+
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 80); // max_offset = 100 - 20 = 80
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_up_from_follow() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        scroll.scroll_up(5, 20);
+
+        // Should anchor at line 75 (80 - 5)
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 75 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_up_clamped_to_zero() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 3 };
+
+        scroll.scroll_up(10, 20); // Would go negative
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 0 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_to_bottom() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 75 };
+
+        scroll.scroll_down(10, 20); // Would exceed max
+
+        // Should transition to FollowLatest
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_partial() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 50 };
+
+        scroll.scroll_down(10, 20);
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_noop_when_following() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        assert!(scroll.is_following());
+
+        scroll.scroll_down(10, 20);
+
+        // Should still be following
+        assert!(scroll.is_following());
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_to_top() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        scroll.scroll_to_top();
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 0 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_to_bottom() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 30 };
+
+        scroll.scroll_to_bottom();
+
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+    }
+
+    #[test]
+    fn test_scroll_state_page_up() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        // Start at bottom (follow mode, offset = 80)
+
+        scroll.page_up(20);
+
+        // Should move up by viewport_height (20), so 80 - 20 = 60
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_page_down() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 40 };
+
+        scroll.page_down(20);
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_has_content_below() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        // At top, should have content below
+        scroll.mode = ScrollMode::Anchored { offset: 0 };
+        assert!(scroll.has_content_below(20));
+
+        // At bottom, should not have content below
+        scroll.scroll_to_bottom();
+        assert!(!scroll.has_content_below(20));
+    }
+
+    #[test]
+    fn test_scroll_state_reset() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 50 };
+
+        scroll.reset();
+
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+        assert_eq!(scroll.cached_line_count, 0);
+    }
+
+    // ========================================================================
+    // CommandPaletteState Tests
+    // ========================================================================
+
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
         let state = CommandPaletteState::new(true);
@@ -460,6 +743,10 @@ mod tests {
         state.clamp_selection();
         assert_eq!(state.selected, 0);
     }
+
+    // ========================================================================
+    // LoginState Tests
+    // ========================================================================
 
     #[test]
     fn test_login_state_is_active() {

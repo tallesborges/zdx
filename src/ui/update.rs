@@ -13,8 +13,7 @@ use crate::models::AVAILABLE_MODELS;
 use crate::ui::effects::UiEffect;
 use crate::ui::events::UiEvent;
 use crate::ui::state::{
-    CommandPaletteState, EngineState, LoginEvent, LoginState, ModelPickerState, ScrollMode,
-    TuiState,
+    CommandPaletteState, EngineState, LoginEvent, LoginState, ModelPickerState, TuiState,
 };
 use crate::ui::transcript::HistoryCell;
 
@@ -76,10 +75,12 @@ fn handle_paste(state: &mut TuiState, text: &str) {
 fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent, viewport_height: usize) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
-            scroll_lines_up(state, MOUSE_SCROLL_LINES, viewport_height);
+            state.scroll.scroll_up(MOUSE_SCROLL_LINES, viewport_height);
         }
         MouseEventKind::ScrollDown => {
-            scroll_lines_down(state, MOUSE_SCROLL_LINES, viewport_height);
+            state
+                .scroll
+                .scroll_down(MOUSE_SCROLL_LINES, viewport_height);
         }
         _ => {}
     }
@@ -158,19 +159,19 @@ fn handle_main_key(
             }
         }
         KeyCode::PageUp => {
-            scroll_page_up(state, viewport_height);
+            state.scroll.page_up(viewport_height);
             vec![]
         }
         KeyCode::PageDown => {
-            scroll_page_down(state, viewport_height);
+            state.scroll.page_down(viewport_height);
             vec![]
         }
         KeyCode::Home if ctrl => {
-            scroll_to_top(state);
+            state.scroll.scroll_to_top();
             vec![]
         }
         KeyCode::End if ctrl => {
-            scroll_to_bottom(state);
+            state.scroll.scroll_to_bottom();
             vec![]
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
@@ -232,54 +233,6 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
 
     state.clear_input();
     effects
-}
-
-// ============================================================================
-// Scroll Methods
-// ============================================================================
-
-fn scroll_page_up(state: &mut TuiState, viewport_height: usize) {
-    scroll_lines_up(state, viewport_height.max(1), viewport_height);
-}
-
-fn scroll_page_down(state: &mut TuiState, viewport_height: usize) {
-    scroll_lines_down(state, viewport_height.max(1), viewport_height);
-}
-
-fn scroll_to_top(state: &mut TuiState) {
-    state.scroll_mode = ScrollMode::Anchored { offset: 0 };
-}
-
-fn scroll_to_bottom(state: &mut TuiState) {
-    state.scroll_mode = ScrollMode::FollowLatest;
-}
-
-fn scroll_lines_up(state: &mut TuiState, lines: usize, viewport_height: usize) {
-    let page_size = viewport_height.max(1);
-    let current_offset = match &state.scroll_mode {
-        ScrollMode::FollowLatest => state.cached_line_count.saturating_sub(page_size),
-        ScrollMode::Anchored { offset } => *offset,
-    };
-
-    let new_offset = current_offset.saturating_sub(lines);
-    state.scroll_mode = ScrollMode::Anchored { offset: new_offset };
-}
-
-fn scroll_lines_down(state: &mut TuiState, lines: usize, viewport_height: usize) {
-    let page_size = viewport_height.max(1);
-    let current_offset = match &state.scroll_mode {
-        ScrollMode::FollowLatest => return,
-        ScrollMode::Anchored { offset } => *offset,
-    };
-
-    let max_offset = state.cached_line_count.saturating_sub(page_size);
-    let new_offset = (current_offset + lines).min(max_offset);
-
-    if new_offset >= max_offset {
-        state.scroll_mode = ScrollMode::FollowLatest;
-    } else {
-        state.scroll_mode = ScrollMode::Anchored { offset: new_offset };
-    }
 }
 
 // ============================================================================
@@ -549,7 +502,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     state.transcript.clear();
     state.messages.clear();
     state.command_history.clear();
-    state.scroll_mode = ScrollMode::FollowLatest;
+    state.scroll.reset();
 
     if state.session.is_some() {
         vec![UiEffect::CreateNewSession]
@@ -829,17 +782,17 @@ fn handle_login_result(state: &mut TuiState, result: Result<(), String>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::state::ScrollMode;
 
     #[test]
     fn test_scroll_to_top() {
         let config = crate::config::Config::default();
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
-        state.scroll_mode = ScrollMode::FollowLatest;
 
-        scroll_to_top(&mut state);
+        state.scroll.scroll_to_top();
 
         assert!(matches!(
-            state.scroll_mode,
+            state.scroll.mode,
             ScrollMode::Anchored { offset: 0 }
         ));
     }
@@ -848,11 +801,26 @@ mod tests {
     fn test_scroll_to_bottom() {
         let config = crate::config::Config::default();
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
-        state.scroll_mode = ScrollMode::Anchored { offset: 10 };
+        state.scroll.scroll_to_top(); // Start from top
 
-        scroll_to_bottom(&mut state);
+        state.scroll.scroll_to_bottom();
 
-        assert!(matches!(state.scroll_mode, ScrollMode::FollowLatest));
+        assert!(matches!(state.scroll.mode, ScrollMode::FollowLatest));
+    }
+
+    #[test]
+    fn test_scroll_up_and_down() {
+        let config = crate::config::Config::default();
+        let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
+        state.scroll.update_line_count(100);
+
+        // Start following, scroll up should anchor
+        state.scroll.scroll_up(5, 20);
+        assert!(matches!(state.scroll.mode, ScrollMode::Anchored { .. }));
+
+        // Scroll down should move towards bottom
+        state.scroll.scroll_down(100, 20);
+        assert!(matches!(state.scroll.mode, ScrollMode::FollowLatest));
     }
 
     #[test]

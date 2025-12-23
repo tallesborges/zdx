@@ -18,7 +18,7 @@ use ratatui::{
 
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::state::{
-    AuthType, CommandPaletteState, EngineState, LoginState, ModelPickerState, ScrollMode, TuiState,
+    AuthType, CommandPaletteState, EngineState, LoginState, ModelPickerState, TuiState,
 };
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
@@ -49,16 +49,15 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     let all_lines = render_transcript(state, transcript_width);
     let total_lines = all_lines.len();
 
-    // Calculate scroll offset based on mode
-    let scroll_offset = match &state.scroll_mode {
-        ScrollMode::FollowLatest => {
-            // Show bottom of transcript
+    // Use ScrollState for offset calculation (uses cached line count)
+    // Note: We use total_lines here since we just calculated it
+    let scroll_offset = {
+        // Temporarily use the fresh line count for accurate offset calculation
+        let max_offset = total_lines.saturating_sub(transcript_height);
+        if state.scroll.is_following() {
             total_lines.saturating_sub(transcript_height)
-        }
-        ScrollMode::Anchored { offset } => {
-            // Clamp to valid range
-            let max_offset = total_lines.saturating_sub(transcript_height);
-            (*offset).min(max_offset)
+        } else {
+            state.scroll.get_offset(transcript_height).min(max_offset)
         }
     };
 
