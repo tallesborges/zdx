@@ -301,51 +301,63 @@ impl TuiRuntime {
 
 ---
 
-### Slice 4: Effects System
+### Slice 4: Effects System ✅
 
 **Goal:** Make engine orchestration and async work explicit effects, not mixed into UI state mutations.
 
 **Scope checklist:**
-- [ ] Create `src/ui/effects.rs` with `UiEffect` enum:
+- [x] Create `src/ui/effects.rs` with `UiEffect` enum:
     ```rust
     pub enum UiEffect {
         Quit,
-        StartEngineTurn { prompt: String, options: EngineOptions },
+        StartEngineTurn,  // Reads prompt/options from state
         InterruptEngine,
         SpawnTokenExchange { code: String, verifier: String },
         OpenBrowser { url: String },
         SaveSession { event: SessionEvent },
         PersistModel { model: String },
+        CreateNewSession,  // Added for /new command
     }
     ```
-- [ ] Update reducer to return `Vec<UiEffect>` instead of spawning tasks directly
-- [ ] Add effect executor in `TuiRuntime`:
+- [x] Update reducer to return `Vec<UiEffect>` instead of spawning tasks directly
+- [x] Add effect executor in `TuiRuntime`:
     ```rust
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
-            UiEffect::Quit => self.should_quit = true,
-            UiEffect::StartEngineTurn { prompt, options } => {
-                self.spawn_engine_turn(prompt, options);
-            }
-            // ...
+            UiEffect::Quit => self.state.should_quit = true,
+            UiEffect::StartEngineTurn => self.spawn_engine_turn(),
+            UiEffect::InterruptEngine => self.interrupt_engine(),
+            UiEffect::SpawnTokenExchange { code, verifier } => { ... }
+            UiEffect::OpenBrowser { url } => { let _ = open::that(&url); }
+            UiEffect::SaveSession { event } => { ... }
+            UiEffect::PersistModel { model } => { ... }
+            UiEffect::CreateNewSession => { ... }
         }
     }
     ```
-- [ ] Keep existing coalescing/backpressure behavior (bounded channels)
+- [x] Keep existing coalescing/backpressure behavior (bounded channels)
 
 **✅ Demo:**
-- Streaming remains smooth
-- Input stays responsive during streaming
-- Tool events still appear
-- Login flow works end-to-end
+- Streaming remains smooth ✓
+- Input stays responsive during streaming ✓
+- Tool events still appear ✓
+- Login flow works end-to-end ✓
 
 **Failure modes / guardrails:**
-- Blocking awaits on the UI thread is a no-go
-- Effects must not mutate state directly
+- Blocking awaits on the UI thread is a no-go ✓
+- Effects must not mutate state directly ✓
 
-**Files touched:** `src/ui/effects.rs` (new), `src/ui/update.rs`, `src/ui/runtime.rs`
+**Implementation notes:**
+- `StartEngineTurn` has no parameters (cleaner than plan); reads from `state.messages` and `state.config`
+- Added `CreateNewSession` effect for the `/new` command (improvement over plan)
+- Effects executed synchronously in main loop; async work spawns tasks that send results back via channels
 
-**Estimated size:** ~200 lines added
+**Files touched:**
+- `src/ui/effects.rs`: `UiEffect` enum with 8 variants
+- `src/ui/update.rs`: All handlers return `Vec<UiEffect>`
+- `src/ui/tui.rs`: `execute_effect()` and `execute_effects()` methods
+
+**Actual size:** ~50 lines in effects.rs, effect execution integrated during Slice 3
 
 ---
 
