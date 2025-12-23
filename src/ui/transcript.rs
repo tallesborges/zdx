@@ -49,6 +49,8 @@ pub enum ToolState {
     Done,
     /// Tool failed with an error.
     Error,
+    /// Tool was cancelled/interrupted by user.
+    Cancelled,
 }
 
 /// Spinner frames for animated tool running indicator.
@@ -214,6 +216,17 @@ impl HistoryCell {
         }
     }
 
+    /// Marks a tool cell as cancelled (interrupted by user).
+    ///
+    /// Only affects cells that are still in Running state.
+    pub fn mark_cancelled(&mut self) {
+        if let HistoryCell::Tool { state, .. } = self
+            && *state == ToolState::Running
+        {
+            *state = ToolState::Cancelled;
+        }
+    }
+
     /// Renders this cell into display lines for the given width.
     ///
     /// This is the core rendering contract from SPEC.md §9:
@@ -286,6 +299,12 @@ impl HistoryCell {
                         Style::ToolError,
                         Style::ToolCancelled,
                         Some(" (failed)"),
+                    ),
+                    ToolState::Cancelled => (
+                        "$ ".to_string(),
+                        Style::ToolCancelled,
+                        Style::ToolCancelled,
+                        Some(" (cancelled)"),
                     ),
                 };
 
