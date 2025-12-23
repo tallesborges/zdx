@@ -15,8 +15,6 @@ use crate::ui::commands::SLASH_COMMANDS;
 use crate::ui::effects::UiEffect;
 use crate::ui::state::{OverlayState, TuiState};
 
-use super::HEADER_HEIGHT;
-
 // ============================================================================
 // State
 // ============================================================================
@@ -88,10 +86,7 @@ pub fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
 /// Handles key events for the command palette.
 ///
 /// Returns effects to execute. If a command is selected, returns `ExecuteCommand` effect.
-pub fn handle_palette_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
-) -> Vec<UiEffect> {
+pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
     match key.code {
@@ -183,14 +178,12 @@ pub fn render_command_palette(
     let palette_width = 50.min(area.width.saturating_sub(4));
     let palette_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
 
-    // Available vertical space (between header and input)
-    let available_top = HEADER_HEIGHT;
-    let available_bottom = input_top_y;
-    let available_height = available_bottom.saturating_sub(available_top);
+    // Available vertical space (above input)
+    let available_height = input_top_y;
 
     // Position: centered both horizontally and vertically
     let palette_x = (area.width.saturating_sub(palette_width)) / 2;
-    let palette_y = available_top + (available_height.saturating_sub(palette_height)) / 2;
+    let palette_y = (available_height.saturating_sub(palette_height)) / 2;
 
     let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
 

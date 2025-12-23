@@ -123,14 +123,6 @@ fn handle_main_key(
             open_command_palette(state, false);
             vec![]
         }
-        KeyCode::Char('q') if !ctrl && !shift && !alt => {
-            if state.get_input_text().is_empty() {
-                vec![UiEffect::Quit]
-            } else {
-                state.textarea.input(key);
-                vec![]
-            }
-        }
         KeyCode::Char('c') if ctrl => {
             if state.engine_state.is_running() {
                 vec![UiEffect::InterruptEngine]
