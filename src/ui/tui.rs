@@ -123,6 +123,60 @@ const MOUSE_SCROLL_LINES: usize = 3;
 const SPINNER_SPEED_DIVISOR: usize = 3;
 
 // ============================================================================
+// Login Events (Reducer Pattern)
+// ============================================================================
+
+/// Events for the login flow (reducer pattern).
+///
+/// These events drive the login overlay state machine.
+/// All state changes go through `TuiApp::update()`.
+#[derive(Debug, Clone)]
+enum LoginEvent {
+    /// User requested login (e.g., via `/login` command).
+    LoginRequested,
+    /// User entered the auth code.
+    AuthCodeEntered { code: String },
+    /// Login succeeded.
+    LoginSucceeded,
+    /// Login failed with an error message.
+    LoginFailed { message: String },
+    /// User cancelled the login flow.
+    LoginCancelled,
+}
+
+/// State for the login overlay.
+#[derive(Debug, Clone)]
+enum LoginState {
+    /// Not in login flow.
+    Idle,
+    /// Showing auth URL, waiting for user to paste code.
+    AwaitingCode {
+        /// The auth URL to display.
+        url: String,
+        /// PKCE verifier for code exchange.
+        pkce_verifier: String,
+        /// User's input (the auth code).
+        input: String,
+        /// Error message from previous attempt (if any).
+        error: Option<String>,
+    },
+    /// Exchanging code for tokens (async operation in progress).
+    Exchanging {
+        /// The auth code being exchanged.
+        code: String,
+        /// PKCE verifier for exchange.
+        pkce_verifier: String,
+    },
+}
+
+impl LoginState {
+    /// Returns true if the login overlay should be displayed.
+    fn is_active(&self) -> bool {
+        !matches!(self, LoginState::Idle)
+    }
+}
+
+// ============================================================================
 // Slash Commands
 // ============================================================================
 
@@ -161,6 +215,16 @@ impl SlashCommand {
 
 /// Available slash commands.
 const SLASH_COMMANDS: &[SlashCommand] = &[
+    SlashCommand {
+        name: "login",
+        aliases: &[],
+        description: "Login with Anthropic OAuth",
+    },
+    SlashCommand {
+        name: "logout",
+        aliases: &[],
+        description: "Logout from Anthropic OAuth",
+    },
     SlashCommand {
         name: "new",
         aliases: &["clear"],
@@ -298,6 +362,10 @@ pub struct TuiApp {
     /// Command popup state (None = closed).
     /// Using Option<T> ensures trivial cleanup on drop/panic.
     command_popup: Option<CommandPopupState>,
+    /// Login overlay state.
+    login_state: LoginState,
+    /// Receiver for async login token exchange result.
+    login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
 }
 
 impl TuiApp {
@@ -378,6 +446,8 @@ impl TuiApp {
             input_draft: None,
             spinner_frame: 0,
             command_popup: None,
+            login_state: LoginState::Idle,
+            login_exchange_rx: None,
         })
     }
 
@@ -460,6 +530,9 @@ impl TuiApp {
 
             // Check for engine task completion
             self.poll_engine_completion();
+
+            // Poll for login exchange result
+            self.poll_login_result();
 
             // Advance spinner animation frame
             self.spinner_frame = self.spinner_frame.wrapping_add(1);
@@ -706,6 +779,7 @@ impl TuiApp {
         };
         let popup_open = self.command_popup.is_some();
         let popup_state = self.command_popup.clone();
+        let login_state = self.login_state.clone();
 
         self.terminal.draw(|frame| {
             let area = frame.area();
@@ -780,6 +854,11 @@ impl TuiApp {
             // Command popup overlay (rendered last to be on top)
             if let Some(popup) = &popup_state {
                 Self::render_command_popup(frame, popup, area, chunks[2].y);
+            }
+
+            // Login overlay (rendered on top of everything)
+            if login_state.is_active() {
+                Self::render_login_overlay(frame, &login_state, area);
             }
         })?;
 
@@ -1045,7 +1124,12 @@ impl TuiApp {
                 Ok(())
             }
             Event::Paste(text) => {
-                self.textarea.insert_str(&text);
+                // Route paste to login input if overlay is active
+                if let LoginState::AwaitingCode { ref mut input, .. } = self.login_state {
+                    input.push_str(&text);
+                } else {
+                    self.textarea.insert_str(&text);
+                }
                 Ok(())
             }
             Event::Resize(_, _) => {
@@ -1072,6 +1156,11 @@ impl TuiApp {
 
     /// Handles a key event.
     fn handle_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        // If login overlay is active, route all keys to login handler
+        if self.login_state.is_active() {
+            return self.handle_login_key(key);
+        }
+
         // If command popup is open, route all keys to popup handler
         if self.command_popup.is_some() {
             return self.handle_popup_key(key);
@@ -1547,8 +1636,15 @@ impl TuiApp {
         };
 
         // Match on command name and execute
-        // Note: Actual execution logic is in Slice 4 - for now just close
         match cmd.name {
+            "login" => {
+                self.close_command_popup(false);
+                self.update(LoginEvent::LoginRequested);
+            }
+            "logout" => {
+                self.close_command_popup(false);
+                self.execute_logout();
+            }
             "new" => {
                 self.close_command_popup(false);
                 self.execute_new();
@@ -1608,6 +1704,26 @@ impl TuiApp {
         }
     }
 
+    /// Executes the /logout command.
+    fn execute_logout(&mut self) {
+        use crate::providers::oauth::anthropic;
+
+        match anthropic::clear_credentials() {
+            Ok(true) => {
+                self.transcript
+                    .push(HistoryCell::system("Logged out from Anthropic OAuth."));
+            }
+            Ok(false) => {
+                self.transcript
+                    .push(HistoryCell::system("No OAuth credentials to clear."));
+            }
+            Err(e) => {
+                self.transcript
+                    .push(HistoryCell::system(format!("Logout failed: {}", e)));
+            }
+        }
+    }
+
     /// Executes the /quit command.
     fn execute_quit(&mut self) {
         // Allow quit even during streaming - will interrupt first
@@ -1616,6 +1732,241 @@ impl TuiApp {
         }
         self.should_quit = true;
     }
+
+    // ========================================================================
+    // Login Flow (Reducer Pattern)
+    // ========================================================================
+
+    /// Updates login state based on an event (reducer pattern).
+    ///
+    /// This is the single point of mutation for login state.
+    fn update(&mut self, event: LoginEvent) {
+        use crate::providers::oauth::anthropic;
+
+        match event {
+            LoginEvent::LoginRequested => {
+                let pkce = anthropic::generate_pkce();
+                let url = anthropic::build_auth_url(&pkce);
+                let _ = open::that(&url); // Try to open browser
+                self.login_state = LoginState::AwaitingCode {
+                    url,
+                    pkce_verifier: pkce.verifier,
+                    input: String::new(),
+                    error: None,
+                };
+            }
+            LoginEvent::AuthCodeEntered { code } => {
+                if let LoginState::AwaitingCode { pkce_verifier, .. } = &self.login_state {
+                    self.login_state = LoginState::Exchanging {
+                        code,
+                        pkce_verifier: pkce_verifier.clone(),
+                    };
+                }
+            }
+            LoginEvent::LoginSucceeded => {
+                self.login_state = LoginState::Idle;
+                self.transcript
+                    .push(HistoryCell::system("Logged in with Anthropic OAuth."));
+            }
+            LoginEvent::LoginFailed { message } => {
+                let pkce = anthropic::generate_pkce();
+                let url = anthropic::build_auth_url(&pkce);
+                self.login_state = LoginState::AwaitingCode {
+                    url,
+                    pkce_verifier: pkce.verifier,
+                    input: String::new(),
+                    error: Some(message),
+                };
+            }
+            LoginEvent::LoginCancelled => {
+                self.login_state = LoginState::Idle;
+                self.login_exchange_rx = None;
+            }
+        }
+    }
+
+    /// Handles key events when the login overlay is active.
+    fn handle_login_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match &mut self.login_state {
+            LoginState::Idle => {}
+            LoginState::AwaitingCode { input, .. } => match key.code {
+                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                    self.update(LoginEvent::LoginCancelled);
+                }
+                KeyCode::Enter => {
+                    let code = input.trim().to_string();
+                    if !code.is_empty() {
+                        self.update(LoginEvent::AuthCodeEntered { code });
+                        self.spawn_token_exchange();
+                    }
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    input.push(c);
+                }
+                _ => {}
+            },
+            LoginState::Exchanging { .. } => {
+                if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                    self.update(LoginEvent::LoginCancelled);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Spawns async task to exchange auth code for tokens.
+    fn spawn_token_exchange(&mut self) {
+        use crate::providers::oauth::anthropic;
+
+        let (code, pkce_verifier) = match &self.login_state {
+            LoginState::Exchanging {
+                code,
+                pkce_verifier,
+            } => (code.clone(), pkce_verifier.clone()),
+            _ => return,
+        };
+
+        let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
+        self.login_exchange_rx = Some(rx);
+
+        tokio::spawn(async move {
+            let pkce = anthropic::Pkce {
+                verifier: pkce_verifier,
+                challenge: String::new(),
+            };
+            let result = match anthropic::exchange_code(&code, &pkce).await {
+                Ok(creds) => anthropic::save_credentials(&creds)
+                    .map_err(|e| format!("Failed to save: {}", e)),
+                Err(e) => Err(e.to_string()),
+            };
+            let _ = tx.send(result).await;
+        });
+    }
+
+    /// Polls for login exchange result (non-blocking).
+    fn poll_login_result(&mut self) {
+        let Some(rx) = &mut self.login_exchange_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(Ok(())) => {
+                self.login_exchange_rx = None;
+                self.update(LoginEvent::LoginSucceeded);
+            }
+            Ok(Err(msg)) => {
+                self.login_exchange_rx = None;
+                self.update(LoginEvent::LoginFailed { message: msg });
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                self.login_exchange_rx = None;
+                self.update(LoginEvent::LoginFailed {
+                    message: "Exchange task failed".to_string(),
+                });
+            }
+        }
+    }
+
+    /// Renders the login overlay.
+    fn render_login_overlay(frame: &mut ratatui::Frame, state: &LoginState, area: Rect) {
+        let popup_width = 60.min(area.width.saturating_sub(4));
+        let popup_height = 9.min(area.height.saturating_sub(4));
+        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+        let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+        let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+
+        frame.render_widget(Clear, popup_area);
+
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Cyan))
+            .title(" Anthropic Login ")
+            .title_style(
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_widget(block, popup_area);
+
+        let inner = Rect::new(
+            popup_area.x + 2,
+            popup_area.y + 1,
+            popup_area.width.saturating_sub(4),
+            popup_area.height.saturating_sub(2),
+        );
+
+        let lines: Vec<Line> = match state {
+            LoginState::Idle => return,
+            LoginState::AwaitingCode {
+                url, input, error, ..
+            } => {
+                // Show truncated URL for display
+                let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
+
+                let mut l = vec![
+                    Line::from(Span::styled(
+                        "Browser opened for authentication.",
+                        Style::default().fg(Color::Green),
+                    )),
+                    Line::from(Span::styled(
+                        display_url,
+                        Style::default().fg(Color::DarkGray),
+                    )),
+                    Line::from(""),
+                    Line::from(Span::styled(
+                        "Paste auth code:",
+                        Style::default().fg(Color::White),
+                    )),
+                    Line::from(Span::styled(
+                        format!("> {}█", input),
+                        Style::default().fg(Color::Yellow),
+                    )),
+                ];
+                if let Some(e) = error {
+                    l.push(Line::from(""));
+                    l.push(Line::from(Span::styled(
+                        e.as_str(),
+                        Style::default().fg(Color::Red),
+                    )));
+                }
+                l.push(Line::from(""));
+                l.push(Line::from(Span::styled(
+                    "Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )));
+                l
+            }
+            LoginState::Exchanging { .. } => vec![
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Exchanging code...",
+                    Style::default().fg(Color::Yellow),
+                )),
+                Line::from(""),
+                Line::from(Span::styled(
+                    "Esc to cancel",
+                    Style::default().fg(Color::DarkGray),
+                )),
+            ],
+        };
+
+        let para = Paragraph::new(lines);
+        frame.render_widget(para, inner);
+    }
+}
+
+/// Truncates a string in the middle with "..." if too long.
+fn truncate_middle(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len || max_len < 10 {
+        return s.to_string();
+    }
+    let half = (max_len - 3) / 2;
+    format!("{}...{}", &s[..half], &s[s.len() - half..])
 }
 
 impl Drop for TuiApp {
@@ -1680,7 +2031,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_name() {
-        let cmd = &SLASH_COMMANDS[0]; // new
+        let cmd = &SLASH_COMMANDS[2]; // new
         assert!(cmd.matches("new"));
         assert!(cmd.matches("ne"));
         assert!(cmd.matches("NEW")); // case-insensitive
@@ -1689,7 +2040,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_alias() {
-        let cmd = &SLASH_COMMANDS[0]; // new (alias: clear)
+        let cmd = &SLASH_COMMANDS[2]; // new (alias: clear)
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
@@ -1697,10 +2048,16 @@ mod tests {
 
     #[test]
     fn test_slash_command_display_name() {
-        let new_cmd = &SLASH_COMMANDS[0];
+        let login_cmd = &SLASH_COMMANDS[0];
+        assert_eq!(login_cmd.display_name(), "/login");
+
+        let logout_cmd = &SLASH_COMMANDS[1];
+        assert_eq!(logout_cmd.display_name(), "/logout");
+
+        let new_cmd = &SLASH_COMMANDS[2];
         assert_eq!(new_cmd.display_name(), "/new (clear)");
 
-        let quit = &SLASH_COMMANDS[1];
+        let quit = &SLASH_COMMANDS[3];
         assert_eq!(quit.display_name(), "/quit (q, exit)");
     }
 
@@ -1770,7 +2127,7 @@ mod tests {
         let mut state = CommandPopupState::new(true);
         // Select the second command
         state.selected = 1;
-        assert_eq!(state.filtered_commands().len(), 2);
+        assert_eq!(state.filtered_commands().len(), 4); // login, logout, new, quit
 
         // Filter to just one command
         state.filter = "new".to_string();
