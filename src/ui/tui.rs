@@ -317,6 +317,10 @@ impl TuiRuntime {
                         .push(HistoryCell::system("Conversation cleared."));
                 }
             },
+            UiEffect::ExecuteCommand { name } => {
+                let effects = update::execute_command(&mut self.state, name);
+                self.execute_effects(effects);
+            }
         }
     }
 

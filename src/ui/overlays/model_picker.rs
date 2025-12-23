@@ -1,0 +1,227 @@
+//! Model picker overlay.
+//!
+//! Contains state, update handlers, and render function for the model picker.
+
+use crossterm::event::{KeyCode, KeyModifiers};
+use ratatui::{
+    Frame,
+    layout::{Alignment, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span},
+    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
+};
+
+use crate::models::AVAILABLE_MODELS;
+use crate::ui::effects::UiEffect;
+use crate::ui::state::{OverlayState, TuiState};
+use crate::ui::transcript::HistoryCell;
+
+use super::HEADER_HEIGHT;
+
+// ============================================================================
+// State
+// ============================================================================
+
+/// State for the model picker overlay.
+#[derive(Debug, Clone)]
+pub struct ModelPickerState {
+    /// Currently selected index.
+    pub selected: usize,
+}
+
+impl ModelPickerState {
+    /// Creates a new picker state, selecting the current model if found.
+    pub fn new(current_model: &str) -> Self {
+        let selected = AVAILABLE_MODELS
+            .iter()
+            .position(|m| m.id == current_model)
+            .unwrap_or(0);
+        Self { selected }
+    }
+}
+
+// ============================================================================
+// Update Handlers
+// ============================================================================
+
+/// Opens the model picker overlay.
+pub fn open_model_picker(state: &mut TuiState) {
+    if matches!(state.overlay, OverlayState::None) {
+        state.overlay = OverlayState::ModelPicker(ModelPickerState::new(&state.config.model));
+    }
+}
+
+/// Closes the model picker overlay.
+pub fn close_model_picker(state: &mut TuiState) {
+    state.overlay = OverlayState::None;
+}
+
+/// Handles key events for the model picker.
+pub fn handle_model_picker_key(
+    state: &mut TuiState,
+    key: crossterm::event::KeyEvent,
+) -> Vec<UiEffect> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+    match key.code {
+        KeyCode::Esc => {
+            close_model_picker(state);
+            vec![]
+        }
+        KeyCode::Char('c') if ctrl => {
+            close_model_picker(state);
+            vec![]
+        }
+        KeyCode::Up => {
+            model_picker_select_prev(state);
+            vec![]
+        }
+        KeyCode::Down => {
+            model_picker_select_next(state);
+            vec![]
+        }
+        KeyCode::Enter => execute_model_selection(state),
+        _ => vec![],
+    }
+}
+
+fn model_picker_select_prev(state: &mut TuiState) {
+    if let Some(picker) = state.overlay.as_model_picker_mut()
+        && picker.selected > 0
+    {
+        picker.selected -= 1;
+    }
+}
+
+fn model_picker_select_next(state: &mut TuiState) {
+    if let Some(picker) = state.overlay.as_model_picker_mut()
+        && picker.selected < AVAILABLE_MODELS.len() - 1
+    {
+        picker.selected += 1;
+    }
+}
+
+fn execute_model_selection(state: &mut TuiState) -> Vec<UiEffect> {
+    let Some(picker) = state.overlay.as_model_picker() else {
+        return vec![];
+    };
+
+    let Some(model) = AVAILABLE_MODELS.get(picker.selected) else {
+        close_model_picker(state);
+        return vec![];
+    };
+
+    let model_id = model.id.to_string();
+    let display_name = model.display_name;
+
+    state.config.model = model_id.clone();
+    close_model_picker(state);
+
+    state
+        .transcript
+        .push(HistoryCell::system(format!("Switched to {}", display_name)));
+
+    vec![UiEffect::PersistModel { model: model_id }]
+}
+
+// ============================================================================
+// Render
+// ============================================================================
+
+/// Renders the model picker as an overlay.
+pub fn render_model_picker(
+    frame: &mut Frame,
+    picker: &ModelPickerState,
+    area: Rect,
+    input_top_y: u16,
+) {
+    let picker_width = 30.min(area.width.saturating_sub(4));
+    let picker_height = (AVAILABLE_MODELS.len() as u16 + 5).min(area.height / 2);
+
+    let available_top = HEADER_HEIGHT;
+    let available_bottom = input_top_y;
+    let available_height = available_bottom.saturating_sub(available_top);
+
+    let picker_x = (area.width.saturating_sub(picker_width)) / 2;
+    let picker_y = available_top + (available_height.saturating_sub(picker_height)) / 2;
+
+    let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
+
+    frame.render_widget(Clear, picker_area);
+
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Magenta))
+        .title(" Select Model ")
+        .title_style(
+            Style::default()
+                .fg(Color::Magenta)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(outer_block, picker_area);
+
+    let inner_area = Rect::new(
+        picker_area.x + 1,
+        picker_area.y + 1,
+        picker_area.width.saturating_sub(2),
+        picker_area.height.saturating_sub(2),
+    );
+
+    let list_height = inner_area.height.saturating_sub(2);
+    let list_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, list_height);
+
+    let items: Vec<ListItem> = AVAILABLE_MODELS
+        .iter()
+        .map(|model| {
+            let line = Line::from(Span::styled(
+                model.display_name,
+                Style::default()
+                    .fg(Color::Cyan)
+                    .add_modifier(Modifier::BOLD),
+            ));
+            ListItem::new(line)
+        })
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(Color::DarkGray)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(picker.selected));
+    frame.render_stateful_widget(list, list_area, &mut list_state);
+
+    // Separator line
+    let separator = "─".repeat(inner_area.width as usize);
+    let sep_y = inner_area.y + list_height;
+    if sep_y < inner_area.y + inner_area.height {
+        let separator_area = Rect::new(inner_area.x, sep_y, inner_area.width, 1);
+        frame.render_widget(
+            Paragraph::new(Line::from(Span::styled(
+                &separator,
+                Style::default().fg(Color::DarkGray),
+            ))),
+            separator_area,
+        );
+    }
+
+    // Keyboard hints
+    let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
+    let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
+    let hints_line = Line::from(vec![
+        Span::styled("↑↓", Style::default().fg(Color::Magenta)),
+        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
+        Span::styled("•", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Enter", Style::default().fg(Color::Magenta)),
+        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+        Span::styled("•", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Esc", Style::default().fg(Color::Magenta)),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
+    frame.render_widget(hints_para, hints_area);
+}

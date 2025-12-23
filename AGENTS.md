@@ -22,6 +22,10 @@
   - `src/ui/view.rs`: pure render functions (no mutations)
   - `src/ui/effects.rs`: effect types returned by reducer for runtime to execute
   - `src/ui/events.rs`: UI event types
+  - `src/ui/overlays/`: self-contained overlay modules (state + update + render)
+    - `src/ui/overlays/palette.rs`: command palette overlay
+    - `src/ui/overlays/model_picker.rs`: model picker overlay
+    - `src/ui/overlays/login.rs`: OAuth login flow overlay
   - `src/ui/commands.rs`: slash command definitions for command palette
   - `src/ui/transcript.rs`: transcript view model (styles, wrapping, rendering)
   - `src/ui/stream.rs`: streamed stdout/stderr rendering + exec mode wrapper
