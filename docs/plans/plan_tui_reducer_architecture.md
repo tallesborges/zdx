@@ -418,12 +418,12 @@ impl TuiRuntime {
 
 ---
 
-### Slice 6: Overlay Focus Model
+### Slice 6: Overlay Focus Model ✅
 
 **Goal:** Eliminate cascades like `if login/palette/picker...` with a single overlay enum.
 
 **Scope checklist:**
-- [ ] Replace separate overlay fields with unified enum:
+- [x] Replace separate overlay fields with unified enum:
     ```rust
     pub enum OverlayState {
         None,
@@ -432,30 +432,36 @@ impl TuiRuntime {
         Login(LoginState),
     }
     ```
-- [ ] Route keys by focus: overlay first, then input
+- [x] Route keys by focus: overlay first, then input
     ```rust
     fn handle_key(state: &mut TuiState, key: KeyEvent) -> Vec<UiEffect> {
-        match &mut state.overlay {
-            OverlayState::CommandPalette(p) => handle_palette_key(p, key),
-            OverlayState::ModelPicker(m) => handle_picker_key(m, key),
-            OverlayState::Login(l) => handle_login_key(l, key),
-            OverlayState::None => handle_main_key(state, key),
+        match &state.overlay {
+            OverlayState::Login(_) => handle_login_key(state, key),
+            OverlayState::CommandPalette(_) => handle_palette_key(state, key),
+            OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
+            OverlayState::None => handle_main_key(state, key, viewport_height),
         }
     }
     ```
-- [ ] Ensure Esc consistently closes the active overlay
+- [x] Ensure Esc consistently closes the active overlay
+- [x] Removed `LoginState::Idle` variant (not needed - `OverlayState::None` covers it)
+- [x] Added helper methods on `OverlayState` for accessing inner state
 
 **✅ Demo:**
-- Esc closes any active overlay
-- Arrow keys do the right thing per overlay
-- No "which overlay?" cascade in code
+- Esc closes any active overlay ✓
+- Arrow keys do the right thing per overlay ✓
+- No "which overlay?" cascade in code ✓
+- All 121 tests pass ✓
 
 **Failure modes / guardrails:**
-- Arrow-key conflicts with input/history must be resolved consistently
+- Arrow-key conflicts with input/history resolved ✓
 
-**Files touched:** `src/ui/state.rs`, `src/ui/update.rs`, `src/ui/view.rs`
+**Files touched:**
+- `src/ui/state.rs`: Added `OverlayState` enum, removed `LoginState::Idle`, replaced three fields with one
+- `src/ui/update.rs`: Single match for key routing, updated all overlay handlers
+- `src/ui/view.rs`: Single match for overlay rendering
 
-**Estimated size:** ~150 lines reorganized
+**Actual size:** ~100 lines reorganized
 
 ---
 

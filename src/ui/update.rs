@@ -13,7 +13,8 @@ use crate::models::AVAILABLE_MODELS;
 use crate::ui::effects::UiEffect;
 use crate::ui::events::UiEvent;
 use crate::ui::state::{
-    CommandPaletteState, EngineState, LoginEvent, LoginState, ModelPickerState, TuiState,
+    CommandPaletteState, EngineState, LoginEvent, LoginState, ModelPickerState, OverlayState,
+    TuiState,
 };
 use crate::ui::transcript::HistoryCell;
 
@@ -65,7 +66,7 @@ fn handle_terminal_event(
 }
 
 fn handle_paste(state: &mut TuiState, text: &str) {
-    if let LoginState::AwaitingCode { ref mut input, .. } = state.login_state {
+    if let OverlayState::Login(LoginState::AwaitingCode { ref mut input, .. }) = state.overlay {
         input.push_str(text);
     } else {
         state.textarea.insert_str(text);
@@ -91,18 +92,13 @@ fn handle_key(
     key: crossterm::event::KeyEvent,
     viewport_height: usize,
 ) -> Vec<UiEffect> {
-    // Route to overlay handlers first
-    if state.login_state.is_active() {
-        return handle_login_key(state, key);
+    // Route by active overlay - single match, no cascade
+    match &state.overlay {
+        OverlayState::Login(_) => handle_login_key(state, key),
+        OverlayState::CommandPalette(_) => handle_palette_key(state, key),
+        OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
+        OverlayState::None => handle_main_key(state, key, viewport_height),
     }
-    if state.command_palette.is_some() {
-        return handle_palette_key(state, key);
-    }
-    if state.model_picker.is_some() {
-        return handle_model_picker_key(state, key);
-    }
-
-    handle_main_key(state, key, viewport_height)
 }
 
 fn handle_main_key(
@@ -306,13 +302,14 @@ fn navigate_history_down(state: &mut TuiState) {
 // ============================================================================
 
 fn open_command_palette(state: &mut TuiState, insert_slash_on_escape: bool) {
-    if state.command_palette.is_none() {
-        state.command_palette = Some(CommandPaletteState::new(insert_slash_on_escape));
+    if matches!(state.overlay, OverlayState::None) {
+        state.overlay =
+            OverlayState::CommandPalette(CommandPaletteState::new(insert_slash_on_escape));
     }
 }
 
 fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
-    state.command_palette = None;
+    state.overlay = OverlayState::None;
     if insert_slash {
         state.textarea.insert_char('/');
     }
@@ -324,8 +321,8 @@ fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> 
     match key.code {
         KeyCode::Esc => {
             let insert_slash = state
-                .command_palette
-                .as_ref()
+                .overlay
+                .as_command_palette()
                 .is_some_and(|p| p.insert_slash_on_escape);
             close_command_palette(state, insert_slash);
             vec![]
@@ -344,14 +341,14 @@ fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> 
         }
         KeyCode::Enter | KeyCode::Tab => execute_selected_command(state),
         KeyCode::Backspace => {
-            if let Some(palette) = &mut state.command_palette {
+            if let Some(palette) = state.overlay.as_command_palette_mut() {
                 palette.filter.pop();
                 palette.clamp_selection();
             }
             vec![]
         }
         KeyCode::Char(c) if !ctrl => {
-            if let Some(palette) = &mut state.command_palette {
+            if let Some(palette) = state.overlay.as_command_palette_mut() {
                 palette.filter.push(c);
                 palette.clamp_selection();
             }
@@ -362,7 +359,7 @@ fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> 
 }
 
 fn palette_select_prev(state: &mut TuiState) {
-    if let Some(palette) = &mut state.command_palette {
+    if let Some(palette) = state.overlay.as_command_palette_mut() {
         let count = palette.filtered_commands().len();
         if count > 0 && palette.selected > 0 {
             palette.selected -= 1;
@@ -371,7 +368,7 @@ fn palette_select_prev(state: &mut TuiState) {
 }
 
 fn palette_select_next(state: &mut TuiState) {
-    if let Some(palette) = &mut state.command_palette {
+    if let Some(palette) = state.overlay.as_command_palette_mut() {
         let count = palette.filtered_commands().len();
         if count > 0 && palette.selected < count - 1 {
             palette.selected += 1;
@@ -380,7 +377,7 @@ fn palette_select_next(state: &mut TuiState) {
 }
 
 fn execute_selected_command(state: &mut TuiState) -> Vec<UiEffect> {
-    let Some(palette) = &state.command_palette else {
+    let Some(palette) = state.overlay.as_command_palette() else {
         return vec![];
     };
 
@@ -414,13 +411,13 @@ fn execute_selected_command(state: &mut TuiState) -> Vec<UiEffect> {
 // ============================================================================
 
 fn open_model_picker(state: &mut TuiState) {
-    if state.model_picker.is_none() {
-        state.model_picker = Some(ModelPickerState::new(&state.config.model));
+    if matches!(state.overlay, OverlayState::None) {
+        state.overlay = OverlayState::ModelPicker(ModelPickerState::new(&state.config.model));
     }
 }
 
 fn close_model_picker(state: &mut TuiState) {
-    state.model_picker = None;
+    state.overlay = OverlayState::None;
 }
 
 fn handle_model_picker_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
@@ -449,7 +446,7 @@ fn handle_model_picker_key(state: &mut TuiState, key: crossterm::event::KeyEvent
 }
 
 fn model_picker_select_prev(state: &mut TuiState) {
-    if let Some(picker) = &mut state.model_picker
+    if let Some(picker) = state.overlay.as_model_picker_mut()
         && picker.selected > 0
     {
         picker.selected -= 1;
@@ -457,7 +454,7 @@ fn model_picker_select_prev(state: &mut TuiState) {
 }
 
 fn model_picker_select_next(state: &mut TuiState) {
-    if let Some(picker) = &mut state.model_picker
+    if let Some(picker) = state.overlay.as_model_picker_mut()
         && picker.selected < AVAILABLE_MODELS.len() - 1
     {
         picker.selected += 1;
@@ -465,7 +462,7 @@ fn model_picker_select_next(state: &mut TuiState) {
 }
 
 fn execute_model_selection(state: &mut TuiState) -> Vec<UiEffect> {
-    let Some(picker) = &state.model_picker else {
+    let Some(picker) = state.overlay.as_model_picker() else {
         return vec![];
     };
 
@@ -686,25 +683,27 @@ fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
         LoginEvent::LoginRequested => {
             let pkce = anthropic::generate_pkce();
             let url = anthropic::build_auth_url(&pkce);
-            state.login_state = LoginState::AwaitingCode {
+            state.overlay = OverlayState::Login(LoginState::AwaitingCode {
                 url: url.clone(),
                 pkce_verifier: pkce.verifier,
                 input: String::new(),
                 error: None,
-            };
+            });
             vec![UiEffect::OpenBrowser { url }]
         }
         LoginEvent::AuthCodeEntered { code } => {
-            if let LoginState::AwaitingCode { pkce_verifier, .. } = &state.login_state {
+            if let OverlayState::Login(LoginState::AwaitingCode { pkce_verifier, .. }) =
+                &state.overlay
+            {
                 let verifier = pkce_verifier.clone();
-                state.login_state = LoginState::Exchanging;
+                state.overlay = OverlayState::Login(LoginState::Exchanging);
                 vec![UiEffect::SpawnTokenExchange { code, verifier }]
             } else {
                 vec![]
             }
         }
         LoginEvent::LoginSucceeded => {
-            state.login_state = LoginState::Idle;
+            state.overlay = OverlayState::None;
             state.refresh_auth_type();
             state
                 .transcript
@@ -714,16 +713,16 @@ fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
         LoginEvent::LoginFailed { message } => {
             let pkce = anthropic::generate_pkce();
             let url = anthropic::build_auth_url(&pkce);
-            state.login_state = LoginState::AwaitingCode {
+            state.overlay = OverlayState::Login(LoginState::AwaitingCode {
                 url,
                 pkce_verifier: pkce.verifier,
                 input: String::new(),
                 error: Some(message),
-            };
+            });
             vec![]
         }
         LoginEvent::LoginCancelled => {
-            state.login_state = LoginState::Idle;
+            state.overlay = OverlayState::None;
             state.login_exchange_rx = None;
             vec![]
         }
@@ -733,9 +732,8 @@ fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
 fn handle_login_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-    match &mut state.login_state {
-        LoginState::Idle => vec![],
-        LoginState::AwaitingCode { input, .. } => match key.code {
+    match &mut state.overlay {
+        OverlayState::Login(LoginState::AwaitingCode { input, .. }) => match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                 update_login(state, LoginEvent::LoginCancelled)
             }
@@ -757,13 +755,14 @@ fn handle_login_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Ve
             }
             _ => vec![],
         },
-        LoginState::Exchanging => {
+        OverlayState::Login(LoginState::Exchanging) => {
             if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
                 update_login(state, LoginEvent::LoginCancelled)
             } else {
                 vec![]
             }
         }
+        _ => vec![],
     }
 }
 

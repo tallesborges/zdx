@@ -18,7 +18,8 @@ use ratatui::{
 
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::state::{
-    AuthType, CommandPaletteState, EngineState, LoginState, ModelPickerState, TuiState,
+    AuthType, CommandPaletteState, EngineState, LoginState, ModelPickerState, OverlayState,
+    TuiState,
 };
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
@@ -94,17 +95,18 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     // Input area
     frame.render_widget(&state.textarea, chunks[2]);
 
-    // Render overlays (last, so they appear on top)
-    if let Some(palette) = &state.command_palette {
-        render_command_palette(frame, palette, area, chunks[2].y);
-    }
-
-    if let Some(picker) = &state.model_picker {
-        render_model_picker(frame, picker, area, chunks[2].y);
-    }
-
-    if state.login_state.is_active() {
-        render_login_overlay(frame, &state.login_state, area);
+    // Render overlay (last, so it appears on top)
+    match &state.overlay {
+        OverlayState::CommandPalette(palette) => {
+            render_command_palette(frame, palette, area, chunks[2].y);
+        }
+        OverlayState::ModelPicker(picker) => {
+            render_model_picker(frame, picker, area, chunks[2].y);
+        }
+        OverlayState::Login(login_state) => {
+            render_login_overlay(frame, login_state, area);
+        }
+        OverlayState::None => {}
     }
 }
 
@@ -161,7 +163,7 @@ fn render_header(state: &TuiState, frame: &mut Frame, area: Rect, has_content_be
         ));
     }
 
-    if state.command_palette.is_some() {
+    if matches!(state.overlay, OverlayState::CommandPalette(_)) {
         status_spans.push(Span::raw(" │ "));
         status_spans.push(Span::styled(
             "/ Commands (Esc to cancel)",
@@ -530,7 +532,6 @@ fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect)
     );
 
     let lines: Vec<Line> = match login_state {
-        LoginState::Idle => return,
         LoginState::AwaitingCode {
             url, input, error, ..
         } => {

@@ -44,8 +44,6 @@ pub enum LoginEvent {
 /// State for the login overlay.
 #[derive(Debug, Clone)]
 pub enum LoginState {
-    /// Not in login flow.
-    Idle,
     /// Showing auth URL, waiting for user to paste code.
     AwaitingCode {
         /// The auth URL to display.
@@ -62,10 +60,81 @@ pub enum LoginState {
     Exchanging,
 }
 
-impl LoginState {
-    /// Returns true if the login overlay should be displayed.
+// ============================================================================
+// Overlay State (Unified)
+// ============================================================================
+
+/// Unified overlay state.
+///
+/// Only one overlay can be active at a time. This eliminates the cascade of
+/// `if palette.is_some() / if picker.is_some() / if login.is_active()` checks.
+#[derive(Debug, Clone)]
+pub enum OverlayState {
+    /// No overlay active.
+    None,
+    /// Command palette is open.
+    CommandPalette(CommandPaletteState),
+    /// Model picker is open.
+    ModelPicker(ModelPickerState),
+    /// Login flow is active.
+    Login(LoginState),
+}
+
+impl OverlayState {
+    /// Returns true if any overlay is active.
+    #[allow(dead_code)] // Public API for tests and future use
     pub fn is_active(&self) -> bool {
-        !matches!(self, LoginState::Idle)
+        !matches!(self, OverlayState::None)
+    }
+
+    /// Returns the command palette state if active.
+    pub fn as_command_palette(&self) -> Option<&CommandPaletteState> {
+        match self {
+            OverlayState::CommandPalette(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the command palette state mutably if active.
+    pub fn as_command_palette_mut(&mut self) -> Option<&mut CommandPaletteState> {
+        match self {
+            OverlayState::CommandPalette(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the model picker state if active.
+    pub fn as_model_picker(&self) -> Option<&ModelPickerState> {
+        match self {
+            OverlayState::ModelPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the model picker state mutably if active.
+    pub fn as_model_picker_mut(&mut self) -> Option<&mut ModelPickerState> {
+        match self {
+            OverlayState::ModelPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the login state if active.
+    #[allow(dead_code)] // Public API for tests and future use
+    pub fn as_login(&self) -> Option<&LoginState> {
+        match self {
+            OverlayState::Login(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Returns the login state mutably if active.
+    #[allow(dead_code)] // Public API for tests and future use
+    pub fn as_login_mut(&mut self) -> Option<&mut LoginState> {
+        match self {
+            OverlayState::Login(l) => Some(l),
+            _ => None,
+        }
     }
 }
 
@@ -371,12 +440,8 @@ pub struct TuiState {
     pub input_draft: Option<String>,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
-    /// Command palette state (None = closed).
-    pub command_palette: Option<CommandPaletteState>,
-    /// Model picker state (None = closed).
-    pub model_picker: Option<ModelPickerState>,
-    /// Login overlay state.
-    pub login_state: LoginState,
+    /// Active overlay state (command palette, model picker, or login).
+    pub overlay: OverlayState,
     /// Receiver for async login token exchange result.
     pub login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
     /// Current auth type indicator (cached, refreshed on login/logout).
@@ -447,9 +512,7 @@ impl TuiState {
             history_index: None,
             input_draft: None,
             spinner_frame: 0,
-            command_palette: None,
-            model_picker: None,
-            login_state: LoginState::Idle,
+            overlay: OverlayState::None,
             login_exchange_rx: None,
             auth_type: AuthType::detect(),
         }
@@ -745,21 +808,29 @@ mod tests {
     }
 
     // ========================================================================
-    // LoginState Tests
+    // OverlayState Tests
     // ========================================================================
 
     #[test]
-    fn test_login_state_is_active() {
-        assert!(!LoginState::Idle.is_active());
-        assert!(
-            LoginState::AwaitingCode {
-                url: String::new(),
-                pkce_verifier: String::new(),
-                input: String::new(),
-                error: None,
-            }
-            .is_active()
-        );
-        assert!(LoginState::Exchanging.is_active());
+    fn test_overlay_state_is_active() {
+        assert!(!OverlayState::None.is_active());
+        assert!(OverlayState::CommandPalette(CommandPaletteState::new(true)).is_active());
+        assert!(OverlayState::ModelPicker(ModelPickerState::new("test")).is_active());
+        assert!(OverlayState::Login(LoginState::Exchanging).is_active());
+    }
+
+    #[test]
+    fn test_overlay_state_accessors() {
+        let palette = OverlayState::CommandPalette(CommandPaletteState::new(true));
+        assert!(palette.as_command_palette().is_some());
+        assert!(palette.as_model_picker().is_none());
+        assert!(palette.as_login().is_none());
+
+        let picker = OverlayState::ModelPicker(ModelPickerState::new("test"));
+        assert!(picker.as_command_palette().is_none());
+        assert!(picker.as_model_picker().is_some());
+
+        let login = OverlayState::Login(LoginState::Exchanging);
+        assert!(login.as_login().is_some());
     }
 }
