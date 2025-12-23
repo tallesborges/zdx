@@ -85,11 +85,21 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
 
     // Slice visible lines
     let visible_end = (scroll_offset + transcript_height).min(total_lines);
-    let visible_lines: Vec<Line<'static>> = all_lines
+    let content_lines: Vec<Line<'static>> = all_lines
         .into_iter()
         .skip(scroll_offset)
         .take(visible_end - scroll_offset)
         .collect();
+
+    // Bottom-align: add padding at top when content doesn't fill the screen
+    let visible_lines: Vec<Line<'static>> = if content_lines.len() < transcript_height {
+        let padding_count = transcript_height - content_lines.len();
+        let mut padded = vec![Line::default(); padding_count];
+        padded.extend(content_lines);
+        padded
+    } else {
+        content_lines
+    };
 
     // Create layout: transcript, input, status
     let chunks = Layout::default()
@@ -261,15 +271,6 @@ fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
         }
         // Add blank line between cells
         lines.push(Line::default());
-    }
-
-    // Remove trailing blank line if not waiting or streaming
-    let is_active = matches!(
-        state.engine_state,
-        EngineState::Waiting { .. } | EngineState::Streaming { .. }
-    );
-    if !is_active && lines.last().map(|l| l.spans.is_empty()).unwrap_or(false) {
-        lines.pop();
     }
 
     lines
