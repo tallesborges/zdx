@@ -9,6 +9,9 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
+/// Default config template with comments, embedded at compile time.
+const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("default_config.toml");
+
 pub mod paths {
     //! Path resolution for ZDX configuration and data directories.
     //!
@@ -88,6 +91,40 @@ impl Config {
         }
     }
 
+    /// Saves only the model field to the config file.
+    ///
+    /// Creates the file if it doesn't exist.
+    /// Preserves existing fields and comments using toml_edit.
+    pub fn save_model(model: &str) -> Result<()> {
+        Self::save_model_to(&paths::config_path(), model)
+    }
+
+    /// Saves only the model field to a specific config file path.
+    ///
+    /// Creates the file with default template if it doesn't exist.
+    /// Preserves existing fields and comments using toml_edit.
+    pub fn save_model_to(path: &Path, model: &str) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        // Read existing file or use default template
+        let contents = if path.exists() {
+            fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?
+        } else {
+            DEFAULT_CONFIG_TEMPLATE.to_string()
+        };
+
+        // Parse as editable document (preserves comments and formatting)
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        // Update model field
+        doc["model"] = value(model);
+
+        Self::write_config(path, &doc.to_string())
+    }
+
     /// Returns the effective system prompt, preferring the file if both are set.
     pub fn effective_system_prompt(&self) -> Result<Option<String>> {
         if let Some(path_str) = &self.system_prompt_file {
@@ -125,30 +162,27 @@ impl Config {
             anyhow::bail!("Config file already exists at {}", path.display());
         }
 
+        Self::write_config(path, DEFAULT_CONFIG_TEMPLATE)
+    }
+
+    /// Writes config content to a file, creating parent directories as needed.
+    /// Uses atomic write (temp file + rename) to prevent corruption.
+    fn write_config(path: &Path, content: &str) -> Result<()> {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
                 .with_context(|| format!("Failed to create directory {}", parent.display()))?;
         }
 
-        let toml = format!(
-            r#"# ZDX Configuration
-
-model = "{}"
-max_tokens = {}
-tool_timeout_secs = {}
-
-# system_prompt = "You are a helpful assistant."
-# system_prompt_file = "/path/to/system_prompt.md"
-
-# anthropic_base_url = "https://api.anthropic.com"
-"#,
-            Self::DEFAULT_MODEL,
-            Self::DEFAULT_MAX_TOKENS,
-            Self::DEFAULT_TOOL_TIMEOUT_SECS,
-        );
-
-        fs::write(path, toml)
-            .with_context(|| format!("Failed to write config to {}", path.display()))?;
+        let tmp_path = path.with_extension("toml.tmp");
+        fs::write(&tmp_path, content)
+            .with_context(|| format!("Failed to write config to {}", tmp_path.display()))?;
+        fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "Failed to rename {} to {}",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
 
         Ok(())
     }
@@ -232,9 +266,11 @@ mod tests {
         let prompt_file = dir.path().join("prompt.txt");
         fs::write(&prompt_file, "file prompt").unwrap();
 
-        let mut config = Config::default();
-        config.system_prompt_file = Some(prompt_file.to_str().unwrap().to_string());
-        config.system_prompt = Some("inline prompt".to_string());
+        let config = Config {
+            system_prompt_file: Some(prompt_file.to_str().unwrap().to_string()),
+            system_prompt: Some("inline prompt".to_string()),
+            ..Default::default()
+        };
 
         assert_eq!(
             config.effective_system_prompt().unwrap(),
@@ -245,8 +281,10 @@ mod tests {
     /// Timeout: zero disables timeout (SPEC §6).
     #[test]
     fn test_tool_timeout_zero_disables() {
-        let mut config = Config::default();
-        config.tool_timeout_secs = 0;
+        let config = Config {
+            tool_timeout_secs: 0,
+            ..Default::default()
+        };
         assert_eq!(config.tool_timeout(), None);
     }
 
@@ -272,8 +310,93 @@ mod tests {
     /// Base URL: empty/whitespace treated as unset.
     #[test]
     fn test_anthropic_base_url_empty_is_none() {
-        let mut config = Config::default();
-        config.anthropic_base_url = Some("   ".to_string());
+        let config = Config {
+            anthropic_base_url: Some("   ".to_string()),
+            ..Default::default()
+        };
         assert_eq!(config.effective_anthropic_base_url(), None);
+    }
+
+    /// save_model: creates new config file with template if it doesn't exist.
+    #[test]
+    fn test_save_model_creates_file_with_template() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        Config::save_model_to(&config_path, "claude-sonnet-4-5-20250929").unwrap();
+
+        assert!(config_path.exists());
+
+        // Verify model was updated
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.model, "claude-sonnet-4-5-20250929");
+
+        // Verify template comments are preserved
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# ZDX Configuration"));
+        assert!(contents.contains("# Maximum tokens"));
+        assert!(contents.contains("max_tokens = 1024"));
+    }
+
+    /// save_model: preserves other fields in existing config.
+    #[test]
+    fn test_save_model_preserves_other_fields() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Create config with other fields
+        fs::write(
+            &config_path,
+            r#"model = "old-model"
+max_tokens = 2048
+tool_timeout_secs = 60
+"#,
+        )
+        .unwrap();
+
+        Config::save_model_to(&config_path, "new-model").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.model, "new-model");
+        assert_eq!(config.max_tokens, 2048); // preserved
+        assert_eq!(config.tool_timeout_secs, 60); // preserved
+    }
+
+    /// save_model: preserves comments in config file.
+    #[test]
+    fn test_save_model_preserves_comments() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Create config with comments
+        fs::write(
+            &config_path,
+            r#"# My config file
+model = "old-model"
+# This is important
+max_tokens = 2048
+"#,
+        )
+        .unwrap();
+
+        Config::save_model_to(&config_path, "new-model").unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# My config file"));
+        assert!(contents.contains("# This is important"));
+        assert!(contents.contains("new-model"));
+    }
+
+    /// save_model: creates parent directories if needed.
+    #[test]
+    fn test_save_model_creates_parent_dirs() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("nested").join("dir").join("config.toml");
+
+        Config::save_model_to(&config_path, "claude-sonnet").unwrap();
+
+        assert!(config_path.exists());
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.model, "claude-sonnet");
     }
 }

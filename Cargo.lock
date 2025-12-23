@@ -2708,6 +2708,7 @@ dependencies = [
  "tempfile",
  "tokio",
  "toml",
+ "toml_edit",
  "tui-textarea",
  "url",
  "uuid",

@@ -1990,13 +1990,19 @@ impl TuiApp {
         let model_id = model.id.to_string();
         let display_name = model.display_name;
 
-        self.config.model = model_id;
+        self.config.model = model_id.clone();
         self.close_model_picker();
 
-        self.transcript.push(HistoryCell::system(format!(
-            "Switched to {}",
-            display_name
-        )));
+        // Persist model to config file (best-effort)
+        if let Err(e) = crate::config::Config::save_model(&model_id) {
+            self.transcript.push(HistoryCell::system(format!(
+                "Warning: Failed to save model preference: {}",
+                e
+            )));
+        }
+
+        self.transcript
+            .push(HistoryCell::system(format!("Switched to {}", display_name)));
     }
 
     /// Executes the /new (or /clear) command.
