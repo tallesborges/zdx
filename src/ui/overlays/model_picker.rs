@@ -16,8 +16,6 @@ use crate::ui::effects::UiEffect;
 use crate::ui::state::{OverlayState, TuiState};
 use crate::ui::transcript::HistoryCell;
 
-use super::HEADER_HEIGHT;
-
 // ============================================================================
 // State
 // ============================================================================
@@ -138,12 +136,10 @@ pub fn render_model_picker(
     let picker_width = 30.min(area.width.saturating_sub(4));
     let picker_height = (AVAILABLE_MODELS.len() as u16 + 5).min(area.height / 2);
 
-    let available_top = HEADER_HEIGHT;
-    let available_bottom = input_top_y;
-    let available_height = available_bottom.saturating_sub(available_top);
+    let available_height = input_top_y;
 
     let picker_x = (area.width.saturating_sub(picker_width)) / 2;
-    let picker_y = available_top + (available_height.saturating_sub(picker_height)) / 2;
+    let picker_y = (available_height.saturating_sub(picker_height)) / 2;
 
     let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
 

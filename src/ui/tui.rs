@@ -27,7 +27,7 @@ use crate::ui::state::{EngineState, TuiState};
 use crate::ui::terminal;
 use crate::ui::transcript::HistoryCell;
 use crate::ui::update;
-use crate::ui::view::{self, HEADER_HEIGHT, INPUT_HEIGHT};
+use crate::ui::view::{self, INPUT_HEIGHT, STATUS_HEIGHT};
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(
@@ -161,7 +161,7 @@ impl TuiRuntime {
     fn transcript_height(&self) -> usize {
         self.terminal
             .size()
-            .map(|s| s.height.saturating_sub(HEADER_HEIGHT + INPUT_HEIGHT) as usize)
+            .map(|s| s.height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize)
             .unwrap_or(20)
     }
 

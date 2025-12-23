@@ -20,15 +20,41 @@ use crate::ui::overlays::{render_command_palette, render_login_overlay, render_m
 use crate::ui::state::{AuthType, EngineState, OverlayState, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
-/// Height of the input area (lines).
+/// Height of the input area (lines, including borders).
 pub const INPUT_HEIGHT: u16 = 5;
 
-/// Height of header area (lines: title + status + border).
-pub const HEADER_HEIGHT: u16 = 3;
+/// Height of status line below input.
+pub const STATUS_HEIGHT: u16 = 1;
+
+/// Spinner frames for status line animation.
+const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Spinner speed divisor (render frames per spinner frame).
 /// At 30fps render rate, 3 gives ~10fps spinner animation.
 const SPINNER_SPEED_DIVISOR: usize = 3;
+
+/// Gets the current git branch name, if in a git repo.
+fn get_git_branch(root: &std::path::Path) -> Option<String> {
+    let head_path = root.join(".git/HEAD");
+    if let Ok(content) = std::fs::read_to_string(head_path)
+        && let Some(branch) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(branch.trim().to_string());
+    }
+    None
+}
+
+/// Shortens a path for display, using ~ for home directory.
+fn shorten_path(path: &std::path::Path) -> String {
+    // Canonicalize to resolve "." and ".." to absolute path
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(home) = dirs::home_dir()
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        return format!("~/{}", relative.display());
+    }
+    path.display().to_string()
+}
 
 /// Renders the entire TUI to the frame.
 ///
@@ -40,17 +66,15 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     // Get terminal size for transcript rendering
     let transcript_width = area.width.saturating_sub(2) as usize;
 
-    // Calculate transcript pane height
-    let transcript_height = area.height.saturating_sub(HEADER_HEIGHT + INPUT_HEIGHT) as usize;
+    // Calculate transcript pane height (no header now)
+    let transcript_height = area.height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize;
 
     // Pre-render transcript lines
     let all_lines = render_transcript(state, transcript_width);
     let total_lines = all_lines.len();
 
     // Use ScrollState for offset calculation (uses cached line count)
-    // Note: We use total_lines here since we just calculated it
     let scroll_offset = {
-        // Temporarily use the fresh line count for accurate offset calculation
         let max_offset = total_lines.saturating_sub(transcript_height);
         if state.scroll.is_following() {
             total_lines.saturating_sub(transcript_height)
@@ -58,9 +82,6 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
             state.scroll.get_offset(transcript_height).min(max_offset)
         }
     };
-
-    // Check if there's content below the viewport (for indicator)
-    let has_content_below = scroll_offset + transcript_height < total_lines;
 
     // Slice visible lines
     let visible_end = (scroll_offset + transcript_height).min(total_lines);
@@ -70,35 +91,35 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         .take(visible_end - scroll_offset)
         .collect();
 
-    // Create layout: header, transcript, input
+    // Create layout: transcript, input, status
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(HEADER_HEIGHT), // Header
             Constraint::Min(1),                // Transcript
             Constraint::Length(INPUT_HEIGHT),  // Input
+            Constraint::Length(STATUS_HEIGHT), // Status line
         ])
         .split(area);
 
-    // Render header
-    render_header(state, frame, chunks[0], has_content_below);
-
-    // Transcript area (already sliced to visible)
+    // Transcript area
     let transcript = Paragraph::new(visible_lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::NONE));
-    frame.render_widget(transcript, chunks[1]);
+    frame.render_widget(transcript, chunks[0]);
 
-    // Input area
-    frame.render_widget(&state.textarea, chunks[2]);
+    // Input area with model on top-left border and path on bottom-right
+    render_input(state, frame, chunks[1]);
+
+    // Status line below input
+    render_status_line(state, frame, chunks[2]);
 
     // Render overlay (last, so it appears on top)
     match &state.overlay {
         OverlayState::CommandPalette(palette) => {
-            render_command_palette(frame, palette, area, chunks[2].y);
+            render_command_palette(frame, palette, area, chunks[1].y);
         }
         OverlayState::ModelPicker(picker) => {
-            render_model_picker(frame, picker, area, chunks[2].y);
+            render_model_picker(frame, picker, area, chunks[1].y);
         }
         OverlayState::Login(login_state) => {
             render_login_overlay(frame, login_state, area);
@@ -107,75 +128,126 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     }
 }
 
-/// Renders the header section (title + status line).
-fn render_header(state: &TuiState, frame: &mut Frame, area: Rect, has_content_below: bool) {
-    // Header line 1: Title and scroll indicator
-    let mut title_spans = vec![
-        Span::styled(
-            "ZDX",
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        ),
-        Span::raw(" — "),
-        Span::styled("q", Style::default().fg(Color::Yellow)),
-        Span::raw(" to quit"),
-    ];
-    if has_content_below {
-        title_spans.push(Span::raw("  "));
-        title_spans.push(Span::styled("▼ more", Style::default().fg(Color::DarkGray)));
-    }
-
-    // Header line 2: Status line
-    let status_state = match &state.engine_state {
-        EngineState::Idle => ("Ready", Color::Green),
-        EngineState::Waiting { .. } => ("Thinking...", Color::Yellow),
-        EngineState::Streaming { .. } => ("Streaming...", Color::Yellow),
-    };
-
+/// Renders the input area with model info on top border and path on bottom border.
+fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
+    // Build top-left title: model name + auth type
     let auth_indicator = match state.auth_type {
-        AuthType::OAuth => ("●", Color::Green, "OAuth"),
-        AuthType::ApiKey => ("●", Color::Blue, "API"),
-        AuthType::None => ("○", Color::Red, "No Auth"),
+        AuthType::OAuth => " (oauth)",
+        AuthType::ApiKey => " (api-key)",
+        AuthType::None => "",
+    };
+    let model_title = format!(" {}{} ", state.config.model, auth_indicator);
+
+    // Build bottom-right title: path and git branch
+    let path_str = shorten_path(&state.engine_opts.root);
+    let bottom_title = if let Some(branch) = get_git_branch(&state.engine_opts.root) {
+        format!(" {} ({}) ", path_str, branch)
+    } else {
+        format!(" {} ", path_str)
     };
 
-    let mut status_spans = vec![
-        Span::styled(&state.config.model, Style::default().fg(Color::DarkGray)),
-        Span::raw(" "),
-        Span::styled(auth_indicator.0, Style::default().fg(auth_indicator.1)),
-        Span::styled(
-            format!(" {}", auth_indicator.2),
+    // Create a custom textarea rendering with our border titles
+    // We need to render the textarea content inside our custom block
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Span::styled(
+            model_title,
             Style::default().fg(Color::DarkGray),
-        ),
-        Span::raw(" │ "),
-        Span::styled(status_state.0, Style::default().fg(status_state.1)),
-    ];
-
-    if let Some(idx) = state.history_index {
-        let total = state.command_history.len();
-        status_spans.push(Span::raw(" │ "));
-        status_spans.push(Span::styled(
-            format!("history {}/{}", idx + 1, total),
-            Style::default().fg(Color::DarkGray),
-        ));
-    }
-
-    if matches!(state.overlay, OverlayState::CommandPalette(_)) {
-        status_spans.push(Span::raw(" │ "));
-        status_spans.push(Span::styled(
-            "/ Commands (Esc to cancel)",
-            Style::default().fg(Color::Yellow),
-        ));
-    }
-
-    let header = Paragraph::new(vec![Line::from(title_spans), Line::from(status_spans)])
-        .alignment(Alignment::Center)
-        .block(
-            Block::default()
-                .borders(Borders::BOTTOM)
-                .border_style(Style::default().fg(Color::DarkGray)),
+        ))
+        .title_bottom(
+            Line::from(Span::styled(
+                bottom_title,
+                Style::default().fg(Color::DarkGray),
+            ))
+            .alignment(Alignment::Right),
         );
-    frame.render_widget(header, area);
+
+    // Get cursor position for rendering
+    let cursor_line = state.textarea.cursor().0;
+    let cursor_col = state.textarea.cursor().1;
+
+    // We need to render the textarea directly but with a modified block
+    // Clone the textarea widget's visual appearance
+    let mut styled_lines: Vec<Line> = Vec::new();
+    for (i, line) in state.textarea.lines().iter().enumerate() {
+        if i == cursor_line {
+            // Add cursor indicator on the current line
+            let mut spans = Vec::new();
+            let chars: Vec<char> = line.chars().collect();
+            if cursor_col < chars.len() {
+                spans.push(Span::raw(chars[..cursor_col].iter().collect::<String>()));
+                spans.push(Span::styled(
+                    chars[cursor_col].to_string(),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+                spans.push(Span::raw(
+                    chars[cursor_col + 1..].iter().collect::<String>(),
+                ));
+            } else {
+                spans.push(Span::raw(line.clone()));
+                spans.push(Span::styled(
+                    " ",
+                    Style::default().add_modifier(Modifier::REVERSED),
+                ));
+            }
+            styled_lines.push(Line::from(spans));
+        } else {
+            styled_lines.push(Line::from(line.as_str()));
+        }
+    }
+
+    // If no lines, show cursor
+    if styled_lines.is_empty() {
+        styled_lines.push(Line::from(Span::styled(
+            " ",
+            Style::default().add_modifier(Modifier::REVERSED),
+        )));
+    }
+
+    let input_paragraph = Paragraph::new(styled_lines).block(block);
+    frame.render_widget(input_paragraph, area);
+}
+
+/// Renders the status line below the input.
+fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
+    let spinner_idx = (state.spinner_frame / SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len();
+    let spinner = SPINNER_FRAMES[spinner_idx];
+
+    let spans: Vec<Span> = match &state.engine_state {
+        EngineState::Idle => {
+            // Show helpful shortcuts when idle
+            vec![
+                Span::styled("Ctrl+P", Style::default().fg(Color::DarkGray)),
+                Span::raw(" commands  "),
+                Span::styled("Ctrl+C", Style::default().fg(Color::DarkGray)),
+                Span::raw(" quit"),
+            ]
+        }
+        EngineState::Waiting { .. } => {
+            vec![
+                Span::styled(spinner, Style::default().fg(Color::Yellow)),
+                Span::raw(" "),
+                Span::styled("Waiting...", Style::default().fg(Color::Yellow)),
+                Span::raw("  "),
+                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                Span::raw(" to cancel"),
+            ]
+        }
+        EngineState::Streaming { .. } => {
+            vec![
+                Span::styled(spinner, Style::default().fg(Color::Cyan)),
+                Span::raw(" "),
+                Span::styled("Streaming...", Style::default().fg(Color::Cyan)),
+                Span::raw("  "),
+                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                Span::raw(" to cancel"),
+            ]
+        }
+    };
+
+    let status = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
+    frame.render_widget(status, area);
 }
 
 /// Renders the transcript into ratatui Lines.
