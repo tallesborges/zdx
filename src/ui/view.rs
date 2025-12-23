@@ -570,7 +570,7 @@ fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect)
             )));
             l
         }
-        LoginState::Exchanging { .. } => vec![
+        LoginState::Exchanging => vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Exchanging code...",

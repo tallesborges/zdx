@@ -59,12 +59,8 @@ pub enum LoginState {
         error: Option<String>,
     },
     /// Exchanging code for tokens (async operation in progress).
-    Exchanging {
-        /// The auth code being exchanged.
-        code: String,
-        /// PKCE verifier for exchange.
-        pkce_verifier: String,
-    },
+    /// The code and verifier are passed to the effect, not stored here.
+    Exchanging,
 }
 
 impl LoginState {
@@ -479,12 +475,6 @@ mod tests {
             }
             .is_active()
         );
-        assert!(
-            LoginState::Exchanging {
-                code: String::new(),
-                pkce_verifier: String::new(),
-            }
-            .is_active()
-        );
+        assert!(LoginState::Exchanging.is_active());
     }
 }

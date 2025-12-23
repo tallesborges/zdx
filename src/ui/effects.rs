@@ -1,0 +1,40 @@
+//! UI effect types.
+//!
+//! Effects are commands returned by the reducer that the runtime executes.
+//! They represent side effects like spawning async tasks, persisting state, etc.
+//!
+//! This keeps the reducer pure: it only mutates state and returns effects,
+//! never performs I/O or spawns tasks directly.
+
+use crate::core::session::SessionEvent;
+
+/// Effects returned by the reducer for the runtime to execute.
+///
+/// The reducer returns `Vec<UiEffect>` from each update call.
+/// The runtime executes these effects after rendering.
+#[derive(Debug)]
+pub enum UiEffect {
+    /// Quit the application.
+    Quit,
+
+    /// Start an engine turn with the current input.
+    StartEngineTurn,
+
+    /// Interrupt the running engine task.
+    InterruptEngine,
+
+    /// Spawn async token exchange for login.
+    SpawnTokenExchange { code: String, verifier: String },
+
+    /// Open a URL in the system browser.
+    OpenBrowser { url: String },
+
+    /// Append an event to the session log.
+    SaveSession { event: SessionEvent },
+
+    /// Persist the model preference to config.
+    PersistModel { model: String },
+
+    /// Create a new session (for /new command).
+    CreateNewSession,
+}
