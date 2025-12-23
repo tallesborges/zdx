@@ -239,7 +239,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
         TranscriptStyle::System => Style::default().fg(Color::DarkGray),
-        TranscriptStyle::ToolBracket => Style::default().fg(Color::DarkGray),
+        TranscriptStyle::ToolBracket => Style::default().fg(Color::Gray),
         TranscriptStyle::ToolStatus => Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
@@ -251,7 +251,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::ToolCancelled => Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::CROSSED_OUT),
-        TranscriptStyle::ToolOutput => Style::default().fg(Color::Gray),
+        TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
     }
 }
 

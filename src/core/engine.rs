@@ -351,6 +351,13 @@ pub async fn run_turn(
             .await;
         }
 
+        // Emit turn complete with final result
+        sink.important(EngineEvent::TurnComplete {
+            final_text: full_text.clone(),
+            messages: messages.clone(),
+        })
+        .await;
+
         return Ok((full_text, messages));
     }
 }

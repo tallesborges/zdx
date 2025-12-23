@@ -10,7 +10,6 @@ use anyhow::Result;
 use ratatui::style::{Color, Style};
 use ratatui::widgets::{Block, Borders};
 use tokio::sync::mpsc;
-use tokio::task::JoinHandle;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
@@ -158,14 +157,15 @@ pub enum ScrollMode {
 // ============================================================================
 
 /// Engine execution state.
+///
+/// Tracks the current engine task and its event channel.
+/// The task sends events through the channel, including `TurnComplete` when done.
 #[derive(Debug)]
 pub enum EngineState {
     /// No engine task running, ready for input.
     Idle,
     /// Streaming response in progress.
     Streaming {
-        /// Handle to the spawned engine task.
-        handle: JoinHandle<Result<(String, Vec<ChatMessage>)>>,
         /// Receiver for engine events.
         rx: mpsc::Receiver<std::sync::Arc<crate::core::events::EngineEvent>>,
         /// ID of the streaming assistant cell in transcript.
@@ -175,8 +175,6 @@ pub enum EngineState {
     },
     /// Waiting for first response (shows "thinking...").
     Waiting {
-        /// Handle to the spawned engine task.
-        handle: JoinHandle<Result<(String, Vec<ChatMessage>)>>,
         /// Receiver for engine events.
         rx: mpsc::Receiver<std::sync::Arc<crate::core::events::EngineEvent>>,
     },

@@ -22,7 +22,7 @@ use crate::core::interrupt;
 use crate::core::session::{self, Session};
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::effects::UiEffect;
-use crate::ui::events::{TurnResult, UiEvent};
+use crate::ui::events::UiEvent;
 use crate::ui::state::{EngineState, TuiState};
 use crate::ui::terminal;
 use crate::ui::transcript::HistoryCell;
@@ -208,11 +208,8 @@ impl TuiRuntime {
         // Always emit a tick for animation/polling
         events.push(UiEvent::Tick);
 
-        // Poll engine events (streaming deltas, completion, etc.)
+        // Poll engine events (streaming deltas, tool events, completion, etc.)
         self.collect_engine_events(&mut events);
-
-        // Check for engine task completion
-        self.collect_engine_completion(&mut events);
 
         // Poll for login exchange result
         self.collect_login_result(&mut events);
@@ -237,54 +234,6 @@ impl TuiRuntime {
             };
 
             events.push(UiEvent::Engine((*event).clone()));
-        }
-    }
-
-    /// Checks if the engine task completed and collects the result.
-    fn collect_engine_completion(&mut self, events: &mut Vec<UiEvent>) {
-        let is_finished = match &self.state.engine_state {
-            EngineState::Waiting { handle, .. } | EngineState::Streaming { handle, .. } => {
-                handle.is_finished()
-            }
-            EngineState::Idle => false,
-        };
-
-        if !is_finished {
-            return;
-        }
-
-        // Extract the handle without replacing state yet (reducer will do that)
-        let old_state = std::mem::replace(&mut self.state.engine_state, EngineState::Idle);
-
-        let handle = match old_state {
-            EngineState::Waiting { handle, .. } => handle,
-            EngineState::Streaming { handle, .. } => handle,
-            EngineState::Idle => return,
-        };
-
-        match futures_util::FutureExt::now_or_never(handle) {
-            Some(Ok(Ok((final_text, messages)))) => {
-                events.push(UiEvent::TurnFinished(TurnResult::Success {
-                    final_text,
-                    messages,
-                }));
-            }
-            Some(Ok(Err(e))) => {
-                if e.downcast_ref::<crate::core::interrupt::InterruptedError>()
-                    .is_some()
-                {
-                    events.push(UiEvent::TurnFinished(TurnResult::Interrupted));
-                } else {
-                    events.push(UiEvent::TurnFinished(TurnResult::Error(e.to_string())));
-                }
-            }
-            Some(Err(e)) => {
-                events.push(UiEvent::TurnFinished(TurnResult::Error(format!(
-                    "Internal error: {}",
-                    e
-                ))));
-            }
-            None => {}
         }
     }
 
@@ -400,18 +349,19 @@ impl TuiRuntime {
             let _fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![tui_tx]);
         }
 
-        let handle = tokio::spawn(async move {
-            crate::core::engine::run_turn(
+        // Spawn the engine task - it will send TurnComplete when done
+        tokio::spawn(async move {
+            let _ = crate::core::engine::run_turn(
                 messages,
                 &config,
                 &engine_opts,
                 system_prompt.as_deref(),
                 engine_tx,
             )
-            .await
+            .await;
         });
 
-        self.state.engine_state = EngineState::Waiting { handle, rx: tui_rx };
+        self.state.engine_state = EngineState::Waiting { rx: tui_rx };
     }
 
     fn spawn_token_exchange(&mut self, code: &str, verifier: &str) {

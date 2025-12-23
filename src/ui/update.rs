@@ -11,7 +11,7 @@ use crate::core::interrupt;
 use crate::core::session::SessionEvent;
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::effects::UiEffect;
-use crate::ui::events::{TurnResult, UiEvent};
+use crate::ui::events::UiEvent;
 use crate::ui::state::{
     CommandPaletteState, EngineState, LoginEvent, LoginState, ModelPickerState, ScrollMode,
     TuiState,
@@ -33,11 +33,7 @@ pub fn update(state: &mut TuiState, event: UiEvent, viewport_height: usize) -> V
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event, viewport_height),
-        UiEvent::Engine(engine_event) => {
-            handle_engine_event(state, &engine_event);
-            vec![]
-        }
-        UiEvent::TurnFinished(result) => handle_turn_finished(state, result),
+        UiEvent::Engine(engine_event) => handle_engine_event(state, &engine_event),
         UiEvent::LoginResult(result) => {
             handle_login_result(state, result);
             vec![]
@@ -600,7 +596,10 @@ fn execute_quit(state: &mut TuiState) -> Vec<UiEffect> {
 // Engine Event Handlers
 // ============================================================================
 
-pub fn handle_engine_event(state: &mut TuiState, event: &crate::core::events::EngineEvent) {
+pub fn handle_engine_event(
+    state: &mut TuiState,
+    event: &crate::core::events::EngineEvent,
+) -> Vec<UiEffect> {
     use crate::core::events::EngineEvent;
 
     match event {
@@ -613,9 +612,8 @@ pub fn handle_engine_event(state: &mut TuiState, event: &crate::core::events::En
                     state.transcript.push(cell);
 
                     let old_state = std::mem::replace(&mut state.engine_state, EngineState::Idle);
-                    if let EngineState::Waiting { handle, rx } = old_state {
+                    if let EngineState::Waiting { rx } = old_state {
                         state.engine_state = EngineState::Streaming {
-                            handle,
                             rx,
                             cell_id,
                             pending_delta: text.clone(),
@@ -650,6 +648,7 @@ pub fn handle_engine_event(state: &mut TuiState, event: &crate::core::events::En
                 }
                 EngineState::Idle => {}
             }
+            vec![]
         }
         EngineEvent::AssistantFinal { .. } => {
             if let EngineState::Streaming { cell_id, .. } = &state.engine_state
@@ -657,21 +656,26 @@ pub fn handle_engine_event(state: &mut TuiState, event: &crate::core::events::En
             {
                 cell.finalize_assistant();
             }
+            vec![]
         }
         EngineEvent::Error { message, .. } => {
             state
                 .transcript
                 .push(HistoryCell::system(format!("Error: {}", message)));
+            vec![]
         }
         EngineEvent::Interrupted => {
             state.transcript.push(HistoryCell::system("[Interrupted]"));
             interrupt::reset();
+            state.engine_state = EngineState::Idle;
+            vec![]
         }
         EngineEvent::ToolRequested { id, name, input } => {
             let tool_cell = HistoryCell::tool_running(id, name, input.clone());
             state.transcript.push(tool_cell);
+            vec![]
         }
-        EngineEvent::ToolStarted { .. } => {}
+        EngineEvent::ToolStarted { .. } => vec![],
         EngineEvent::ToolFinished { id, result } => {
             if let Some(cell) = state
                 .transcript
@@ -679,6 +683,24 @@ pub fn handle_engine_event(state: &mut TuiState, event: &crate::core::events::En
                 .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == id))
             {
                 cell.set_tool_result(result.clone());
+            }
+            vec![]
+        }
+        EngineEvent::TurnComplete {
+            final_text,
+            messages,
+        } => {
+            // Turn completed - update messages and reset engine state
+            state.messages = messages.clone();
+            state.engine_state = EngineState::Idle;
+
+            // Save assistant message to session if enabled
+            if !final_text.is_empty() && state.session.is_some() {
+                vec![UiEffect::SaveSession {
+                    event: SessionEvent::assistant_message(final_text),
+                }]
+            } else {
+                vec![]
             }
         }
     }
@@ -698,40 +720,6 @@ pub fn apply_pending_delta(state: &mut TuiState) {
         }
         pending_delta.clear();
     }
-}
-
-fn handle_turn_finished(state: &mut TuiState, result: TurnResult) -> Vec<UiEffect> {
-    let old_state = std::mem::replace(&mut state.engine_state, EngineState::Idle);
-
-    let had_streaming_cell = matches!(old_state, EngineState::Streaming { .. });
-
-    match result {
-        TurnResult::Success {
-            final_text,
-            messages,
-        } => {
-            state.messages = messages;
-
-            if !final_text.is_empty() && state.session.is_some() {
-                return vec![UiEffect::SaveSession {
-                    event: SessionEvent::assistant_message(&final_text),
-                }];
-            }
-        }
-        TurnResult::Error(msg) => {
-            if !had_streaming_cell {
-                state
-                    .transcript
-                    .push(HistoryCell::system(format!("Error: {}", msg)));
-            }
-            state.messages.pop();
-        }
-        TurnResult::Interrupted => {
-            // Already handled by EngineEvent::Interrupted
-        }
-    }
-
-    vec![]
 }
 
 // ============================================================================

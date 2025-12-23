@@ -232,6 +232,10 @@ impl CliRenderer {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
+            EngineEvent::TurnComplete { .. } => {
+                // Turn complete - no action needed in exec mode.
+                // The caller handles the final result from run_turn.
+            }
         }
     }
 
