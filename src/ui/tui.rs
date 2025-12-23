@@ -682,9 +682,34 @@ impl TuiApp {
                             };
                         }
                     }
-                    EngineState::Streaming { pending_delta, .. } => {
-                        // Buffer the delta for coalescing
-                        pending_delta.push_str(text);
+                    EngineState::Streaming {
+                        cell_id,
+                        pending_delta,
+                        ..
+                    } => {
+                        // Check if the current cell was finalized (AssistantFinal received during tool loop)
+                        // If so, we need to create a new cell for this new message
+                        let needs_new_cell = self
+                            .transcript
+                            .iter()
+                            .find(|c| c.id() == *cell_id)
+                            .map(|c| {
+                                matches!(c, HistoryCell::Assistant { is_streaming, .. } if !*is_streaming)
+                            })
+                            .unwrap_or(false);
+
+                        if needs_new_cell {
+                            // Create a new streaming cell for the new message
+                            let new_cell = HistoryCell::assistant_streaming("");
+                            let new_cell_id = new_cell.id();
+                            self.transcript.push(new_cell);
+                            *cell_id = new_cell_id;
+                            pending_delta.clear();
+                            pending_delta.push_str(text);
+                        } else {
+                            // Buffer the delta for coalescing
+                            pending_delta.push_str(text);
+                        }
                     }
                     EngineState::Idle => {}
                 }
