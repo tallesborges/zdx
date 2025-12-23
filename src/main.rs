@@ -1,5 +1,6 @@
 mod config;
 mod core;
+mod models;
 mod providers;
 mod tools;
 mod ui;

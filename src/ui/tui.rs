@@ -35,6 +35,7 @@ use crate::core::engine::EngineOptions;
 use crate::core::events::EngineEvent;
 use crate::core::interrupt;
 use crate::core::session::{self, Session, SessionEvent};
+use crate::models::AVAILABLE_MODELS;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::transcript::{CellId, HistoryCell, Style as TranscriptStyle, StyledLine};
 
@@ -245,31 +246,6 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
 // ============================================================================
 // Model Picker
 // ============================================================================
-
-/// Definition of an available model.
-#[derive(Debug, Clone)]
-struct ModelOption {
-    /// Model ID (sent to API)
-    id: &'static str,
-    /// Display name for the picker
-    display_name: &'static str,
-}
-
-/// Available models for the picker.
-const AVAILABLE_MODELS: &[ModelOption] = &[
-    ModelOption {
-        id: "claude-sonnet-4-5-20250929",
-        display_name: "Claude Sonnet 4.5",
-    },
-    ModelOption {
-        id: "claude-opus-4-5-20251101",
-        display_name: "Claude Opus 4.5",
-    },
-    ModelOption {
-        id: "claude-haiku-4-5-20251001",
-        display_name: "Claude Haiku 4.5",
-    },
-];
 
 /// State for the model picker overlay.
 #[derive(Debug, Clone)]
