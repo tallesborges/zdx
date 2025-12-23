@@ -111,6 +111,22 @@ fn handle_main_key(
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
     match key.code {
+        // Ctrl+U (or Command+Backspace on macOS): clear the current line
+        KeyCode::Char('u') if ctrl && !shift && !alt => {
+            let (row, _) = state.textarea.cursor();
+            let current_line = state.textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
+            if current_line.is_empty() && row > 0 {
+                // Line is empty, move to end of previous line and delete the newline
+                state.textarea.move_cursor(tui_textarea::CursorMove::Up);
+                state.textarea.move_cursor(tui_textarea::CursorMove::End);
+                state.textarea.delete_next_char(); // delete the newline
+            } else {
+                // Clear current line
+                state.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                state.textarea.delete_line_by_end();
+            }
+            vec![]
+        }
         KeyCode::Char('/') if !ctrl && !shift && !alt => {
             if state.get_input_text().is_empty() {
                 open_command_palette(state, false);
