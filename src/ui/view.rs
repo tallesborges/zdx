@@ -21,10 +21,13 @@ use crate::ui::state::{AuthType, EngineState, OverlayState, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
 /// Height of the input area (lines, including borders).
-pub const INPUT_HEIGHT: u16 = 5;
+const INPUT_HEIGHT: u16 = 5;
 
 /// Height of status line below input.
-pub const STATUS_HEIGHT: u16 = 1;
+const STATUS_HEIGHT: u16 = 1;
+
+/// Horizontal margin for the transcript area (left and right).
+const TRANSCRIPT_MARGIN: u16 = 1;
 
 /// Spinner frames for status line animation.
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -33,29 +36,6 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 /// At 30fps render rate, 3 gives ~10fps spinner animation.
 const SPINNER_SPEED_DIVISOR: usize = 3;
 
-/// Gets the current git branch name, if in a git repo.
-fn get_git_branch(root: &std::path::Path) -> Option<String> {
-    let head_path = root.join(".git/HEAD");
-    if let Ok(content) = std::fs::read_to_string(head_path)
-        && let Some(branch) = content.strip_prefix("ref: refs/heads/")
-    {
-        return Some(branch.trim().to_string());
-    }
-    None
-}
-
-/// Shortens a path for display, using ~ for home directory.
-fn shorten_path(path: &std::path::Path) -> String {
-    // Canonicalize to resolve "." and ".." to absolute path
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(home) = dirs::home_dir()
-        && let Ok(relative) = path.strip_prefix(&home)
-    {
-        return format!("~/{}", relative.display());
-    }
-    path.display().to_string()
-}
-
 /// Renders the entire TUI to the frame.
 ///
 /// This is a pure render function - it only reads state and draws to frame.
@@ -63,8 +43,8 @@ fn shorten_path(path: &std::path::Path) -> String {
 pub fn view(state: &TuiState, frame: &mut Frame) {
     let area = frame.area();
 
-    // Get terminal size for transcript rendering
-    let transcript_width = area.width.saturating_sub(2) as usize;
+    // Get terminal size for transcript rendering (account for margins)
+    let transcript_width = area.width.saturating_sub(TRANSCRIPT_MARGIN * 2) as usize;
 
     // Calculate transcript pane height (no header now)
     let transcript_height = area.height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize;
@@ -111,11 +91,17 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         ])
         .split(area);
 
-    // Transcript area
+    // Transcript area with horizontal margins
     let transcript = Paragraph::new(visible_lines)
         .wrap(Wrap { trim: false })
         .block(Block::default().borders(Borders::NONE));
-    frame.render_widget(transcript, chunks[0]);
+    let transcript_area = Rect {
+        x: chunks[0].x + TRANSCRIPT_MARGIN,
+        y: chunks[0].y,
+        width: chunks[0].width.saturating_sub(TRANSCRIPT_MARGIN * 2),
+        height: chunks[0].height,
+    };
+    frame.render_widget(transcript, transcript_area);
 
     // Input area with model on top-left border and path on bottom-right
     render_input(state, frame, chunks[1]);
@@ -149,11 +135,10 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     let model_title = format!(" {}{} ", state.config.model, auth_indicator);
 
     // Build bottom-right title: path and git branch
-    let path_str = shorten_path(&state.engine_opts.root);
-    let bottom_title = if let Some(branch) = get_git_branch(&state.engine_opts.root) {
-        format!(" {} ({}) ", path_str, branch)
+    let bottom_title = if let Some(ref branch) = state.git_branch {
+        format!(" {} ({}) ", state.display_path, branch)
     } else {
-        format!(" {} ", path_str)
+        format!(" {} ", state.display_path)
     };
 
     // Create a custom textarea rendering with our border titles
@@ -328,6 +313,14 @@ fn convert_style(style: TranscriptStyle) -> Style {
 
 /// Returns the total line count from the transcript rendering.
 /// Called after view() to update cached_line_count in state.
-pub fn calculate_line_count(state: &TuiState, width: usize) -> usize {
-    render_transcript(state, width).len()
+/// Takes the raw terminal width - margins are applied internally.
+pub fn calculate_line_count(state: &TuiState, terminal_width: usize) -> usize {
+    let effective_width = terminal_width.saturating_sub((TRANSCRIPT_MARGIN * 2) as usize);
+    render_transcript(state, effective_width).len()
+}
+
+/// Calculates the available height for the transcript given the terminal height.
+/// Encapsulates layout logic so callers don't need to know about INPUT_HEIGHT/STATUS_HEIGHT.
+pub fn calculate_transcript_height(terminal_height: u16) -> usize {
+    terminal_height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize
 }
