@@ -2,16 +2,14 @@
 
 use std::fs;
 
-use assert_cmd::prelude::*;
+use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
-use std::process::Command;
 use tempfile::tempdir;
 
 /// Test: logout without --anthropic shows error.
 #[test]
 fn test_logout_requires_provider_flag() {
-    Command::cargo_bin("zdx-cli")
-        .unwrap()
+    cargo_bin_cmd!("zdx-cli")
         .arg("logout")
         .assert()
         .failure()
@@ -21,8 +19,7 @@ fn test_logout_requires_provider_flag() {
 /// Test: login without --anthropic shows error.
 #[test]
 fn test_login_requires_provider_flag() {
-    Command::cargo_bin("zdx-cli")
-        .unwrap()
+    cargo_bin_cmd!("zdx-cli")
         .arg("login")
         .assert()
         .failure()
@@ -34,8 +31,7 @@ fn test_login_requires_provider_flag() {
 fn test_logout_when_not_logged_in() {
     let temp = tempdir().unwrap();
 
-    Command::cargo_bin("zdx-cli")
-        .unwrap()
+    cargo_bin_cmd!("zdx-cli")
         .env("ZDX_HOME", temp.path())
         .arg("logout")
         .arg("--anthropic")
@@ -57,8 +53,7 @@ fn test_logout_clears_credentials() {
     )
     .unwrap();
 
-    Command::cargo_bin("zdx-cli")
-        .unwrap()
+    cargo_bin_cmd!("zdx-cli")
         .env("ZDX_HOME", temp.path())
         .arg("logout")
         .arg("--anthropic")
@@ -80,8 +75,7 @@ fn test_login_shows_oauth_instructions() {
     let temp = tempdir().unwrap();
 
     // Start login but don't provide input - it will fail but we can check the output
-    let output = Command::cargo_bin("zdx-cli")
-        .unwrap()
+    let output = cargo_bin_cmd!("zdx-cli")
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
@@ -117,8 +111,7 @@ fn test_login_prompts_when_already_logged_in() {
     .unwrap();
 
     // Run login without providing confirmation
-    let output = Command::cargo_bin("zdx-cli")
-        .unwrap()
+    let output = cargo_bin_cmd!("zdx-cli")
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
@@ -162,8 +155,7 @@ fn test_oauth_file_permissions_on_logout() {
     }
 
     // Logout triggers save which should preserve permissions
-    Command::cargo_bin("zdx-cli")
-        .unwrap()
+    cargo_bin_cmd!("zdx-cli")
         .env("ZDX_HOME", temp.path())
         .arg("logout")
         .arg("--anthropic")
