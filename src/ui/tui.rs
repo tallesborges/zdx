@@ -366,6 +366,19 @@ pub struct TuiApp {
     login_state: LoginState,
     /// Receiver for async login token exchange result.
     login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
+    /// Current auth type indicator (cached, refreshed on login/logout).
+    auth_type: AuthType,
+}
+
+/// Authentication type indicator for status line.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AuthType {
+    /// Using OAuth token from ~/.zdx/oauth.json
+    OAuth,
+    /// Using API key from environment
+    ApiKey,
+    /// No authentication configured
+    None,
 }
 
 impl TuiApp {
@@ -448,7 +461,30 @@ impl TuiApp {
             command_popup: None,
             login_state: LoginState::Idle,
             login_exchange_rx: None,
+            auth_type: Self::detect_auth_type(),
         })
+    }
+
+    /// Detects the current authentication type.
+    fn detect_auth_type() -> AuthType {
+        use crate::providers::oauth::anthropic;
+
+        // Check for OAuth credentials first
+        if let Ok(Some(_creds)) = anthropic::load_credentials() {
+            return AuthType::OAuth;
+        }
+
+        // Check for API key in environment
+        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+            return AuthType::ApiKey;
+        }
+
+        AuthType::None
+    }
+
+    /// Refreshes the cached auth type (call after login/logout).
+    fn refresh_auth_type(&mut self) {
+        self.auth_type = Self::detect_auth_type();
     }
 
     /// Builds transcript cells from message history.
@@ -780,6 +816,7 @@ impl TuiApp {
         let popup_open = self.command_popup.is_some();
         let popup_state = self.command_popup.clone();
         let login_state = self.login_state.clone();
+        let auth_type = self.auth_type;
 
         self.terminal.draw(|frame| {
             let area = frame.area();
@@ -811,9 +848,20 @@ impl TuiApp {
                 title_spans.push(Span::styled("▼ more", Style::default().fg(Color::DarkGray)));
             }
 
-            // Header line 2: Status line (model, state, history indicator, popup indicator)
+            // Header line 2: Status line (model, auth, state, history indicator, popup indicator)
+            let auth_indicator = match auth_type {
+                AuthType::OAuth => ("●", Color::Green, "OAuth"),
+                AuthType::ApiKey => ("●", Color::Blue, "API"),
+                AuthType::None => ("○", Color::Red, "No Auth"),
+            };
             let mut status_spans = vec![
                 Span::styled(&model_name, Style::default().fg(Color::DarkGray)),
+                Span::raw(" "),
+                Span::styled(auth_indicator.0, Style::default().fg(auth_indicator.1)),
+                Span::styled(
+                    format!(" {}", auth_indicator.2),
+                    Style::default().fg(Color::DarkGray),
+                ),
                 Span::raw(" │ "),
                 Span::styled(status_state.0, Style::default().fg(status_state.1)),
             ];
@@ -1710,6 +1758,7 @@ impl TuiApp {
 
         match anthropic::clear_credentials() {
             Ok(true) => {
+                self.refresh_auth_type();
                 self.transcript
                     .push(HistoryCell::system("Logged out from Anthropic OAuth."));
             }
@@ -1765,6 +1814,7 @@ impl TuiApp {
             }
             LoginEvent::LoginSucceeded => {
                 self.login_state = LoginState::Idle;
+                self.refresh_auth_type();
                 self.transcript
                     .push(HistoryCell::system("Logged in with Anthropic OAuth."));
             }
