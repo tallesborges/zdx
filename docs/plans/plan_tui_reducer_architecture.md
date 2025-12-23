@@ -245,51 +245,59 @@ impl TuiRuntime {
 
 ---
 
-### Slice 3: UiEvent Enum + Reducer Entrypoint
+### Slice 3: UiEvent Enum + Reducer Entrypoint ✅
 
 **Goal:** Stop scattering mutations across `poll_*`, `handle_*`, and `execute_*`. One event enum, one `update()` function.
 
 **Scope checklist:**
-- [ ] Create `src/ui/events.rs` with `UiEvent` enum:
+- [x] Create `src/ui/events.rs` with `UiEvent` enum:
     ```rust
     pub enum UiEvent {
         Tick,
         Terminal(crossterm::event::Event),
         Engine(EngineEvent),
-        TurnFinished(Result<Vec<ChatMessage>, EngineError>),
+        TurnFinished(TurnResult),  // Uses dedicated enum instead of Result
         LoginResult(Result<(), String>),
     }
     ```
-- [ ] Create `src/ui/update.rs` with reducer:
+- [x] Create `src/ui/effects.rs` with `UiEffect` enum (needed for reducer return type)
+- [x] Create `src/ui/update.rs` with reducer:
     ```rust
-    pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
+    pub fn update(state: &mut TuiState, event: UiEvent, viewport_height: usize) -> Vec<UiEffect> {
         match event {
-            UiEvent::Terminal(Event::Key(k)) => handle_key(state, k),
-            UiEvent::Terminal(Event::Mouse(m)) => handle_mouse(state, m),
-            UiEvent::Terminal(Event::Paste(t)) => handle_paste(state, t),
-            UiEvent::Engine(e) => handle_engine_event(state, e),
+            UiEvent::Tick => { state.spinner_frame = ...; vec![] }
+            UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event, viewport_height),
+            UiEvent::Engine(e) => { handle_engine_event(state, &e); vec![] }
             UiEvent::TurnFinished(r) => handle_turn_finished(state, r),
-            UiEvent::LoginResult(r) => handle_login_result(state, r),
-            UiEvent::Tick => vec![],
+            UiEvent::LoginResult(r) => { handle_login_result(state, r); vec![] }
         }
     }
     ```
-- [ ] Migrate existing `handle_key`, `handle_mouse`, `handle_engine_event` logic into reducer
-- [ ] Handle `tui-textarea` input in reducer: `state.textarea.input(event)` for text input keys
+- [x] Migrate existing `handle_key`, `handle_mouse`, `handle_engine_event` logic into reducer
+- [x] Handle `tui-textarea` input in reducer: `state.textarea.input(event)` for text input keys
     - Note: `tui-textarea` manages its own undo/redo history internally
-- [ ] Subsume existing `LoginEvent` into `UiEvent::LoginResult` or keep as internal
+- [x] Keep `LoginEvent` as internal to reducer (subsumed into `update_login()` helper)
+- [x] Simplify `LoginState::Exchanging` to unit variant (code/verifier passed via effect)
 
 **✅ Demo:**
-- Submit/stream/login/model switch/new/quit all work
-- `rg "fn update"` shows one reducer (plus login sub-reducer if kept)
+- Submit/stream/login/model switch/new/quit all work ✓
+- `rg "^pub fn update" src/ui/` shows one reducer ✓
+- `rg "fn update_login" src/ui/` shows internal login sub-reducer ✓
 
 **Failure modes / guardrails:**
-- Avoid double-handling the same event
-- One mutation path only
+- Avoid double-handling the same event ✓
+- One mutation path only ✓
 
-**Files touched:** `src/ui/events.rs` (new), `src/ui/update.rs` (new), `src/ui/runtime.rs`
+**Files touched:**
+- `src/ui/events.rs` (new): `UiEvent`, `TurnResult`
+- `src/ui/effects.rs` (new): `UiEffect` enum
+- `src/ui/update.rs` (new): Main reducer + all event handlers
+- `src/ui/tui.rs`: Refactored to collect events, call reducer, execute effects
+- `src/ui/state.rs`: Simplified `LoginState::Exchanging`
+- `src/ui/view.rs`: Updated for simplified `LoginState::Exchanging`
+- `src/ui/mod.rs`: Added exports for new modules
 
-**Estimated size:** ~400 lines reorganized
+**Actual size:** ~700 lines in update.rs (handlers moved from tui.rs), tui.rs reduced to ~400 lines
 
 ---
 

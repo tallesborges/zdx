@@ -3,6 +3,9 @@
 //! This module provides terminal-based UI components:
 //! - `tui`: Full-screen alternate-screen TUI runtime for interactive chat
 //! - `state`: TUI application state (separate from terminal ownership)
+//! - `events`: Unified event enum for the TUI
+//! - `effects`: Effect types returned by the reducer
+//! - `update`: The reducer - all state mutations happen here
 //! - `view`: Pure render functions (read-only, no mutations)
 //! - `commands`: Slash command definitions
 //! - `stream`: Streaming renderer for exec mode
@@ -10,11 +13,14 @@
 //! - `terminal`: Terminal lifecycle management (setup/restore/panic hook)
 
 pub mod commands;
+pub mod effects;
+pub mod events;
 pub mod state;
 pub mod stream;
 pub mod terminal;
 pub mod transcript;
 pub mod tui;
+pub mod update;
 pub mod view;
 
 pub use tui::{run_interactive_chat, run_interactive_chat_with_history};
