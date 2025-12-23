@@ -311,19 +311,18 @@ impl AnthropicClient {
             .collect();
 
         // Add cache_control to the last content block of the last user message
-        if let Some(last_user_msg) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
-            if let ApiMessageContent::Blocks(blocks) = &mut last_user_msg.content {
-                if let Some(last_block) = blocks.last_mut() {
-                    match last_block {
-                        ApiContentBlock::Text { cache_control, .. } => {
-                            *cache_control = Some(CacheControl::ephemeral());
-                        }
-                        ApiContentBlock::ToolResult { cache_control, .. } => {
-                            *cache_control = Some(CacheControl::ephemeral());
-                        }
-                        _ => {}
-                    }
+        if let Some(last_user_msg) = api_messages.iter_mut().rev().find(|m| m.role == "user")
+            && let ApiMessageContent::Blocks(blocks) = &mut last_user_msg.content
+            && let Some(last_block) = blocks.last_mut()
+        {
+            match last_block {
+                ApiContentBlock::Text { cache_control, .. } => {
+                    *cache_control = Some(CacheControl::ephemeral());
                 }
+                ApiContentBlock::ToolResult { cache_control, .. } => {
+                    *cache_control = Some(CacheControl::ephemeral());
+                }
+                _ => {}
             }
         }
 
