@@ -72,6 +72,11 @@ ZDX solves this with a boring, reliable core:
 - **Engine/UI separation:** engine emits events; renderers do terminal I/O.
 - **KISS/YAGNI:** ship the smallest daily-driver value; refactor only after usage proves shape.
 - **YOLO default:** prioritize speed/flow on the user’s machine; guardrails are opt-in and low friction.
+- **User journey drives order:** build in the order the user experiences it: start → input → submit → see output → stream → scroll/navigate → follow-up interactions → polish.
+- **Ship-first:** prioritize a daily-usable MVP early; refactor later (YAGNI).
+- **Demoable slices:** every slice must be runnable and include ✅ Demo criteria.
+- **For UI work:** prefer reducer pattern: update(state, event); render reads state only.
+- **Call out key decisions/risks early:** (keybindings + focus, input vs navigation conflicts, backpressure, performance).
 
 ---
 
