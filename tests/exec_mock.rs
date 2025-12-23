@@ -6,7 +6,7 @@ use fixtures::{
 };
 use predicates::prelude::*;
 use tempfile::TempDir;
-use wiremock::matchers::{header, method, path};
+use wiremock::matchers::{header, header_regex, method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
 /// Creates a temp ZDX_HOME directory for test isolation.
@@ -243,7 +243,7 @@ async fn test_exec_includes_system_prompt_from_config() {
 
     let body = request_body.lock().unwrap().clone();
     assert!(
-        body.contains("\"system\":\"You are a Rust expert.\""),
+        body.contains("\"text\":\"You are a Rust expert.\""),
         "Request body should contain system prompt. Got: {}",
         body
     );
@@ -293,7 +293,7 @@ async fn test_exec_system_prompt_flag_overrides_config() {
 
     let body = request_body.lock().unwrap().clone();
     assert!(
-        body.contains("\"system\":\"From flag\""),
+        body.contains("\"text\":\"From flag\""),
         "Request body should contain system prompt override. Got: {}",
         body
     );
@@ -347,9 +347,15 @@ async fn test_exec_system_prompt_flag_empty_clears_config() {
         .success();
 
     let body = request_body.lock().unwrap().clone();
+    // System should contain only Claude Code prompt, not the config prompt
     assert!(
-        !body.contains("\"system\""),
-        "Request body should omit system field when cleared. Got: {}",
+        body.contains("Claude Code"),
+        "Request body should contain Claude Code system prompt. Got: {}",
+        body
+    );
+    assert!(
+        !body.contains("From config"),
+        "Request body should not contain config system prompt. Got: {}",
         body
     );
 }
@@ -733,12 +739,15 @@ async fn test_exec_uses_oauth_bearer_header_when_logged_in() {
     .unwrap();
 
     // Mock expects Authorization: Bearer header (OAuth) instead of x-api-key
-    // Also requires anthropic-beta header with oauth-2025-04-20
+    // Also requires anthropic-beta header with oauth and tool streaming flags
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .and(header("Authorization", "Bearer test-oauth-access-token"))
         .and(header("anthropic-version", "2023-06-01"))
-        .and(header("anthropic-beta", "oauth-2025-04-20"))
+        .and(header_regex(
+            "anthropic-beta",
+            "oauth-2025-04-20.*fine-grained-tool-streaming.*interleaved-thinking",
+        ))
         .respond_with(text_response("Hello from OAuth!"))
         .mount(&mock_server)
         .await;
@@ -762,11 +771,15 @@ async fn test_exec_uses_api_key_when_no_oauth() {
 
     // No OAuth file created in zdx_home
 
-    // Mock expects x-api-key header (API key auth)
+    // Mock expects x-api-key header (API key auth) with beta header
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
         .and(header("x-api-key", "my-api-key"))
         .and(header("anthropic-version", "2023-06-01"))
+        .and(header_regex(
+            "anthropic-beta",
+            "fine-grained-tool-streaming.*interleaved-thinking",
+        ))
         .respond_with(text_response("Hello from API key!"))
         .mount(&mock_server)
         .await;

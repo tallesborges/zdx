@@ -12,8 +12,13 @@ use crate::tools::{ToolDefinition, ToolResult};
 
 const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 const API_VERSION: &str = "2023-06-01";
-/// Beta header required for OAuth authentication
-const OAUTH_BETA_HEADER: &str = "oauth-2025-04-20";
+/// Beta features for API key authentication
+const BETA_HEADER: &str = "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+/// Beta features for OAuth authentication
+const OAUTH_BETA_HEADER: &str =
+    "oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+/// Required system prompt prefix for OAuth tokens (Claude Code identification)
+const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 // === Structured Provider Errors ===
 
@@ -282,7 +287,10 @@ impl AnthropicClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
-        let api_messages: Vec<ApiMessage> = messages.iter().map(ApiMessage::from).collect();
+        let api_messages: Vec<ApiMessage> = messages
+            .iter()
+            .map(|m| ApiMessage::from_chat_message(m, true))
+            .collect();
 
         let tool_defs = if tools.is_empty() {
             None
@@ -290,12 +298,16 @@ impl AnthropicClient {
             Some(tools.iter().map(ApiToolDef::from).collect::<Vec<_>>())
         };
 
+        // Build system blocks based on auth type
+        // OAuth requires the Claude Code system prompt prefix with cache_control
+        let system_blocks = self.build_system_blocks(system);
+
         let request = StreamingMessagesRequest {
             model: &self.config.model,
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             tools: tool_defs,
-            system,
+            system: system_blocks,
             stream: true,
         };
 
@@ -305,12 +317,14 @@ impl AnthropicClient {
             .http
             .post(&url)
             .header("anthropic-version", API_VERSION)
-            .header("content-type", "application/json");
+            .header("content-type", "application/json")
+            .header("accept", "application/json");
 
-        // Set authentication header based on auth type
-        // OAuth requires the oauth-2025-04-20 beta header
+        // Set authentication and beta headers based on auth type
         request_builder = match self.config.auth_type {
-            AuthType::ApiKey => request_builder.header("x-api-key", &self.config.auth_token),
+            AuthType::ApiKey => request_builder
+                .header("x-api-key", &self.config.auth_token)
+                .header("anthropic-beta", BETA_HEADER),
             AuthType::OAuth => request_builder
                 .header(
                     "Authorization",
@@ -334,6 +348,19 @@ impl AnthropicClient {
         let byte_stream = response.bytes_stream();
         let event_stream = SseParser::new(byte_stream);
         Ok(Box::pin(event_stream))
+    }
+
+    /// Builds system message blocks with cache control.
+    ///
+    /// Always includes the Claude Code identification prompt.
+    fn build_system_blocks(&self, system: Option<&str>) -> Option<Vec<SystemBlock>> {
+        let mut blocks = vec![SystemBlock::with_cache_control(CLAUDE_CODE_SYSTEM_PROMPT)];
+
+        if let Some(prompt) = system {
+            blocks.push(SystemBlock::with_cache_control(prompt));
+        }
+
+        Some(blocks)
     }
 
     /// Classifies a reqwest error into a ProviderError.
@@ -635,8 +662,43 @@ struct StreamingMessagesRequest<'a> {
     #[serde(skip_serializing_if = "Option::is_none")]
     tools: Option<Vec<ApiToolDef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    system: Option<&'a str>,
+    system: Option<Vec<SystemBlock>>,
     stream: bool,
+}
+
+/// System message block with optional cache control.
+#[derive(Debug, Serialize)]
+struct SystemBlock {
+    #[serde(rename = "type")]
+    block_type: &'static str,
+    text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cache_control: Option<CacheControl>,
+}
+
+impl SystemBlock {
+    fn with_cache_control(text: impl Into<String>) -> Self {
+        Self {
+            block_type: "text",
+            text: text.into(),
+            cache_control: Some(CacheControl::ephemeral()),
+        }
+    }
+}
+
+/// Cache control settings for prompt caching.
+#[derive(Debug, Serialize)]
+struct CacheControl {
+    #[serde(rename = "type")]
+    cache_type: &'static str,
+}
+
+impl CacheControl {
+    fn ephemeral() -> Self {
+        Self {
+            cache_type: "ephemeral",
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -673,7 +735,11 @@ enum ApiMessageContent {
 #[serde(tag = "type")]
 enum ApiContentBlock {
     #[serde(rename = "text")]
-    Text { text: String },
+    Text {
+        text: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -689,8 +755,9 @@ enum ApiContentBlock {
     },
 }
 
-impl From<&ChatMessage> for ApiMessage {
-    fn from(msg: &ChatMessage) -> Self {
+impl ApiMessage {
+    /// Converts a ChatMessage to ApiMessage with optional cache control.
+    fn from_chat_message(msg: &ChatMessage, use_cache_control: bool) -> Self {
         match &msg.content {
             MessageContent::Text(text) => ApiMessage {
                 role: msg.role.clone(),
@@ -700,9 +767,14 @@ impl From<&ChatMessage> for ApiMessage {
                 let api_blocks: Vec<ApiContentBlock> = blocks
                     .iter()
                     .map(|b| match b {
-                        ChatContentBlock::Text(text) => {
-                            ApiContentBlock::Text { text: text.clone() }
-                        }
+                        ChatContentBlock::Text(text) => ApiContentBlock::Text {
+                            text: text.clone(),
+                            cache_control: if use_cache_control {
+                                Some(CacheControl::ephemeral())
+                            } else {
+                                None
+                            },
+                        },
                         ChatContentBlock::ToolUse { id, name, input } => ApiContentBlock::ToolUse {
                             id: id.clone(),
                             name: name.clone(),

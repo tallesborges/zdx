@@ -269,9 +269,40 @@
 - Animation/fade (optional)
 
 ### Phase 3 (Future)
-- More commands: `/model`, `/session`, `/help`
+- More commands: `/session`, `/help`
 - Command arguments
 - Fuzzy matching (fzf-style)
+
+---
+
+## Slice 6: Model Selector ✅ DONE
+
+**Goal:** Add `/model` command with a picker overlay to switch Claude models.
+
+**Implementation:**
+- Added `/model` (alias: `/m`) slash command
+- Created `ModelPickerState` for picker overlay state
+- Created `AVAILABLE_MODELS` constant with supported models:
+  - `claude-sonnet-4-5` - Claude Sonnet 4.5
+  - `claude-opus-4-5` - Claude Opus 4.5
+  - `claude-haiku-4-5` - Claude Haiku 4.5
+- Model picker opens centered overlay with magenta theme
+- Arrow keys navigate, Enter selects, Escape cancels
+- Selection updates `self.config.model` for subsequent turns
+- Picker pre-selects current model if found in list
+
+**Checklist:**
+- [x] Add `/model` slash command to `SLASH_COMMANDS`
+- [x] Create `ModelOption` struct and `AVAILABLE_MODELS` constant
+- [x] Create `ModelPickerState` with pre-selection of current model
+- [x] Add `model_picker: Option<ModelPickerState>` to `TuiApp`
+- [x] Implement `render_model_picker()` with magenta theme
+- [x] Implement `handle_model_picker_key()` for navigation
+- [x] Implement `execute_model_selection()` to update config
+- [x] Update tests for new command count
+- [x] Pass clippy checks
+
+**✅ Demo:** Type `/model` → see picker with 3 models. Select with Enter → model switched.
 
 ---
 

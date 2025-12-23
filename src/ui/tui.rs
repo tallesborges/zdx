@@ -226,6 +226,11 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Logout from Anthropic OAuth",
     },
     SlashCommand {
+        name: "model",
+        aliases: &["m"],
+        description: "Switch model",
+    },
+    SlashCommand {
         name: "new",
         aliases: &["clear"],
         description: "Start a new conversation",
@@ -236,6 +241,53 @@ const SLASH_COMMANDS: &[SlashCommand] = &[
         description: "Exit ZDX",
     },
 ];
+
+// ============================================================================
+// Model Picker
+// ============================================================================
+
+/// Definition of an available model.
+#[derive(Debug, Clone)]
+struct ModelOption {
+    /// Model ID (sent to API)
+    id: &'static str,
+    /// Display name for the picker
+    display_name: &'static str,
+}
+
+/// Available models for the picker.
+const AVAILABLE_MODELS: &[ModelOption] = &[
+    ModelOption {
+        id: "claude-sonnet-4-5-20250929",
+        display_name: "Claude Sonnet 4.5",
+    },
+    ModelOption {
+        id: "claude-opus-4-5-20251101",
+        display_name: "Claude Opus 4.5",
+    },
+    ModelOption {
+        id: "claude-haiku-4-5-20251001",
+        display_name: "Claude Haiku 4.5",
+    },
+];
+
+/// State for the model picker overlay.
+#[derive(Debug, Clone)]
+struct ModelPickerState {
+    /// Currently selected index.
+    selected: usize,
+}
+
+impl ModelPickerState {
+    /// Creates a new picker state, selecting the current model if found.
+    fn new(current_model: &str) -> Self {
+        let selected = AVAILABLE_MODELS
+            .iter()
+            .position(|m| m.id == current_model)
+            .unwrap_or(0);
+        Self { selected }
+    }
+}
 
 /// State for the slash command palette.
 ///
@@ -362,6 +414,8 @@ pub struct TuiApp {
     /// Command palette state (None = closed).
     /// Using Option<T> ensures trivial cleanup on drop/panic.
     command_palette: Option<CommandPaletteState>,
+    /// Model picker state (None = closed).
+    model_picker: Option<ModelPickerState>,
     /// Login overlay state.
     login_state: LoginState,
     /// Receiver for async login token exchange result.
@@ -459,6 +513,7 @@ impl TuiApp {
             input_draft: None,
             spinner_frame: 0,
             command_palette: None,
+            model_picker: None,
             login_state: LoginState::Idle,
             login_exchange_rx: None,
             auth_type: Self::detect_auth_type(),
@@ -815,6 +870,7 @@ impl TuiApp {
         };
         let palette_open = self.command_palette.is_some();
         let palette_state = self.command_palette.clone();
+        let model_picker_state = self.model_picker.clone();
         let login_state = self.login_state.clone();
         let auth_type = self.auth_type;
 
@@ -902,6 +958,11 @@ impl TuiApp {
             // Command palette overlay (rendered last to be on top)
             if let Some(palette) = &palette_state {
                 Self::render_command_palette(frame, palette, area, chunks[2].y);
+            }
+
+            // Model picker overlay
+            if let Some(picker) = &model_picker_state {
+                Self::render_model_picker(frame, picker, area, chunks[2].y);
             }
 
             // Login overlay (rendered on top of everything)
@@ -1087,6 +1148,115 @@ impl TuiApp {
         frame.render_widget(hints_para, hints_area);
     }
 
+    /// Renders the model picker as an overlay.
+    fn render_model_picker(
+        frame: &mut ratatui::Frame,
+        picker: &ModelPickerState,
+        area: Rect,
+        input_top_y: u16,
+    ) {
+        // Calculate picker dimensions
+        let picker_width = 30.min(area.width.saturating_sub(4));
+        // Height: models + 4 (top border + title space + models + separator + hints + bottom border)
+        let picker_height = (AVAILABLE_MODELS.len() as u16 + 5).min(area.height / 2);
+
+        // Available vertical space (between header and input)
+        let available_top = HEADER_HEIGHT;
+        let available_bottom = input_top_y;
+        let available_height = available_bottom.saturating_sub(available_top);
+
+        // Position: centered both horizontally and vertically
+        let picker_x = (area.width.saturating_sub(picker_width)) / 2;
+        let picker_y = available_top + (available_height.saturating_sub(picker_height)) / 2;
+
+        let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
+
+        // Clear the area behind the picker
+        frame.render_widget(Clear, picker_area);
+
+        // Render outer border
+        let outer_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Magenta))
+            .title(" Select Model ")
+            .title_style(
+                Style::default()
+                    .fg(Color::Magenta)
+                    .add_modifier(Modifier::BOLD),
+            );
+        frame.render_widget(outer_block, picker_area);
+
+        // Inner area (inside border)
+        let inner_area = Rect::new(
+            picker_area.x + 1,
+            picker_area.y + 1,
+            picker_area.width.saturating_sub(2),
+            picker_area.height.saturating_sub(2),
+        );
+
+        // Model list area
+        let list_height = inner_area.height.saturating_sub(2); // -2 for separator + hints
+        let list_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, list_height);
+
+        // Build the list items
+        let items: Vec<ListItem> = AVAILABLE_MODELS
+            .iter()
+            .map(|model| {
+                let line = Line::from(Span::styled(
+                    model.display_name,
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                ));
+                ListItem::new(line)
+            })
+            .collect();
+
+        // Create the list with selection
+        let list = List::new(items)
+            .highlight_style(
+                Style::default()
+                    .bg(Color::DarkGray)
+                    .add_modifier(Modifier::BOLD),
+            )
+            .highlight_symbol("▶ ");
+
+        // Render with selection state
+        let mut list_state = ListState::default();
+        list_state.select(Some(picker.selected));
+        frame.render_stateful_widget(list, list_area, &mut list_state);
+
+        // Separator line
+        let separator = "─".repeat(inner_area.width as usize);
+        let sep_y = inner_area.y + list_height;
+        if sep_y < inner_area.y + inner_area.height {
+            let separator_area = Rect::new(inner_area.x, sep_y, inner_area.width, 1);
+            frame.render_widget(
+                Paragraph::new(Line::from(Span::styled(
+                    &separator,
+                    Style::default().fg(Color::DarkGray),
+                ))),
+                separator_area,
+            );
+        }
+
+        // Keyboard hints at the bottom
+        let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
+        let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
+        let hints_line = Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(Color::Magenta)),
+            Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
+            Span::styled("•", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Enter", Style::default().fg(Color::Magenta)),
+            Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+            Span::styled("•", Style::default().fg(Color::DarkGray)),
+            Span::styled(" Esc", Style::default().fg(Color::Magenta)),
+            Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+        ]);
+        let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
+        frame.render_widget(hints_para, hints_area);
+    }
+
     /// Renders the transcript into ratatui Lines.
     fn render_transcript(&self, width: usize) -> Vec<Line<'static>> {
         let mut lines = Vec::new();
@@ -1212,6 +1382,11 @@ impl TuiApp {
         // If command palette is open, route all keys to palette handler
         if self.command_palette.is_some() {
             return self.handle_palette_key(key);
+        }
+
+        // If model picker is open, route all keys to picker handler
+        if self.model_picker.is_some() {
+            return self.handle_model_picker_key(key);
         }
 
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -1693,6 +1868,10 @@ impl TuiApp {
                 self.close_command_palette(false);
                 self.execute_logout();
             }
+            "model" => {
+                self.close_command_palette(false);
+                self.open_model_picker();
+            }
             "new" => {
                 self.close_command_palette(false);
                 self.execute_new();
@@ -1705,6 +1884,94 @@ impl TuiApp {
                 self.close_command_palette(false);
             }
         }
+    }
+
+    // ========================================================================
+    // Model Picker
+    // ========================================================================
+
+    /// Opens the model picker overlay.
+    fn open_model_picker(&mut self) {
+        if self.model_picker.is_none() {
+            self.model_picker = Some(ModelPickerState::new(&self.config.model));
+        }
+    }
+
+    /// Closes the model picker overlay.
+    fn close_model_picker(&mut self) {
+        self.model_picker = None;
+    }
+
+    /// Handles key events when the model picker is open.
+    fn handle_model_picker_key(&mut self, key: event::KeyEvent) -> Result<()> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            // Escape or Ctrl+C: close picker
+            KeyCode::Esc => {
+                self.close_model_picker();
+            }
+            KeyCode::Char('c') if ctrl => {
+                self.close_model_picker();
+            }
+            // Up arrow: move selection up
+            KeyCode::Up => {
+                self.model_picker_select_prev();
+            }
+            // Down arrow: move selection down
+            KeyCode::Down => {
+                self.model_picker_select_next();
+            }
+            // Enter: select model
+            KeyCode::Enter => {
+                self.execute_model_selection();
+            }
+            // Ignore other keys
+            _ => {}
+        }
+
+        Ok(())
+    }
+
+    /// Moves model picker selection to the previous item.
+    fn model_picker_select_prev(&mut self) {
+        if let Some(picker) = &mut self.model_picker
+            && picker.selected > 0
+        {
+            picker.selected -= 1;
+        }
+    }
+
+    /// Moves model picker selection to the next item.
+    fn model_picker_select_next(&mut self) {
+        if let Some(picker) = &mut self.model_picker
+            && picker.selected < AVAILABLE_MODELS.len() - 1
+        {
+            picker.selected += 1;
+        }
+    }
+
+    /// Executes the model selection.
+    fn execute_model_selection(&mut self) {
+        let Some(picker) = &self.model_picker else {
+            return;
+        };
+
+        let Some(model) = AVAILABLE_MODELS.get(picker.selected) else {
+            self.close_model_picker();
+            return;
+        };
+
+        let model_id = model.id.to_string();
+        let display_name = model.display_name;
+
+        self.config.model = model_id;
+        self.close_model_picker();
+
+        self.transcript.push(HistoryCell::system(format!(
+            "Switched to {}",
+            display_name
+        )));
     }
 
     /// Executes the /new (or /clear) command.
@@ -2081,7 +2348,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_name() {
-        let cmd = &SLASH_COMMANDS[2]; // new
+        let cmd = &SLASH_COMMANDS[3]; // new
         assert!(cmd.matches("new"));
         assert!(cmd.matches("ne"));
         assert!(cmd.matches("NEW")); // case-insensitive
@@ -2090,7 +2357,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_alias() {
-        let cmd = &SLASH_COMMANDS[2]; // new (alias: clear)
+        let cmd = &SLASH_COMMANDS[3]; // new (alias: clear)
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
@@ -2104,10 +2371,13 @@ mod tests {
         let logout_cmd = &SLASH_COMMANDS[1];
         assert_eq!(logout_cmd.display_name(), "/logout");
 
-        let new_cmd = &SLASH_COMMANDS[2];
+        let model_cmd = &SLASH_COMMANDS[2];
+        assert_eq!(model_cmd.display_name(), "/model (m)");
+
+        let new_cmd = &SLASH_COMMANDS[3];
         assert_eq!(new_cmd.display_name(), "/new (clear)");
 
-        let quit = &SLASH_COMMANDS[3];
+        let quit = &SLASH_COMMANDS[4];
         assert_eq!(quit.display_name(), "/quit (q, exit)");
     }
 
@@ -2177,7 +2447,7 @@ mod tests {
         let mut state = CommandPaletteState::new(true);
         // Select the second command
         state.selected = 1;
-        assert_eq!(state.filtered_commands().len(), 4); // login, logout, new, quit
+        assert_eq!(state.filtered_commands().len(), 5); // login, logout, model, new, quit
 
         // Filter to just one command
         state.filter = "new".to_string();
