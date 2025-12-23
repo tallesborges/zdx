@@ -799,7 +799,7 @@ impl ApiMessage {
 // === Public Chat Types ===
 
 /// Content block in a chat message.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ChatContentBlock {
     #[serde(rename = "text")]
@@ -815,7 +815,7 @@ pub enum ChatContentBlock {
 }
 
 /// Message content - either simple text or structured blocks.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum MessageContent {
     Text(String),
@@ -823,7 +823,7 @@ pub enum MessageContent {
 }
 
 /// A chat message with owned data.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
     pub content: MessageContent,

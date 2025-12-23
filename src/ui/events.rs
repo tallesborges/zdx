@@ -7,7 +7,6 @@
 use crossterm::event::Event as CrosstermEvent;
 
 use crate::core::events::EngineEvent;
-use crate::providers::anthropic::ChatMessage;
 
 /// Unified event enum for the TUI.
 ///
@@ -21,26 +20,9 @@ pub enum UiEvent {
     /// Terminal input event (key, mouse, paste, resize).
     Terminal(CrosstermEvent),
 
-    /// Engine event (streaming deltas, tool events, etc.).
+    /// Engine event (streaming deltas, tool events, completion, etc.).
     Engine(EngineEvent),
-
-    /// Engine turn completed with final result.
-    TurnFinished(TurnResult),
 
     /// Async login token exchange completed.
     LoginResult(Result<(), String>),
-}
-
-/// Result of an engine turn.
-#[derive(Debug)]
-pub enum TurnResult {
-    /// Turn completed successfully with final text and updated messages.
-    Success {
-        final_text: String,
-        messages: Vec<ChatMessage>,
-    },
-    /// Turn failed with an error.
-    Error(String),
-    /// Turn was interrupted by user.
-    Interrupted,
 }

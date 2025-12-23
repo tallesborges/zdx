@@ -25,7 +25,7 @@ pub struct ToolDefinition {
 }
 
 /// Result of executing a tool (for API compatibility).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_use_id: String,
     pub content: String,

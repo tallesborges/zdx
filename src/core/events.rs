@@ -8,7 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::providers::anthropic::ProviderErrorKind;
+use crate::providers::anthropic::{ChatMessage, ProviderErrorKind};
 
 /// Events emitted by the engine during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -46,6 +46,14 @@ pub enum EngineEvent {
 
     /// Execution was interrupted (e.g., by user signal).
     Interrupted,
+
+    /// Turn completed successfully with final result.
+    TurnComplete {
+        /// Final accumulated text from the assistant.
+        final_text: String,
+        /// Updated message history (includes assistant responses and tool results).
+        messages: Vec<ChatMessage>,
+    },
 }
 
 /// Error categories for EngineEvent::Error.
