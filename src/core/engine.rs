@@ -312,6 +312,15 @@ pub async fn run_turn(
                 }
             }
 
+            // Emit AssistantFinal to signal this message is complete
+            // This allows the TUI to finalize the current streaming cell before tools
+            if !full_text.is_empty() {
+                sink.important(EngineEvent::AssistantFinal {
+                    text: full_text.clone(),
+                })
+                .await;
+            }
+
             // Emit ToolRequested events for all tools before execution
             for tu in &finalized {
                 sink.important(EngineEvent::ToolRequested {
