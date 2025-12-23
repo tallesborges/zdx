@@ -4,8 +4,10 @@
 //! - `tui`: Full-screen alternate-screen TUI for interactive chat
 //! - `stream`: Streaming renderer for exec mode
 //! - `transcript`: Virtual transcript model for chat cells
+//! - `terminal`: Terminal lifecycle management (setup/restore/panic hook)
 
 pub mod stream;
+pub mod terminal;
 pub mod transcript;
 pub mod tui;
 
