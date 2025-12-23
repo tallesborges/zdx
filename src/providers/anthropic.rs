@@ -1,4 +1,19 @@
 //! Anthropic Claude API client.
+//!
+//! # Prompt Caching Strategy
+//!
+//! Anthropic allows up to 4 cache breakpoints per request. Each breakpoint caches
+//! everything from the START of the request up to that marker (prefix caching).
+//! Minimum cache size is 1,024 tokens.
+//!
+//! We use 2 breakpoints:
+//! - **BP1 (last system block)**: Caches system prompt + AGENTS.md context.
+//!   Reused across sessions with the same config.
+//! - **BP2 (last user message)**: Caches conversation history.
+//!   Reused within the same session for subsequent turns.
+//!
+//! This ensures the large system prompt is cached even for short conversations,
+//! and provides cross-session cache hits when starting new conversations.
 
 use std::fmt;
 use std::pin::Pin;
@@ -287,10 +302,30 @@ impl AnthropicClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
-        let api_messages: Vec<ApiMessage> = messages
+        // Convert messages to API format.
+        // Only the last content block of the last user message gets cache_control
+        // to respect Anthropic's limit of 4 cache_control blocks total.
+        let mut api_messages: Vec<ApiMessage> = messages
             .iter()
-            .map(|m| ApiMessage::from_chat_message(m, true))
+            .map(|m| ApiMessage::from_chat_message(m, false))
             .collect();
+
+        // Add cache_control to the last content block of the last user message
+        if let Some(last_user_msg) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
+            if let ApiMessageContent::Blocks(blocks) = &mut last_user_msg.content {
+                if let Some(last_block) = blocks.last_mut() {
+                    match last_block {
+                        ApiContentBlock::Text { cache_control, .. } => {
+                            *cache_control = Some(CacheControl::ephemeral());
+                        }
+                        ApiContentBlock::ToolResult { cache_control, .. } => {
+                            *cache_control = Some(CacheControl::ephemeral());
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
 
         let tool_defs = if tools.is_empty() {
             None
@@ -350,17 +385,24 @@ impl AnthropicClient {
         Ok(Box::pin(event_stream))
     }
 
-    /// Builds system message blocks with cache control.
+    /// Builds system message blocks with cache control on the last block only.
     ///
     /// Always includes the Claude Code identification prompt.
+    /// Cache control placement:
+    /// - Last system block: caches system prompt (often large with AGENTS.md)
+    /// - Last user message: caches conversation history (set in send_messages_stream)
+    ///
+    /// This uses 2 of 4 allowed breakpoints. The minimum cache threshold is
+    /// 1,024 tokens, so caching the system prompt separately ensures it gets
+    /// cached even for short conversations.
     fn build_system_blocks(&self, system: Option<&str>) -> Option<Vec<SystemBlock>> {
-        let mut blocks = vec![SystemBlock::with_cache_control(CLAUDE_CODE_SYSTEM_PROMPT)];
-
-        if let Some(prompt) = system {
-            blocks.push(SystemBlock::with_cache_control(prompt));
+        match system {
+            Some(prompt) => Some(vec![
+                SystemBlock::new(CLAUDE_CODE_SYSTEM_PROMPT),
+                SystemBlock::with_cache_control(prompt),
+            ]),
+            None => Some(vec![SystemBlock::with_cache_control(CLAUDE_CODE_SYSTEM_PROMPT)]),
         }
-
-        Some(blocks)
     }
 
     /// Classifies a reqwest error into a ProviderError.
@@ -677,6 +719,14 @@ struct SystemBlock {
 }
 
 impl SystemBlock {
+    fn new(text: impl Into<String>) -> Self {
+        Self {
+            block_type: "text",
+            text: text.into(),
+            cache_control: None,
+        }
+    }
+
     fn with_cache_control(text: impl Into<String>) -> Self {
         Self {
             block_type: "text",
@@ -752,6 +802,8 @@ enum ApiContentBlock {
         content: String,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         is_error: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
     },
 }
 
@@ -784,6 +836,7 @@ impl ApiMessage {
                             tool_use_id: result.tool_use_id.clone(),
                             content: result.content.clone(),
                             is_error: result.is_error,
+                            cache_control: None,
                         },
                     })
                     .collect();
