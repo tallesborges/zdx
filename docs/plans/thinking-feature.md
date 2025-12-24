@@ -315,7 +315,7 @@ zdx sessions resume <id>
 - **Slice 4:** TUI displays thinking cells with distinct style ✅
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
 - **Slice 6:** ThinkingLevel enum maps to correct budget values ✅
-- **Slice 7:** Model title shows thinking indicator when enabled
+- **Slice 7:** Model title shows thinking indicator when enabled ✅
 - **Slice 8:** Thinking picker opens/closes, selection updates state
 - **Slice 9:** Ctrl+T and /thinking command both open picker
 - **Slice 10:** Thinking level persists to config file, survives restart
@@ -419,22 +419,23 @@ cargo run
 
 ---
 
-### Slice 7: Show thinking level in model title
+### Slice 7: Show thinking level in model title ✅
 
 **Goal:** Display current thinking level next to model name in status bar
 
 **Scope checklist:**
-- [ ] Update `render_input()` in `view.rs` to include thinking level:
+- [x] Update `render_input()` in `view.rs` to include thinking level:
   ```rust
-  // Format: " claude-sonnet-4 (api-key) [thinking: medium] "
-  let thinking_indicator = match state.config.thinking_level {
-      ThinkingLevel::Off => String::new(),
-      level => format!(" [💭{}]", level.display_name()),
-  };
-  let model_title = format!(" {}{}{} ", state.config.model, auth_indicator, thinking_indicator);
+  // Format: " claude-sonnet-4 (api-key) [💭medium] "
+  if state.config.thinking_level != ThinkingLevel::Off {
+      title_spans.push(Span::styled(
+          format!(" [💭{}]", state.config.thinking_level.display_name()),
+          thinking_style,
+      ));
+  }
   ```
-- [ ] Use dim/italic style for thinking indicator to distinguish from model name
-- [ ] Keep indicator compact: `[💭med]` or `[💭high]` (abbreviate if needed)
+- [x] Use dim style for thinking indicator to distinguish from model name
+- [x] Keep indicator compact: `[💭medium]` or `[💭high]`
 
 **Demo:**
 ```bash
