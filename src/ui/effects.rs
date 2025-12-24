@@ -6,6 +6,7 @@
 //! This keeps the reducer pure: it only mutates state and returns effects,
 //! never performs I/O or spawns tasks directly.
 
+use crate::config::ThinkingLevel;
 use crate::core::session::SessionEvent;
 
 /// Effects returned by the reducer for the runtime to execute.
@@ -34,6 +35,9 @@ pub enum UiEffect {
 
     /// Persist the model preference to config.
     PersistModel { model: String },
+
+    /// Persist the thinking level preference to config.
+    PersistThinking { level: ThinkingLevel },
 
     /// Create a new session (for /new command).
     CreateNewSession,
