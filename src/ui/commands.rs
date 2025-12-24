@@ -107,7 +107,7 @@ mod tests {
         assert_eq!(logout_cmd.display_name(), "/logout");
 
         let model_cmd = &SLASH_COMMANDS[3];
-        assert_eq!(model_cmd.display_name(), "/model (m)");
+        assert_eq!(model_cmd.display_name(), "/model");
 
         let new_cmd = &SLASH_COMMANDS[4];
         assert_eq!(new_cmd.display_name(), "/new (clear)");
