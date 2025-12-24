@@ -606,8 +606,10 @@ impl MarkdownRenderer {
         match tag {
             TagEnd::Paragraph => {
                 self.flush_paragraph();
-                // Add blank line after paragraph
-                self.lines.push(StyledLine::empty());
+                // Add blank line after paragraph, but not inside list items
+                if self.list_stack.is_empty() {
+                    self.lines.push(StyledLine::empty());
+                }
             }
             TagEnd::Heading(_) => {
                 self.flush_paragraph();
