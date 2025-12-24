@@ -101,7 +101,9 @@ pub enum ToolState {
 }
 
 /// Spinner frames for animated tool running indicator.
-const SPINNER_FRAMES: &[&str] = &["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
+/// Spinner frames using circle characters for better terminal compatibility.
+/// Braille dots (⠋⠙⠹) may not render correctly in all terminals/fonts.
+const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// A logical unit in the transcript.
 ///
@@ -962,8 +964,8 @@ mod tests {
         // First line should show spinner + tool name/path
         let first_line: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
         assert!(first_line.contains("read") || first_line.contains("test.txt"));
-        // Should have spinner prefix (first frame is ⠋)
-        assert!(first_line.starts_with("⠋"));
+        // Should have spinner prefix (first frame is ◐)
+        assert!(first_line.starts_with("◐"));
 
         // State should be Running
         match cell {
