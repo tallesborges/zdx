@@ -510,6 +510,15 @@ pub fn handle_engine_event(
                 vec![]
             }
         }
+        // Thinking events - stub handlers for Slice 3 (display implemented in Slice 4)
+        EngineEvent::ThinkingDelta { .. } => {
+            // TODO (Slice 4): Create or append to thinking cell in transcript
+            vec![]
+        }
+        EngineEvent::ThinkingFinal { .. } => {
+            // TODO (Slice 4): Finalize thinking cell with signature
+            vec![]
+        }
     }
 }
 

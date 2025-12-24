@@ -840,6 +840,8 @@ enum ApiMessageContent {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ApiContentBlock {
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String, signature: String },
     #[serde(rename = "text")]
     Text {
         text: String,
@@ -875,6 +877,13 @@ impl ApiMessage {
                 let api_blocks: Vec<ApiContentBlock> = blocks
                     .iter()
                     .map(|b| match b {
+                        ChatContentBlock::Thinking {
+                            thinking,
+                            signature,
+                        } => ApiContentBlock::Thinking {
+                            thinking: thinking.clone(),
+                            signature: signature.clone(),
+                        },
                         ChatContentBlock::Text(text) => ApiContentBlock::Text {
                             text: text.clone(),
                             cache_control: if use_cache_control {
@@ -911,6 +920,8 @@ impl ApiMessage {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ChatContentBlock {
+    #[serde(rename = "thinking")]
+    Thinking { thinking: String, signature: String },
     #[serde(rename = "text")]
     Text(String),
     #[serde(rename = "tool_use")]
