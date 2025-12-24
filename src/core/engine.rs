@@ -215,10 +215,18 @@ pub async fn run_turn(
             return Err(crate::core::interrupt::InterruptedError.into());
         }
 
-        let mut stream = match client
-            .send_messages_stream(&messages, &tools, system_prompt)
-            .await
-        {
+        // Use select! to make the API call interruptible (important for slow responses
+        // like Opus with extended thinking which can take 30+ seconds before first chunk)
+        let stream_result = tokio::select! {
+            biased;
+            _ = crate::core::interrupt::wait_for_interrupt() => {
+                sink.important(EngineEvent::Interrupted).await;
+                return Err(crate::core::interrupt::InterruptedError.into());
+            }
+            result = client.send_messages_stream(&messages, &tools, system_prompt) => result,
+        };
+
+        let mut stream = match stream_result {
             Ok(s) => s,
             Err(e) => {
                 return Err(emit_error_async(e, &sink).await);

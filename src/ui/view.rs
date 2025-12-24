@@ -342,6 +342,9 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::Thinking => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM | Modifier::ITALIC),
+        TranscriptStyle::Interrupted => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
     }
 }
 

@@ -17,7 +17,7 @@ use crate::ui::overlays::{
     open_thinking_picker,
 };
 use crate::ui::state::{EngineState, OverlayState, TuiState};
-use crate::ui::transcript::HistoryCell;
+use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 3;
@@ -492,10 +492,34 @@ pub fn handle_engine_event(
             vec![]
         }
         EngineEvent::Interrupted => {
-            // Mark any running tools as cancelled
+            // Mark any running tools or streaming cells as cancelled
+            let mut any_marked = false;
             for cell in &mut state.transcript {
+                let was_active = matches!(
+                    cell,
+                    HistoryCell::Assistant { is_streaming: true, .. }
+                        | HistoryCell::Thinking { is_streaming: true, .. }
+                        | HistoryCell::Tool { state: ToolState::Running, .. }
+                );
                 cell.mark_cancelled();
+                if was_active {
+                    any_marked = true;
+                }
             }
+
+            // If no streaming/running cells were marked, mark the last user cell
+            // (this means we interrupted before any response was generated)
+            if !any_marked {
+                if let Some(last_user) = state
+                    .transcript
+                    .iter_mut()
+                    .rev()
+                    .find(|c| matches!(c, HistoryCell::User { .. }))
+                {
+                    last_user.mark_request_interrupted();
+                }
+            }
+
             interrupt::reset();
             state.engine_state = EngineState::Idle;
             vec![]

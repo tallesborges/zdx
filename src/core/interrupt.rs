@@ -36,6 +36,9 @@ fn notify_waiters() {
 /// Triggers an interrupt via Ctrl+C, force-exiting on a second Ctrl+C.
 pub fn trigger_ctrl_c() {
     if INTERRUPTED.swap(true, Ordering::SeqCst) {
+        // Second interrupt - force exit.
+        // Restore terminal first since process::exit() bypasses Drop handlers.
+        let _ = crate::ui::terminal::restore_terminal();
         std::process::exit(130);
     }
     notify_waiters();
