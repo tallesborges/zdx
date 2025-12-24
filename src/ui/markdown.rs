@@ -766,7 +766,10 @@ impl MarkdownRenderer {
             }],
         });
 
-        for line in full_text.split('\n') {
+        // Trim trailing newline to avoid empty line before closing fence
+        let trimmed = full_text.trim_end_matches('\n');
+
+        for line in trimmed.split('\n') {
             // Add indent for visual separation
             self.lines.push(StyledLine {
                 spans: vec![
