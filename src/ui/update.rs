@@ -321,6 +321,7 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
     use crate::ui::overlays::login::update_login;
 
     match cmd_name {
+        "config" => vec![UiEffect::OpenConfig],
         "login" => update_login(state, LoginEvent::LoginRequested),
         "logout" => {
             execute_logout(state);

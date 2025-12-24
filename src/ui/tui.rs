@@ -286,6 +286,22 @@ impl TuiRuntime {
             UiEffect::OpenBrowser { url } => {
                 let _ = open::that(&url);
             }
+            UiEffect::OpenConfig => {
+                let config_path = crate::config::paths::config_path();
+                if config_path.exists() {
+                    if let Err(e) = open::that(&config_path) {
+                        self.state.transcript.push(HistoryCell::system(format!(
+                            "Failed to open config: {}",
+                            e
+                        )));
+                    }
+                } else {
+                    self.state.transcript.push(HistoryCell::system(format!(
+                        "Config file not found: {}",
+                        config_path.display()
+                    )));
+                }
+            }
             UiEffect::SaveSession { event } => {
                 if let Some(ref mut s) = self.state.session
                     && let Err(e) = s.append(&event)

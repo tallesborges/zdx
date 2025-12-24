@@ -38,6 +38,11 @@ impl SlashCommand {
 /// Available slash commands.
 pub const SLASH_COMMANDS: &[SlashCommand] = &[
     SlashCommand {
+        name: "config",
+        aliases: &["settings"],
+        description: "Open config file in default editor",
+    },
+    SlashCommand {
         name: "login",
         aliases: &[],
         description: "Login with Anthropic OAuth",
@@ -70,7 +75,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_name() {
-        let cmd = &SLASH_COMMANDS[3]; // new
+        let cmd = &SLASH_COMMANDS[4]; // new
         assert!(cmd.matches("new"));
         assert!(cmd.matches("ne"));
         assert!(cmd.matches("NEW")); // case-insensitive
@@ -79,7 +84,7 @@ mod tests {
 
     #[test]
     fn test_slash_command_matches_alias() {
-        let cmd = &SLASH_COMMANDS[3]; // new (alias: clear)
+        let cmd = &SLASH_COMMANDS[4]; // new (alias: clear)
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
@@ -87,19 +92,22 @@ mod tests {
 
     #[test]
     fn test_slash_command_display_name() {
-        let login_cmd = &SLASH_COMMANDS[0];
+        let config_cmd = &SLASH_COMMANDS[0];
+        assert_eq!(config_cmd.display_name(), "/config (settings)");
+
+        let login_cmd = &SLASH_COMMANDS[1];
         assert_eq!(login_cmd.display_name(), "/login");
 
-        let logout_cmd = &SLASH_COMMANDS[1];
+        let logout_cmd = &SLASH_COMMANDS[2];
         assert_eq!(logout_cmd.display_name(), "/logout");
 
-        let model_cmd = &SLASH_COMMANDS[2];
+        let model_cmd = &SLASH_COMMANDS[3];
         assert_eq!(model_cmd.display_name(), "/model (m)");
 
-        let new_cmd = &SLASH_COMMANDS[3];
+        let new_cmd = &SLASH_COMMANDS[4];
         assert_eq!(new_cmd.display_name(), "/new (clear)");
 
-        let quit = &SLASH_COMMANDS[4];
+        let quit = &SLASH_COMMANDS[5];
         assert_eq!(quit.display_name(), "/quit (q, exit)");
     }
 }
