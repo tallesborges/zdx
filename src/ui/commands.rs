@@ -54,7 +54,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "model",
-        aliases: &["m"],
+        aliases: &[],
         description: "Switch model",
     },
     SlashCommand {
@@ -69,7 +69,7 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
     },
     SlashCommand {
         name: "thinking",
-        aliases: &["think", "t"],
+        aliases: &[],
         description: "Change thinking level",
     },
 ];
