@@ -3,6 +3,7 @@
 //! Simulates a two-step interaction:
 //! 1. First response asks for tool_use(read)
 //! 2. Second response returns final text
+//!
 //! Verifies that the second request includes tool_result block.
 
 mod fixtures;
