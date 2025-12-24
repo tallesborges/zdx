@@ -316,9 +316,9 @@ zdx sessions resume <id>
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
 - **Slice 6:** ThinkingLevel enum maps to correct budget values ✅
 - **Slice 7:** Model title shows thinking indicator when enabled ✅
-- **Slice 8:** Thinking picker opens/closes, selection updates state
-- **Slice 9:** Ctrl+T and /thinking command both open picker
-- **Slice 10:** Thinking level persists to config file, survives restart
+- **Slice 8:** Thinking picker opens/closes, selection updates state ✅
+- **Slice 9:** Ctrl+T and /thinking command both open picker ✅
+- **Slice 10:** Thinking level persists to config file, survives restart ✅
 
 ### Regression tests (protect contracts)
 - [x] `test_sse_parser_thinking_response` — fixture test for thinking stream
@@ -326,7 +326,7 @@ zdx sessions resume <id>
 - [x] `test_session_thinking_roundtrip` — thinking persists and loads
 - [x] `test_aborted_thinking_converts_to_text` — signature fallback
 - [x] `test_thinking_level_budget_mapping` — each level maps to expected tokens
-- [ ] `test_save_thinking_level_preserves_config` — toml_edit preserves comments
+- [x] `test_save_thinking_level_preserves_config` — toml_edit preserves comments
 
 ---
 
@@ -450,30 +450,32 @@ cargo run
 
 ---
 
-### Slice 8: Thinking level picker overlay
+### Slice 8: Thinking level picker overlay ✅
 
 **Goal:** User can change thinking level via overlay (like model picker)
 
 **Scope checklist:**
-- [ ] Create `src/ui/overlays/thinking_picker.rs`:
-  - [ ] `ThinkingPickerState { selected: usize }` struct
-  - [ ] `ThinkingPickerState::new(current: ThinkingLevel)` - select current level
-  - [ ] `open_thinking_picker(state)` - opens overlay
-  - [ ] `close_thinking_picker(state)` - closes overlay
-  - [ ] `handle_thinking_picker_key(state, key)` - up/down/enter/esc
-  - [ ] `render_thinking_picker(frame, picker, area, input_top_y)` - render list with:
+- [x] Create `src/ui/overlays/thinking_picker.rs`:
+  - [x] `ThinkingPickerState { selected: usize }` struct
+  - [x] `ThinkingPickerState::new(current: ThinkingLevel)` - select current level
+  - [x] `open_thinking_picker(state)` - opens overlay
+  - [x] `close_thinking_picker(state)` - closes overlay
+  - [x] `handle_thinking_picker_key(state, key)` - up/down/enter/esc
+  - [x] `render_thinking_picker(frame, picker, area, input_top_y)` - render list with:
     - Level name (left column, cyan)
     - Description with token count (right column, dimmed)
-- [ ] Add `OverlayState::ThinkingPicker(ThinkingPickerState)` variant
-- [ ] Add accessor methods: `as_thinking_picker()`, `as_thinking_picker_mut()`
-- [ ] Wire up in `update.rs`:
+- [x] Add `OverlayState::ThinkingPicker(ThinkingPickerState)` variant
+- [x] Add accessor methods: `as_thinking_picker()`, `as_thinking_picker_mut()`
+- [x] Wire up in `update.rs`:
   - Handle key events when ThinkingPicker overlay active
   - On selection: update `state.config.thinking_level`, emit `PersistThinking` effect
-- [ ] Wire up in `view.rs`: render thinking picker when active
-- [ ] Add `UiEffect::PersistThinking { level: ThinkingLevel }` effect
-- [ ] Implement effect in `tui.rs`: call `Config::save_thinking_level()`
+- [x] Wire up in `view.rs`: render thinking picker when active
+- [x] Add `UiEffect::PersistThinking { level: ThinkingLevel }` effect
+- [x] Implement effect in `tui.rs`: call `Config::save_thinking_level()`
+- [x] Add `/thinking` command to commands.rs with aliases `think`, `t`
+- [x] Add `Config::save_thinking_level()` method to config.rs
 
-**Demo:**
+**✅ Demo:**
 ```bash
 cargo run
 # Press Ctrl+T (or /thinking command)
@@ -486,26 +488,24 @@ cargo run
 
 ---
 
-### Slice 9: Keybinding + slash command for thinking picker
+### Slice 9: Keybinding + slash command for thinking picker ✅
 
 **Goal:** User can open thinking picker via keyboard shortcut or command
 
 **Scope checklist:**
-- [ ] Add `Ctrl+T` keybinding in `update.rs` to open thinking picker
-- [ ] Add `/thinking` slash command in `commands.rs`:
+- [x] Add `Ctrl+T` keybinding in `update.rs` to open thinking picker
+- [x] Add `/thinking` slash command in `commands.rs`:
   ```rust
   SlashCommand {
       name: "thinking",
       aliases: &["think", "t"],
       description: "Change thinking level",
-      action: CommandAction::OpenThinkingPicker,
   }
   ```
-- [ ] Add `CommandAction::OpenThinkingPicker` variant
-- [ ] Handle action in command execution to open overlay
-- [ ] Add system message on level change: "Thinking level set to {level}"
+- [x] Handle command in `execute_command()` to open overlay (no CommandAction enum needed - uses string matching like other commands)
+- [x] Add system message on level change: "Thinking level set to {level}" (in `execute_thinking_selection()`)
 
-**Demo:**
+**✅ Demo:**
 ```bash
 cargo run
 # Press Ctrl+T → thinking picker opens
@@ -515,18 +515,22 @@ cargo run
 
 ---
 
-### Slice 10: Config persistence for thinking level
+### Slice 10: Config persistence for thinking level ✅
 
 **Goal:** Thinking level persists to config file like model selection
 
 **Scope checklist:**
-- [ ] Add `Config::save_thinking_level(level: ThinkingLevel)` method
-- [ ] Add `Config::save_thinking_level_to(path, level)` for testability
-- [ ] Use `toml_edit` to preserve comments (same pattern as `save_model`)
-- [ ] Update runtime effect handler to call `save_thinking_level()`
-- [ ] Add integration test: change level via picker, restart, verify persisted
+- [x] Add `Config::save_thinking_level(level: ThinkingLevel)` method
+- [x] Add `Config::save_thinking_level_to(path, level)` for testability
+- [x] Use `toml_edit` to preserve comments (same pattern as `save_model`)
+- [x] Update runtime effect handler to call `save_thinking_level()`
+- [x] Add unit tests for save_thinking_level:
+  - `test_save_thinking_level_creates_file_with_template`
+  - `test_save_thinking_level_preserves_other_fields`
+  - `test_save_thinking_level_preserves_comments`
+  - `test_save_thinking_level_roundtrip`
 
-**Demo:**
+**✅ Demo:**
 ```bash
 cargo run
 # Change thinking level via picker
