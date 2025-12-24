@@ -481,23 +481,26 @@ impl HistoryCell {
                     let max_preview_lines = 5;
                     let truncated = all_lines.len() > max_preview_lines;
 
-                    for line in all_lines.iter().take(max_preview_lines) {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: (*line).to_string(),
-                                style: Style::ToolOutput,
-                            }],
-                        });
-                    }
-
+                    // Show truncation indicator first (before the last lines)
                     if truncated {
                         lines.push(StyledLine {
                             spans: vec![StyledSpan {
                                 text: format!(
-                                    "[... {} more lines ...]",
+                                    "[{} more lines ...]",
                                     all_lines.len() - max_preview_lines
                                 ),
                                 style: Style::ToolBracket,
+                            }],
+                        });
+                    }
+
+                    // Show the last N lines (most recent output is usually most relevant)
+                    let skip_count = all_lines.len().saturating_sub(max_preview_lines);
+                    for line in all_lines.iter().skip(skip_count) {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: (*line).to_string(),
+                                style: Style::ToolOutput,
                             }],
                         });
                     }
