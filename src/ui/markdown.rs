@@ -331,6 +331,10 @@ fn process_text_span_impl(
     first_prefix: &[StyledSpan],
     rest_prefix: &[StyledSpan],
 ) {
+    // Check for leading/trailing whitespace before splitting
+    let has_leading_space = span.text.starts_with(|c: char| c.is_whitespace());
+    let has_trailing_space = span.text.ends_with(|c: char| c.is_whitespace());
+
     // Split into words (this collapses whitespace)
     let words: Vec<&str> = span.text.split_whitespace().collect();
 
@@ -350,11 +354,23 @@ fn process_text_span_impl(
         return;
     }
 
+    // Add leading space if original text had it and we have prior content
+    if has_leading_space && !current_line_spans.is_empty() {
+        let current_avail = if *is_first_line { available_width } else { rest_width };
+        if *current_line_width + 1 <= current_avail {
+            current_line_spans.push(StyledSpan {
+                text: " ".to_string(),
+                style: span.style,
+            });
+            *current_line_width += 1;
+        }
+    }
+
     for (i, word) in words.iter().enumerate() {
         let word_width = word.width();
         let current_avail = if *is_first_line { available_width } else { rest_width };
 
-        // Add space before word (except first word)
+        // Add space before word (except first word - leading space handled above)
         if i > 0 {
             // Check if space + word fits
             if *current_line_width + 1 + word_width <= current_avail {
@@ -414,6 +430,18 @@ fn process_text_span_impl(
                     *current_line_width += frag_width;
                 }
             }
+        }
+    }
+
+    // Add trailing space if original text had it
+    if has_trailing_space {
+        let current_avail = if *is_first_line { available_width } else { rest_width };
+        if *current_line_width + 1 <= current_avail {
+            current_line_spans.push(StyledSpan {
+                text: " ".to_string(),
+                style: span.style,
+            });
+            *current_line_width += 1;
         }
     }
 }
@@ -930,6 +958,24 @@ mod tests {
             .iter()
             .any(|l| l.spans.iter().any(|s| s.style == Style::CodeInline));
         assert!(has_code_inline);
+    }
+
+    #[test]
+    fn test_inline_code_preserves_surrounding_spaces() {
+        let lines = render_markdown("word `code` word", 80);
+
+        // Combine all text
+        let combined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        // Should have spaces around the code
+        assert!(
+            combined.contains("word ") && combined.contains(" word"),
+            "Expected spaces around inline code, got: {:?}",
+            combined
+        );
     }
 
     #[test]
