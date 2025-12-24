@@ -746,6 +746,14 @@ impl MarkdownRenderer {
         // Collect all text and split by newlines
         let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
+        // Opening fence (subtle)
+        self.lines.push(StyledLine {
+            spans: vec![StyledSpan {
+                text: "```".to_string(),
+                style: Style::CodeFence,
+            }],
+        });
+
         for line in full_text.split('\n') {
             // Add indent for visual separation
             self.lines.push(StyledLine {
@@ -761,6 +769,14 @@ impl MarkdownRenderer {
                 ],
             });
         }
+
+        // Closing fence (subtle)
+        self.lines.push(StyledLine {
+            spans: vec![StyledSpan {
+                text: "```".to_string(),
+                style: Style::CodeFence,
+            }],
+        });
     }
 
     fn flush_list_item(&mut self) {

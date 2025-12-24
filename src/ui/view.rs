@@ -349,6 +349,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
         // Markdown styles
         TranscriptStyle::CodeInline => Style::default().fg(Color::Cyan),
         TranscriptStyle::CodeBlock => Style::default().fg(Color::Cyan),
+        TranscriptStyle::CodeFence => Style::default().fg(Color::DarkGray),
         TranscriptStyle::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
         TranscriptStyle::Strong => Style::default().add_modifier(Modifier::BOLD),
         TranscriptStyle::H1 => Style::default()
