@@ -1,0 +1,1037 @@
+//! Markdown parsing and rendering for assistant responses.
+//!
+//! This module provides:
+//! - `render_markdown()`: Parse markdown text into styled lines
+//! - `wrap_styled_spans()`: Wrap styled spans while preserving styles across line breaks
+//!
+//! Uses pulldown-cmark for parsing. Falls back to plain text if parsing fails.
+
+use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use unicode_width::UnicodeWidthStr;
+
+use super::transcript::{Style, StyledLine, StyledSpan};
+
+/// Options for wrapping styled spans with hanging indents.
+#[derive(Debug, Clone, Default)]
+pub struct WrapOptions {
+    /// Maximum display width for lines.
+    pub width: usize,
+    /// Prefix spans for the first line (e.g., "- " for list bullet).
+    pub first_prefix: Vec<StyledSpan>,
+    /// Prefix spans for continuation lines (e.g., "  " for alignment).
+    pub rest_prefix: Vec<StyledSpan>,
+}
+
+impl WrapOptions {
+    /// Creates wrap options with just a width (no prefixes).
+    pub fn new(width: usize) -> Self {
+        Self {
+            width,
+            first_prefix: vec![],
+            rest_prefix: vec![],
+        }
+    }
+
+    /// Creates wrap options with hanging indent for list items.
+    #[allow(dead_code)]
+    pub fn with_list_indent(width: usize, bullet: &str, indent: usize) -> Self {
+        Self {
+            width,
+            first_prefix: vec![StyledSpan {
+                text: bullet.to_string(),
+                style: Style::ListBullet,
+            }],
+            rest_prefix: vec![StyledSpan {
+                text: " ".repeat(indent),
+                style: Style::Plain,
+            }],
+        }
+    }
+}
+
+/// Calculates the display width of a slice of styled spans.
+fn spans_display_width(spans: &[StyledSpan]) -> usize {
+    spans.iter().map(|s| s.text.width()).sum()
+}
+
+/// Breaks a styled span into character-by-width fragments.
+///
+/// Used for inline code or when word boundaries aren't available.
+fn break_span_by_width(span: &StyledSpan, max_width: usize) -> Vec<StyledSpan> {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut current_width: usize = 0;
+
+    for ch in span.text.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+
+        // Zero-width characters always stay with current fragment
+        if ch_width == 0 {
+            current.push(ch);
+            continue;
+        }
+
+        // Check if adding this character would exceed width
+        if current_width + ch_width > max_width && !current.is_empty() {
+            parts.push(StyledSpan {
+                text: std::mem::take(&mut current),
+                style: span.style,
+            });
+            current_width = 0;
+        }
+
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    if !current.is_empty() {
+        parts.push(StyledSpan {
+            text: current,
+            style: span.style,
+        });
+    }
+
+    if parts.is_empty() {
+        parts.push(StyledSpan {
+            text: String::new(),
+            style: span.style,
+        });
+    }
+
+    parts
+}
+
+/// Wraps styled spans while preserving styles across line breaks.
+///
+/// This is the critical function that enables markdown rendering:
+/// - Wraps at word boundaries for normal text
+/// - Preserves whitespace for inline code
+/// - Handles hanging indents via `WrapOptions`
+/// - Maintains style information across line breaks
+pub fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<StyledLine> {
+    if opts.width == 0 || spans.is_empty() {
+        // Degenerate case: just return spans as single line
+        let mut all_spans = opts.first_prefix.clone();
+        all_spans.extend(spans.iter().cloned());
+        return vec![StyledLine { spans: all_spans }];
+    }
+
+    let mut lines: Vec<StyledLine> = Vec::new();
+    let mut current_line_spans: Vec<StyledSpan> = Vec::new();
+    let mut current_line_width: usize = 0;
+    let mut is_first_line = true;
+
+    // Calculate prefix widths
+    let first_prefix_width = spans_display_width(&opts.first_prefix);
+    let rest_prefix_width = spans_display_width(&opts.rest_prefix);
+
+    // Available content width depends on which line we're on
+    let content_width_first = opts.width.saturating_sub(first_prefix_width);
+    let content_width_rest = opts.width.saturating_sub(rest_prefix_width);
+
+    for span in spans {
+        // Check for hard breaks (newlines in span text)
+        if span.text.contains('\n') {
+            for (i, part) in span.text.split('\n').enumerate() {
+                if i > 0 {
+                    // Flush current line on newline
+                    flush_line_impl(
+                        &mut lines,
+                        &mut current_line_spans,
+                        &mut is_first_line,
+                        &opts.first_prefix,
+                        &opts.rest_prefix,
+                    );
+                    current_line_width = 0;
+                }
+
+                if !part.is_empty() {
+                    let part_span = StyledSpan {
+                        text: part.to_string(),
+                        style: span.style,
+                    };
+                    let available = if is_first_line {
+                        content_width_first
+                    } else {
+                        content_width_rest
+                    };
+                    process_span_impl(
+                        &part_span,
+                        &mut current_line_spans,
+                        &mut current_line_width,
+                        &mut is_first_line,
+                        available,
+                        content_width_rest,
+                        &mut lines,
+                        &opts.first_prefix,
+                        &opts.rest_prefix,
+                    );
+                }
+            }
+            continue;
+        }
+
+        let available = if is_first_line {
+            content_width_first
+        } else {
+            content_width_rest
+        };
+        process_span_impl(
+            span,
+            &mut current_line_spans,
+            &mut current_line_width,
+            &mut is_first_line,
+            available,
+            content_width_rest,
+            &mut lines,
+            &opts.first_prefix,
+            &opts.rest_prefix,
+        );
+    }
+
+    // Flush remaining content
+    if !current_line_spans.is_empty() {
+        flush_line_impl(
+            &mut lines,
+            &mut current_line_spans,
+            &mut is_first_line,
+            &opts.first_prefix,
+            &opts.rest_prefix,
+        );
+    }
+
+    // Ensure at least one line with prefix
+    if lines.is_empty() {
+        lines.push(StyledLine {
+            spans: opts.first_prefix.clone(),
+        });
+    }
+
+    lines
+}
+
+/// Helper to flush current line to lines vec.
+fn flush_line_impl(
+    lines: &mut Vec<StyledLine>,
+    current_line_spans: &mut Vec<StyledSpan>,
+    is_first_line: &mut bool,
+    first_prefix: &[StyledSpan],
+    rest_prefix: &[StyledSpan],
+) {
+    let prefix = if *is_first_line {
+        first_prefix.to_vec()
+    } else {
+        rest_prefix.to_vec()
+    };
+
+    let mut final_spans = prefix;
+    final_spans.append(current_line_spans);
+    lines.push(StyledLine { spans: final_spans });
+    *is_first_line = false;
+}
+
+/// Process a single span, handling word wrapping.
+fn process_span_impl(
+    span: &StyledSpan,
+    current_line_spans: &mut Vec<StyledSpan>,
+    current_line_width: &mut usize,
+    is_first_line: &mut bool,
+    available_width: usize,
+    rest_width: usize,
+    lines: &mut Vec<StyledLine>,
+    first_prefix: &[StyledSpan],
+    rest_prefix: &[StyledSpan],
+) {
+    let is_code = matches!(span.style, Style::CodeInline | Style::CodeBlock);
+
+    if is_code {
+        process_code_span_impl(
+            span,
+            current_line_spans,
+            current_line_width,
+            is_first_line,
+            available_width,
+            rest_width,
+            lines,
+            first_prefix,
+            rest_prefix,
+        );
+    } else {
+        process_text_span_impl(
+            span,
+            current_line_spans,
+            current_line_width,
+            is_first_line,
+            available_width,
+            rest_width,
+            lines,
+            first_prefix,
+            rest_prefix,
+        );
+    }
+}
+
+/// Process code span (preserve whitespace, break by character).
+fn process_code_span_impl(
+    span: &StyledSpan,
+    current_line_spans: &mut Vec<StyledSpan>,
+    current_line_width: &mut usize,
+    is_first_line: &mut bool,
+    available_width: usize,
+    rest_width: usize,
+    lines: &mut Vec<StyledLine>,
+    first_prefix: &[StyledSpan],
+    rest_prefix: &[StyledSpan],
+) {
+    let span_width = span.text.width();
+
+    if *current_line_width + span_width <= available_width {
+        // Fits on current line
+        current_line_spans.push(span.clone());
+        *current_line_width += span_width;
+    } else if span_width <= rest_width && *current_line_width > 0 {
+        // Doesn't fit but would fit on fresh line
+        flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+        *current_line_width = 0;
+        current_line_spans.push(span.clone());
+        *current_line_width = span_width;
+    } else {
+        // Need to break the span
+        let remaining_width = available_width.saturating_sub(*current_line_width);
+        let fragments = break_span_by_width(span, remaining_width.max(1));
+
+        for (i, frag) in fragments.into_iter().enumerate() {
+            let frag_width = frag.text.width();
+            let current_avail = if *is_first_line { available_width } else { rest_width };
+
+            if i > 0 && *current_line_width + frag_width > current_avail {
+                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                *current_line_width = 0;
+            }
+
+            if !frag.text.is_empty() {
+                current_line_spans.push(frag.clone());
+                *current_line_width += frag_width;
+            }
+        }
+    }
+}
+
+/// Process normal text span (word boundaries, collapse whitespace).
+fn process_text_span_impl(
+    span: &StyledSpan,
+    current_line_spans: &mut Vec<StyledSpan>,
+    current_line_width: &mut usize,
+    is_first_line: &mut bool,
+    available_width: usize,
+    rest_width: usize,
+    lines: &mut Vec<StyledLine>,
+    first_prefix: &[StyledSpan],
+    rest_prefix: &[StyledSpan],
+) {
+    // Split into words (this collapses whitespace)
+    let words: Vec<&str> = span.text.split_whitespace().collect();
+
+    if words.is_empty() {
+        // Only whitespace - add a single space if we have content
+        if !current_line_spans.is_empty() {
+            let space_span = StyledSpan {
+                text: " ".to_string(),
+                style: span.style,
+            };
+            let current_avail = if *is_first_line { available_width } else { rest_width };
+            if *current_line_width + 1 <= current_avail {
+                current_line_spans.push(space_span);
+                *current_line_width += 1;
+            }
+        }
+        return;
+    }
+
+    for (i, word) in words.iter().enumerate() {
+        let word_width = word.width();
+        let current_avail = if *is_first_line { available_width } else { rest_width };
+
+        // Add space before word (except first word)
+        if i > 0 {
+            // Check if space + word fits
+            if *current_line_width + 1 + word_width <= current_avail {
+                current_line_spans.push(StyledSpan {
+                    text: " ".to_string(),
+                    style: span.style,
+                });
+                *current_line_width += 1;
+            } else {
+                // Word doesn't fit, start new line
+                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                *current_line_width = 0;
+            }
+        }
+
+        let current_avail = if *is_first_line { available_width } else { rest_width };
+
+        // Now add the word
+        if word_width <= current_avail.saturating_sub(*current_line_width) {
+            current_line_spans.push(StyledSpan {
+                text: (*word).to_string(),
+                style: span.style,
+            });
+            *current_line_width += word_width;
+        } else if word_width <= rest_width && *current_line_width > 0 {
+            // Word fits on fresh line
+            flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+            *current_line_width = 0;
+            current_line_spans.push(StyledSpan {
+                text: (*word).to_string(),
+                style: span.style,
+            });
+            *current_line_width = word_width;
+        } else {
+            // Word is too long, need to break it
+            if *current_line_width > 0 {
+                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                *current_line_width = 0;
+            }
+
+            let word_span = StyledSpan {
+                text: (*word).to_string(),
+                style: span.style,
+            };
+            let break_width = if *is_first_line { available_width } else { rest_width };
+            let fragments = break_span_by_width(&word_span, break_width);
+
+            for frag in fragments {
+                let frag_width = frag.text.width();
+                let current_avail = if *is_first_line { available_width } else { rest_width };
+                if *current_line_width + frag_width > current_avail && *current_line_width > 0 {
+                    flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                    *current_line_width = 0;
+                }
+                if !frag.text.is_empty() {
+                    current_line_spans.push(frag);
+                    *current_line_width += frag_width;
+                }
+            }
+        }
+    }
+}
+
+/// Renders markdown text into styled lines.
+///
+/// This is the main entry point for markdown rendering:
+/// - Parses markdown using pulldown-cmark
+/// - Converts events to styled spans
+/// - Wraps at the given width
+///
+/// Falls back to plain text rendering if parsing fails.
+pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
+    if text.is_empty() {
+        return vec![StyledLine { spans: vec![] }];
+    }
+
+    let parser = Parser::new(text);
+    let mut renderer = MarkdownRenderer::new(width);
+
+    for event in parser {
+        renderer.process_event(event);
+    }
+
+    renderer.finish()
+}
+
+/// Internal state for markdown rendering.
+struct MarkdownRenderer {
+    width: usize,
+    lines: Vec<StyledLine>,
+    /// Current paragraph/block spans being collected.
+    current_spans: Vec<StyledSpan>,
+    /// Style stack for nested inline styles.
+    style_stack: Vec<Style>,
+    /// Are we inside a code block?
+    in_code_block: bool,
+    /// Current list nesting and state.
+    list_stack: Vec<ListState>,
+    /// Are we inside a blockquote?
+    in_blockquote: bool,
+    /// Current heading level (None if not in heading).
+    current_heading: Option<HeadingLevel>,
+}
+
+#[derive(Debug, Clone)]
+struct ListState {
+    /// None for unordered, Some(n) for ordered starting at n.
+    ordered: Option<u64>,
+    /// Current item number (for ordered lists).
+    current_item: u64,
+}
+
+impl MarkdownRenderer {
+    fn new(width: usize) -> Self {
+        Self {
+            width,
+            lines: Vec::new(),
+            current_spans: Vec::new(),
+            style_stack: vec![Style::Assistant],
+            in_code_block: false,
+            list_stack: Vec::new(),
+            in_blockquote: false,
+            current_heading: None,
+        }
+    }
+
+    fn current_style(&self) -> Style {
+        self.style_stack.last().copied().unwrap_or(Style::Assistant)
+    }
+
+    fn push_style(&mut self, style: Style) {
+        self.style_stack.push(style);
+    }
+
+    fn pop_style(&mut self) {
+        if self.style_stack.len() > 1 {
+            self.style_stack.pop();
+        }
+    }
+
+    fn process_event(&mut self, event: Event) {
+        match event {
+            Event::Start(tag) => self.start_tag(tag),
+            Event::End(tag) => self.end_tag(tag),
+            Event::Text(text) => self.add_text(&text),
+            Event::Code(code) => self.add_inline_code(&code),
+            Event::SoftBreak => self.add_soft_break(),
+            Event::HardBreak => self.add_hard_break(),
+            Event::Html(_) => {
+                // Skip HTML to avoid terminal injection
+            }
+            Event::InlineHtml(_) => {
+                // Skip inline HTML
+            }
+            Event::FootnoteReference(_) => {
+                // Skip footnotes for now
+            }
+            Event::TaskListMarker(checked) => {
+                // Render task list marker
+                let marker = if checked { "[x] " } else { "[ ] " };
+                self.current_spans.push(StyledSpan {
+                    text: marker.to_string(),
+                    style: Style::ListBullet,
+                });
+            }
+            Event::Rule => {
+                // Horizontal rule - flush and add separator
+                self.flush_paragraph();
+                self.lines.push(StyledLine {
+                    spans: vec![StyledSpan {
+                        text: "─".repeat(self.width.min(40)),
+                        style: Style::Plain,
+                    }],
+                });
+            }
+            Event::InlineMath(_) | Event::DisplayMath(_) => {
+                // Math not supported yet, render as-is
+            }
+        }
+    }
+
+    fn start_tag(&mut self, tag: Tag) {
+        match tag {
+            Tag::Paragraph => {
+                // Paragraphs are implicit containers
+            }
+            Tag::Heading { level, .. } => {
+                self.current_heading = Some(level);
+                let style = match level {
+                    HeadingLevel::H1 => Style::H1,
+                    HeadingLevel::H2 => Style::H2,
+                    _ => Style::H3,
+                };
+                self.push_style(style);
+            }
+            Tag::CodeBlock(_) => {
+                self.flush_paragraph();
+                self.in_code_block = true;
+                self.push_style(Style::CodeBlock);
+            }
+            Tag::List(start) => {
+                self.flush_paragraph();
+                self.list_stack.push(ListState {
+                    ordered: start,
+                    current_item: start.unwrap_or(1),
+                });
+            }
+            Tag::Item => {
+                self.flush_paragraph();
+            }
+            Tag::BlockQuote(_) => {
+                self.flush_paragraph();
+                self.in_blockquote = true;
+                self.push_style(Style::BlockQuote);
+            }
+            Tag::Emphasis => {
+                self.push_style(Style::Emphasis);
+            }
+            Tag::Strong => {
+                self.push_style(Style::Strong);
+            }
+            Tag::Strikethrough => {
+                // Use plain for strikethrough (terminal support varies)
+                self.push_style(Style::Plain);
+            }
+            Tag::Link { .. } => {
+                self.push_style(Style::Link);
+                // TODO: Store URL for later to show after link text
+            }
+            Tag::Image { .. } => {
+                // Images not supported in terminal
+            }
+            Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell => {
+                // Tables not implemented yet
+            }
+            Tag::FootnoteDefinition(_) => {
+                // Footnotes not supported
+            }
+            Tag::MetadataBlock(_) => {
+                // Metadata not relevant for display
+            }
+            Tag::HtmlBlock => {
+                // Not implemented
+            }
+        }
+    }
+
+    fn end_tag(&mut self, tag: TagEnd) {
+        match tag {
+            TagEnd::Paragraph => {
+                self.flush_paragraph();
+                // Add blank line after paragraph
+                self.lines.push(StyledLine::empty());
+            }
+            TagEnd::Heading(_) => {
+                self.flush_paragraph();
+                self.pop_style();
+                self.current_heading = None;
+                // Add blank line after heading
+                self.lines.push(StyledLine::empty());
+            }
+            TagEnd::CodeBlock => {
+                self.flush_code_block();
+                self.in_code_block = false;
+                self.pop_style();
+                // Add blank line after code block
+                self.lines.push(StyledLine::empty());
+            }
+            TagEnd::List(_) => {
+                self.list_stack.pop();
+                if self.list_stack.is_empty() {
+                    // Add blank line after top-level list
+                    self.lines.push(StyledLine::empty());
+                }
+            }
+            TagEnd::Item => {
+                self.flush_list_item();
+                // Increment item counter for ordered lists
+                if let Some(list) = self.list_stack.last_mut() {
+                    list.current_item += 1;
+                }
+            }
+            TagEnd::BlockQuote => {
+                self.flush_paragraph();
+                self.in_blockquote = false;
+                self.pop_style();
+            }
+            TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
+                self.pop_style();
+            }
+            _ => {}
+        }
+    }
+
+    fn add_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        let style = self.current_style();
+
+        if self.in_code_block {
+            // Code blocks: preserve exact text including newlines
+            self.current_spans.push(StyledSpan {
+                text: text.to_string(),
+                style,
+            });
+        } else {
+            // Normal text
+            self.current_spans.push(StyledSpan {
+                text: text.to_string(),
+                style,
+            });
+        }
+    }
+
+    fn add_inline_code(&mut self, code: &str) {
+        self.current_spans.push(StyledSpan {
+            text: code.to_string(),
+            style: Style::CodeInline,
+        });
+    }
+
+    fn add_soft_break(&mut self) {
+        // Soft break becomes a space
+        self.current_spans.push(StyledSpan {
+            text: " ".to_string(),
+            style: self.current_style(),
+        });
+    }
+
+    fn add_hard_break(&mut self) {
+        // Hard break forces a new line within the current block
+        self.current_spans.push(StyledSpan {
+            text: "\n".to_string(),
+            style: self.current_style(),
+        });
+    }
+
+    fn flush_paragraph(&mut self) {
+        if self.current_spans.is_empty() {
+            return;
+        }
+
+        let spans = std::mem::take(&mut self.current_spans);
+        let opts = WrapOptions::new(self.width);
+        let wrapped = wrap_styled_spans(&spans, &opts);
+        self.lines.extend(wrapped);
+    }
+
+    fn flush_code_block(&mut self) {
+        if self.current_spans.is_empty() {
+            return;
+        }
+
+        // Code blocks: emit each line as-is without wrapping
+        let spans = std::mem::take(&mut self.current_spans);
+
+        // Collect all text and split by newlines
+        let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+
+        for line in full_text.split('\n') {
+            // Add indent for visual separation
+            self.lines.push(StyledLine {
+                spans: vec![
+                    StyledSpan {
+                        text: "  ".to_string(),
+                        style: Style::Plain,
+                    },
+                    StyledSpan {
+                        text: line.to_string(),
+                        style: Style::CodeBlock,
+                    },
+                ],
+            });
+        }
+    }
+
+    fn flush_list_item(&mut self) {
+        if self.current_spans.is_empty() {
+            return;
+        }
+
+        let spans = std::mem::take(&mut self.current_spans);
+
+        // Determine list marker and indentation
+        let (marker, marker_style) = if let Some(list) = self.list_stack.last() {
+            if list.ordered.is_some() {
+                (format!("{}. ", list.current_item), Style::ListNumber)
+            } else {
+                ("• ".to_string(), Style::ListBullet)
+            }
+        } else {
+            ("• ".to_string(), Style::ListBullet)
+        };
+
+        let indent_level = self.list_stack.len().saturating_sub(1);
+        let base_indent = "  ".repeat(indent_level);
+        let marker_width = marker.width();
+
+        let opts = WrapOptions {
+            width: self.width,
+            first_prefix: vec![
+                StyledSpan {
+                    text: base_indent.clone(),
+                    style: Style::Plain,
+                },
+                StyledSpan {
+                    text: marker,
+                    style: marker_style,
+                },
+            ],
+            rest_prefix: vec![StyledSpan {
+                text: format!("{}{}", base_indent, " ".repeat(marker_width)),
+                style: Style::Plain,
+            }],
+        };
+
+        let wrapped = wrap_styled_spans(&spans, &opts);
+        self.lines.extend(wrapped);
+    }
+
+    fn finish(mut self) -> Vec<StyledLine> {
+        // Flush any remaining content
+        if !self.current_spans.is_empty() {
+            if self.in_code_block {
+                self.flush_code_block();
+            } else {
+                self.flush_paragraph();
+            }
+        }
+
+        // Remove trailing empty lines
+        while self.lines.last().is_some_and(|l| l.spans.is_empty()) {
+            self.lines.pop();
+        }
+
+        if self.lines.is_empty() {
+            self.lines.push(StyledLine { spans: vec![] });
+        }
+
+        self.lines
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ========================================================================
+    // wrap_styled_spans tests
+    // ========================================================================
+
+    #[test]
+    fn test_wrap_styled_spans_basic() {
+        let spans = vec![StyledSpan {
+            text: "hello world".to_string(),
+            style: Style::Assistant,
+        }];
+        let opts = WrapOptions::new(20);
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        assert_eq!(lines.len(), 1);
+        // Text is split into words but style is preserved
+        let combined: String = lines[0].spans.iter().map(|s| s.text.as_str()).collect();
+        assert_eq!(combined, "hello world");
+        // All spans should have same style
+        assert!(lines[0].spans.iter().all(|s| s.style == Style::Assistant));
+    }
+
+    #[test]
+    fn test_wrap_styled_spans_split() {
+        let spans = vec![StyledSpan {
+            text: "hello world".to_string(),
+            style: Style::Assistant,
+        }];
+        let opts = WrapOptions::new(8);
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        assert_eq!(lines.len(), 2);
+        assert_eq!(lines[0].spans[0].text, "hello");
+        assert_eq!(lines[1].spans[0].text, "world");
+    }
+
+    #[test]
+    fn test_wrap_styled_spans_mid_span_break() {
+        let spans = vec![
+            StyledSpan {
+                text: "hello ".to_string(),
+                style: Style::Assistant,
+            },
+            StyledSpan {
+                text: "world".to_string(),
+                style: Style::Strong,
+            },
+        ];
+        let opts = WrapOptions::new(8);
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        // "hello" fits on first line, "world" on second
+        assert_eq!(lines.len(), 2);
+        // First line should have "hello"
+        // Second line should have "world" with Strong style preserved
+        let last_line = &lines[1];
+        assert!(last_line.spans.iter().any(|s| s.style == Style::Strong));
+    }
+
+    #[test]
+    fn test_wrap_styled_spans_inline_code_whitespace() {
+        // Inline code should preserve spaces
+        let spans = vec![StyledSpan {
+            text: "foo  bar".to_string(), // double space
+            style: Style::CodeInline,
+        }];
+        let opts = WrapOptions::new(20);
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        // Should preserve the double space
+        assert_eq!(lines[0].spans[0].text, "foo  bar");
+    }
+
+    #[test]
+    fn test_wrap_styled_spans_hard_break() {
+        let spans = vec![StyledSpan {
+            text: "line1\nline2".to_string(),
+            style: Style::Assistant,
+        }];
+        let opts = WrapOptions::new(20);
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn test_wrap_styled_spans_hanging_indent() {
+        let spans = vec![StyledSpan {
+            text: "this is a longer text that should wrap".to_string(),
+            style: Style::Assistant,
+        }];
+        let opts = WrapOptions {
+            width: 20,
+            first_prefix: vec![StyledSpan {
+                text: "• ".to_string(),
+                style: Style::ListBullet,
+            }],
+            rest_prefix: vec![StyledSpan {
+                text: "  ".to_string(),
+                style: Style::Plain,
+            }],
+        };
+        let lines = wrap_styled_spans(&spans, &opts);
+
+        // First line should start with bullet
+        assert_eq!(lines[0].spans[0].text, "• ");
+        // Continuation lines should have indent
+        if lines.len() > 1 {
+            assert_eq!(lines[1].spans[0].text, "  ");
+        }
+    }
+
+    // ========================================================================
+    // render_markdown tests
+    // ========================================================================
+
+    #[test]
+    fn test_inline_code() {
+        let lines = render_markdown("Use `code` here", 80);
+
+        // Should have CodeInline style
+        let has_code_inline = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::CodeInline));
+        assert!(has_code_inline);
+    }
+
+    #[test]
+    fn test_bold_italic() {
+        let lines = render_markdown("**bold** and *italic*", 80);
+
+        let has_strong = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::Strong));
+        let has_emphasis = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::Emphasis));
+
+        assert!(has_strong, "Should have Strong style");
+        assert!(has_emphasis, "Should have Emphasis style");
+    }
+
+    #[test]
+    fn test_code_block_no_wrap() {
+        let md = "```\nfn main() {\n    println!(\"hello\");\n}\n```";
+        let lines = render_markdown(md, 20);
+
+        // Code block lines should have CodeBlock style
+        let code_lines: Vec<_> = lines
+            .iter()
+            .filter(|l| l.spans.iter().any(|s| s.style == Style::CodeBlock))
+            .collect();
+
+        assert!(!code_lines.is_empty());
+        // Should preserve indentation
+        let has_indent = code_lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.text.contains("    ")));
+        assert!(has_indent, "Code block should preserve indentation");
+    }
+
+    #[test]
+    fn test_heading_styles() {
+        let lines = render_markdown("# H1\n\n## H2\n\n### H3", 80);
+
+        let has_h1 = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::H1));
+        let has_h2 = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::H2));
+        let has_h3 = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::H3));
+
+        assert!(has_h1, "Should have H1 style");
+        assert!(has_h2, "Should have H2 style");
+        assert!(has_h3, "Should have H3 style");
+    }
+
+    #[test]
+    fn test_list_indent() {
+        let lines = render_markdown("- item 1\n- item 2", 80);
+
+        // Should have list bullets
+        let has_bullet = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::ListBullet));
+        assert!(has_bullet, "Should have list bullets");
+    }
+
+    #[test]
+    fn test_ordered_list() {
+        let lines = render_markdown("1. first\n2. second", 80);
+
+        // Should have list numbers
+        let has_number = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::ListNumber));
+        assert!(has_number, "Should have list numbers");
+    }
+
+    #[test]
+    fn test_fallback_to_plain() {
+        // Plain text should work fine
+        let lines = render_markdown("Just plain text without any markdown", 80);
+
+        assert!(!lines.is_empty());
+        // Should have Assistant style (default)
+        let has_assistant = lines
+            .iter()
+            .any(|l| l.spans.iter().any(|s| s.style == Style::Assistant));
+        assert!(has_assistant);
+    }
+
+    #[test]
+    fn test_empty_input() {
+        let lines = render_markdown("", 80);
+        assert_eq!(lines.len(), 1);
+    }
+
+    #[test]
+    fn test_soft_hard_breaks() {
+        // Soft break (single newline in paragraph) becomes space
+        let md = "line1\nline2";
+        let lines = render_markdown(md, 80);
+
+        // Should be rendered as single paragraph
+        // (pulldown-cmark treats single newline as soft break)
+        assert!(!lines.is_empty());
+    }
+}

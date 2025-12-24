@@ -403,14 +403,10 @@ impl HistoryCell {
                 is_interrupted,
                 ..
             } => {
-                let prefix = "";
-                let mut lines = render_prefixed_content(
-                    prefix,
-                    content,
-                    width,
-                    Style::AssistantPrefix,
-                    Style::Assistant,
-                );
+                // Use markdown rendering for assistant responses
+                use crate::ui::markdown::render_markdown;
+
+                let mut lines = render_markdown(content, width);
 
                 // Add streaming indicator if still streaming
                 if *is_streaming && !content.is_empty() {
@@ -746,6 +742,8 @@ pub enum Style {
     /// User message content (italic).
     User,
     /// Assistant message prefix (none).
+    /// Note: Not currently used since markdown rendering handles assistant output.
+    #[allow(dead_code)]
     AssistantPrefix,
     /// Assistant message content.
     Assistant,
@@ -775,6 +773,30 @@ pub enum Style {
     ThinkingPrefix,
     /// Thinking block content (dim/italic).
     Thinking,
+
+    // Markdown styles
+    /// Inline code (`code`).
+    CodeInline,
+    /// Fenced code block content.
+    CodeBlock,
+    /// Emphasized text (*italic*).
+    Emphasis,
+    /// Strong text (**bold**).
+    Strong,
+    /// Heading level 1 (# Heading).
+    H1,
+    /// Heading level 2 (## Heading).
+    H2,
+    /// Heading level 3+ (### Heading).
+    H3,
+    /// Link text.
+    Link,
+    /// Blockquote content.
+    BlockQuote,
+    /// List bullet marker.
+    ListBullet,
+    /// List number marker.
+    ListNumber,
 }
 
 /// Renders content with a prefix, handling line wrapping.
