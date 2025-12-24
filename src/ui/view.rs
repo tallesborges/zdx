@@ -126,13 +126,35 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
 
 /// Renders the input area with model info on top border and path on bottom border.
 fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
-    // Build top-left title: model name + auth type
+    use crate::config::ThinkingLevel;
+
+    // Build top-left title: model name + auth type + thinking level
     let auth_indicator = match state.auth_type {
         AuthType::OAuth => " (oauth)",
         AuthType::ApiKey => " (api-key)",
         AuthType::None => "",
     };
-    let model_title = format!(" {}{} ", state.config.model, auth_indicator);
+
+    // Build title spans: model + auth in normal style, thinking in dim style
+    let base_style = Style::default().fg(Color::DarkGray);
+    let thinking_style = Style::default()
+        .fg(Color::DarkGray)
+        .add_modifier(Modifier::DIM);
+
+    let mut title_spans = vec![Span::styled(
+        format!(" {}{}", state.config.model, auth_indicator),
+        base_style,
+    )];
+
+    // Add thinking indicator with dim style (only when enabled)
+    if state.config.thinking_level != ThinkingLevel::Off {
+        title_spans.push(Span::styled(
+            format!(" [💭{}]", state.config.thinking_level.display_name()),
+            thinking_style,
+        ));
+    }
+
+    title_spans.push(Span::styled(" ", base_style));
 
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {
@@ -146,10 +168,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
-        .title(Span::styled(
-            model_title,
-            Style::default().fg(Color::DarkGray),
-        ))
+        .title(Line::from(title_spans))
         .title_bottom(
             Line::from(Span::styled(
                 bottom_title,
