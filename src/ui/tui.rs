@@ -71,14 +71,6 @@ pub async fn run_interactive_chat_with_history(
         writeln!(err, "Warning: {}", warning.message)?;
     }
 
-    // Show loaded AGENTS.md files
-    if !effective.loaded_agents_paths.is_empty() {
-        writeln!(err, "Loaded AGENTS.md from:")?;
-        for path in &effective.loaded_agents_paths {
-            writeln!(err, "  - {}", path.display())?;
-        }
-    }
-
     // Small delay so user can see the info before TUI takes over
     err.flush()?;
 
@@ -88,6 +80,18 @@ pub async fn run_interactive_chat_with_history(
     } else {
         TuiRuntime::with_history(config.clone(), root, effective.prompt, session, history)?
     };
+
+    // Add system message for loaded AGENTS.md files to transcript
+    if !effective.loaded_agents_paths.is_empty() {
+        let paths_list: Vec<String> = effective
+            .loaded_agents_paths
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect();
+        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
+        runtime.state.transcript.push(HistoryCell::system(message));
+    }
+
     runtime.run()?;
 
     // Print goodbye after TUI exits (terminal restored)
