@@ -310,6 +310,22 @@ pub async fn run_turn(
                         })
                         .await;
                     }
+
+                    // Check if this is a tool_use block finishing - emit ToolRequested
+                    // immediately so UI can show the tool with its command while
+                    // other content blocks may still be streaming.
+                    if let Some(tu) = tool_uses.iter().find(|t| t.index == index) {
+                        // Try to parse the input JSON; if it fails, use empty object
+                        // (the full error will be handled later when finalizing)
+                        let input: Value = serde_json::from_str(&tu.input_json)
+                            .unwrap_or_else(|_| serde_json::json!({}));
+                        sink.important(EngineEvent::ToolRequested {
+                            id: tu.id.clone(),
+                            name: tu.name.clone(),
+                            input,
+                        })
+                        .await;
+                    }
                 }
                 StreamEvent::MessageDelta {
                     stop_reason: reason,
@@ -363,15 +379,8 @@ pub async fn run_turn(
                 .await;
             }
 
-            // Emit ToolRequested events for all tools before execution
-            for tu in &finalized {
-                sink.important(EngineEvent::ToolRequested {
-                    id: tu.id.clone(),
-                    name: tu.name.clone(),
-                    input: tu.input.clone(),
-                })
-                .await;
-            }
+            // Note: ToolRequested events are already emitted during streaming
+            // (at ContentBlockStop for each tool_use block) for immediate UI feedback.
 
             // Build the assistant response with thinking + tool_use blocks
             let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &finalized);
