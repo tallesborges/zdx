@@ -118,21 +118,25 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 #[derive(Debug, Clone, PartialEq)]
 pub enum HistoryCell {
     /// User input message.
+    /// `is_interrupted` indicates if the request was cancelled before any response.
     User {
         id: CellId,
         created_at: DateTime<Utc>,
         content: String,
+        is_interrupted: bool,
     },
 
     /// Assistant response.
     ///
     /// During streaming, `content` accumulates deltas.
     /// `is_streaming` indicates if more content is expected.
+    /// `is_interrupted` indicates if streaming was cancelled by user.
     Assistant {
         id: CellId,
         created_at: DateTime<Utc>,
         content: String,
         is_streaming: bool,
+        is_interrupted: bool,
     },
 
     /// Tool invocation with state and optional result.
@@ -159,6 +163,7 @@ pub enum HistoryCell {
     ///
     /// During streaming, `content` accumulates deltas and `signature` is None.
     /// When finalized, `signature` is set (required for API continuity).
+    /// `is_interrupted` indicates if streaming was cancelled by user.
     Thinking {
         id: CellId,
         created_at: DateTime<Utc>,
@@ -166,6 +171,7 @@ pub enum HistoryCell {
         /// Cryptographic signature from the API (None while streaming).
         signature: Option<String>,
         is_streaming: bool,
+        is_interrupted: bool,
     },
 }
 
@@ -187,6 +193,7 @@ impl HistoryCell {
             id: CellId::new(),
             created_at: Utc::now(),
             content: content.into(),
+            is_interrupted: false,
         }
     }
 
@@ -197,6 +204,7 @@ impl HistoryCell {
             created_at: Utc::now(),
             content: content.into(),
             is_streaming: false,
+            is_interrupted: false,
         }
     }
 
@@ -207,6 +215,7 @@ impl HistoryCell {
             created_at: Utc::now(),
             content: content.into(),
             is_streaming: true,
+            is_interrupted: false,
         }
     }
 
@@ -246,6 +255,7 @@ impl HistoryCell {
             content: content.into(),
             signature: None,
             is_streaming: true,
+            is_interrupted: false,
         }
     }
 
@@ -319,14 +329,41 @@ impl HistoryCell {
         }
     }
 
-    /// Marks a tool cell as cancelled (interrupted by user).
+    /// Marks a cell as cancelled/interrupted by user.
     ///
-    /// Only affects cells that are still in Running state.
+    /// For tools: only affects cells still in Running state.
+    /// For assistant/thinking: only affects cells still streaming.
     pub fn mark_cancelled(&mut self) {
-        if let HistoryCell::Tool { state, .. } = self
-            && *state == ToolState::Running
-        {
-            *state = ToolState::Cancelled;
+        match self {
+            HistoryCell::Tool { state, .. } if *state == ToolState::Running => {
+                *state = ToolState::Cancelled;
+            }
+            HistoryCell::Assistant {
+                is_streaming,
+                is_interrupted,
+                ..
+            } if *is_streaming => {
+                *is_streaming = false;
+                *is_interrupted = true;
+            }
+            HistoryCell::Thinking {
+                is_streaming,
+                is_interrupted,
+                ..
+            } if *is_streaming => {
+                *is_streaming = false;
+                *is_interrupted = true;
+            }
+            _ => {}
+        }
+    }
+
+    /// Marks a user cell as interrupted (request cancelled before any response).
+    ///
+    /// Only affects User cells.
+    pub fn mark_request_interrupted(&mut self) {
+        if let HistoryCell::User { is_interrupted, .. } = self {
+            *is_interrupted = true;
         }
     }
 
@@ -340,13 +377,30 @@ impl HistoryCell {
     /// to display for running tools (0-9). Callers should increment this at ~10Hz.
     pub fn display_lines(&self, width: usize, spinner_frame: usize) -> Vec<StyledLine> {
         match self {
-            HistoryCell::User { content, .. } => {
+            HistoryCell::User {
+                content,
+                is_interrupted,
+                ..
+            } => {
                 let prefix = "| ";
-                render_prefixed_content(prefix, content, width, Style::UserPrefix, Style::User)
+                let mut lines =
+                    render_prefixed_content(prefix, content, width, Style::UserPrefix, Style::User);
+
+                // Append interrupted indicator to last line if request was cancelled
+                if *is_interrupted {
+                    if let Some(last) = lines.last_mut() {
+                        last.spans.push(StyledSpan {
+                            text: " (interrupted)".to_string(),
+                            style: Style::Interrupted,
+                        });
+                    }
+                }
+                lines
             }
             HistoryCell::Assistant {
                 content,
                 is_streaming,
+                is_interrupted,
                 ..
             } => {
                 let prefix = "";
@@ -365,6 +419,16 @@ impl HistoryCell {
                         last.spans.push(StyledSpan {
                             text: "▌".to_string(),
                             style: Style::StreamingCursor,
+                        });
+                    }
+                }
+
+                // Append interrupted indicator to last line
+                if *is_interrupted {
+                    if let Some(last) = lines.last_mut() {
+                        last.spans.push(StyledSpan {
+                            text: " (interrupted)".to_string(),
+                            style: Style::Interrupted,
                         });
                     }
                 }
@@ -407,7 +471,7 @@ impl HistoryCell {
                         "$ ".to_string(),
                         Style::ToolCancelled,
                         Style::ToolCancelled,
-                        Some(" (cancelled)"),
+                        Some(" (interrupted)"),
                     ),
                 };
 
@@ -427,7 +491,7 @@ impl HistoryCell {
                         if let Some(suf) = suffix {
                             spans.push(StyledSpan {
                                 text: suf.to_string(),
-                                style: Style::ToolError,
+                                style: Style::Interrupted,
                             });
                         }
                         lines.push(StyledLine { spans });
@@ -467,7 +531,7 @@ impl HistoryCell {
                     if let Some(suf) = suffix {
                         spans.push(StyledSpan {
                             text: suf.to_string(),
-                            style: Style::ToolError,
+                            style: Style::Interrupted,
                         });
                     }
                     lines.push(StyledLine { spans });
@@ -527,6 +591,7 @@ impl HistoryCell {
             HistoryCell::Thinking {
                 content,
                 is_streaming,
+                is_interrupted,
                 ..
             } => {
                 let prefix = "Thinking: ";
@@ -548,6 +613,16 @@ impl HistoryCell {
                         style: Style::StreamingCursor,
                     });
                 }
+
+                // Append interrupted indicator to last line
+                if *is_interrupted {
+                    if let Some(last) = lines.last_mut() {
+                        last.spans.push(StyledSpan {
+                            text: " (interrupted)".to_string(),
+                            style: Style::Interrupted,
+                        });
+                    }
+                }
                 lines
             }
         }
@@ -567,19 +642,41 @@ impl HistoryCell {
         }
     }
 
-    /// Returns the content length for cache key computation.
+    /// Returns a discriminator for cache key computation.
     ///
-    /// This is used to invalidate cache entries when content changes.
+    /// This is used to invalidate cache entries when content or state changes.
+    /// The value must change when the rendered output would change.
     pub fn content_len(&self) -> usize {
         match self {
-            HistoryCell::User { content, .. } => content.len(),
-            HistoryCell::Assistant { content, .. } => content.len(),
+            HistoryCell::User {
+                content,
+                is_interrupted,
+                ..
+            } => {
+                // Include is_interrupted in discriminator to invalidate cache when marked
+                content.len() + if *is_interrupted { 1 } else { 0 }
+            }
+            HistoryCell::Assistant {
+                content,
+                is_interrupted,
+                ..
+            } => {
+                // Include is_interrupted in discriminator
+                content.len() + if *is_interrupted { 1 } else { 0 }
+            }
             HistoryCell::Tool { result, .. } => {
                 // Use result presence as cache discriminator
                 if result.is_some() { 1 } else { 0 }
             }
             HistoryCell::System { content, .. } => content.len(),
-            HistoryCell::Thinking { content, .. } => content.len(),
+            HistoryCell::Thinking {
+                content,
+                is_interrupted,
+                ..
+            } => {
+                // Include is_interrupted in discriminator
+                content.len() + if *is_interrupted { 1 } else { 0 }
+            }
         }
     }
 
@@ -668,10 +765,12 @@ pub enum Style {
     ToolRunning,
     /// Tool success prefix (green $).
     ToolSuccess,
-    /// Tool cancelled command (strikethrough).
+    /// Tool cancelled/interrupted command style.
     ToolCancelled,
     /// Tool output (stdout from bash, etc).
     ToolOutput,
+    /// Interrupted suffix indicator (dim).
+    Interrupted,
     /// Thinking block prefix ("Thinking: ").
     ThinkingPrefix,
     /// Thinking block content (dim/italic).
