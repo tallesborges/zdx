@@ -228,6 +228,13 @@ fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<StyledLine
 - Added view.rs style mappings for all markdown styles
 - Tests added in `src/ui/markdown.rs`
 
+**Additional fixes applied:**
+- Fixed extra blank lines between list items (paragraphs inside lists don't add trailing blank line)
+- Fixed missing spaces around inline code (preserve leading/trailing whitespace in text spans)
+- Added subtle ```` ``` ```` fence markers with `Style::CodeFence` (dark gray)
+- Show language identifier on opening fence (e.g., ```` ```rust ````)
+- Fixed empty line before closing fence (trim trailing newlines from code content)
+
 **✅ Demo:**
 ```bash
 # Run zdx, send prompt that triggers markdown response
@@ -251,9 +258,6 @@ cargo run --
 ## Slice 2: Code blocks (preserve formatting, no wrap)
 **Goal:** Render fenced code blocks with monospace style, no word wrapping, preserve indentation.
 
-## Slice 2: Code blocks (preserve formatting, no wrap)
-**Goal:** Render fenced code blocks with monospace style, no word wrapping, preserve indentation.
-
 **Status:** ✅ **COMPLETE** (implemented as part of Slice 1)
 
 **Scope checklist:**
@@ -263,6 +267,9 @@ cargo run --
 - [x] Preserve whitespace exactly (avoid `split_whitespace()` or any normalization)
 - [x] Add `Style::CodeBlock` variant
 - [x] Ensure code blocks have indent/prefix for visual separation (e.g., indent by 2 spaces)
+- [x] Add `Style::CodeFence` for subtle ```` ``` ```` markers (dark gray)
+- [x] Show language identifier on opening fence (e.g., ```` ```rust ````)
+- [x] Trim trailing newlines to avoid empty line before closing fence
 - [ ] **Document MVP limitation:** Long code lines will be **clipped** by ratatui (no horizontal scroll until Phase 2)
   - Consider adding visual `…` indicator at edge for clipped lines
 
