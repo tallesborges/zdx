@@ -140,17 +140,17 @@ cargo test -- sse_parser_thinking
 
 ---
 
-### Slice 3: Engine events + turn tracking
+### Slice 3: Engine events + turn tracking ✅
 
 **Goal:** Engine emits thinking events, tracks turn content for proper grouping
 
 **Scope checklist:**
-- [ ] Add to `EngineEvent` enum:
+- [x] Add to `EngineEvent` enum:
   ```rust
   ThinkingDelta { text: String },
   ThinkingFinal { text: String, signature: String },
   ```
-- [ ] Add `ThinkingBlock` tracking in engine loop (similar to `ToolUseBuilder`):
+- [x] Add `ThinkingBlock` tracking in engine loop (similar to `ToolUseBuilder`):
   ```rust
   struct ThinkingBuilder {
       index: usize,
@@ -158,11 +158,13 @@ cargo test -- sse_parser_thinking
       signature: String,
   }
   ```
-- [ ] Handle `StreamEvent::ThinkingDelta` → accumulate text, emit `EngineEvent::ThinkingDelta`
-- [ ] Handle `StreamEvent::SignatureDelta` → accumulate signature
-- [ ] Handle `StreamEvent::ThinkingBlockStop` → emit `EngineEvent::ThinkingFinal`
-- [ ] Add `ChatContentBlock::Thinking { thinking: String, signature: String }` variant
-- [ ] Include thinking blocks in `assistant_blocks` for `TurnComplete.messages`
+- [x] Handle `StreamEvent::ThinkingDelta` → accumulate text, emit `EngineEvent::ThinkingDelta`
+- [x] Handle `StreamEvent::SignatureDelta` → accumulate signature
+- [x] Handle `StreamEvent::ContentBlockStop` for thinking → emit `EngineEvent::ThinkingFinal`
+- [x] Add `ChatContentBlock::Thinking { thinking: String, signature: String }` variant
+- [x] Include thinking blocks in `assistant_blocks` for `TurnComplete.messages`
+- [x] Add stub handlers in TUI update.rs (display deferred to Slice 4)
+- [x] Add exec mode handlers in stream.rs (dim text output for thinking)
 
 **✅ Demo:**
 ```bash

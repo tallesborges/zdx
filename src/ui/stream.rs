@@ -236,6 +236,18 @@ impl CliRenderer {
                 // Turn complete - no action needed in exec mode.
                 // The caller handles the final result from run_turn.
             }
+            EngineEvent::ThinkingDelta { text } => {
+                // In exec mode, stream thinking text with a prefix (dim)
+                if !text.is_empty() {
+                    let _ = write!(self.stderr, "\x1b[2m{}\x1b[0m", text);
+                    let _ = self.stderr.flush();
+                }
+            }
+            EngineEvent::ThinkingFinal { .. } => {
+                // Thinking complete - ensure newline after thinking output
+                let _ = writeln!(self.stderr);
+                let _ = self.stderr.flush();
+            }
         }
     }
 

@@ -119,6 +119,14 @@ pub struct ToolUseBuilder {
     pub input_json: String,
 }
 
+/// Builder for accumulating thinking block data from streaming events.
+#[derive(Debug, Clone)]
+pub struct ThinkingBuilder {
+    pub index: usize,
+    pub text: String,
+    pub signature: String,
+}
+
 /// Finalized tool use with parsed input (ready for execution).
 #[derive(Debug, Clone)]
 pub struct ToolUse {
@@ -216,6 +224,7 @@ pub async fn run_turn(
         // State for accumulating the current response
         let mut full_text = String::new();
         let mut tool_uses: Vec<ToolUseBuilder> = Vec::new();
+        let mut thinking_blocks: Vec<ThinkingBuilder> = Vec::new();
         let mut stop_reason: Option<String> = None;
 
         // Process stream events with periodic interrupt checking
@@ -261,6 +270,12 @@ pub async fn run_turn(
                             name: name.unwrap_or_default(),
                             input_json: String::new(),
                         });
+                    } else if block_type == "thinking" {
+                        thinking_blocks.push(ThinkingBuilder {
+                            index,
+                            text: String::new(),
+                            signature: String::new(),
+                        });
                     }
                 }
                 StreamEvent::InputJsonDelta {
@@ -269,6 +284,27 @@ pub async fn run_turn(
                 } => {
                     if let Some(tu) = tool_uses.iter_mut().find(|t| t.index == index) {
                         tu.input_json.push_str(&partial_json);
+                    }
+                }
+                StreamEvent::ThinkingDelta { index, thinking } => {
+                    if let Some(tb) = thinking_blocks.iter_mut().find(|t| t.index == index) {
+                        tb.text.push_str(&thinking);
+                        sink.delta(EngineEvent::ThinkingDelta { text: thinking });
+                    }
+                }
+                StreamEvent::SignatureDelta { index, signature } => {
+                    if let Some(tb) = thinking_blocks.iter_mut().find(|t| t.index == index) {
+                        tb.signature.push_str(&signature);
+                    }
+                }
+                StreamEvent::ContentBlockStop { index } => {
+                    // Check if this is a thinking block finishing
+                    if let Some(tb) = thinking_blocks.iter().find(|t| t.index == index) {
+                        sink.important(EngineEvent::ThinkingFinal {
+                            text: tb.text.clone(),
+                            signature: tb.signature.clone(),
+                        })
+                        .await;
                     }
                 }
                 StreamEvent::MessageDelta {
@@ -289,7 +325,7 @@ pub async fn run_turn(
                     .await;
                     return Err(anyhow::Error::new(provider_err));
                 }
-                // Ignore other events (Ping, MessageStart, ContentBlockStop, MessageStop)
+                // Ignore other events (Ping, MessageStart, MessageStop)
                 _ => {}
             }
         }
@@ -333,8 +369,8 @@ pub async fn run_turn(
                 .await;
             }
 
-            // Build the assistant response with tool_use blocks
-            let assistant_blocks = build_assistant_blocks(&full_text, &finalized);
+            // Build the assistant response with thinking + tool_use blocks
+            let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &finalized);
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results
@@ -351,6 +387,12 @@ pub async fn run_turn(
                 text: full_text.clone(),
             })
             .await;
+        }
+
+        // Build final assistant message with thinking + text blocks
+        let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &[]);
+        if !assistant_blocks.is_empty() {
+            messages.push(ChatMessage::assistant_blocks(assistant_blocks));
         }
 
         // Emit turn complete with final result
@@ -407,9 +449,21 @@ async fn execute_tools_async(
     Ok(results)
 }
 
-/// Builds assistant content blocks from accumulated text and tool uses.
-fn build_assistant_blocks(text: &str, tool_uses: &[ToolUse]) -> Vec<ChatContentBlock> {
-    let mut blocks = Vec::with_capacity(1 + tool_uses.len());
+/// Builds assistant content blocks from accumulated thinking, text, and tool uses.
+fn build_assistant_blocks(
+    thinking_blocks: &[ThinkingBuilder],
+    text: &str,
+    tool_uses: &[ToolUse],
+) -> Vec<ChatContentBlock> {
+    let mut blocks = Vec::with_capacity(thinking_blocks.len() + 1 + tool_uses.len());
+
+    // Add thinking blocks first (order matters for API)
+    for tb in thinking_blocks {
+        blocks.push(ChatContentBlock::Thinking {
+            thinking: tb.text.clone(),
+            signature: tb.signature.clone(),
+        });
+    }
 
     // Add text block if any
     if !text.is_empty() {

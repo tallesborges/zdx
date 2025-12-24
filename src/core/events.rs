@@ -14,6 +14,12 @@ use crate::providers::anthropic::{ChatMessage, ProviderErrorKind};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
+    /// Incremental thinking chunk from the assistant (extended thinking).
+    ThinkingDelta { text: String },
+
+    /// Final complete thinking block from the assistant (extended thinking).
+    ThinkingFinal { text: String, signature: String },
+
     /// Incremental text chunk from the assistant.
     AssistantDelta { text: String },
 
