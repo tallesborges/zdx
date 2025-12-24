@@ -319,6 +319,14 @@ impl TuiRuntime {
                     )));
                 }
             }
+            UiEffect::PersistThinking { level } => {
+                if let Err(e) = crate::config::Config::save_thinking_level(level) {
+                    self.state.transcript.push(HistoryCell::system(format!(
+                        "Warning: Failed to save thinking level: {}",
+                        e
+                    )));
+                }
+            }
             UiEffect::CreateNewSession => match session::Session::new() {
                 Ok(new_session) => {
                     let new_id = new_session.id.clone();

@@ -18,7 +18,9 @@ use crate::providers::anthropic::ChatMessage;
 use crate::ui::transcript::HistoryCell;
 
 // Re-export overlay types for backwards compatibility
-pub use crate::ui::overlays::{CommandPaletteState, LoginState, ModelPickerState};
+pub use crate::ui::overlays::{
+    CommandPaletteState, LoginState, ModelPickerState, ThinkingPickerState,
+};
 
 // ============================================================================
 // Overlay State (Unified)
@@ -36,6 +38,8 @@ pub enum OverlayState {
     CommandPalette(CommandPaletteState),
     /// Model picker is open.
     ModelPicker(ModelPickerState),
+    /// Thinking level picker is open.
+    ThinkingPicker(ThinkingPickerState),
     /// Login flow is active.
     Login(LoginState),
 }
@@ -75,6 +79,22 @@ impl OverlayState {
     pub fn as_model_picker_mut(&mut self) -> Option<&mut ModelPickerState> {
         match self {
             OverlayState::ModelPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the thinking picker state if active.
+    pub fn as_thinking_picker(&self) -> Option<&ThinkingPickerState> {
+        match self {
+            OverlayState::ThinkingPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the thinking picker state mutably if active.
+    pub fn as_thinking_picker_mut(&mut self) -> Option<&mut ThinkingPickerState> {
+        match self {
+            OverlayState::ThinkingPicker(p) => Some(p),
             _ => None,
         }
     }
@@ -695,22 +715,33 @@ mod tests {
 
     #[test]
     fn test_overlay_state_is_active() {
+        use crate::config::ThinkingLevel;
         assert!(!OverlayState::None.is_active());
         assert!(OverlayState::CommandPalette(CommandPaletteState::new(true)).is_active());
         assert!(OverlayState::ModelPicker(ModelPickerState::new("test")).is_active());
+        assert!(
+            OverlayState::ThinkingPicker(ThinkingPickerState::new(ThinkingLevel::Off)).is_active()
+        );
         assert!(OverlayState::Login(LoginState::Exchanging).is_active());
     }
 
     #[test]
     fn test_overlay_state_accessors() {
+        use crate::config::ThinkingLevel;
         let palette = OverlayState::CommandPalette(CommandPaletteState::new(true));
         assert!(palette.as_command_palette().is_some());
         assert!(palette.as_model_picker().is_none());
+        assert!(palette.as_thinking_picker().is_none());
         assert!(palette.as_login().is_none());
 
         let picker = OverlayState::ModelPicker(ModelPickerState::new("test"));
         assert!(picker.as_command_palette().is_none());
         assert!(picker.as_model_picker().is_some());
+
+        let thinking_picker =
+            OverlayState::ThinkingPicker(ThinkingPickerState::new(ThinkingLevel::Medium));
+        assert!(thinking_picker.as_thinking_picker().is_some());
+        assert!(thinking_picker.as_model_picker().is_none());
 
         let login = OverlayState::Login(LoginState::Exchanging);
         assert!(login.as_login().is_some());

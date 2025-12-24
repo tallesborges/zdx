@@ -16,7 +16,9 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph, Wrap},
 };
 
-use crate::ui::overlays::{render_command_palette, render_login_overlay, render_model_picker};
+use crate::ui::overlays::{
+    render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
+};
 use crate::ui::state::{AuthType, EngineState, OverlayState, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
@@ -116,6 +118,9 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         }
         OverlayState::ModelPicker(picker) => {
             render_model_picker(frame, picker, area, chunks[1].y);
+        }
+        OverlayState::ThinkingPicker(picker) => {
+            render_thinking_picker(frame, picker, area, chunks[1].y);
         }
         OverlayState::Login(login_state) => {
             render_login_overlay(frame, login_state, area);

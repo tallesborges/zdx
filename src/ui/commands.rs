@@ -67,6 +67,11 @@ pub const SLASH_COMMANDS: &[SlashCommand] = &[
         aliases: &["q", "exit"],
         description: "Exit ZDX",
     },
+    SlashCommand {
+        name: "thinking",
+        aliases: &["think", "t"],
+        description: "Change thinking level",
+    },
 ];
 
 #[cfg(test)]
