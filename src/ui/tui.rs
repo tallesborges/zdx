@@ -290,10 +290,9 @@ impl TuiRuntime {
                 let config_path = crate::config::paths::config_path();
                 if config_path.exists() {
                     if let Err(e) = open::that(&config_path) {
-                        self.state.transcript.push(HistoryCell::system(format!(
-                            "Failed to open config: {}",
-                            e
-                        )));
+                        self.state
+                            .transcript
+                            .push(HistoryCell::system(format!("Failed to open config: {}", e)));
                     }
                 } else {
                     self.state.transcript.push(HistoryCell::system(format!(

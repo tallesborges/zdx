@@ -79,7 +79,6 @@ impl ThinkingLevel {
             ThinkingLevel::High,
         ]
     }
-
 }
 
 /// Default config template with comments, embedded at compile time.
@@ -549,7 +548,7 @@ max_tokens = 2048
     #[test]
     fn test_effective_max_tokens_auto_adjusts_when_thinking_enabled() {
         let config = Config {
-            max_tokens: 1024, // too low for thinking
+            max_tokens: 1024,                      // too low for thinking
             thinking_level: ThinkingLevel::Medium, // 8192 budget
             ..Default::default()
         };
