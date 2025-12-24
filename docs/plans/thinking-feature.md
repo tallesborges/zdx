@@ -223,12 +223,12 @@ cargo run
 
 ---
 
-### Slice 5: Session persistence + API reconstruction
+### Slice 5: Session persistence + API reconstruction ✅
 
 **Goal:** Thinking persists in session JSONL, replays correctly, API messages properly grouped
 
 **Scope checklist:**
-- [ ] Add `SessionEvent::Thinking` variant:
+- [x] Add `SessionEvent::Thinking` variant:
   ```rust
   Thinking {
       content: String,
@@ -236,10 +236,10 @@ cargo run
       ts: String,
   }
   ```
-- [ ] Update `SessionEvent::from_engine()` to convert `ThinkingFinal`
-- [ ] Update session loading to reconstruct thinking cells
-- [ ] Update `ChatMessage` / `ApiMessage` serialization:
-  - Add `ApiContentBlock::Thinking` variant
+- [x] Update `SessionEvent::from_engine()` to convert `ThinkingFinal`
+- [x] Update session loading to reconstruct thinking cells
+- [x] Update `ChatMessage` / `ApiMessage` serialization:
+  - Add `ApiContentBlock::Thinking` variant (already existed)
   - Serialize with signature when present
   - **If signature missing (aborted):** convert to text block:
     ```rust
@@ -248,8 +248,8 @@ cargo run
         cache_control: None,
     }
     ```
-- [ ] Update `ApiMessage::from_chat_message()` to handle thinking blocks
-- [ ] Verify turn grouping: thinking + text + tool_use → single assistant message (already works via `assistant_blocks`)
+- [x] Update `ApiMessage::from_chat_message()` to handle thinking blocks (already worked, added aborted handling)
+- [x] Verify turn grouping: thinking + text + tool_use → single assistant message (already works via `assistant_blocks`)
 
 **✅ Demo:**
 ```bash
@@ -295,17 +295,17 @@ zdx sessions resume <id>
 ## Testing
 
 ### Per-slice smoke tests
-- **Slice 1:** Config loads with new fields, effective_max_tokens() returns safe value
-- **Slice 2:** SSE fixture test parses thinking events
-- **Slice 3:** Engine emits ThinkingDelta/ThinkingFinal events
-- **Slice 4:** TUI displays thinking cells with distinct style
-- **Slice 5:** Session round-trip preserves thinking, resume works
+- **Slice 1:** Config loads with new fields, effective_max_tokens() returns safe value ✅
+- **Slice 2:** SSE fixture test parses thinking events ✅
+- **Slice 3:** Engine emits ThinkingDelta/ThinkingFinal events ✅
+- **Slice 4:** TUI displays thinking cells with distinct style ✅
+- **Slice 5:** Session round-trip preserves thinking, resume works ✅
 
 ### Regression tests (protect contracts)
-- [ ] `test_sse_parser_thinking_response` — fixture test for thinking stream
-- [ ] `test_effective_max_tokens_with_thinking` — token limit safety
-- [ ] `test_session_thinking_roundtrip` — thinking persists and loads
-- [ ] `test_aborted_thinking_converts_to_text` — signature fallback
+- [x] `test_sse_parser_thinking_response` — fixture test for thinking stream
+- [x] `test_effective_max_tokens_with_thinking` — token limit safety
+- [x] `test_session_thinking_roundtrip` — thinking persists and loads
+- [x] `test_aborted_thinking_converts_to_text` — signature fallback
 
 ---
 

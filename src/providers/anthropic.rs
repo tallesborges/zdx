@@ -867,6 +867,10 @@ enum ApiContentBlock {
 
 impl ApiMessage {
     /// Converts a ChatMessage to ApiMessage with optional cache control.
+    ///
+    /// Handles thinking blocks with missing signatures (aborted thinking) by
+    /// converting them to text blocks wrapped in `<thinking>` tags, following
+    /// the pi-mono pattern for API compatibility.
     fn from_chat_message(msg: &ChatMessage, use_cache_control: bool) -> Self {
         match &msg.content {
             MessageContent::Text(text) => ApiMessage {
@@ -880,10 +884,22 @@ impl ApiMessage {
                         ChatContentBlock::Thinking {
                             thinking,
                             signature,
-                        } => ApiContentBlock::Thinking {
-                            thinking: thinking.clone(),
-                            signature: signature.clone(),
-                        },
+                        } => {
+                            // If signature is missing or empty (aborted thinking),
+                            // convert to text block to avoid API rejection.
+                            // This follows the pi-mono pattern.
+                            if signature.is_empty() {
+                                ApiContentBlock::Text {
+                                    text: format!("<thinking>\n{}\n</thinking>", thinking),
+                                    cache_control: None,
+                                }
+                            } else {
+                                ApiContentBlock::Thinking {
+                                    thinking: thinking.clone(),
+                                    signature: signature.clone(),
+                                }
+                            }
+                        }
                         ChatContentBlock::Text(text) => ApiContentBlock::Text {
                             text: text.clone(),
                             cache_control: if use_cache_control {
@@ -1394,5 +1410,73 @@ data: {"type":"message_stop"}
         // for (i, e) in events.iter().enumerate() {
         //     println!("{}: {:?}", i, e);
         // }
+    }
+
+    #[test]
+    fn test_aborted_thinking_converts_to_text() {
+        // Test that thinking blocks with empty signature are converted to text blocks
+        let msg = ChatMessage::assistant_blocks(vec![
+            ChatContentBlock::Thinking {
+                thinking: "Partial thoughts here...".to_string(),
+                signature: "".to_string(), // Empty signature = aborted
+            },
+            ChatContentBlock::Text("The response".to_string()),
+        ]);
+
+        let api_msg = ApiMessage::from_chat_message(&msg, false);
+
+        // Verify the structure
+        if let ApiMessageContent::Blocks(blocks) = api_msg.content {
+            assert_eq!(blocks.len(), 2);
+
+            // First block should be converted to text with <thinking> tags
+            match &blocks[0] {
+                ApiContentBlock::Text { text, .. } => {
+                    assert!(text.contains("<thinking>"));
+                    assert!(text.contains("Partial thoughts here..."));
+                    assert!(text.contains("</thinking>"));
+                }
+                _ => panic!("Expected Text block for aborted thinking"),
+            }
+
+            // Second block should remain as text
+            match &blocks[1] {
+                ApiContentBlock::Text { text, .. } => {
+                    assert_eq!(text, "The response");
+                }
+                _ => panic!("Expected Text block"),
+            }
+        } else {
+            panic!("Expected Blocks content");
+        }
+    }
+
+    #[test]
+    fn test_valid_thinking_preserved() {
+        // Test that thinking blocks with valid signature are preserved
+        let msg = ChatMessage::assistant_blocks(vec![ChatContentBlock::Thinking {
+            thinking: "Deep analysis...".to_string(),
+            signature: "valid_signature_123".to_string(),
+        }]);
+
+        let api_msg = ApiMessage::from_chat_message(&msg, false);
+
+        if let ApiMessageContent::Blocks(blocks) = api_msg.content {
+            assert_eq!(blocks.len(), 1);
+
+            // Should remain as Thinking block
+            match &blocks[0] {
+                ApiContentBlock::Thinking {
+                    thinking,
+                    signature,
+                } => {
+                    assert_eq!(thinking, "Deep analysis...");
+                    assert_eq!(signature, "valid_signature_123");
+                }
+                _ => panic!("Expected Thinking block to be preserved"),
+            }
+        } else {
+            panic!("Expected Blocks content");
+        }
     }
 }
