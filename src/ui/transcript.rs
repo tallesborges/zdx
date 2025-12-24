@@ -471,45 +471,33 @@ impl HistoryCell {
                     lines.push(StyledLine { spans });
                 }
 
-                // Show truncated output preview when done
+                // Show truncated output preview when done (combine stdout + stderr)
                 if let Some(res) = result
                     && let Some(data) = res.data()
                 {
-                    // Show stdout for bash tool
-                    if let Some(output) = data.get("stdout").and_then(|v| v.as_str()) {
-                        let output_lines: Vec<&str> = output.lines().collect();
-                        let max_preview_lines = 5;
-                        let truncated = output_lines.len() > max_preview_lines;
+                    let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+                    let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+                    let all_lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
+                    let max_preview_lines = 5;
+                    let truncated = all_lines.len() > max_preview_lines;
 
-                        for line in output_lines.iter().take(max_preview_lines) {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: (*line).to_string(),
-                                    style: Style::ToolOutput,
-                                }],
-                            });
-                        }
-
-                        if truncated {
-                            lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: format!(
-                                        "[... {} more lines ...]",
-                                        output_lines.len() - max_preview_lines
-                                    ),
-                                    style: Style::ToolBracket,
-                                }],
-                            });
-                        }
-                    }
-                    // Show stderr if present and non-empty
-                    if let Some(stderr) = data.get("stderr").and_then(|v| v.as_str())
-                        && !stderr.is_empty()
-                    {
+                    for line in all_lines.iter().take(max_preview_lines) {
                         lines.push(StyledLine {
                             spans: vec![StyledSpan {
-                                text: format!("stderr: {}", stderr.lines().next().unwrap_or("")),
-                                style: Style::ToolError,
+                                text: (*line).to_string(),
+                                style: Style::ToolOutput,
+                            }],
+                        });
+                    }
+
+                    if truncated {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: format!(
+                                    "[... {} more lines ...]",
+                                    all_lines.len() - max_preview_lines
+                                ),
+                                style: Style::ToolBracket,
                             }],
                         });
                     }
