@@ -214,13 +214,24 @@ Deliverables
 
 # Polish Phases (after MVP)
 
-## Phase 2a: Plain text wrap + scroll
+## Phase 2a: Plain text wrap + scroll ✅
 Goal: Proper line wrapping (already partially done in Slice 4).
 
-- [ ] Add `unicode-width` for display width (CJK, emoji).
-- [ ] Wrap by display width, not byte length.
-- [ ] Cache wrapped lines per `(cell_id, width)`.
-- [ ] ✅ Check-in: emoji and CJK characters wrap correctly.
+- [x] Add `unicode-width` for display width (CJK, emoji).
+- [x] Wrap by display width, not byte length.
+- [x] Cache wrapped lines per `(cell_id, width)`.
+- [x] ✅ Check-in: emoji and CJK characters wrap correctly.
+
+**Implementation notes:**
+- Added `unicode-width` crate for display width calculation.
+- `wrap_text()` now uses `UnicodeWidthStr::width()` instead of byte length.
+- `break_word_by_width()` handles breaking long words at proper character boundaries.
+- `render_prefixed_content()` uses display width for prefix/indent calculation.
+- `WrapCache` struct with `RefCell` interior mutability for caching during render.
+- Cache key: `(CellId, width, content_len)` to invalidate on content changes.
+- Streaming/running cells are not cached (dynamic content).
+- Cache cleared on terminal resize events.
+- 16 new tests for unicode wrapping and caching.
 
 ## Phase 2b: Markdown rendering (strict subset)
 Goal: Styled markdown output. Keep scope tight.

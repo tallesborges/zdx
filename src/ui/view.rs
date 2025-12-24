@@ -274,7 +274,11 @@ fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
     for cell in &state.transcript {
-        let styled_lines = cell.display_lines(width, state.spinner_frame / SPINNER_SPEED_DIVISOR);
+        let styled_lines = cell.display_lines_cached(
+            width,
+            state.spinner_frame / SPINNER_SPEED_DIVISOR,
+            &state.wrap_cache,
+        );
         for styled_line in styled_lines {
             lines.push(convert_styled_line(styled_line));
         }

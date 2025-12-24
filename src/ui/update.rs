@@ -61,7 +61,11 @@ fn handle_terminal_event(
             handle_paste(state, &text);
             vec![]
         }
-        Event::Resize(_, _) => vec![],
+        Event::Resize(_, _) => {
+            // Clear wrap cache on resize since line wrapping depends on width
+            state.wrap_cache.clear();
+            vec![]
+        }
         _ => vec![],
     }
 }

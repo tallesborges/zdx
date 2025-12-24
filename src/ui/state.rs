@@ -15,7 +15,7 @@ use crate::config::Config;
 use crate::core::engine::EngineOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
-use crate::ui::transcript::HistoryCell;
+use crate::ui::transcript::{HistoryCell, WrapCache};
 
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::overlays::{
@@ -387,6 +387,8 @@ pub struct TuiState {
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
+    /// Cache for wrapped line rendering.
+    pub wrap_cache: WrapCache,
 }
 
 impl TuiState {
@@ -462,6 +464,7 @@ impl TuiState {
             auth_type: AuthType::detect(),
             git_branch,
             display_path,
+            wrap_cache: WrapCache::new(),
         }
     }
 
