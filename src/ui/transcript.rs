@@ -524,7 +524,7 @@ impl HistoryCell {
                 is_streaming,
                 ..
             } => {
-                let prefix = "💭 ";
+                let prefix = "Thinking: ";
                 let mut lines = render_prefixed_content(
                     prefix,
                     content,
@@ -667,7 +667,7 @@ pub enum Style {
     ToolCancelled,
     /// Tool output (stdout from bash, etc).
     ToolOutput,
-    /// Thinking block prefix ("💭 ").
+    /// Thinking block prefix ("Thinking: ").
     ThinkingPrefix,
     /// Thinking block content (dim/italic).
     Thinking,
@@ -685,7 +685,7 @@ fn render_prefixed_content(
     content_style: Style,
 ) -> Vec<StyledLine> {
     let mut lines = Vec::new();
-    // Use display width for prefix (handles emoji like 💭 correctly)
+    // Use display width for prefix
     let prefix_display_width = prefix.width();
 
     // Minimum usable width
@@ -1106,7 +1106,7 @@ mod tests {
 
         // Should have thinking prefix
         assert!(!lines.is_empty());
-        assert_eq!(lines[0].spans[0].text, "💭 ");
+        assert_eq!(lines[0].spans[0].text, "Thinking: ");
         assert_eq!(lines[0].spans[0].style, Style::ThinkingPrefix);
 
         // Should have streaming cursor
@@ -1239,14 +1239,14 @@ mod tests {
 
     #[test]
     fn test_thinking_prefix_width() {
-        // The thinking prefix "💭 " uses emoji which is 2 columns + space
+        // The thinking prefix "Thinking: " is 10 characters
         // This test ensures the prefix width is calculated correctly
         let cell = HistoryCell::thinking_streaming("x");
-        let lines = cell.display_lines(10, 0);
+        let lines = cell.display_lines(20, 0);
 
         // Should have prefix + content on first line
         assert!(!lines.is_empty());
-        assert_eq!(lines[0].spans[0].text, "💭 ");
+        assert_eq!(lines[0].spans[0].text, "Thinking: ");
     }
 
     #[test]
