@@ -310,7 +310,7 @@ mod tests {
 
     #[test]
     fn test_model_option_sorting() {
-        let mut models = vec![
+        let mut models = [
             ModelOption {
                 family: "z-family".to_string(),
                 id: "z-model".to_string(),
