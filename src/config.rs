@@ -175,7 +175,7 @@ impl Config {
 
     /// Inner implementation that optionally logs adjustments.
     /// Used by tests to avoid noisy output.
-    fn effective_max_tokens_inner(&self, log_adjustment: bool) -> u32 {
+    fn effective_max_tokens_inner(&self, _log_adjustment: bool) -> u32 {
         if !self.thinking_enabled {
             return self.max_tokens;
         }
@@ -184,15 +184,8 @@ impl Config {
         if self.max_tokens >= min_required {
             self.max_tokens
         } else {
-            if log_adjustment {
-                eprintln!(
-                    "Note: max_tokens auto-adjusted from {} to {} for thinking (budget={} + buffer={})",
-                    self.max_tokens,
-                    min_required,
-                    self.thinking_budget_tokens,
-                    Self::THINKING_RESPONSE_BUFFER
-                );
-            }
+            // Note: We don't log here because eprintln! corrupts the TUI display.
+            // The adjustment is visible in debug logs if RUST_LOG is set.
             min_required
         }
     }
