@@ -6,7 +6,7 @@
 //!
 //! Uses pulldown-cmark for parsing. Falls back to plain text if parsing fails.
 
-use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
 
 use super::transcript::{Style, StyledLine, StyledSpan};
@@ -479,6 +479,8 @@ struct MarkdownRenderer {
     style_stack: Vec<Style>,
     /// Are we inside a code block?
     in_code_block: bool,
+    /// Language identifier for current code block (e.g., "rust", "python").
+    code_block_lang: Option<String>,
     /// Current list nesting and state.
     list_stack: Vec<ListState>,
     /// Are we inside a blockquote?
@@ -503,6 +505,7 @@ impl MarkdownRenderer {
             current_spans: Vec::new(),
             style_stack: vec![Style::Assistant],
             in_code_block: false,
+            code_block_lang: None,
             list_stack: Vec::new(),
             in_blockquote: false,
             current_heading: None,
@@ -578,9 +581,14 @@ impl MarkdownRenderer {
                 };
                 self.push_style(style);
             }
-            Tag::CodeBlock(_) => {
+            Tag::CodeBlock(kind) => {
                 self.flush_paragraph();
                 self.in_code_block = true;
+                // Extract language from fenced code blocks
+                self.code_block_lang = match kind {
+                    CodeBlockKind::Fenced(lang) if !lang.is_empty() => Some(lang.to_string()),
+                    _ => None,
+                };
                 self.push_style(Style::CodeBlock);
             }
             Tag::List(start) => {
@@ -746,10 +754,14 @@ impl MarkdownRenderer {
         // Collect all text and split by newlines
         let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
-        // Opening fence (subtle)
+        // Opening fence with optional language (subtle)
+        let fence_text = match &self.code_block_lang {
+            Some(lang) => format!("```{}", lang),
+            None => "```".to_string(),
+        };
         self.lines.push(StyledLine {
             spans: vec![StyledSpan {
-                text: "```".to_string(),
+                text: fence_text,
                 style: Style::CodeFence,
             }],
         });
@@ -777,6 +789,9 @@ impl MarkdownRenderer {
                 style: Style::CodeFence,
             }],
         });
+
+        // Clear the language for next code block
+        self.code_block_lang = None;
     }
 
     fn flush_list_item(&mut self) {
