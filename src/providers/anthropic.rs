@@ -400,7 +400,9 @@ impl AnthropicClient {
                 SystemBlock::new(CLAUDE_CODE_SYSTEM_PROMPT),
                 SystemBlock::with_cache_control(prompt),
             ]),
-            None => Some(vec![SystemBlock::with_cache_control(CLAUDE_CODE_SYSTEM_PROMPT)]),
+            None => Some(vec![SystemBlock::with_cache_control(
+                CLAUDE_CODE_SYSTEM_PROMPT,
+            )]),
         }
     }
 

@@ -66,12 +66,22 @@ pub struct Config {
 
     /// Optional Anthropic API base URL (for test rigs or proxies)
     pub anthropic_base_url: Option<String>,
+
+    /// Enable extended thinking (default: false)
+    pub thinking_enabled: bool,
+
+    /// Token budget for thinking when enabled (default: 8000)
+    pub thinking_budget_tokens: u32,
 }
 
 impl Config {
     const DEFAULT_MODEL: &str = "claude-haiku-4-5";
     const DEFAULT_MAX_TOKENS: u32 = 1024;
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 30;
+    const DEFAULT_THINKING_ENABLED: bool = false;
+    const DEFAULT_THINKING_BUDGET_TOKENS: u32 = 8000;
+    /// Minimum buffer above thinking budget for response tokens.
+    const THINKING_RESPONSE_BUFFER: u32 = 4096;
 
     /// Loads configuration from the default config path.
     pub fn load() -> Result<Self> {
@@ -155,6 +165,38 @@ impl Config {
             .filter(|s| !s.trim().is_empty())
     }
 
+    /// Returns the effective max_tokens to use in API requests.
+    ///
+    /// When thinking is enabled, ensures max_tokens >= thinking_budget_tokens + buffer
+    /// to leave room for the response. Logs when auto-adjusting.
+    pub fn effective_max_tokens(&self) -> u32 {
+        self.effective_max_tokens_inner(true)
+    }
+
+    /// Inner implementation that optionally logs adjustments.
+    /// Used by tests to avoid noisy output.
+    fn effective_max_tokens_inner(&self, log_adjustment: bool) -> u32 {
+        if !self.thinking_enabled {
+            return self.max_tokens;
+        }
+
+        let min_required = self.thinking_budget_tokens + Self::THINKING_RESPONSE_BUFFER;
+        if self.max_tokens >= min_required {
+            self.max_tokens
+        } else {
+            if log_adjustment {
+                eprintln!(
+                    "Note: max_tokens auto-adjusted from {} to {} for thinking (budget={} + buffer={})",
+                    self.max_tokens,
+                    min_required,
+                    self.thinking_budget_tokens,
+                    Self::THINKING_RESPONSE_BUFFER
+                );
+            }
+            min_required
+        }
+    }
+
     /// Creates a default config file at the given path.
     /// Returns an error if the file already exists.
     pub fn init(path: &Path) -> Result<()> {
@@ -197,6 +239,8 @@ impl Default for Config {
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
             anthropic_base_url: None,
+            thinking_enabled: Self::DEFAULT_THINKING_ENABLED,
+            thinking_budget_tokens: Self::DEFAULT_THINKING_BUDGET_TOKENS,
         }
     }
 }
@@ -398,5 +442,83 @@ max_tokens = 2048
         assert!(config_path.exists());
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-sonnet");
+    }
+
+    /// Thinking: defaults to disabled with 8000 budget.
+    #[test]
+    fn test_thinking_defaults() {
+        let config = Config::default();
+        assert!(!config.thinking_enabled);
+        assert_eq!(config.thinking_budget_tokens, 8000);
+    }
+
+    /// Thinking: effective_max_tokens returns raw value when thinking disabled.
+    #[test]
+    fn test_effective_max_tokens_thinking_disabled() {
+        let config = Config {
+            max_tokens: 1024,
+            thinking_enabled: false,
+            thinking_budget_tokens: 8000,
+            ..Default::default()
+        };
+        assert_eq!(config.effective_max_tokens_inner(false), 1024);
+    }
+
+    /// Thinking: effective_max_tokens auto-adjusts when thinking enabled and max_tokens too low.
+    #[test]
+    fn test_effective_max_tokens_auto_adjusts_when_thinking_enabled() {
+        let config = Config {
+            max_tokens: 1024, // too low for thinking
+            thinking_enabled: true,
+            thinking_budget_tokens: 8000,
+            ..Default::default()
+        };
+        // Should be thinking_budget_tokens + buffer (4096)
+        assert_eq!(config.effective_max_tokens_inner(false), 8000 + 4096);
+    }
+
+    /// Thinking: effective_max_tokens respects user value when sufficient.
+    #[test]
+    fn test_effective_max_tokens_respects_high_value() {
+        let config = Config {
+            max_tokens: 20000, // sufficient
+            thinking_enabled: true,
+            thinking_budget_tokens: 8000,
+            ..Default::default()
+        };
+        assert_eq!(config.effective_max_tokens_inner(false), 20000);
+    }
+
+    /// Thinking: config loads from file with thinking fields.
+    #[test]
+    fn test_thinking_config_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"thinking_enabled = true
+thinking_budget_tokens = 10000
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(config.thinking_enabled);
+        assert_eq!(config.thinking_budget_tokens, 10000);
+    }
+
+    /// Thinking: old configs without thinking fields use defaults (serde default).
+    #[test]
+    fn test_thinking_config_missing_uses_defaults() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Old config without thinking fields
+        fs::write(&config_path, "model = \"claude-3-opus\"\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(!config.thinking_enabled);
+        assert_eq!(config.thinking_budget_tokens, 8000);
     }
 }
