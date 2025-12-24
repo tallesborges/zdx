@@ -271,12 +271,15 @@ zdx sessions resume <id>
 
 ## Contracts (guardrails)
 
-1. **Thinking disabled by default**: `thinking_enabled = false` is default; no API changes when disabled
+1. **Thinking disabled by default**: `thinking_level = off` is default; no API changes when disabled
 2. **Token limit safety**: `effective_max_tokens() >= thinking_budget_tokens + 1` always enforced
 3. **Signature preservation**: aborted thinking blocks convert to text blocks to avoid API rejection
 4. **Turn grouping**: thinking + text + tool_use from same turn → single assistant message to API
 5. **Event ordering**: thinking events emitted before text events within a turn (matches API order)
 6. **Session schema**: add `thinking` event type; older sessions remain readable (forward compatible)
+7. **Thinking level display**: when thinking enabled, level shown in model title bar (Phase 2)
+8. **Level persistence**: thinking level persists to config file immediately on change (Phase 2)
+9. **Config migration**: old `thinking_enabled` + `thinking_budget_tokens` format auto-migrates (Phase 2)
 
 ---
 
@@ -290,6 +293,17 @@ zdx sessions resume <id>
 | Turn association | Implicit (adjacent) OR explicit (turn_id) | **Implicit** | Engine already groups by turn; no need for explicit ID |
 | Max tokens adjustment | Auto-adjust OR error | **Auto-adjust with log** | Better UX, user can still override explicitly |
 
+### Phase 2 key decisions
+
+| Decision | Options | Recommendation | Rationale |
+|----------|---------|----------------|-----------|
+| Budget representation | Exact tokens OR named levels | **Named levels** | Simpler UX, covers 90% of use cases, maps to common patterns |
+| Level names | off/low/med/high OR off/minimal/low/med/high | **5 levels** | Minimal (~1k) useful for simple tasks, more granularity |
+| Config migration | Break old format OR auto-migrate | **Auto-migrate** | No friction for existing users |
+| Picker keybinding | Ctrl+T OR Ctrl+Shift+T | **Ctrl+T** | Available, memorable (T for Thinking) |
+| Level indicator style | Full name OR abbreviated | **Abbreviated** | `[💭med]` fits better, model names can be long |
+| Indicator position | After model OR after auth | **After auth** | Logical grouping: model + auth + thinking config |
+
 ---
 
 ## Testing
@@ -300,12 +314,20 @@ zdx sessions resume <id>
 - **Slice 3:** Engine emits ThinkingDelta/ThinkingFinal events ✅
 - **Slice 4:** TUI displays thinking cells with distinct style ✅
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
+- **Slice 6:** ThinkingLevel enum maps to correct budget values
+- **Slice 7:** Model title shows thinking indicator when enabled
+- **Slice 8:** Thinking picker opens/closes, selection updates state
+- **Slice 9:** Ctrl+T and /thinking command both open picker
+- **Slice 10:** Thinking level persists to config file, survives restart
 
 ### Regression tests (protect contracts)
 - [x] `test_sse_parser_thinking_response` — fixture test for thinking stream
 - [x] `test_effective_max_tokens_with_thinking` — token limit safety
 - [x] `test_session_thinking_roundtrip` — thinking persists and loads
 - [x] `test_aborted_thinking_converts_to_text` — signature fallback
+- [ ] `test_thinking_level_budget_mapping` — each level maps to expected tokens
+- [ ] `test_thinking_level_config_migration` — old format migrates correctly
+- [ ] `test_save_thinking_level_preserves_config` — toml_edit preserves comments
 
 ---
 
@@ -347,15 +369,208 @@ Each slice is independently demoable. Slices 4 and 5 can be developed in paralle
 
 ---
 
+## Phase 2: Runtime Thinking Control
+
+### Slice 6: Thinking level enum + config mapping
+
+**Goal:** Replace boolean `thinking_enabled` with a thinking level that maps to budget tokens
+
+**Scope checklist:**
+- [ ] Define `ThinkingLevel` enum in `config.rs`:
+  ```rust
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+  #[serde(rename_all = "lowercase")]
+  pub enum ThinkingLevel {
+      #[default]
+      Off,      // No reasoning
+      Minimal,  // Very brief reasoning (~1k tokens)
+      Low,      // Light reasoning (~2k tokens)
+      Medium,   // Moderate reasoning (~8k tokens)
+      High,     // Deep reasoning (~16k tokens)
+  }
+  ```
+- [ ] Add `ThinkingLevel::budget_tokens(&self) -> Option<u32>` method:
+  - `Off` → `None` (disabled)
+  - `Minimal` → `Some(1024)`
+  - `Low` → `Some(2048)`
+  - `Medium` → `Some(8192)`
+  - `High` → `Some(16384)`
+- [ ] Add `ThinkingLevel::description(&self) -> &'static str` method:
+  - `Off` → "No reasoning"
+  - `Minimal` → "Very brief reasoning (~1k tokens)"
+  - `Low` → "Light reasoning (~2k tokens)"
+  - `Medium` → "Moderate reasoning (~8k tokens)"
+  - `High` → "Deep reasoning (~16k tokens)"
+- [ ] Add `ThinkingLevel::display_name(&self) -> &'static str` method (short: "off", "minimal", etc.)
+- [ ] Add `ThinkingLevel::all() -> &'static [ThinkingLevel]` for picker
+- [ ] Replace `thinking_enabled: bool` + `thinking_budget_tokens: u32` with `thinking_level: ThinkingLevel`
+- [ ] Update `effective_max_tokens()` to use `thinking_level.budget_tokens()`
+- [ ] Migrate old config format (backwards compat):
+  - `thinking_enabled = false` → `thinking_level = "off"`
+  - `thinking_enabled = true` + `thinking_budget_tokens = X` → map to nearest level
+- [ ] Update `default_config.toml` template with `thinking_level`
+
+**Demo:**
+```bash
+# Edit config: thinking_level = "medium"
+cargo run
+# Verify thinking works with ~8000 token budget
+```
+
+**Risks / failure modes:**
+- Config migration for existing users → serde `#[serde(alias)]` or custom deserialize
+
+---
+
+### Slice 7: Show thinking level in model title
+
+**Goal:** Display current thinking level next to model name in status bar
+
+**Scope checklist:**
+- [ ] Update `render_input()` in `view.rs` to include thinking level:
+  ```rust
+  // Format: " claude-sonnet-4 (api-key) [thinking: medium] "
+  let thinking_indicator = match state.config.thinking_level {
+      ThinkingLevel::Off => String::new(),
+      level => format!(" [💭{}]", level.display_name()),
+  };
+  let model_title = format!(" {}{}{} ", state.config.model, auth_indicator, thinking_indicator);
+  ```
+- [ ] Use dim/italic style for thinking indicator to distinguish from model name
+- [ ] Keep indicator compact: `[💭med]` or `[💭high]` (abbreviate if needed)
+
+**Demo:**
+```bash
+cargo run
+# See "[💭medium]" after model name in input border
+# Change config to thinking_level = "off"
+# Restart - indicator disappears
+```
+
+**Risks / failure modes:**
+- Long model names overflow border → truncate model name, not indicator
+
+---
+
+### Slice 8: Thinking level picker overlay
+
+**Goal:** User can change thinking level via overlay (like model picker)
+
+**Scope checklist:**
+- [ ] Create `src/ui/overlays/thinking_picker.rs`:
+  - [ ] `ThinkingPickerState { selected: usize }` struct
+  - [ ] `ThinkingPickerState::new(current: ThinkingLevel)` - select current level
+  - [ ] `open_thinking_picker(state)` - opens overlay
+  - [ ] `close_thinking_picker(state)` - closes overlay
+  - [ ] `handle_thinking_picker_key(state, key)` - up/down/enter/esc
+  - [ ] `render_thinking_picker(frame, picker, area, input_top_y)` - render list with:
+    - Level name (left column, cyan)
+    - Description with token count (right column, dimmed)
+- [ ] Add `OverlayState::ThinkingPicker(ThinkingPickerState)` variant
+- [ ] Add accessor methods: `as_thinking_picker()`, `as_thinking_picker_mut()`
+- [ ] Wire up in `update.rs`:
+  - Handle key events when ThinkingPicker overlay active
+  - On selection: update `state.config.thinking_level`, emit `PersistThinking` effect
+- [ ] Wire up in `view.rs`: render thinking picker when active
+- [ ] Add `UiEffect::PersistThinking { level: ThinkingLevel }` effect
+- [ ] Implement effect in `tui.rs`: call `Config::save_thinking_level()`
+
+**Demo:**
+```bash
+cargo run
+# Press Ctrl+T (or /thinking command)
+# See thinking level picker with Off/Minimal/Low/Medium/High
+# Select "High" → config persisted, indicator updates to [💭high]
+```
+
+**Risks / failure modes:**
+- Overlay positioning conflicts with model picker → same centering logic, exclusive
+
+---
+
+### Slice 9: Keybinding + slash command for thinking picker
+
+**Goal:** User can open thinking picker via keyboard shortcut or command
+
+**Scope checklist:**
+- [ ] Add `Ctrl+T` keybinding in `update.rs` to open thinking picker
+- [ ] Add `/thinking` slash command in `commands.rs`:
+  ```rust
+  SlashCommand {
+      name: "thinking",
+      aliases: &["think", "t"],
+      description: "Change thinking level",
+      action: CommandAction::OpenThinkingPicker,
+  }
+  ```
+- [ ] Add `CommandAction::OpenThinkingPicker` variant
+- [ ] Handle action in command execution to open overlay
+- [ ] Add system message on level change: "Thinking level set to {level}"
+
+**Demo:**
+```bash
+cargo run
+# Press Ctrl+T → thinking picker opens
+# Or type /thinking → picker opens
+# Select level → "Thinking level set to high" appears in transcript
+```
+
+---
+
+### Slice 10: Config persistence for thinking level
+
+**Goal:** Thinking level persists to config file like model selection
+
+**Scope checklist:**
+- [ ] Add `Config::save_thinking_level(level: ThinkingLevel)` method
+- [ ] Add `Config::save_thinking_level_to(path, level)` for testability
+- [ ] Use `toml_edit` to preserve comments (same pattern as `save_model`)
+- [ ] Update runtime effect handler to call `save_thinking_level()`
+- [ ] Add integration test: change level via picker, restart, verify persisted
+
+**Demo:**
+```bash
+cargo run
+# Change thinking level via picker
+# Quit and restart
+# Verify thinking level indicator shows persisted value
+```
+
+---
+
+## Updated Slice Dependency Graph
+
+```
+Slice 1-5 (MVP - Complete) ✅
+    │
+    ▼
+Slice 6 (Thinking level enum)
+    │
+    ├─────────────────┐
+    ▼                 ▼
+Slice 7 (Model title) Slice 8 (Picker overlay)
+                      │
+                      ▼
+                  Slice 9 (Keybinding + command)
+                      │
+                      ▼
+                  Slice 10 (Config persistence)
+```
+
+Slices 7 and 8 can be developed in parallel after Slice 6.
+
+---
+
 ## Later / Deferred
 
 | Item | Trigger to revisit |
 |------|-------------------|
-| Thinking budget in UI (model picker) | User feedback on needing runtime control |
+| ~~Thinking budget in UI (model picker)~~ | ✅ Replaced by thinking level picker (Slice 8) |
 | Per-prompt thinking toggle | User feedback on needing per-turn control |
 | Thinking for other providers | When adding provider that supports extended thinking |
 | Thinking summarization | User feedback on long thinking being noisy |
 | Streaming thinking collapse | UX research on optimal display during stream |
+| Custom budget in picker | User feedback on needing fine-grained control beyond levels |
 
 ---
 
