@@ -345,6 +345,26 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::Interrupted => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM),
+
+        // Markdown styles
+        TranscriptStyle::CodeInline => Style::default().fg(Color::Cyan),
+        TranscriptStyle::CodeBlock => Style::default().fg(Color::Cyan),
+        TranscriptStyle::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
+        TranscriptStyle::Strong => Style::default().add_modifier(Modifier::BOLD),
+        TranscriptStyle::H1 => Style::default()
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        TranscriptStyle::H2 => Style::default().add_modifier(Modifier::BOLD),
+        TranscriptStyle::H3 => Style::default()
+            .add_modifier(Modifier::ITALIC)
+            .fg(Color::White),
+        TranscriptStyle::Link => Style::default()
+            .fg(Color::Cyan)
+            .add_modifier(Modifier::UNDERLINED),
+        TranscriptStyle::BlockQuote => Style::default()
+            .fg(Color::Green)
+            .add_modifier(Modifier::ITALIC),
+        TranscriptStyle::ListBullet => Style::default().fg(Color::Yellow),
+        TranscriptStyle::ListNumber => Style::default().fg(Color::Yellow),
     }
 }
 

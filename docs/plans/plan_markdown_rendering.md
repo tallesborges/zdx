@@ -197,28 +197,36 @@ fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<StyledLine
 ## Slice 1: Markdown parsing (non-streaming, finalized only)
 **Goal:** Parse finalized assistant responses as markdown, render styled inline elements (bold, italic, inline code). Implement styled text wrapping as foundation for all other slices.
 
+**Status:** ✅ **COMPLETE**
+
 **Scope checklist:**
-- [ ] Add `pulldown-cmark = "0.11"` to Cargo.toml
-- [ ] Create `src/ui/markdown.rs`
-- [ ] **[CRITICAL]** Implement `wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<StyledLine>`
-  - [ ] Add `WrapOptions` struct with `width`, `first_prefix`, `rest_prefix` fields
-  - [ ] Extend existing unicode-width logic from `transcript.rs` (reuse `break_word_by_width()`)
-  - [ ] Handle breaking mid-span: split span into fragments, preserve style on each fragment
-  - [ ] Respect word boundaries for normal text (use `split_whitespace()`)
-  - [ ] Preserve whitespace for inline code (`Style::CodeInline` → no whitespace collapsing)
-  - [ ] Handle hard breaks: `\n` in `span.text` triggers line flush
-  - [ ] Support hanging indents via `first_prefix` vs `rest_prefix`
-- [ ] Implement `render_markdown(text: &str, width: usize) -> Vec<StyledLine>`
-  - [ ] Parse markdown with `pulldown_cmark::Parser::new()`
-  - [ ] Handle events: `Text`, `Code`, `Emphasis`, `Strong`, `SoftBreak`, `HardBreak`
-  - [ ] `Event::SoftBreak` → emit space span
-  - [ ] `Event::HardBreak` → emit `\n` in span text (triggers flush in wrapper)
-  - [ ] `Event::Html` → skip or render as plain text (avoid terminal injection)
-  - [ ] Convert events to `Vec<StyledSpan>`, then call `wrap_styled_spans()`
-- [ ] Add `Style` enum variants: `CodeInline`, `Emphasis`, `Strong`
-- [ ] Hook into `HistoryCell::Assistant::display_lines()` — **always** use `render_markdown()` (no heuristic)
-- [ ] Graceful degradation: if `pulldown_cmark` parsing fails → fall back to plain text rendering
-- [ ] **Update `AGENTS.md`** when adding `src/ui/markdown.rs` (required by repo rules)
+- [x] Add `pulldown-cmark = "0.11"` to Cargo.toml
+- [x] Create `src/ui/markdown.rs`
+- [x] **[CRITICAL]** Implement `wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<StyledLine>`
+  - [x] Add `WrapOptions` struct with `width`, `first_prefix`, `rest_prefix` fields
+  - [x] Extend existing unicode-width logic from `transcript.rs` (reuse `break_word_by_width()`)
+  - [x] Handle breaking mid-span: split span into fragments, preserve style on each fragment
+  - [x] Respect word boundaries for normal text (use `split_whitespace()`)
+  - [x] Preserve whitespace for inline code (`Style::CodeInline` → no whitespace collapsing)
+  - [x] Handle hard breaks: `\n` in `span.text` triggers line flush
+  - [x] Support hanging indents via `first_prefix` vs `rest_prefix`
+- [x] Implement `render_markdown(text: &str, width: usize) -> Vec<StyledLine>`
+  - [x] Parse markdown with `pulldown_cmark::Parser::new()`
+  - [x] Handle events: `Text`, `Code`, `Emphasis`, `Strong`, `SoftBreak`, `HardBreak`
+  - [x] `Event::SoftBreak` → emit space span
+  - [x] `Event::HardBreak` → emit `\n` in span text (triggers flush in wrapper)
+  - [x] `Event::Html` → skip or render as plain text (avoid terminal injection)
+  - [x] Convert events to `Vec<StyledSpan>`, then call `wrap_styled_spans()`
+- [x] Add `Style` enum variants: `CodeInline`, `Emphasis`, `Strong`
+- [x] Hook into `HistoryCell::Assistant::display_lines()` — **always** use `render_markdown()` (no heuristic)
+- [x] Graceful degradation: if `pulldown_cmark` parsing fails → fall back to plain text rendering
+- [x] **Update `AGENTS.md`** when adding `src/ui/markdown.rs` (required by repo rules)
+
+**Implementation notes:**
+- Also implemented Slice 2 (code blocks) and Slice 3 (headings) and Slice 4 (lists) as part of the same pass
+- Slice 6 (links and blockquotes) also included
+- Added view.rs style mappings for all markdown styles
+- Tests added in `src/ui/markdown.rs`
 
 **✅ Demo:**
 ```bash
@@ -243,13 +251,18 @@ cargo run --
 ## Slice 2: Code blocks (preserve formatting, no wrap)
 **Goal:** Render fenced code blocks with monospace style, no word wrapping, preserve indentation.
 
+## Slice 2: Code blocks (preserve formatting, no wrap)
+**Goal:** Render fenced code blocks with monospace style, no word wrapping, preserve indentation.
+
+**Status:** ✅ **COMPLETE** (implemented as part of Slice 1)
+
 **Scope checklist:**
-- [ ] Handle `pulldown_cmark::Event::Start(Tag::CodeBlock(...))` and `End(TagEnd::CodeBlock)`
-- [ ] Track `in_code_block` state during event processing
-- [ ] When in code block: collect text into separate lines, **skip `wrap_styled_spans()`** entirely
-- [ ] Preserve whitespace exactly (avoid `split_whitespace()` or any normalization)
-- [ ] Add `Style::CodeBlock` variant
-- [ ] Ensure code blocks have indent/prefix for visual separation (e.g., indent by 2 spaces)
+- [x] Handle `pulldown_cmark::Event::Start(Tag::CodeBlock(...))` and `End(TagEnd::CodeBlock)`
+- [x] Track `in_code_block` state during event processing
+- [x] When in code block: collect text into separate lines, **skip `wrap_styled_spans()`** entirely
+- [x] Preserve whitespace exactly (avoid `split_whitespace()` or any normalization)
+- [x] Add `Style::CodeBlock` variant
+- [x] Ensure code blocks have indent/prefix for visual separation (e.g., indent by 2 spaces)
 - [ ] **Document MVP limitation:** Long code lines will be **clipped** by ratatui (no horizontal scroll until Phase 2)
   - Consider adding visual `…` indicator at edge for clipped lines
 
@@ -277,12 +290,14 @@ cargo run --
 ## Slice 3: Headings
 **Goal:** Style headings (H1-H6) to stand out visually.
 
+**Status:** ✅ **COMPLETE** (implemented as part of Slice 1)
+
 **Scope checklist:**
-- [ ] Handle `Start(Tag::Heading { level, .. })` and `End(TagEnd::Heading(level))`
-- [ ] Add `Style::H1`, `Style::H2`, `Style::H3` variants (H4-H6 can share H3 style for MVP)
-- [ ] H1: bold + underline, H2: bold, H3: italic or dim
-- [ ] Emit heading content as styled spans, wrap using `wrap_styled_spans()` with empty prefixes
-- [ ] Add spacing via explicit blank `StyledLine`s (not embedded `\n`) to keep width-agnostic model consistent
+- [x] Handle `Start(Tag::Heading { level, .. })` and `End(TagEnd::Heading(level))`
+- [x] Add `Style::H1`, `Style::H2`, `Style::H3` variants (H4-H6 can share H3 style for MVP)
+- [x] H1: bold + underline, H2: bold, H3: italic or dim
+- [x] Emit heading content as styled spans, wrap using `wrap_styled_spans()` with empty prefixes
+- [x] Add spacing via explicit blank `StyledLine`s (not embedded `\n`) to keep width-agnostic model consistent
 
 **✅ Demo:**
 ```bash
@@ -304,18 +319,20 @@ cargo run --
 ## Slice 4: Lists (ordered, unordered, indented)
 **Goal:** Render lists with bullets/numbers and proper indentation.
 
+**Status:** ✅ **COMPLETE** (implemented as part of Slice 1)
+
 **Dependencies:** Requires `wrap_styled_spans()` from Slice 1 for hanging indents.
 
 **Scope checklist:**
-- [ ] Handle `Start(Tag::List(None))` (unordered) and `Start(Tag::List(Some(start)))` (ordered)
-- [ ] Handle `Start(Tag::Item)` and `End(TagEnd::Item)`
-- [ ] Track indent level for nested lists
-- [ ] Emit list markers: `•` or `-` for unordered, `1.`, `2.` for ordered
-- [ ] Indent list items (e.g., 2 spaces per level)
-- [ ] Use `wrap_styled_spans()` with `WrapOptions`:
+- [x] Handle `Start(Tag::List(None))` (unordered) and `Start(Tag::List(Some(start)))` (ordered)
+- [x] Handle `Start(Tag::Item)` and `End(TagEnd::Item)`
+- [x] Track indent level for nested lists
+- [x] Emit list markers: `•` or `-` for unordered, `1.`, `2.` for ordered
+- [x] Indent list items (e.g., 2 spaces per level)
+- [x] Use `wrap_styled_spans()` with `WrapOptions`:
   - `first_prefix`: bullet/number + space (e.g., `[StyledSpan { text: "- ", style: Style::ListBullet }]`)
   - `rest_prefix`: spaces to align with text start (e.g., `[StyledSpan { text: "  ", style: Style::Assistant }]`)
-- [ ] **Note:** Current `render_prefixed_content()` only supports single style + `&str`; it won't work for mixed inline styles inside list items
+- [x] **Note:** Current `render_prefixed_content()` only supports single style + `&str`; it won't work for mixed inline styles inside list items
 
 **✅ Demo:**
 ```bash
@@ -372,16 +389,20 @@ cargo run --
 ## Slice 6: Links and blockquotes
 **Goal:** Render links (cyan, underlined, show URL) and blockquotes (indented, styled).
 
+**Status:** ⚠️ **PARTIALLY COMPLETE** (implemented as part of Slice 1)
+
 **Dependencies:** Requires `wrap_styled_spans()` from Slice 1 for proper wrapping.
 
 **Scope checklist:**
-- [ ] Handle `Start(Tag::Link { dest_url, .. })` → render link text + URL in parens
-  - [ ] Handle nested emphasis inside link text (preserve styles)
-  - [ ] Truncate very long URLs (e.g., middle truncation: `https://example.com/very...long/path`)
-- [ ] Add `Style::Link` variant
-- [ ] Handle `Start(Tag::BlockQuote)` → indent content, add blockquote style
-- [ ] Add `Style::BlockQuote` variant
-- [ ] Use `wrap_styled_spans()` with appropriate prefixes to preserve indentation across wrapped lines
+- [x] Handle `Start(Tag::Link { dest_url, .. })` → render link text styled
+  - [ ] Handle nested emphasis inside link text (preserve styles) - **TODO: URL display**
+  - [ ] Truncate very long URLs (e.g., middle truncation: `https://example.com/very...long/path`) - **TODO**
+- [x] Add `Style::Link` variant
+- [x] Handle `Start(Tag::BlockQuote)` → indent content, add blockquote style
+- [x] Add `Style::BlockQuote` variant
+- [x] Use `wrap_styled_spans()` with appropriate prefixes to preserve indentation across wrapped lines
+
+**Note:** Link URL display not yet implemented - link text is styled but URL is not shown in parentheses.
 
 **✅ Demo:**
 ```bash
