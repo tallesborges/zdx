@@ -779,6 +779,8 @@ pub enum Style {
     CodeInline,
     /// Fenced code block content.
     CodeBlock,
+    /// Code fence markers (``` - rendered subtly).
+    CodeFence,
     /// Emphasized text (*italic*).
     Emphasis,
     /// Strong text (**bold**).
