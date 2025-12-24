@@ -180,12 +180,12 @@ RUST_LOG=debug cargo run
 
 ---
 
-### Slice 4: Transcript cell + TUI display
+### Slice 4: Transcript cell + TUI display ✅
 
 **Goal:** Thinking streams visibly in TUI
 
 **Scope checklist:**
-- [ ] Add `HistoryCell::Thinking` variant:
+- [x] Add `HistoryCell::Thinking` variant:
   ```rust
   Thinking {
       id: CellId,
@@ -195,16 +195,18 @@ RUST_LOG=debug cargo run
       is_streaming: bool,
   }
   ```
-- [ ] Add `HistoryCell::thinking_streaming()` constructor
-- [ ] Add `HistoryCell::append_thinking_delta()` method
-- [ ] Add `HistoryCell::finalize_thinking()` method
-- [ ] Update `handle_engine_event()` in `update.rs`:
+- [x] Add `HistoryCell::thinking_streaming()` constructor
+- [x] Add `HistoryCell::append_thinking_delta()` method
+- [x] Add `HistoryCell::finalize_thinking()` method
+- [x] Update `handle_engine_event()` in `update.rs`:
   - `ThinkingDelta` → create or append to thinking cell
   - `ThinkingFinal` → finalize cell, store signature
-- [ ] Render thinking cells with distinct style:
+- [x] Render thinking cells with distinct style:
   - Prefix: `💭 ` (or `[thinking]` for non-emoji terminals)
-  - Style: dim/italic text
-- [ ] Add `display_lines()` implementation for Thinking cells
+  - Style: dim/italic text (magenta prefix, dark gray content)
+- [x] Add `display_lines()` implementation for Thinking cells
+- [x] Add `Style::ThinkingPrefix` and `Style::Thinking` variants
+- [x] Update `view.rs` to convert thinking styles to ratatui styles
 
 **✅ Demo:**
 ```bash

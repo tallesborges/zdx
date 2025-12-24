@@ -105,6 +105,19 @@ pub enum HistoryCell {
         created_at: DateTime<Utc>,
         content: String,
     },
+
+    /// Thinking block (extended thinking from the model).
+    ///
+    /// During streaming, `content` accumulates deltas and `signature` is None.
+    /// When finalized, `signature` is set (required for API continuity).
+    Thinking {
+        id: CellId,
+        created_at: DateTime<Utc>,
+        content: String,
+        /// Cryptographic signature from the API (None while streaming).
+        signature: Option<String>,
+        is_streaming: bool,
+    },
 }
 
 impl HistoryCell {
@@ -115,6 +128,7 @@ impl HistoryCell {
             HistoryCell::Assistant { id, .. } => *id,
             HistoryCell::Tool { id, .. } => *id,
             HistoryCell::System { id, .. } => *id,
+            HistoryCell::Thinking { id, .. } => *id,
         }
     }
 
@@ -175,6 +189,17 @@ impl HistoryCell {
         }
     }
 
+    /// Creates a new streaming thinking cell.
+    pub fn thinking_streaming(content: impl Into<String>) -> Self {
+        HistoryCell::Thinking {
+            id: CellId::new(),
+            created_at: Utc::now(),
+            content: content.into(),
+            signature: None,
+            is_streaming: true,
+        }
+    }
+
     /// Appends text to an assistant cell's content.
     ///
     /// Panics if called on a non-assistant cell.
@@ -196,6 +221,35 @@ impl HistoryCell {
                 *is_streaming = false;
             }
             _ => panic!("finalize_assistant called on non-assistant cell"),
+        }
+    }
+
+    /// Appends text to a thinking cell's content.
+    ///
+    /// Panics if called on a non-thinking cell.
+    pub fn append_thinking_delta(&mut self, delta: &str) {
+        match self {
+            HistoryCell::Thinking { content, .. } => {
+                content.push_str(delta);
+            }
+            _ => panic!("append_thinking_delta called on non-thinking cell"),
+        }
+    }
+
+    /// Finalizes a thinking cell with its signature.
+    ///
+    /// Panics if called on a non-thinking cell.
+    pub fn finalize_thinking(&mut self, sig: String) {
+        match self {
+            HistoryCell::Thinking {
+                is_streaming,
+                signature,
+                ..
+            } => {
+                *is_streaming = false;
+                *signature = Some(sig);
+            }
+            _ => panic!("finalize_thinking called on non-thinking cell"),
         }
     }
 
@@ -430,6 +484,32 @@ impl HistoryCell {
                 let prefix = "System: ";
                 render_prefixed_content(prefix, content, width, Style::SystemPrefix, Style::System)
             }
+            HistoryCell::Thinking {
+                content,
+                is_streaming,
+                ..
+            } => {
+                let prefix = "💭 ";
+                let mut lines = render_prefixed_content(
+                    prefix,
+                    content,
+                    width,
+                    Style::ThinkingPrefix,
+                    Style::Thinking,
+                );
+
+                // Add streaming indicator if still streaming
+                if *is_streaming
+                    && !content.is_empty()
+                    && let Some(last) = lines.last_mut()
+                {
+                    last.spans.push(StyledSpan {
+                        text: "▌".to_string(),
+                        style: Style::StreamingCursor,
+                    });
+                }
+                lines
+            }
         }
     }
 }
@@ -493,6 +573,10 @@ pub enum Style {
     ToolCancelled,
     /// Tool output (stdout from bash, etc).
     ToolOutput,
+    /// Thinking block prefix ("💭 ").
+    ThinkingPrefix,
+    /// Thinking block content (dim/italic).
+    Thinking,
 }
 
 /// Renders content with a prefix, handling line wrapping.
@@ -869,5 +953,76 @@ mod tests {
             }
             _ => panic!("Expected assistant cell"),
         }
+    }
+
+    #[test]
+    fn test_thinking_streaming() {
+        let cell = HistoryCell::thinking_streaming("Analyzing...");
+        let lines = cell.display_lines(80, 0);
+
+        // Should have thinking prefix
+        assert!(!lines.is_empty());
+        assert_eq!(lines[0].spans[0].text, "💭 ");
+        assert_eq!(lines[0].spans[0].style, Style::ThinkingPrefix);
+
+        // Should have streaming cursor
+        let last_line = lines.last().unwrap();
+        let last_span = last_line.spans.last().unwrap();
+        assert_eq!(last_span.text, "▌");
+        assert_eq!(last_span.style, Style::StreamingCursor);
+    }
+
+    #[test]
+    fn test_thinking_final() {
+        let mut cell = HistoryCell::thinking_streaming("Done thinking.");
+        cell.finalize_thinking("signature123".to_string());
+        let lines = cell.display_lines(80, 0);
+
+        // Should NOT have streaming cursor
+        let last_line = lines.last().unwrap();
+        let last_span = last_line.spans.last().unwrap();
+        assert_ne!(last_span.text, "▌");
+
+        // Verify signature is stored
+        match &cell {
+            HistoryCell::Thinking {
+                is_streaming,
+                signature,
+                ..
+            } => {
+                assert!(!*is_streaming);
+                assert_eq!(signature.as_deref(), Some("signature123"));
+            }
+            _ => panic!("Expected thinking cell"),
+        }
+    }
+
+    #[test]
+    fn test_append_thinking_delta() {
+        let mut cell = HistoryCell::thinking_streaming("");
+        cell.append_thinking_delta("First ");
+        cell.append_thinking_delta("second");
+
+        match &cell {
+            HistoryCell::Thinking {
+                content,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(content, "First second");
+                assert!(*is_streaming);
+            }
+            _ => panic!("Expected thinking cell"),
+        }
+    }
+
+    #[test]
+    fn test_thinking_cell_content_style() {
+        let cell = HistoryCell::thinking_streaming("Deep analysis");
+        let lines = cell.display_lines(80, 0);
+
+        // Content should use Thinking style (dim/italic)
+        assert!(lines[0].spans.len() >= 2);
+        assert_eq!(lines[0].spans[1].style, Style::Thinking);
     }
 }

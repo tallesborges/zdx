@@ -510,13 +510,48 @@ pub fn handle_engine_event(
                 vec![]
             }
         }
-        // Thinking events - stub handlers for Slice 3 (display implemented in Slice 4)
-        EngineEvent::ThinkingDelta { .. } => {
-            // TODO (Slice 4): Create or append to thinking cell in transcript
+        // Thinking events - create or update thinking cells in transcript
+        EngineEvent::ThinkingDelta { text } => {
+            // Find the last cell and check if it's a streaming thinking cell
+            let should_create_new = state
+                .transcript
+                .last()
+                .map(|cell| {
+                    !matches!(
+                        cell,
+                        HistoryCell::Thinking {
+                            is_streaming: true,
+                            ..
+                        }
+                    )
+                })
+                .unwrap_or(true);
+
+            if should_create_new {
+                // Create a new streaming thinking cell
+                let cell = HistoryCell::thinking_streaming(text);
+                state.transcript.push(cell);
+            } else {
+                // Append to the existing streaming thinking cell
+                if let Some(cell) = state.transcript.last_mut() {
+                    cell.append_thinking_delta(text);
+                }
+            }
             vec![]
         }
-        EngineEvent::ThinkingFinal { .. } => {
-            // TODO (Slice 4): Finalize thinking cell with signature
+        EngineEvent::ThinkingFinal { signature, .. } => {
+            // Find the last streaming thinking cell and finalize it
+            if let Some(cell) = state.transcript.iter_mut().rev().find(|c| {
+                matches!(
+                    c,
+                    HistoryCell::Thinking {
+                        is_streaming: true,
+                        ..
+                    }
+                )
+            }) {
+                cell.finalize_thinking(signature.clone());
+            }
             vec![]
         }
     }
