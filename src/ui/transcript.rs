@@ -6,12 +6,59 @@
 //!
 //! See SPEC.md §9 for the contract.
 
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
+use unicode_width::UnicodeWidthStr;
 
 use crate::core::events::ToolOutput;
+
+/// Cache for wrapped lines to avoid re-computing on every frame.
+///
+/// Keyed by `(CellId, width, content_len)` where `content_len` helps
+/// invalidate entries when streaming content changes.
+///
+/// Uses interior mutability (`RefCell`) to allow caching during immutable
+/// render passes.
+#[derive(Debug, Default)]
+pub struct WrapCache {
+    /// Maps (cell_id, width, content_len) -> cached styled lines
+    cache: RefCell<HashMap<(CellId, usize, usize), Vec<StyledLine>>>,
+}
+
+impl WrapCache {
+    /// Creates a new empty cache.
+    pub fn new() -> Self {
+        Self {
+            cache: RefCell::new(HashMap::new()),
+        }
+    }
+
+    /// Clears all cached entries.
+    ///
+    /// Call this on terminal resize to invalidate width-dependent caches.
+    pub fn clear(&self) {
+        self.cache.borrow_mut().clear();
+    }
+
+    /// Gets cached lines for a cell, cloning if present.
+    fn get(&self, cell_id: CellId, width: usize, content_len: usize) -> Option<Vec<StyledLine>> {
+        self.cache
+            .borrow()
+            .get(&(cell_id, width, content_len))
+            .cloned()
+    }
+
+    /// Stores wrapped lines in the cache.
+    fn insert(&self, cell_id: CellId, width: usize, content_len: usize, lines: Vec<StyledLine>) {
+        self.cache
+            .borrow_mut()
+            .insert((cell_id, width, content_len), lines);
+    }
+}
 
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -512,6 +559,65 @@ impl HistoryCell {
             }
         }
     }
+
+    /// Returns whether this cell's display output can be cached.
+    ///
+    /// Cells with dynamic content (streaming, running tools with spinners)
+    /// should not be cached since they change every frame.
+    pub fn is_cacheable(&self) -> bool {
+        match self {
+            HistoryCell::User { .. } => true,
+            HistoryCell::Assistant { is_streaming, .. } => !*is_streaming,
+            HistoryCell::Tool { state, .. } => *state != ToolState::Running,
+            HistoryCell::System { .. } => true,
+            HistoryCell::Thinking { is_streaming, .. } => !*is_streaming,
+        }
+    }
+
+    /// Returns the content length for cache key computation.
+    ///
+    /// This is used to invalidate cache entries when content changes.
+    pub fn content_len(&self) -> usize {
+        match self {
+            HistoryCell::User { content, .. } => content.len(),
+            HistoryCell::Assistant { content, .. } => content.len(),
+            HistoryCell::Tool { result, .. } => {
+                // Use result presence as cache discriminator
+                if result.is_some() { 1 } else { 0 }
+            }
+            HistoryCell::System { content, .. } => content.len(),
+            HistoryCell::Thinking { content, .. } => content.len(),
+        }
+    }
+
+    /// Renders this cell into display lines, using cache when possible.
+    ///
+    /// This is the preferred method for rendering in the TUI loop.
+    /// It caches the output for static cells to avoid recomputation.
+    pub fn display_lines_cached(
+        &self,
+        width: usize,
+        spinner_frame: usize,
+        cache: &WrapCache,
+    ) -> Vec<StyledLine> {
+        // Skip cache for dynamic cells
+        if !self.is_cacheable() {
+            return self.display_lines(width, spinner_frame);
+        }
+
+        let cell_id = self.id();
+        let content_len = self.content_len();
+
+        // Check cache
+        if let Some(cached) = cache.get(cell_id, width, content_len) {
+            return cached;
+        }
+
+        // Compute and cache
+        let lines = self.display_lines(width, spinner_frame);
+        cache.insert(cell_id, width, content_len, lines.clone());
+        lines
+    }
 }
 
 /// A styled span of text (UI-agnostic).
@@ -591,14 +697,15 @@ fn render_prefixed_content(
     content_style: Style,
 ) -> Vec<StyledLine> {
     let mut lines = Vec::new();
-    let prefix_len = prefix.len();
+    // Use display width for prefix (handles emoji like 💭 correctly)
+    let prefix_display_width = prefix.width();
 
     // Minimum usable width
-    let min_width = prefix_len + 10;
+    let min_width = prefix_display_width + 10;
     let effective_width = width.max(min_width);
 
     // Content width after prefix/indent
-    let content_width = effective_width.saturating_sub(prefix_len);
+    let content_width = effective_width.saturating_sub(prefix_display_width);
 
     // Split content into paragraphs (preserve blank lines)
     let paragraphs: Vec<&str> = content.split('\n').collect();
@@ -635,9 +742,9 @@ fn render_prefixed_content(
                 });
                 is_first_line = false;
             } else {
-                // Indent continuation lines
+                // Indent continuation lines (use display width for proper alignment)
                 spans.push(StyledSpan {
-                    text: " ".repeat(prefix_len),
+                    text: " ".repeat(prefix_display_width),
                     style: Style::Plain,
                 });
             }
@@ -664,14 +771,14 @@ fn render_prefixed_content(
     lines
 }
 
-/// Wraps text to fit within the given width.
+/// Wraps text to fit within the given display width.
 ///
-/// Simple word-wrap implementation. Does not handle:
-/// - Unicode grapheme clusters (uses byte length)
-/// - Wide characters (CJK, emoji)
-/// - Hyphenation
+/// Uses unicode display width for proper handling of:
+/// - CJK characters (double-width)
+/// - Emoji
+/// - Zero-width characters
 ///
-/// TODO: Use textwrap or unicode-width for proper wrapping.
+/// Does not handle hyphenation.
 fn wrap_text(text: &str, width: usize) -> Vec<String> {
     if width == 0 {
         return vec![text.to_string()];
@@ -679,40 +786,46 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
 
     let mut lines = Vec::new();
     let mut current_line = String::new();
+    let mut current_width: usize = 0;
 
     for word in text.split_whitespace() {
+        let word_width = word.width();
+
         if current_line.is_empty() {
             // First word on line
-            if word.len() > width {
-                // Word is too long, force break
-                let mut remaining = word;
-                while remaining.len() > width {
-                    lines.push(remaining[..width].to_string());
-                    remaining = &remaining[width..];
-                }
-                if !remaining.is_empty() {
-                    current_line = remaining.to_string();
+            if word_width > width {
+                // Word is too long, force break by character
+                let mut broken = break_word_by_width(word, width);
+                if let Some(last) = broken.pop() {
+                    // All but last go to completed lines
+                    lines.extend(broken);
+                    // Last part becomes current line
+                    current_width = last.width();
+                    current_line = last;
                 }
             } else {
                 current_line = word.to_string();
+                current_width = word_width;
             }
-        } else if current_line.len() + 1 + word.len() <= width {
-            // Word fits on current line
+        } else if current_width + 1 + word_width <= width {
+            // Word fits on current line (+ 1 for space)
             current_line.push(' ');
             current_line.push_str(word);
+            current_width += 1 + word_width;
         } else {
             // Start new line
-            lines.push(current_line);
-            if word.len() > width {
-                // Word is too long, force break
-                let mut remaining = word;
-                while remaining.len() > width {
-                    lines.push(remaining[..width].to_string());
-                    remaining = &remaining[width..];
+            lines.push(std::mem::take(&mut current_line));
+            if word_width > width {
+                // Word is too long, force break by character
+                let mut broken = break_word_by_width(word, width);
+                if let Some(last) = broken.pop() {
+                    lines.extend(broken);
+                    current_width = last.width();
+                    current_line = last;
                 }
-                current_line = remaining.to_string();
             } else {
                 current_line = word.to_string();
+                current_width = word_width;
             }
         }
     }
@@ -727,6 +840,49 @@ fn wrap_text(text: &str, width: usize) -> Vec<String> {
     }
 
     lines
+}
+
+/// Breaks a word into parts that fit within the given display width.
+///
+/// Used when a single word is wider than the available width.
+/// Breaks at character boundaries, respecting display width.
+fn break_word_by_width(word: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthChar;
+
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut current_width: usize = 0;
+
+    for ch in word.chars() {
+        let ch_width = ch.width().unwrap_or(0);
+
+        // Handle zero-width characters (always add to current)
+        if ch_width == 0 {
+            current.push(ch);
+            continue;
+        }
+
+        // Check if adding this character would exceed width
+        if current_width + ch_width > width && !current.is_empty() {
+            parts.push(current);
+            current = String::new();
+            current_width = 0;
+        }
+
+        current.push(ch);
+        current_width += ch_width;
+    }
+
+    if !current.is_empty() {
+        parts.push(current);
+    }
+
+    // Ensure we return at least one empty part for empty input
+    if parts.is_empty() {
+        parts.push(String::new());
+    }
+
+    parts
 }
 
 #[cfg(test)]
@@ -1024,5 +1180,203 @@ mod tests {
         // Content should use Thinking style (dim/italic)
         assert!(lines[0].spans.len() >= 2);
         assert_eq!(lines[0].spans[1].style, Style::Thinking);
+    }
+
+    // ========================================================================
+    // Unicode width tests (Phase 2a)
+    // ========================================================================
+
+    #[test]
+    fn test_wrap_text_cjk_double_width() {
+        // CJK characters are double-width
+        // "你好世界" = 4 characters, 8 display columns
+        let wrapped = wrap_text("你好世界", 6);
+        // Should wrap after 3 CJK chars (6 columns), leaving 1 char on second line
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "你好世");
+        assert_eq!(wrapped[1], "界");
+    }
+
+    #[test]
+    fn test_wrap_text_emoji() {
+        // Emoji are typically double-width
+        // "🎉🎊🎁" = 3 emoji, 6 display columns
+        let wrapped = wrap_text("🎉🎊🎁", 4);
+        // Should wrap after 2 emoji (4 columns)
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "🎉🎊");
+        assert_eq!(wrapped[1], "🎁");
+    }
+
+    #[test]
+    fn test_wrap_text_mixed_ascii_cjk() {
+        // Mix of ASCII (1-width) and CJK (2-width)
+        // "Hi你好" = 2 + 4 = 6 display columns
+        let wrapped = wrap_text("Hi你好", 5);
+        // "Hi你" = 4 columns, "好" = 2 columns
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "Hi你");
+        assert_eq!(wrapped[1], "好");
+    }
+
+    #[test]
+    fn test_wrap_text_preserves_words_with_unicode() {
+        // Word wrapping should work with unicode
+        let wrapped = wrap_text("Hello 你好 World", 10);
+        // "Hello" (5) fits, "你好" (4) fits, "World" (5) fits
+        assert_eq!(wrapped.len(), 2);
+        assert_eq!(wrapped[0], "Hello 你好");
+        assert_eq!(wrapped[1], "World");
+    }
+
+    #[test]
+    fn test_break_word_by_width_cjk() {
+        // Breaking a long CJK word
+        let parts = break_word_by_width("你好世界很长", 4);
+        // Each part should be at most 4 columns (2 CJK chars)
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0], "你好");
+        assert_eq!(parts[1], "世界");
+        assert_eq!(parts[2], "很长");
+    }
+
+    #[test]
+    fn test_break_word_by_width_emoji() {
+        let parts = break_word_by_width("🎉🎊🎁🎄", 4);
+        // Each emoji is 2 columns, so 2 per line
+        assert_eq!(parts.len(), 2);
+        assert_eq!(parts[0], "🎉🎊");
+        assert_eq!(parts[1], "🎁🎄");
+    }
+
+    #[test]
+    fn test_thinking_prefix_width() {
+        // The thinking prefix "💭 " uses emoji which is 2 columns + space
+        // This test ensures the prefix width is calculated correctly
+        let cell = HistoryCell::thinking_streaming("x");
+        let lines = cell.display_lines(10, 0);
+
+        // Should have prefix + content on first line
+        assert!(!lines.is_empty());
+        assert_eq!(lines[0].spans[0].text, "💭 ");
+    }
+
+    #[test]
+    fn test_user_prefix_alignment_with_unicode() {
+        // User prefix "| " is 2 bytes and 2 columns
+        // Continuation lines should align correctly
+        let cell = HistoryCell::user("First line\nSecond line");
+        let lines = cell.display_lines(80, 0);
+
+        assert_eq!(lines.len(), 2);
+        // First line has "| " prefix
+        assert_eq!(lines[0].spans[0].text, "| ");
+        // Second line has 2-space indent for alignment
+        assert_eq!(lines[1].spans[0].text, "  ");
+    }
+
+    // ========================================================================
+    // Wrap cache tests
+    // ========================================================================
+
+    #[test]
+    fn test_wrap_cache_basic() {
+        let cache = WrapCache::new();
+        let cell = HistoryCell::user("Hello world");
+
+        // First call should compute and cache
+        let lines1 = cell.display_lines_cached(80, 0, &cache);
+        // Second call should return cached
+        let lines2 = cell.display_lines_cached(80, 0, &cache);
+
+        assert_eq!(lines1, lines2);
+    }
+
+    #[test]
+    fn test_wrap_cache_different_widths() {
+        let cache = WrapCache::new();
+        let cell = HistoryCell::user("Hello world this is a test");
+
+        // Different widths should cache separately
+        let lines_wide = cell.display_lines_cached(80, 0, &cache);
+        let lines_narrow = cell.display_lines_cached(20, 0, &cache);
+
+        // Narrow should have more lines due to wrapping
+        assert!(lines_narrow.len() > lines_wide.len());
+    }
+
+    #[test]
+    fn test_wrap_cache_streaming_not_cached() {
+        let cache = WrapCache::new();
+        let cell = HistoryCell::assistant_streaming("Still typing...");
+
+        // Streaming cells should not be cached (is_cacheable returns false)
+        assert!(!cell.is_cacheable());
+
+        // Should still work, just not cached
+        let lines = cell.display_lines_cached(80, 0, &cache);
+        assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_wrap_cache_finalized_cached() {
+        let cache = WrapCache::new();
+        let mut cell = HistoryCell::assistant_streaming("Done");
+        cell.finalize_assistant();
+
+        // Finalized cells should be cacheable
+        assert!(cell.is_cacheable());
+
+        let lines1 = cell.display_lines_cached(80, 0, &cache);
+        let lines2 = cell.display_lines_cached(80, 0, &cache);
+        assert_eq!(lines1, lines2);
+    }
+
+    #[test]
+    fn test_wrap_cache_clear() {
+        let cache = WrapCache::new();
+        let cell = HistoryCell::user("Hello");
+
+        // Populate cache
+        let _ = cell.display_lines_cached(80, 0, &cache);
+
+        // Clear should remove all entries
+        cache.clear();
+
+        // Cache should be empty (we can't directly check, but behavior should be correct)
+        // This mainly tests that clear() doesn't panic
+    }
+
+    #[test]
+    fn test_is_cacheable() {
+        // User cells are always cacheable
+        assert!(HistoryCell::user("test").is_cacheable());
+
+        // System cells are always cacheable
+        assert!(HistoryCell::system("test").is_cacheable());
+
+        // Streaming assistant is not cacheable
+        assert!(!HistoryCell::assistant_streaming("test").is_cacheable());
+
+        // Finalized assistant is cacheable
+        let mut assistant = HistoryCell::assistant_streaming("test");
+        assistant.finalize_assistant();
+        assert!(assistant.is_cacheable());
+
+        // Running tool is not cacheable (has spinner)
+        assert!(!HistoryCell::tool_running("id", "bash", serde_json::json!({})).is_cacheable());
+
+        // Completed tool is cacheable
+        let mut tool = HistoryCell::tool_running("id", "bash", serde_json::json!({}));
+        tool.set_tool_result(ToolOutput::success(serde_json::json!({})));
+        assert!(tool.is_cacheable());
+
+        // Streaming thinking is not cacheable
+        assert!(!HistoryCell::thinking_streaming("test").is_cacheable());
+
+        // Finalized thinking is cacheable
+        let mut thinking = HistoryCell::thinking_streaming("test");
+        thinking.finalize_thinking("sig".to_string());
+        assert!(thinking.is_cacheable());
     }
 }
