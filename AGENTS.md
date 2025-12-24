@@ -25,6 +25,7 @@
   - `src/ui/overlays/`: self-contained overlay modules (state + update + render)
     - `src/ui/overlays/palette.rs`: command palette overlay
     - `src/ui/overlays/model_picker.rs`: model picker overlay
+    - `src/ui/overlays/thinking_picker.rs`: thinking level picker overlay
     - `src/ui/overlays/login.rs`: OAuth login flow overlay
   - `src/ui/commands.rs`: slash command definitions for command palette
   - `src/ui/transcript.rs`: transcript view model (styles, wrapping, rendering)
