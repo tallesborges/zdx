@@ -70,6 +70,16 @@ pub enum SessionEvent {
         text: String,
         ts: String,
     },
+
+    /// Thinking event: extended thinking block from the assistant.
+    Thinking {
+        content: String,
+        /// Cryptographic signature from the API.
+        /// None/missing if thinking was aborted (will be converted to text block on replay).
+        #[serde(default)]
+        signature: Option<String>,
+        ts: String,
+    },
 }
 
 impl SessionEvent {
@@ -128,6 +138,15 @@ impl SessionEvent {
         }
     }
 
+    /// Creates a new thinking event.
+    pub fn thinking(content: impl Into<String>, signature: Option<String>) -> Self {
+        Self::Thinking {
+            content: content.into(),
+            signature,
+            ts: chrono_timestamp(),
+        }
+    }
+
     /// Converts an `EngineEvent` to a `SessionEvent` if applicable.
     ///
     /// Not all engine events are persisted. This returns `None` for events
@@ -147,9 +166,13 @@ impl SessionEvent {
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
             EngineEvent::Interrupted => Some(Self::interrupted()),
+            EngineEvent::ThinkingFinal { text, signature } => {
+                Some(Self::thinking(text.clone(), Some(signature.clone())))
+            }
             // These are not persisted via this path:
             // - AssistantDelta: streamed chunks, not final
             // - AssistantFinal: handled by caller with full context
+            // - ThinkingDelta: streamed chunks, not final
             // - ToolStarted: UI-only, not persisted
             // - Error: not persisted (may be in future)
             _ => None,
@@ -376,9 +399,51 @@ pub fn events_to_messages(
 
     let mut messages: Vec<ChatMessage> = Vec::new();
 
-    // Track pending tool uses to group with results
+    // Track pending assistant content to group into single messages
+    // (thinking blocks + tool uses belong to the same assistant turn)
+    let mut pending_thinking: Vec<(String, Option<String>)> = Vec::new(); // (content, signature)
     let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
     let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
+
+    /// Flushes pending assistant content (thinking + tool_use) into messages.
+    fn flush_pending_assistant(
+        messages: &mut Vec<ChatMessage>,
+        pending_thinking: &mut Vec<(String, Option<String>)>,
+        pending_tool_uses: &mut Vec<(String, String, Value)>,
+        pending_tool_results: &mut Vec<crate::tools::ToolResult>,
+    ) {
+        if pending_thinking.is_empty() && pending_tool_uses.is_empty() {
+            return;
+        }
+
+        let mut blocks: Vec<ChatContentBlock> = Vec::new();
+
+        // Add thinking blocks first
+        for (content, signature) in std::mem::take(pending_thinking) {
+            blocks.push(ChatContentBlock::Thinking {
+                thinking: content,
+                // Use empty string if signature is missing (aborted thinking)
+                // The API serialization will convert this to a text block
+                signature: signature.unwrap_or_default(),
+            });
+        }
+
+        // Add tool_use blocks
+        for (id, name, input) in std::mem::take(pending_tool_uses) {
+            blocks.push(ChatContentBlock::ToolUse { id, name, input });
+        }
+
+        if !blocks.is_empty() {
+            messages.push(ChatMessage::assistant_blocks(blocks));
+        }
+
+        // Add tool results as a separate user message
+        if !pending_tool_results.is_empty() {
+            messages.push(ChatMessage::tool_results(std::mem::take(
+                pending_tool_results,
+            )));
+        }
+    }
 
     for event in events {
         match event {
@@ -386,27 +451,25 @@ pub fn events_to_messages(
                 // Skip meta events
             }
             SessionEvent::Message { role, text, .. } => {
-                // Flush any pending tool uses/results before adding a message
-                if !pending_tool_uses.is_empty() {
-                    // Add assistant message with tool_use blocks
-                    let blocks: Vec<ChatContentBlock> = std::mem::take(&mut pending_tool_uses)
-                        .into_iter()
-                        .map(|(id, name, input)| ChatContentBlock::ToolUse { id, name, input })
-                        .collect();
-                    messages.push(ChatMessage::assistant_blocks(blocks));
+                // Flush any pending assistant content before adding a new message
+                flush_pending_assistant(
+                    &mut messages,
+                    &mut pending_thinking,
+                    &mut pending_tool_uses,
+                    &mut pending_tool_results,
+                );
 
-                    // Add tool results
-                    if !pending_tool_results.is_empty() {
-                        messages.push(ChatMessage::tool_results(std::mem::take(
-                            &mut pending_tool_results,
-                        )));
-                    }
-                }
-
+                // If this is an assistant message and we have it as a text message,
+                // convert it to blocks format to allow appending thinking
                 messages.push(ChatMessage {
                     role,
                     content: MessageContent::Text(text),
                 });
+            }
+            SessionEvent::Thinking {
+                content, signature, ..
+            } => {
+                pending_thinking.push((content, signature));
             }
             SessionEvent::ToolUse {
                 id, name, input, ..
@@ -431,20 +494,13 @@ pub fn events_to_messages(
         }
     }
 
-    // Flush any remaining pending tool uses/results
-    if !pending_tool_uses.is_empty() {
-        let blocks: Vec<ChatContentBlock> = std::mem::take(&mut pending_tool_uses)
-            .into_iter()
-            .map(|(id, name, input)| ChatContentBlock::ToolUse { id, name, input })
-            .collect();
-        messages.push(ChatMessage::assistant_blocks(blocks));
-
-        if !pending_tool_results.is_empty() {
-            messages.push(ChatMessage::tool_results(std::mem::take(
-                &mut pending_tool_results,
-            )));
-        }
-    }
+    // Flush any remaining pending assistant content
+    flush_pending_assistant(
+        &mut messages,
+        &mut pending_thinking,
+        &mut pending_tool_uses,
+        &mut pending_tool_results,
+    );
 
     messages
 }
@@ -472,6 +528,17 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
                 };
                 output.push_str(&format!("### {}\n", role_label));
                 output.push_str(text);
+                output.push_str("\n\n");
+            }
+            SessionEvent::Thinking { content, .. } => {
+                output.push_str("### 💭 Thinking\n");
+                // Truncate long thinking content for display
+                if content.len() > 500 {
+                    output.push_str(&content[..500]);
+                    output.push_str("...");
+                } else {
+                    output.push_str(content);
+                }
                 output.push_str("\n\n");
             }
             SessionEvent::ToolUse { name, input, .. } => {
@@ -701,5 +768,131 @@ mod tests {
         assert!(transcript.contains("### Tool: read"));
         assert!(transcript.contains("### Result ✓"));
         assert!(transcript.contains("### Assistant"));
+    }
+
+    #[test]
+    fn test_thinking_event_serialization() {
+        // Test thinking with signature
+        let thinking = SessionEvent::thinking("Let me analyze this...", Some("sig123".to_string()));
+        let json = serde_json::to_string(&thinking).unwrap();
+        assert!(json.contains("\"type\":\"thinking\""));
+        assert!(json.contains("\"content\":\"Let me analyze this...\""));
+        assert!(json.contains("\"signature\":\"sig123\""));
+
+        // Test thinking without signature (aborted)
+        let aborted = SessionEvent::thinking("Partial thought...", None);
+        let json = serde_json::to_string(&aborted).unwrap();
+        assert!(json.contains("\"type\":\"thinking\""));
+        assert!(json.contains("\"signature\":null"));
+    }
+
+    #[test]
+    fn test_thinking_event_deserialization() {
+        // Test deserialization with signature
+        let json = r#"{"type":"thinking","content":"Deep analysis","signature":"abc123","ts":"2024-01-01T00:00:00Z"}"#;
+        let event: SessionEvent = serde_json::from_str(json).unwrap();
+        match event {
+            SessionEvent::Thinking {
+                content, signature, ..
+            } => {
+                assert_eq!(content, "Deep analysis");
+                assert_eq!(signature, Some("abc123".to_string()));
+            }
+            _ => panic!("Expected Thinking event"),
+        }
+
+        // Test deserialization without signature (backward compat)
+        let json_no_sig = r#"{"type":"thinking","content":"Partial","ts":"2024-01-01T00:00:00Z"}"#;
+        let event: SessionEvent = serde_json::from_str(json_no_sig).unwrap();
+        match event {
+            SessionEvent::Thinking { signature, .. } => {
+                assert_eq!(signature, None);
+            }
+            _ => panic!("Expected Thinking event"),
+        }
+    }
+
+    #[test]
+    fn test_events_to_messages_with_thinking() {
+        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+
+        let events = vec![
+            SessionEvent::user_message("solve this problem"),
+            SessionEvent::thinking(
+                "Let me think about this...".to_string(),
+                Some("sig123".to_string()),
+            ),
+            SessionEvent::tool_use("t1", "bash", json!({"command": "echo test"})),
+            SessionEvent::tool_result("t1", json!({"stdout": "test\n"}), true),
+            SessionEvent::assistant_message("Done!"),
+        ];
+
+        let messages = events_to_messages(events);
+
+        // user + assistant(thinking + tool_use) + tool_results + assistant = 4
+        assert_eq!(messages.len(), 4);
+        assert_eq!(messages[0].role, "user");
+
+        // Second message should be assistant with thinking + tool_use blocks
+        assert_eq!(messages[1].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[1].content {
+            assert_eq!(blocks.len(), 2);
+            assert!(
+                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
+                    if thinking == "Let me think about this..." && signature == "sig123"
+                )
+            );
+            assert!(matches!(&blocks[1], ChatContentBlock::ToolUse { .. }));
+        } else {
+            panic!("Expected Blocks content");
+        }
+    }
+
+    #[test]
+    fn test_session_thinking_roundtrip() {
+        let _temp = setup_temp_zdx_home();
+
+        let mut session = Session::with_id(unique_session_id("thinking-roundtrip")).unwrap();
+        session
+            .append(&SessionEvent::user_message("explain"))
+            .unwrap();
+        session
+            .append(&SessionEvent::thinking(
+                "Deep analysis here...",
+                Some("signature456".to_string()),
+            ))
+            .unwrap();
+        session
+            .append(&SessionEvent::assistant_message("Here's my answer"))
+            .unwrap();
+
+        let events = session.read_events().unwrap();
+        // meta + user + thinking + assistant = 4 events
+        assert_eq!(events.len(), 4);
+        assert!(matches!(events[0], SessionEvent::Meta { .. }));
+        assert!(matches!(events[1], SessionEvent::Message { ref role, .. } if role == "user"));
+        assert!(
+            matches!(events[2], SessionEvent::Thinking { ref content, ref signature, .. }
+                if content == "Deep analysis here..." && signature == &Some("signature456".to_string())
+            )
+        );
+        assert!(matches!(events[3], SessionEvent::Message { ref role, .. } if role == "assistant"));
+    }
+
+    #[test]
+    fn test_format_transcript_with_thinking() {
+        let events = vec![
+            SessionEvent::meta(),
+            SessionEvent::user_message("explain this"),
+            SessionEvent::thinking(
+                "Analyzing the request...".to_string(),
+                Some("sig".to_string()),
+            ),
+            SessionEvent::assistant_message("Here's my explanation."),
+        ];
+
+        let transcript = format_transcript(&events);
+        assert!(transcript.contains("### 💭 Thinking"));
+        assert!(transcript.contains("Analyzing the request..."));
     }
 }
