@@ -180,8 +180,10 @@ pub async fn run_turn(
 
     let anthropic_config = AnthropicConfig::from_env(
         config.model.clone(),
-        config.max_tokens,
+        config.effective_max_tokens(),
         config.effective_anthropic_base_url(),
+        config.thinking_enabled,
+        config.thinking_budget_tokens,
     )?;
     let client = AnthropicClient::new(anthropic_config);
 

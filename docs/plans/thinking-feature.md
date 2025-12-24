@@ -93,12 +93,12 @@ cargo run -- config path && cat ~/.config/zdx/config.toml
 
 ---
 
-### Slice 2: API params + SSE parsing
+### Slice 2: API params + SSE parsing ✅
 
 **Goal:** Send thinking params to API, parse thinking events from stream
 
 **Scope checklist:**
-- [ ] Add `ThinkingConfig` struct for API request:
+- [x] Add `ThinkingConfig` struct for API request:
   ```rust
   #[derive(Serialize)]
   struct ThinkingConfig {
@@ -107,25 +107,24 @@ cargo run -- config path && cat ~/.config/zdx/config.toml
       budget_tokens: u32,
   }
   ```
-- [ ] Add `thinking: Option<ThinkingConfig>` to `StreamingMessagesRequest`
-- [ ] Pass config to `AnthropicClient` and set thinking param when enabled
-- [ ] Use `effective_max_tokens()` in request (not raw config value)
-- [ ] Add fields to `SseDelta` struct:
+- [x] Add `thinking: Option<ThinkingConfig>` to `StreamingMessagesRequest`
+- [x] Pass config to `AnthropicClient` and set thinking param when enabled
+- [x] Use `effective_max_tokens()` in request (not raw config value)
+- [x] Add fields to `SseDelta` struct:
   ```rust
   #[serde(default)]
   thinking: Option<String>,      // for thinking_delta
   #[serde(default)]
   signature: Option<String>,     // for signature_delta
   ```
-- [ ] Add `StreamEvent` variants:
+- [x] Add `StreamEvent` variants:
   ```rust
-  ThinkingBlockStart { index: usize },
-  ThinkingDelta { index: usize, text: String },
+  ThinkingDelta { index: usize, thinking: String },
   SignatureDelta { index: usize, signature: String },
-  ThinkingBlockStop { index: usize },
   ```
-- [ ] Update `parse_sse_event()` to handle:
-  - `content_block_start` with `type = "thinking"`
+  Note: ThinkingBlockStart/Stop use existing ContentBlockStart/Stop with block_type="thinking"
+- [x] Update `parse_sse_event()` to handle:
+  - `content_block_start` with `type = "thinking"` (existing code works)
   - `content_block_delta` with `delta.type = "thinking_delta"`
   - `content_block_delta` with `delta.type = "signature_delta"`
 
