@@ -442,15 +442,23 @@ pub fn handle_engine_event(
                     pending_delta,
                     ..
                 } => {
-                    // Check if current cell was finalized
+                    // Check if we need a new assistant cell:
+                    // - current cell is finalized assistant, or
+                    // - current cell is not an assistant (e.g., thinking cell)
                     let needs_new_cell = state
                         .transcript
                         .iter()
                         .find(|c| c.id() == *cell_id)
                         .map(|c| {
-                            matches!(c, HistoryCell::Assistant { is_streaming, .. } if !*is_streaming)
+                            !matches!(
+                                c,
+                                HistoryCell::Assistant {
+                                    is_streaming: true,
+                                    ..
+                                }
+                            )
                         })
-                        .unwrap_or(false);
+                        .unwrap_or(true);
 
                     if needs_new_cell {
                         let new_cell = HistoryCell::assistant_streaming("");
@@ -527,6 +535,22 @@ pub fn handle_engine_event(
         }
         // Thinking events - create or update thinking cells in transcript
         EngineEvent::ThinkingDelta { text } => {
+            // Transition from Waiting to Streaming
+            if let EngineState::Waiting { .. } = &state.engine_state {
+                let old_state = std::mem::replace(&mut state.engine_state, EngineState::Idle);
+                if let EngineState::Waiting { rx } = old_state {
+                    let cell = HistoryCell::thinking_streaming(text);
+                    let cell_id = cell.id();
+                    state.transcript.push(cell);
+                    state.engine_state = EngineState::Streaming {
+                        rx,
+                        cell_id,
+                        pending_delta: String::new(),
+                    };
+                }
+                return vec![];
+            }
+
             // Find the last cell and check if it's a streaming thinking cell
             let should_create_new = state
                 .transcript

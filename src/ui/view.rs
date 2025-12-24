@@ -154,7 +154,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     // Add thinking indicator with dim style (only when enabled)
     if state.config.thinking_level != ThinkingLevel::Off {
         title_spans.push(Span::styled(
-            format!(" [💭{}]", state.config.thinking_level.display_name()),
+            format!(" [{}]", state.config.thinking_level.display_name()),
             thinking_style,
         ));
     }

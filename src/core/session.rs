@@ -531,7 +531,7 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
                 output.push_str("\n\n");
             }
             SessionEvent::Thinking { content, .. } => {
-                output.push_str("### 💭 Thinking\n");
+                output.push_str("### Thinking\n");
                 // Truncate long thinking content for display
                 if content.len() > 500 {
                     output.push_str(&content[..500]);
@@ -892,7 +892,7 @@ mod tests {
         ];
 
         let transcript = format_transcript(&events);
-        assert!(transcript.contains("### 💭 Thinking"));
+        assert!(transcript.contains("### Thinking"));
         assert!(transcript.contains("Analyzing the request..."));
     }
 }

@@ -292,7 +292,7 @@ pub enum EngineState {
         /// Buffered delta text to apply on next tick (coalescing).
         pending_delta: String,
     },
-    /// Waiting for first response (shows "thinking...").
+    /// Waiting for first response.
     Waiting {
         /// Receiver for engine events.
         rx: mpsc::Receiver<std::sync::Arc<crate::core::events::EngineEvent>>,
