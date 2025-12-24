@@ -152,6 +152,10 @@ pub struct AnthropicConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
+    /// Whether extended thinking is enabled
+    pub thinking_enabled: bool,
+    /// Token budget for thinking (only used when thinking_enabled = true)
+    pub thinking_budget_tokens: u32,
 }
 
 impl AnthropicConfig {
@@ -169,7 +173,13 @@ impl AnthropicConfig {
     /// 1. `ANTHROPIC_BASE_URL` env var (if set and non-empty)
     /// 2. `config_base_url` parameter (if Some and non-empty)
     /// 3. Default: `https://api.anthropic.com`
-    pub fn from_env(model: String, max_tokens: u32, config_base_url: Option<&str>) -> Result<Self> {
+    pub fn from_env(
+        model: String,
+        max_tokens: u32,
+        config_base_url: Option<&str>,
+        thinking_enabled: bool,
+        thinking_budget_tokens: u32,
+    ) -> Result<Self> {
         let (auth_token, auth_type) = Self::resolve_auth()?;
 
         // Resolution order: env > config > default
@@ -181,6 +191,8 @@ impl AnthropicConfig {
             base_url,
             model,
             max_tokens,
+            thinking_enabled,
+            thinking_budget_tokens,
         })
     }
 
@@ -336,12 +348,20 @@ impl AnthropicClient {
         // OAuth requires the Claude Code system prompt prefix with cache_control
         let system_blocks = self.build_system_blocks(system);
 
+        // Build thinking config if enabled
+        let thinking = if self.config.thinking_enabled {
+            Some(ThinkingConfig::enabled(self.config.thinking_budget_tokens))
+        } else {
+            None
+        };
+
         let request = StreamingMessagesRequest {
             model: &self.config.model,
             max_tokens: self.config.max_tokens,
             messages: api_messages,
             tools: tool_defs,
             system: system_blocks,
+            thinking,
             stream: true,
         };
 
@@ -433,7 +453,7 @@ impl AnthropicClient {
 pub enum StreamEvent {
     /// Message started, contains model info
     MessageStart { model: String },
-    /// A content block has started (text or tool_use)
+    /// A content block has started (text or tool_use or thinking)
     ContentBlockStart {
         index: usize,
         block_type: String,
@@ -446,6 +466,10 @@ pub enum StreamEvent {
     TextDelta { index: usize, text: String },
     /// Partial JSON delta for tool input
     InputJsonDelta { index: usize, partial_json: String },
+    /// Thinking delta within a thinking content block
+    ThinkingDelta { index: usize, thinking: String },
+    /// Signature delta within a thinking content block
+    SignatureDelta { index: usize, signature: String },
     /// A content block has ended
     ContentBlockStop { index: usize },
     /// Message delta (e.g., stop_reason update)
@@ -591,6 +615,14 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
                     index: parsed.index,
                     partial_json: parsed.delta.partial_json.unwrap_or_default(),
                 }),
+                "thinking_delta" => Ok(StreamEvent::ThinkingDelta {
+                    index: parsed.index,
+                    thinking: parsed.delta.thinking.unwrap_or_default(),
+                }),
+                "signature_delta" => Ok(StreamEvent::SignatureDelta {
+                    index: parsed.index,
+                    signature: parsed.delta.signature.unwrap_or_default(),
+                }),
                 other => bail!("Unknown delta type: {}", other),
             }
         }
@@ -665,6 +697,10 @@ struct SseDelta {
     text: Option<String>,
     #[serde(default)]
     partial_json: Option<String>,
+    #[serde(default)]
+    thinking: Option<String>,
+    #[serde(default)]
+    signature: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -697,6 +733,23 @@ struct SseErrorInfo {
 
 // === API Request Types ===
 
+/// Thinking configuration for extended thinking feature.
+#[derive(Debug, Serialize)]
+struct ThinkingConfig {
+    #[serde(rename = "type")]
+    thinking_type: &'static str,
+    budget_tokens: u32,
+}
+
+impl ThinkingConfig {
+    fn enabled(budget_tokens: u32) -> Self {
+        Self {
+            thinking_type: "enabled",
+            budget_tokens,
+        }
+    }
+}
+
 #[derive(Debug, Serialize)]
 struct StreamingMessagesRequest<'a> {
     model: &'a str,
@@ -706,6 +759,8 @@ struct StreamingMessagesRequest<'a> {
     tools: Option<Vec<ApiToolDef<'a>>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     system: Option<Vec<SystemBlock>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
     stream: bool,
 }
 
@@ -1199,5 +1254,134 @@ data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text
                 text: "Hello 👋 world".to_string()
             }
         );
+    }
+
+    /// SSE fixture simulating a thinking response with interleaved thinking and text
+    const SSE_THINKING_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_think","type":"message","role":"assistant","content":[],"model":"claude-sonnet-4-20250514","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Let me think"}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":" about this..."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"abc123sig"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Here is my response."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":50}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    #[tokio::test]
+    async fn test_sse_parser_thinking_response() {
+        let stream = mock_byte_stream(SSE_THINKING_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // Verify we got all expected events
+        assert_eq!(events.len(), 11);
+
+        // Check message_start
+        assert!(
+            matches!(&events[0], StreamEvent::MessageStart { model } if model == "claude-sonnet-4-20250514")
+        );
+
+        // Check thinking block start
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type,
+                ..
+            } if block_type == "thinking"
+        ));
+
+        // Check thinking deltas
+        assert_eq!(
+            events[2],
+            StreamEvent::ThinkingDelta {
+                index: 0,
+                thinking: "Let me think".to_string()
+            }
+        );
+        assert_eq!(
+            events[3],
+            StreamEvent::ThinkingDelta {
+                index: 0,
+                thinking: " about this...".to_string()
+            }
+        );
+
+        // Check signature delta
+        assert_eq!(
+            events[4],
+            StreamEvent::SignatureDelta {
+                index: 0,
+                signature: "abc123sig".to_string()
+            }
+        );
+
+        // Check thinking block stop
+        assert_eq!(events[5], StreamEvent::ContentBlockStop { index: 0 });
+
+        // Check text block start
+        assert!(matches!(
+            &events[6],
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block_type,
+                ..
+            } if block_type == "text"
+        ));
+
+        // Check text delta
+        assert_eq!(
+            events[7],
+            StreamEvent::TextDelta {
+                index: 1,
+                text: "Here is my response.".to_string()
+            }
+        );
+
+        // Check text block stop
+        assert_eq!(events[8], StreamEvent::ContentBlockStop { index: 1 });
+
+        // Check message delta and stop
+        assert!(matches!(
+            &events[9],
+            StreamEvent::MessageDelta {
+                stop_reason: Some(reason)
+            } if reason == "end_turn"
+        ));
+        assert_eq!(events[10], StreamEvent::MessageStop);
+
+        // Log actual events for debugging if needed
+        // for (i, e) in events.iter().enumerate() {
+        //     println!("{}: {:?}", i, e);
+        // }
     }
 }
