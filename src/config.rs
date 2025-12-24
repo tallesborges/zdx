@@ -203,6 +203,40 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
+    /// Saves only the thinking_level field to the config file.
+    ///
+    /// Creates the file if it doesn't exist.
+    /// Preserves existing fields and comments using toml_edit.
+    pub fn save_thinking_level(level: ThinkingLevel) -> Result<()> {
+        Self::save_thinking_level_to(&paths::config_path(), level)
+    }
+
+    /// Saves only the thinking_level field to a specific config file path.
+    ///
+    /// Creates the file with default template if it doesn't exist.
+    /// Preserves existing fields and comments using toml_edit.
+    pub fn save_thinking_level_to(path: &Path, level: ThinkingLevel) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        // Read existing file or use default template
+        let contents = if path.exists() {
+            fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?
+        } else {
+            DEFAULT_CONFIG_TEMPLATE.to_string()
+        };
+
+        // Parse as editable document (preserves comments and formatting)
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        // Update thinking_level field
+        doc["thinking_level"] = value(level.display_name());
+
+        Self::write_config(path, &doc.to_string())
+    }
+
     /// Returns the effective system prompt, preferring the file if both are set.
     pub fn effective_system_prompt(&self) -> Result<Option<String>> {
         if let Some(path_str) = &self.system_prompt_file {
@@ -591,5 +625,99 @@ max_tokens = 2048
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::Off);
+    }
+
+    /// save_thinking_level: creates new config file with template if it doesn't exist.
+    #[test]
+    fn test_save_thinking_level_creates_file_with_template() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::High).unwrap();
+
+        assert!(config_path.exists());
+
+        // Verify thinking_level was updated
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.thinking_level, ThinkingLevel::High);
+
+        // Verify template comments are preserved
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# ZDX Configuration"));
+        assert!(contents.contains("thinking_level = \"high\""));
+    }
+
+    /// save_thinking_level: preserves other fields in existing config.
+    #[test]
+    fn test_save_thinking_level_preserves_other_fields() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Create config with other fields
+        fs::write(
+            &config_path,
+            r#"model = "claude-sonnet-4"
+max_tokens = 4096
+thinking_level = "off"
+"#,
+        )
+        .unwrap();
+
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::Medium).unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.thinking_level, ThinkingLevel::Medium);
+        assert_eq!(config.model, "claude-sonnet-4"); // preserved
+        assert_eq!(config.max_tokens, 4096); // preserved
+    }
+
+    /// save_thinking_level: preserves comments in config file.
+    #[test]
+    fn test_save_thinking_level_preserves_comments() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Create config with comments
+        fs::write(
+            &config_path,
+            r#"# My custom config
+model = "claude-sonnet-4"
+# Thinking configuration
+thinking_level = "off"
+"#,
+        )
+        .unwrap();
+
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::High).unwrap();
+
+        let contents = fs::read_to_string(&config_path).unwrap();
+        assert!(contents.contains("# My custom config"));
+        assert!(contents.contains("# Thinking configuration"));
+        assert!(contents.contains("thinking_level = \"high\""));
+    }
+
+    /// save_thinking_level: roundtrip - save and reload works correctly.
+    #[test]
+    fn test_save_thinking_level_roundtrip() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        // Create initial config
+        fs::write(&config_path, "model = \"test-model\"\n").unwrap();
+
+        // Save thinking level
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::Low).unwrap();
+
+        // Reload and verify
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.thinking_level, ThinkingLevel::Low);
+        assert_eq!(config.model, "test-model");
+
+        // Change to different level
+        Config::save_thinking_level_to(&config_path, ThinkingLevel::Minimal).unwrap();
+
+        // Reload and verify again
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
     }
 }
