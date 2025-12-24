@@ -635,6 +635,19 @@ impl MarkdownRenderer {
             Tag::HtmlBlock => {
                 // Not implemented
             }
+            Tag::DefinitionList
+            | Tag::DefinitionListTitle
+            | Tag::DefinitionListDefinition => {
+                // Definition lists not implemented yet
+            }
+            Tag::Superscript => {
+                // Render superscript as plain text (terminal support limited)
+                self.push_style(Style::Plain);
+            }
+            Tag::Subscript => {
+                // Render subscript as plain text (terminal support limited)
+                self.push_style(Style::Plain);
+            }
         }
     }
 
@@ -675,7 +688,7 @@ impl MarkdownRenderer {
                     list.current_item += 1;
                 }
             }
-            TagEnd::BlockQuote => {
+            TagEnd::BlockQuote(_) => {
                 self.flush_paragraph();
                 self.in_blockquote = false;
                 self.pop_style();
