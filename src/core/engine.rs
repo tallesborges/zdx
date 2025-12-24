@@ -186,12 +186,16 @@ pub async fn run_turn(
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sink = EventSink::new(sink);
 
+    // Translate ThinkingLevel to raw API values
+    let thinking_enabled = config.thinking_level.is_enabled();
+    let thinking_budget_tokens = config.thinking_level.budget_tokens().unwrap_or(0);
+
     let anthropic_config = AnthropicConfig::from_env(
         config.model.clone(),
         config.effective_max_tokens(),
         config.effective_anthropic_base_url(),
-        config.thinking_enabled,
-        config.thinking_budget_tokens,
+        thinking_enabled,
+        thinking_budget_tokens,
     )?;
     let client = AnthropicClient::new(anthropic_config);
 

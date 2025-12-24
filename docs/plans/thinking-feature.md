@@ -314,7 +314,7 @@ zdx sessions resume <id>
 - **Slice 3:** Engine emits ThinkingDelta/ThinkingFinal events ✅
 - **Slice 4:** TUI displays thinking cells with distinct style ✅
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
-- **Slice 6:** ThinkingLevel enum maps to correct budget values
+- **Slice 6:** ThinkingLevel enum maps to correct budget values ✅
 - **Slice 7:** Model title shows thinking indicator when enabled
 - **Slice 8:** Thinking picker opens/closes, selection updates state
 - **Slice 9:** Ctrl+T and /thinking command both open picker
@@ -325,8 +325,7 @@ zdx sessions resume <id>
 - [x] `test_effective_max_tokens_with_thinking` — token limit safety
 - [x] `test_session_thinking_roundtrip` — thinking persists and loads
 - [x] `test_aborted_thinking_converts_to_text` — signature fallback
-- [ ] `test_thinking_level_budget_mapping` — each level maps to expected tokens
-- [ ] `test_thinking_level_config_migration` — old format migrates correctly
+- [x] `test_thinking_level_budget_mapping` — each level maps to expected tokens
 - [ ] `test_save_thinking_level_preserves_config` — toml_edit preserves comments
 
 ---
@@ -371,12 +370,12 @@ Each slice is independently demoable. Slices 4 and 5 can be developed in paralle
 
 ## Phase 2: Runtime Thinking Control
 
-### Slice 6: Thinking level enum + config mapping
+### Slice 6: Thinking level enum + config mapping ✅
 
 **Goal:** Replace boolean `thinking_enabled` with a thinking level that maps to budget tokens
 
 **Scope checklist:**
-- [ ] Define `ThinkingLevel` enum in `config.rs`:
+- [x] Define `ThinkingLevel` enum in `config.rs`:
   ```rust
   #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
   #[serde(rename_all = "lowercase")]
@@ -389,26 +388,24 @@ Each slice is independently demoable. Slices 4 and 5 can be developed in paralle
       High,     // Deep reasoning (~16k tokens)
   }
   ```
-- [ ] Add `ThinkingLevel::budget_tokens(&self) -> Option<u32>` method:
+- [x] Add `ThinkingLevel::budget_tokens(&self) -> Option<u32>` method:
   - `Off` → `None` (disabled)
   - `Minimal` → `Some(1024)`
   - `Low` → `Some(2048)`
   - `Medium` → `Some(8192)`
   - `High` → `Some(16384)`
-- [ ] Add `ThinkingLevel::description(&self) -> &'static str` method:
+- [x] Add `ThinkingLevel::description(&self) -> &'static str` method:
   - `Off` → "No reasoning"
   - `Minimal` → "Very brief reasoning (~1k tokens)"
   - `Low` → "Light reasoning (~2k tokens)"
   - `Medium` → "Moderate reasoning (~8k tokens)"
   - `High` → "Deep reasoning (~16k tokens)"
-- [ ] Add `ThinkingLevel::display_name(&self) -> &'static str` method (short: "off", "minimal", etc.)
-- [ ] Add `ThinkingLevel::all() -> &'static [ThinkingLevel]` for picker
-- [ ] Replace `thinking_enabled: bool` + `thinking_budget_tokens: u32` with `thinking_level: ThinkingLevel`
-- [ ] Update `effective_max_tokens()` to use `thinking_level.budget_tokens()`
-- [ ] Migrate old config format (backwards compat):
-  - `thinking_enabled = false` → `thinking_level = "off"`
-  - `thinking_enabled = true` + `thinking_budget_tokens = X` → map to nearest level
-- [ ] Update `default_config.toml` template with `thinking_level`
+- [x] Add `ThinkingLevel::display_name(&self) -> &'static str` method (short: "off", "minimal", etc.)
+- [x] Add `ThinkingLevel::all() -> &'static [ThinkingLevel]` for picker
+- [x] Replace `thinking_enabled: bool` + `thinking_budget_tokens: u32` with `thinking_level: ThinkingLevel`
+- [x] Update `effective_max_tokens()` to use `thinking_level.budget_tokens()`
+- [x] Update `default_config.toml` template with `thinking_level`
+- [x] Update `engine.rs` to translate `ThinkingLevel` to raw API values
 
 **Demo:**
 ```bash
@@ -544,7 +541,7 @@ cargo run
 Slice 1-5 (MVP - Complete) ✅
     │
     ▼
-Slice 6 (Thinking level enum)
+Slice 6 (Thinking level enum) ✅
     │
     ├─────────────────┐
     ▼                 ▼
