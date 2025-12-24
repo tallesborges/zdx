@@ -13,7 +13,8 @@ use crate::ui::effects::UiEffect;
 use crate::ui::events::UiEvent;
 use crate::ui::overlays::{
     LoginEvent, LoginState, handle_login_key, handle_login_result, handle_model_picker_key,
-    handle_palette_key, open_command_palette, open_model_picker,
+    handle_palette_key, handle_thinking_picker_key, open_command_palette, open_model_picker,
+    open_thinking_picker,
 };
 use crate::ui::state::{EngineState, OverlayState, TuiState};
 use crate::ui::transcript::HistoryCell;
@@ -97,6 +98,7 @@ fn handle_key(
         OverlayState::Login(_) => handle_login_key(state, key),
         OverlayState::CommandPalette(_) => handle_palette_key(state, key),
         OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
+        OverlayState::ThinkingPicker(_) => handle_thinking_picker_key(state, key),
         OverlayState::None => handle_main_key(state, key, viewport_height),
     }
 }
@@ -142,6 +144,10 @@ fn handle_main_key(
         }
         KeyCode::Char('p') if ctrl && !shift && !alt => {
             open_command_palette(state, false);
+            vec![]
+        }
+        KeyCode::Char('t') if ctrl && !shift && !alt => {
+            open_thinking_picker(state);
             vec![]
         }
         KeyCode::Char('c') if ctrl => {
@@ -329,6 +335,10 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
         }
         "model" => {
             open_model_picker(state);
+            vec![]
+        }
+        "thinking" => {
+            open_thinking_picker(state);
             vec![]
         }
         "new" => execute_new(state),
