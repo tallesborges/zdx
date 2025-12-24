@@ -114,7 +114,12 @@ fn handle_main_key(
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
         KeyCode::Char('u') if ctrl && !shift && !alt => {
             let (row, _) = state.textarea.cursor();
-            let current_line = state.textarea.lines().get(row).map(|s| s.as_str()).unwrap_or("");
+            let current_line = state
+                .textarea
+                .lines()
+                .get(row)
+                .map(|s| s.as_str())
+                .unwrap_or("");
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
                 state.textarea.move_cursor(tui_textarea::CursorMove::Up);

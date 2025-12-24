@@ -20,3 +20,11 @@ tool_timeout_secs = 30
 
 # Custom Anthropic API base URL (for proxies or test rigs)
 # anthropic_base_url = "https://api.anthropic.com"
+
+# Extended thinking (experimental)
+# When enabled, Claude will show its reasoning process before responding.
+# Note: max_tokens is auto-adjusted to ensure room for both thinking and response.
+thinking_enabled = false
+
+# Token budget for thinking (only used when thinking_enabled = true)
+# thinking_budget_tokens = 8000
