@@ -837,6 +837,40 @@ enum ApiMessageContent {
     Blocks(Vec<ApiContentBlock>),
 }
 
+/// Content block for image data in API requests.
+///
+/// This is used within tool_result content arrays when returning images.
+#[derive(Debug, Clone, Serialize)]
+struct ApiImageSource {
+    #[serde(rename = "type")]
+    source_type: &'static str,
+    media_type: String,
+    data: String,
+}
+
+/// Content block types that can appear in tool_result content arrays.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ApiToolResultBlock {
+    Text { text: String },
+    Image { source: ApiImageSource },
+}
+
+/// Tool result content - either a string or array of blocks.
+///
+/// Anthropic API accepts:
+/// - String for text-only results (backwards compatible)
+/// - Array of blocks when including images
+///
+/// Uses `#[serde(untagged)]` so `Text` serializes as a plain string and
+/// `Blocks` serializes as an array.
+#[derive(Debug, Clone, Serialize)]
+#[serde(untagged)]
+enum ApiToolResultContent {
+    Text(String),
+    Blocks(Vec<ApiToolResultBlock>),
+}
+
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ApiContentBlock {
@@ -857,7 +891,7 @@ enum ApiContentBlock {
     #[serde(rename = "tool_result")]
     ToolResult {
         tool_use_id: String,
-        content: String,
+        content: ApiToolResultContent,
         #[serde(skip_serializing_if = "std::ops::Not::not")]
         is_error: bool,
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -913,12 +947,42 @@ impl ApiMessage {
                             name: name.clone(),
                             input: input.clone(),
                         },
-                        ChatContentBlock::ToolResult(result) => ApiContentBlock::ToolResult {
-                            tool_use_id: result.tool_use_id.clone(),
-                            content: result.content.clone(),
-                            is_error: result.is_error,
-                            cache_control: None,
-                        },
+                        ChatContentBlock::ToolResult(result) => {
+                            use crate::tools::{ToolResultBlock, ToolResultContent};
+
+                            let content = match &result.content {
+                                ToolResultContent::Text(text) => {
+                                    ApiToolResultContent::Text(text.clone())
+                                }
+                                ToolResultContent::Blocks(blocks) => {
+                                    let api_blocks = blocks
+                                        .iter()
+                                        .map(|block| match block {
+                                            ToolResultBlock::Text { text } => {
+                                                ApiToolResultBlock::Text { text: text.clone() }
+                                            }
+                                            ToolResultBlock::Image { mime_type, data } => {
+                                                ApiToolResultBlock::Image {
+                                                    source: ApiImageSource {
+                                                        source_type: "base64",
+                                                        media_type: mime_type.clone(),
+                                                        data: data.clone(),
+                                                    },
+                                                }
+                                            }
+                                        })
+                                        .collect();
+                                    ApiToolResultContent::Blocks(api_blocks)
+                                }
+                            };
+
+                            ApiContentBlock::ToolResult {
+                                tool_use_id: result.tool_use_id.clone(),
+                                content,
+                                is_error: result.is_error,
+                                cache_control: None,
+                            }
+                        }
                     })
                     .collect();
                 ApiMessage {
@@ -1478,5 +1542,206 @@ data: {"type":"message_stop"}
         } else {
             panic!("Expected Blocks content");
         }
+    }
+
+    #[test]
+    fn test_tool_result_text_only_serializes_as_string() {
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        // Text-only tool result should serialize content as a string (backwards compatible)
+        let result = ToolResult {
+            tool_use_id: "toolu_123".to_string(),
+            content: ToolResultContent::Text(
+                r#"{"ok":true,"data":{"content":"file contents"}}"#.to_string(),
+            ),
+            is_error: false,
+        };
+
+        let msg = ChatMessage::tool_results(vec![result]);
+        let api_msg = ApiMessage::from_chat_message(&msg, false);
+        let json = serde_json::to_value(&api_msg).unwrap();
+
+        // Navigate to content[0].content
+        let content = &json["content"][0]["content"];
+
+        // Should be a string, not an array
+        assert!(
+            content.is_string(),
+            "Text-only tool result content should be a string"
+        );
+        assert_eq!(
+            content.as_str().unwrap(),
+            r#"{"ok":true,"data":{"content":"file contents"}}"#
+        );
+    }
+
+    #[test]
+    fn test_tool_result_with_image_serializes_as_array() {
+        use crate::tools::ToolResult;
+
+        // Tool result with image should serialize content as an array with text and image blocks
+        let result = ToolResult::with_image(
+            "toolu_456",
+            r#"{"ok":true,"data":{"path":"test.png"}}"#,
+            "image/png",
+            "iVBORw0KGgo=", // Fake base64
+        );
+
+        let msg = ChatMessage::tool_results(vec![result]);
+        let api_msg = ApiMessage::from_chat_message(&msg, false);
+        let json = serde_json::to_value(&api_msg).unwrap();
+
+        // Navigate to content[0].content
+        let content = &json["content"][0]["content"];
+
+        // Should be an array with 2 blocks
+        assert!(
+            content.is_array(),
+            "Image tool result content should be an array"
+        );
+        let blocks = content.as_array().unwrap();
+        assert_eq!(blocks.len(), 2);
+
+        // First block should be text
+        assert_eq!(blocks[0]["type"], "text");
+        assert_eq!(
+            blocks[0]["text"],
+            r#"{"ok":true,"data":{"path":"test.png"}}"#
+        );
+
+        // Second block should be image with correct source structure
+        assert_eq!(blocks[1]["type"], "image");
+        assert_eq!(blocks[1]["source"]["type"], "base64");
+        assert_eq!(blocks[1]["source"]["media_type"], "image/png");
+        assert_eq!(blocks[1]["source"]["data"], "iVBORw0KGgo=");
+    }
+
+    #[test]
+    fn test_tool_result_with_image_exact_api_structure() {
+        use crate::tools::ToolResult;
+
+        // Verify the exact JSON structure matches Anthropic API spec
+        let result = ToolResult::with_image(
+            "toolu_789",
+            "Read image file [image/jpeg]",
+            "image/jpeg",
+            "/9j/4AAQSkZJRg==", // Fake JPEG base64
+        );
+
+        let msg = ChatMessage::tool_results(vec![result]);
+        let api_msg = ApiMessage::from_chat_message(&msg, false);
+        let json = serde_json::to_value(&api_msg).unwrap();
+
+        // Expected structure per Anthropic API spec:
+        // {
+        //   "role": "user",
+        //   "content": [{
+        //     "type": "tool_result",
+        //     "tool_use_id": "toolu_789",
+        //     "content": [
+        //       { "type": "text", "text": "Read image file [image/jpeg]" },
+        //       { "type": "image", "source": { "type": "base64", "media_type": "image/jpeg", "data": "..." } }
+        //     ]
+        //   }]
+        // }
+
+        assert_eq!(json["role"], "user");
+        assert!(json["content"].is_array());
+
+        let tool_result = &json["content"][0];
+        assert_eq!(tool_result["type"], "tool_result");
+        assert_eq!(tool_result["tool_use_id"], "toolu_789");
+
+        let content = &tool_result["content"];
+        assert!(content.is_array());
+
+        let text_block = &content[0];
+        assert_eq!(text_block["type"], "text");
+        assert_eq!(text_block["text"], "Read image file [image/jpeg]");
+
+        let image_block = &content[1];
+        assert_eq!(image_block["type"], "image");
+        assert_eq!(image_block["source"]["type"], "base64");
+        assert_eq!(image_block["source"]["media_type"], "image/jpeg");
+        assert_eq!(image_block["source"]["data"], "/9j/4AAQSkZJRg==");
+    }
+
+    #[test]
+    fn test_tool_result_content_has_image() {
+        use crate::tools::{ToolResultBlock, ToolResultContent};
+
+        // Text content should not have image
+        let text = ToolResultContent::Text("hello".to_string());
+        assert!(!text.has_image());
+
+        // Blocks with only text should not have image
+        let text_blocks = ToolResultContent::Blocks(vec![ToolResultBlock::Text {
+            text: "hello".to_string(),
+        }]);
+        assert!(!text_blocks.has_image());
+
+        // Blocks with image should have image
+        let image_blocks = ToolResultContent::Blocks(vec![
+            ToolResultBlock::Text {
+                text: "hello".to_string(),
+            },
+            ToolResultBlock::Image {
+                mime_type: "image/png".to_string(),
+                data: "abc".to_string(),
+            },
+        ]);
+        assert!(image_blocks.has_image());
+    }
+
+    #[test]
+    fn test_tool_result_from_output_with_image() {
+        use crate::core::events::{ImageContent, ToolOutput};
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        // Create a ToolOutput with image
+        let output = ToolOutput::success_with_image(
+            serde_json::json!({"path": "test.png", "mime_type": "image/png"}),
+            ImageContent {
+                mime_type: "image/png".to_string(),
+                data: "base64imagedata".to_string(),
+            },
+        );
+
+        let result = ToolResult::from_output("toolu_test".to_string(), &output);
+
+        // Should have blocks content
+        match &result.content {
+            ToolResultContent::Blocks(blocks) => {
+                assert_eq!(blocks.len(), 2);
+                // First is text (JSON envelope)
+                assert!(matches!(
+                    &blocks[0],
+                    crate::tools::ToolResultBlock::Text { .. }
+                ));
+                // Second is image
+                match &blocks[1] {
+                    crate::tools::ToolResultBlock::Image { mime_type, data } => {
+                        assert_eq!(mime_type, "image/png");
+                        assert_eq!(data, "base64imagedata");
+                    }
+                    _ => panic!("Expected Image block"),
+                }
+            }
+            _ => panic!("Expected Blocks content"),
+        }
+    }
+
+    #[test]
+    fn test_tool_result_from_output_text_only() {
+        use crate::core::events::ToolOutput;
+        use crate::tools::{ToolResult, ToolResultContent};
+
+        // Create a text-only ToolOutput
+        let output = ToolOutput::success(serde_json::json!({"content": "file contents"}));
+
+        let result = ToolResult::from_output("toolu_text".to_string(), &output);
+
+        // Should have text content (not blocks)
+        assert!(matches!(&result.content, ToolResultContent::Text(_)));
     }
 }
