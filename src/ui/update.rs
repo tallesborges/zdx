@@ -20,7 +20,9 @@ use crate::ui::state::{EngineState, OverlayState, TuiState};
 use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
-const MOUSE_SCROLL_LINES: usize = 3;
+/// Set to 1 for smooth scrolling on macOS trackpads (which generate many events
+/// per gesture). Traditional mouse wheels work fine with single-line increments.
+const MOUSE_SCROLL_LINES: usize = 1;
 
 /// The main reducer function.
 ///
