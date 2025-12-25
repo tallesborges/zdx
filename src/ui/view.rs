@@ -13,6 +13,7 @@ use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::ui::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
@@ -180,50 +181,65 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
             .alignment(Alignment::Right),
         );
 
-    // Get cursor position for rendering
-    let cursor_line = state.textarea.cursor().0;
-    let cursor_col = state.textarea.cursor().1;
+    let inner_area = block.inner(area);
+    let available_width = inner_area.width as usize;
 
-    // We need to render the textarea directly but with a modified block
-    // Clone the textarea widget's visual appearance
-    let mut styled_lines: Vec<Line> = Vec::new();
-    for (i, line) in state.textarea.lines().iter().enumerate() {
-        if i == cursor_line {
-            // Add cursor indicator on the current line
-            let mut spans = Vec::new();
-            let chars: Vec<char> = line.chars().collect();
-            if cursor_col < chars.len() {
-                spans.push(Span::raw(chars[..cursor_col].iter().collect::<String>()));
-                spans.push(Span::styled(
-                    chars[cursor_col].to_string(),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                ));
-                spans.push(Span::raw(
-                    chars[cursor_col + 1..].iter().collect::<String>(),
-                ));
-            } else {
-                spans.push(Span::raw(line.clone()));
-                spans.push(Span::styled(
-                    " ",
-                    Style::default().add_modifier(Modifier::REVERSED),
-                ));
-            }
-            styled_lines.push(Line::from(spans));
-        } else {
-            styled_lines.push(Line::from(line.as_str()));
-        }
-    }
+    let lines: Vec<Line> = state
+        .textarea
+        .lines()
+        .iter()
+        .map(|line| Line::from(Span::raw(line.clone())))
+        .collect();
 
-    // If no lines, show cursor
-    if styled_lines.is_empty() {
-        styled_lines.push(Line::from(Span::styled(
-            " ",
-            Style::default().add_modifier(Modifier::REVERSED),
-        )));
-    }
-
-    let input_paragraph = Paragraph::new(styled_lines).block(block);
+    let input_paragraph = Paragraph::new(lines)
+        .block(block)
+        .wrap(Wrap { trim: false });
     frame.render_widget(input_paragraph, area);
+
+    if inner_area.width == 0 || inner_area.height == 0 {
+        return;
+    }
+
+    let (cursor_line, cursor_col) = state.textarea.cursor();
+    let cursor_line = cursor_line.min(state.textarea.lines().len().saturating_sub(1));
+    let line = state
+        .textarea
+        .lines()
+        .get(cursor_line)
+        .map(String::as_str)
+        .unwrap_or_default();
+
+    let mut visual_row = 0usize;
+    for prior in state.textarea.lines().iter().take(cursor_line) {
+        let line_width = UnicodeWidthStr::width(prior.as_str());
+        let wrapped = if available_width == 0 {
+            1
+        } else {
+            line_width.div_ceil(available_width).max(1)
+        };
+        visual_row += wrapped;
+    }
+
+    let mut cursor_width = 0usize;
+    for ch in line.chars().take(cursor_col) {
+        cursor_width += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+
+    let (row_offset, col_offset) = if available_width == 0 {
+        (0usize, 0usize)
+    } else {
+        (
+            cursor_width / available_width,
+            cursor_width % available_width,
+        )
+    };
+
+    let cursor_x = inner_area.x + col_offset as u16;
+    let cursor_y = inner_area.y + (visual_row + row_offset) as u16;
+
+    if cursor_x < inner_area.x + inner_area.width && cursor_y < inner_area.y + inner_area.height {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 /// Renders the status line below the input.
