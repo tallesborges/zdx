@@ -53,6 +53,8 @@ pub enum ToolResultContent {
     Blocks(Vec<ToolResultBlock>),
 }
 
+// Test-only helpers for ToolResultContent
+#[cfg(test)]
 impl ToolResultContent {
     /// Returns true if this content contains any image blocks.
     pub fn has_image(&self) -> bool {
@@ -65,7 +67,6 @@ impl ToolResultContent {
     }
 
     /// Returns the text content if this is Text variant, or the first text block's content.
-    /// Used primarily for testing and debugging.
     pub fn as_text(&self) -> Option<&str> {
         match self {
             ToolResultContent::Text(s) => Some(s),
@@ -113,11 +114,12 @@ impl ToolResult {
             is_error: !output.is_ok(),
         }
     }
+}
 
-    /// Creates a ToolResult with image content.
-    ///
-    /// This is a convenience constructor for creating tool results that contain
-    /// both text and image content blocks.
+// Test-only helper for ToolResult
+#[cfg(test)]
+impl ToolResult {
+    /// Creates a ToolResult with image content (test helper).
     pub fn with_image(
         tool_use_id: impl Into<String>,
         text: impl Into<String>,
