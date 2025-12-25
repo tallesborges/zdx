@@ -22,7 +22,7 @@
   - `src/ui/view.rs`: pure render functions (no mutations)
   - `src/ui/effects.rs`: effect types returned by reducer for runtime to execute
   - `src/ui/events.rs`: UI event types
-  - `src/ui/markdown.rs`: markdown parsing and styled text wrapping for assistant responses
+  - `src/ui/markdown.rs`: markdown parsing, styled text wrapping, and streaming collector for assistant responses
   - `src/ui/overlays/`: self-contained overlay modules (state + update + render)
     - `src/ui/overlays/palette.rs`: command palette overlay
     - `src/ui/overlays/model_picker.rs`: model picker overlay
