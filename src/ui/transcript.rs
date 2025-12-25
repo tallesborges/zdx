@@ -468,26 +468,11 @@ impl HistoryCell {
                 };
 
                 // Show command for bash tool, or tool name for others
-                if name == "bash" {
-                    if let Some(cmd) = input.get("command").and_then(|v| v.as_str()) {
-                        let mut spans = vec![
-                            StyledSpan {
-                                text: prefix.clone(),
-                                style: prefix_style,
-                            },
-                            StyledSpan {
-                                text: cmd.to_string(),
-                                style: cmd_style,
-                            },
-                        ];
-                        if let Some(suf) = suffix {
-                            spans.push(StyledSpan {
-                                text: suf.to_string(),
-                                style: Style::Interrupted,
-                            });
-                        }
-                        lines.push(StyledLine { spans });
-                    }
+                let display_text = if name == "bash" {
+                    input
+                        .get("command")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
                 } else {
                     // For other tools, show tool name and key input
                     let input_preview = match name.as_str() {
@@ -505,28 +490,55 @@ impl HistoryCell {
                             .map(|s| s.to_string()),
                         _ => None,
                     };
-                    let display = if let Some(preview) = input_preview {
+                    Some(if let Some(preview) = input_preview {
                         format!("{}: {}", name, preview)
                     } else {
                         name.to_string()
-                    };
-                    let mut spans = vec![
-                        StyledSpan {
-                            text: prefix.clone(),
-                            style: prefix_style,
-                        },
-                        StyledSpan {
-                            text: display,
-                            style: cmd_style,
-                        },
-                    ];
-                    if let Some(suf) = suffix {
+                    })
+                };
+
+                if let Some(text) = display_text {
+                    // Calculate available width for content (after prefix)
+                    let prefix_width = prefix.width();
+                    let content_width = width.saturating_sub(prefix_width).max(10);
+
+                    // Wrap the command/tool text
+                    let wrapped = wrap_text(&text, content_width);
+
+                    for (i, wrapped_line) in wrapped.into_iter().enumerate() {
+                        let mut spans = Vec::new();
+
+                        if i == 0 {
+                            // First line gets the prefix
+                            spans.push(StyledSpan {
+                                text: prefix.clone(),
+                                style: prefix_style,
+                            });
+                        } else {
+                            // Continuation lines get indent
+                            spans.push(StyledSpan {
+                                text: " ".repeat(prefix_width),
+                                style: Style::Plain,
+                            });
+                        }
+
                         spans.push(StyledSpan {
+                            text: wrapped_line,
+                            style: cmd_style,
+                        });
+
+                        lines.push(StyledLine { spans });
+                    }
+
+                    // Add suffix to last line if present
+                    if let Some(suf) = suffix
+                        && let Some(last) = lines.last_mut()
+                    {
+                        last.spans.push(StyledSpan {
                             text: suf.to_string(),
                             style: Style::Interrupted,
                         });
                     }
-                    lines.push(StyledLine { spans });
                 }
 
                 // Show truncated output preview when done (combine stdout + stderr)
@@ -1138,6 +1150,43 @@ mod tests {
             HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Error),
             _ => panic!("Expected tool cell"),
         }
+    }
+
+    #[test]
+    fn test_bash_command_wrapping() {
+        // Long bash command that exceeds 30 columns
+        let long_cmd = "cd /Users/test/project && gemini \"Review the implementation\" -m model";
+        let cell = HistoryCell::tool_running("123", "bash", serde_json::json!({"command": long_cmd}));
+        let lines = cell.display_lines(30, 0);
+
+        // Should wrap to multiple lines
+        assert!(
+            lines.len() > 1,
+            "Long bash command should wrap, got {} lines",
+            lines.len()
+        );
+
+        // First line should have spinner prefix
+        assert_eq!(lines[0].spans[0].text, "◐ ");
+        assert_eq!(lines[0].spans[0].style, Style::ToolRunning);
+
+        // Continuation lines should have indent (2 spaces to match prefix width)
+        assert_eq!(lines[1].spans[0].text, "  ");
+        assert_eq!(lines[1].spans[0].style, Style::Plain);
+
+        // All content should be present when joined
+        let all_content: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(
+            all_content.contains("cd"),
+            "Should contain start of command"
+        );
+        assert!(
+            all_content.contains("model"),
+            "Should contain end of command"
+        );
     }
 
     #[test]
