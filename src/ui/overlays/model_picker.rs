@@ -3,13 +3,11 @@
 //! Contains state, update handlers, and render function for the model picker.
 
 use crossterm::event::{KeyCode, KeyModifiers};
-use ratatui::{
-    Frame,
-    layout::{Alignment, Rect},
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph},
-};
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Rect};
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::effects::UiEffect;

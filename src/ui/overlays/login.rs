@@ -3,13 +3,11 @@
 //! Contains state, update handlers, and render function for the OAuth login flow.
 
 use crossterm::event::{KeyCode, KeyModifiers};
-use ratatui::{
-    Frame,
-    layout::Rect,
-    style::{Color, Modifier, Style},
-    text::{Line, Span},
-    widgets::{Block, Borders, Clear, Paragraph},
-};
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::{Color, Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use crate::ui::effects::UiEffect;
 use crate::ui::state::{OverlayState, TuiState};

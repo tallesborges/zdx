@@ -15,12 +15,11 @@ use crate::config::Config;
 use crate::core::engine::EngineOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
-use crate::ui::transcript::{HistoryCell, WrapCache};
-
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::overlays::{
     CommandPaletteState, LoginState, ModelPickerState, ThinkingPickerState,
 };
+use crate::ui::transcript::{HistoryCell, WrapCache};
 
 // ============================================================================
 // Overlay State (Unified)

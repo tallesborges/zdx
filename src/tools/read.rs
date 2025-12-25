@@ -3,10 +3,10 @@
 //! Allows the agent to read file contents from the filesystem.
 //! Supports both text files and images (JPEG, PNG, GIF, WebP).
 
+use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::path::Path;
-use std::{fs, path::PathBuf};
+use std::path::{Path, PathBuf};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;

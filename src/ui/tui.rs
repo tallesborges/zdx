@@ -14,7 +14,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use crossterm::event;
-use ratatui::{Terminal, backend::CrosstermBackend};
+use ratatui::Terminal;
+use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 
 use crate::config::Config;
@@ -24,10 +25,8 @@ use crate::providers::anthropic::ChatMessage;
 use crate::ui::effects::UiEffect;
 use crate::ui::events::UiEvent;
 use crate::ui::state::{EngineState, TuiState};
-use crate::ui::terminal;
 use crate::ui::transcript::HistoryCell;
-use crate::ui::update;
-use crate::ui::view;
+use crate::ui::{terminal, update, view};
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(

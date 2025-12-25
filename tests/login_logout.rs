@@ -132,8 +132,7 @@ fn test_login_prompts_when_already_logged_in() {
 #[cfg(unix)]
 #[test]
 fn test_oauth_file_permissions_on_logout() {
-    use std::os::unix::fs::OpenOptionsExt;
-    use std::os::unix::fs::PermissionsExt;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 
     let temp = tempdir().unwrap();
     let oauth_path = temp.path().join("oauth.json");
