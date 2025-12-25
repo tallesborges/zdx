@@ -6,7 +6,7 @@
 //!
 //! Uses pulldown-cmark for parsing. Falls back to plain text if parsing fails.
 
-use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Parser, Tag, TagEnd};
+use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
 
 use super::transcript::{Style, StyledLine, StyledSpan};
@@ -401,7 +401,9 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
         return vec![StyledLine { spans: vec![] }];
     }
 
-    let parser = Parser::new(text);
+    let mut options = Options::empty();
+    options.insert(Options::ENABLE_TABLES);
+    let parser = Parser::new_ext(text, options);
     let mut renderer = MarkdownRenderer::new(width);
 
     for event in parser {
@@ -429,6 +431,14 @@ struct MarkdownRenderer {
     in_blockquote: bool,
     /// Current heading level (None if not in heading).
     current_heading: Option<HeadingLevel>,
+    /// Are we inside a table?
+    in_table: bool,
+    /// Are we in the table header row?
+    in_table_head: bool,
+    /// Current row cells being collected.
+    table_row_cells: Vec<String>,
+    /// Current cell text being collected.
+    table_cell_text: String,
 }
 
 #[derive(Debug, Clone)]
@@ -451,6 +461,10 @@ impl MarkdownRenderer {
             list_stack: Vec::new(),
             in_blockquote: false,
             current_heading: None,
+            in_table: false,
+            in_table_head: false,
+            table_row_cells: Vec::new(),
+            table_cell_text: String::new(),
         }
     }
 
@@ -565,8 +579,18 @@ impl MarkdownRenderer {
             Tag::Image { .. } => {
                 // Images not supported in terminal
             }
-            Tag::Table(_) | Tag::TableHead | Tag::TableRow | Tag::TableCell => {
-                // Tables not implemented yet
+            Tag::Table(_) => {
+                self.flush_paragraph();
+                self.in_table = true;
+            }
+            Tag::TableHead => {
+                self.in_table_head = true;
+            }
+            Tag::TableRow => {
+                self.table_row_cells.clear();
+            }
+            Tag::TableCell => {
+                self.table_cell_text.clear();
             }
             Tag::FootnoteDefinition(_) => {
                 // Footnotes not supported
@@ -636,12 +660,36 @@ impl MarkdownRenderer {
             TagEnd::Emphasis | TagEnd::Strong | TagEnd::Strikethrough | TagEnd::Link => {
                 self.pop_style();
             }
+            TagEnd::Table => {
+                self.in_table = false;
+                // Add blank line after table
+                self.lines.push(StyledLine::empty());
+            }
+            TagEnd::TableHead => {
+                // Flush the header row before leaving table head
+                self.flush_table_row();
+                self.in_table_head = false;
+            }
+            TagEnd::TableRow => {
+                self.flush_table_row();
+            }
+            TagEnd::TableCell => {
+                // Trim and collect cell text
+                self.table_row_cells.push(self.table_cell_text.trim().to_string());
+                self.table_cell_text.clear();
+            }
             _ => {}
         }
     }
 
     fn add_text(&mut self, text: &str) {
         if text.is_empty() {
+            return;
+        }
+
+        // When inside a table, collect text for the current cell
+        if self.in_table {
+            self.table_cell_text.push_str(text);
             return;
         }
 
@@ -792,6 +840,51 @@ impl MarkdownRenderer {
 
         let wrapped = wrap_styled_spans(&spans, &opts);
         self.lines.extend(wrapped);
+    }
+
+    fn flush_table_row(&mut self) {
+        if self.table_row_cells.is_empty() {
+            return;
+        }
+
+        let cells = std::mem::take(&mut self.table_row_cells);
+
+        // Simple pipe-separated format: | cell1 | cell2 | cell3 |
+        let row_text = format!("| {} |", cells.join(" | "));
+
+        let style = if self.in_table_head {
+            Style::Strong
+        } else {
+            Style::Assistant
+        };
+
+        self.lines.push(StyledLine {
+            spans: vec![StyledSpan {
+                text: row_text,
+                style,
+            }],
+        });
+
+        // Add separator line after header
+        if self.in_table_head {
+            let separator = format!(
+                "|{}|",
+                cells
+                    .iter()
+                    .map(|c| {
+                        let width = c.width().max(3);
+                        format!(" {} ", "-".repeat(width))
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|")
+            );
+            self.lines.push(StyledLine {
+                spans: vec![StyledSpan {
+                    text: separator,
+                    style: Style::Plain,
+                }],
+            });
+        }
     }
 
     fn finish(mut self) -> Vec<StyledLine> {
@@ -1068,5 +1161,30 @@ mod tests {
         // Should be rendered as single paragraph
         // (pulldown-cmark treats single newline as soft break)
         assert!(!lines.is_empty());
+    }
+
+    #[test]
+    fn test_table_rendering() {
+        let md = "| Header 1 | Header 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |";
+        let lines = render_markdown(md, 80);
+
+        // Should have multiple lines (header, separator, data row)
+        assert!(
+            lines.len() >= 3,
+            "Table should render at least 3 lines, got {}",
+            lines.len()
+        );
+
+        // Combine all text to check for table content
+        let combined: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        // Should contain pipe separators and headers
+        assert!(combined.contains("|"), "Table should have pipe separators");
+        assert!(combined.contains("Header 1"), "Table should contain header text");
+        assert!(combined.contains("Cell 1"), "Table should contain cell text");
     }
 }
