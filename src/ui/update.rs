@@ -478,6 +478,11 @@ pub fn handle_engine_event(
             vec![]
         }
         EngineEvent::AssistantFinal { .. } => {
+            // Apply any pending delta before finalizing to ensure no content is lost.
+            // This is critical because multiple events can be processed in one loop
+            // iteration, and TurnComplete may follow immediately after AssistantFinal.
+            apply_pending_delta(state);
+
             if let EngineState::Streaming { cell_id, .. } = &state.engine_state
                 && let Some(cell) = state.transcript.iter_mut().find(|c| c.id() == *cell_id)
             {
@@ -486,6 +491,10 @@ pub fn handle_engine_event(
             vec![]
         }
         EngineEvent::Error { message, .. } => {
+            // Apply any pending delta before resetting engine state to preserve
+            // partial content that was streamed before the error occurred.
+            apply_pending_delta(state);
+
             state
                 .transcript
                 .push(HistoryCell::system(format!("Error: {}", message)));
@@ -494,6 +503,10 @@ pub fn handle_engine_event(
             vec![]
         }
         EngineEvent::Interrupted => {
+            // Apply any pending delta before resetting engine state to preserve
+            // partial content that was streamed before the interruption.
+            apply_pending_delta(state);
+
             // Mark any running tools or streaming cells as cancelled
             let mut any_marked = false;
             for cell in &mut state.transcript {
@@ -552,6 +565,11 @@ pub fn handle_engine_event(
             final_text,
             messages,
         } => {
+            // Apply any pending delta before resetting engine state to ensure no
+            // content is lost. This handles edge cases where AssistantFinal wasn't
+            // received or didn't have a chance to apply the delta.
+            apply_pending_delta(state);
+
             // Turn completed - update messages and reset engine state
             state.messages = messages.clone();
             state.engine_state = EngineState::Idle;
@@ -623,6 +641,21 @@ pub fn handle_engine_event(
             }) {
                 cell.finalize_thinking(signature.clone());
             }
+            vec![]
+        }
+        EngineEvent::UsageUpdate {
+            input_tokens,
+            output_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+        } => {
+            // Accumulate usage for session-wide tracking
+            state.usage.add(
+                *input_tokens,
+                *output_tokens,
+                *cache_read_input_tokens,
+                *cache_creation_input_tokens,
+            );
             vec![]
         }
     }
