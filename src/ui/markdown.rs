@@ -293,7 +293,13 @@ fn process_code_span_impl(
         *current_line_width += span_width;
     } else if span_width <= rest_width && *current_line_width > 0 {
         // Doesn't fit but would fit on fresh line
-        flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+        flush_line_impl(
+            lines,
+            current_line_spans,
+            is_first_line,
+            first_prefix,
+            rest_prefix,
+        );
         *current_line_width = 0;
         current_line_spans.push(span.clone());
         *current_line_width = span_width;
@@ -304,10 +310,20 @@ fn process_code_span_impl(
 
         for (i, frag) in fragments.into_iter().enumerate() {
             let frag_width = frag.text.width();
-            let current_avail = if *is_first_line { available_width } else { rest_width };
+            let current_avail = if *is_first_line {
+                available_width
+            } else {
+                rest_width
+            };
 
             if i > 0 && *current_line_width + frag_width > current_avail {
-                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                flush_line_impl(
+                    lines,
+                    current_line_spans,
+                    is_first_line,
+                    first_prefix,
+                    rest_prefix,
+                );
                 *current_line_width = 0;
             }
 
@@ -345,7 +361,11 @@ fn process_text_span_impl(
                 text: " ".to_string(),
                 style: span.style,
             };
-            let current_avail = if *is_first_line { available_width } else { rest_width };
+            let current_avail = if *is_first_line {
+                available_width
+            } else {
+                rest_width
+            };
             if *current_line_width + 1 <= current_avail {
                 current_line_spans.push(space_span);
                 *current_line_width += 1;
@@ -356,7 +376,11 @@ fn process_text_span_impl(
 
     // Add leading space if original text had it and we have prior content
     if has_leading_space && !current_line_spans.is_empty() {
-        let current_avail = if *is_first_line { available_width } else { rest_width };
+        let current_avail = if *is_first_line {
+            available_width
+        } else {
+            rest_width
+        };
         if *current_line_width + 1 <= current_avail {
             current_line_spans.push(StyledSpan {
                 text: " ".to_string(),
@@ -368,7 +392,11 @@ fn process_text_span_impl(
 
     for (i, word) in words.iter().enumerate() {
         let word_width = word.width();
-        let current_avail = if *is_first_line { available_width } else { rest_width };
+        let current_avail = if *is_first_line {
+            available_width
+        } else {
+            rest_width
+        };
 
         // Add space before word (except first word - leading space handled above)
         if i > 0 {
@@ -381,12 +409,22 @@ fn process_text_span_impl(
                 *current_line_width += 1;
             } else {
                 // Word doesn't fit, start new line
-                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                flush_line_impl(
+                    lines,
+                    current_line_spans,
+                    is_first_line,
+                    first_prefix,
+                    rest_prefix,
+                );
                 *current_line_width = 0;
             }
         }
 
-        let current_avail = if *is_first_line { available_width } else { rest_width };
+        let current_avail = if *is_first_line {
+            available_width
+        } else {
+            rest_width
+        };
 
         // Now add the word
         if word_width <= current_avail.saturating_sub(*current_line_width) {
@@ -397,7 +435,13 @@ fn process_text_span_impl(
             *current_line_width += word_width;
         } else if word_width <= rest_width && *current_line_width > 0 {
             // Word fits on fresh line
-            flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+            flush_line_impl(
+                lines,
+                current_line_spans,
+                is_first_line,
+                first_prefix,
+                rest_prefix,
+            );
             *current_line_width = 0;
             current_line_spans.push(StyledSpan {
                 text: (*word).to_string(),
@@ -407,7 +451,13 @@ fn process_text_span_impl(
         } else {
             // Word is too long, need to break it
             if *current_line_width > 0 {
-                flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                flush_line_impl(
+                    lines,
+                    current_line_spans,
+                    is_first_line,
+                    first_prefix,
+                    rest_prefix,
+                );
                 *current_line_width = 0;
             }
 
@@ -415,14 +465,28 @@ fn process_text_span_impl(
                 text: (*word).to_string(),
                 style: span.style,
             };
-            let break_width = if *is_first_line { available_width } else { rest_width };
+            let break_width = if *is_first_line {
+                available_width
+            } else {
+                rest_width
+            };
             let fragments = break_span_by_width(&word_span, break_width);
 
             for frag in fragments {
                 let frag_width = frag.text.width();
-                let current_avail = if *is_first_line { available_width } else { rest_width };
+                let current_avail = if *is_first_line {
+                    available_width
+                } else {
+                    rest_width
+                };
                 if *current_line_width + frag_width > current_avail && *current_line_width > 0 {
-                    flush_line_impl(lines, current_line_spans, is_first_line, first_prefix, rest_prefix);
+                    flush_line_impl(
+                        lines,
+                        current_line_spans,
+                        is_first_line,
+                        first_prefix,
+                        rest_prefix,
+                    );
                     *current_line_width = 0;
                 }
                 if !frag.text.is_empty() {
@@ -435,7 +499,11 @@ fn process_text_span_impl(
 
     // Add trailing space if original text had it
     if has_trailing_space {
-        let current_avail = if *is_first_line { available_width } else { rest_width };
+        let current_avail = if *is_first_line {
+            available_width
+        } else {
+            rest_width
+        };
         if *current_line_width + 1 <= current_avail {
             current_line_spans.push(StyledSpan {
                 text: " ".to_string(),
@@ -635,9 +703,7 @@ impl MarkdownRenderer {
             Tag::HtmlBlock => {
                 // Not implemented
             }
-            Tag::DefinitionList
-            | Tag::DefinitionListTitle
-            | Tag::DefinitionListDefinition => {
+            Tag::DefinitionList | Tag::DefinitionListTitle | Tag::DefinitionListDefinition => {
                 // Definition lists not implemented yet
             }
             Tag::Superscript => {

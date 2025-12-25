@@ -497,9 +497,16 @@ pub fn handle_engine_event(
             for cell in &mut state.transcript {
                 let was_active = matches!(
                     cell,
-                    HistoryCell::Assistant { is_streaming: true, .. }
-                        | HistoryCell::Thinking { is_streaming: true, .. }
-                        | HistoryCell::Tool { state: ToolState::Running, .. }
+                    HistoryCell::Assistant {
+                        is_streaming: true,
+                        ..
+                    } | HistoryCell::Thinking {
+                        is_streaming: true,
+                        ..
+                    } | HistoryCell::Tool {
+                        state: ToolState::Running,
+                        ..
+                    }
                 );
                 cell.mark_cancelled();
                 if was_active {

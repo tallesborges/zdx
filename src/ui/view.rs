@@ -352,8 +352,7 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::CodeFence => Style::default().fg(Color::DarkGray),
         TranscriptStyle::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
         TranscriptStyle::Strong => Style::default().add_modifier(Modifier::BOLD),
-        TranscriptStyle::H1 => Style::default()
-            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
+        TranscriptStyle::H1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
         TranscriptStyle::H2 => Style::default().add_modifier(Modifier::BOLD),
         TranscriptStyle::H3 => Style::default()
             .add_modifier(Modifier::ITALIC)
