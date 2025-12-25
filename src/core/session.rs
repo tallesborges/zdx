@@ -484,7 +484,9 @@ pub fn events_to_messages(
             } => {
                 pending_tool_results.push(crate::tools::ToolResult {
                     tool_use_id,
-                    content: serde_json::to_string(&output).unwrap_or_default(),
+                    content: crate::tools::ToolResultContent::Text(
+                        serde_json::to_string(&output).unwrap_or_default(),
+                    ),
                     is_error: !ok,
                 });
             }

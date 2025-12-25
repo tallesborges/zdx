@@ -24,22 +24,117 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+/// Content block within a tool result.
+///
+/// Anthropic API requires tool_result content to be an array of blocks
+/// when including images: `[{type: "text", ...}, {type: "image", ...}]`
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum ToolResultBlock {
+    /// Text content block.
+    Text { text: String },
+    /// Image content block (base64 encoded).
+    Image { mime_type: String, data: String },
+}
+
+/// Content of a tool result - either simple text or structured blocks.
+///
+/// - `Text`: Simple string content (backwards compatible, serializes as string)
+/// - `Blocks`: Array of content blocks (required for images)
+///
+/// Uses `#[serde(untagged)]` so `Text` serializes as a plain string and
+/// `Blocks` serializes as an array.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum ToolResultContent {
+    /// Simple text content (serializes as string for backwards compatibility).
+    Text(String),
+    /// Array of content blocks (required when including images).
+    Blocks(Vec<ToolResultBlock>),
+}
+
+impl ToolResultContent {
+    /// Returns true if this content contains any image blocks.
+    pub fn has_image(&self) -> bool {
+        match self {
+            ToolResultContent::Text(_) => false,
+            ToolResultContent::Blocks(blocks) => blocks
+                .iter()
+                .any(|b| matches!(b, ToolResultBlock::Image { .. })),
+        }
+    }
+
+    /// Returns the text content if this is Text variant, or the first text block's content.
+    /// Used primarily for testing and debugging.
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            ToolResultContent::Text(s) => Some(s),
+            ToolResultContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
+                ToolResultBlock::Text { text } => Some(text.as_str()),
+                _ => None,
+            }),
+        }
+    }
+}
+
 /// Result of executing a tool (for API compatibility).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ToolResult {
     pub tool_use_id: String,
-    pub content: String,
+    pub content: ToolResultContent,
     #[serde(default)]
     pub is_error: bool,
 }
 
 impl ToolResult {
     /// Creates a ToolResult from a ToolOutput.
+    ///
+    /// If the output contains image content, creates a Blocks content with
+    /// both text (JSON envelope) and image blocks. Otherwise, creates Text content.
     pub fn from_output(tool_use_id: String, output: &ToolOutput) -> Self {
+        let content = match output.image() {
+            Some(image) => {
+                // Create blocks with text description + image
+                let text_block = ToolResultBlock::Text {
+                    text: output.to_json_string(),
+                };
+                let image_block = ToolResultBlock::Image {
+                    mime_type: image.mime_type.clone(),
+                    data: image.data.clone(),
+                };
+                ToolResultContent::Blocks(vec![text_block, image_block])
+            }
+            None => ToolResultContent::Text(output.to_json_string()),
+        };
+
         Self {
             tool_use_id,
-            content: output.to_json_string(),
+            content,
             is_error: !output.is_ok(),
+        }
+    }
+
+    /// Creates a ToolResult with image content.
+    ///
+    /// This is a convenience constructor for creating tool results that contain
+    /// both text and image content blocks.
+    pub fn with_image(
+        tool_use_id: impl Into<String>,
+        text: impl Into<String>,
+        mime_type: impl Into<String>,
+        data: impl Into<String>,
+    ) -> Self {
+        let blocks = vec![
+            ToolResultBlock::Text { text: text.into() },
+            ToolResultBlock::Image {
+                mime_type: mime_type.into(),
+                data: data.into(),
+            },
+        ];
+        Self {
+            tool_use_id: tool_use_id.into(),
+            content: ToolResultContent::Blocks(blocks),
+            is_error: false,
         }
     }
 }
@@ -163,7 +258,13 @@ mod tests {
         let (output, result) = execute_tool("bash", "toolu_timeout", &input, &ctx).await;
         // Timeout is still a success envelope with timed_out=true
         assert!(output.is_ok());
-        assert!(result.content.contains(r#""timed_out":true"#));
+        assert!(
+            result
+                .content
+                .as_text()
+                .unwrap()
+                .contains(r#""timed_out":true"#)
+        );
     }
 
     #[tokio::test]
@@ -175,6 +276,12 @@ mod tests {
         let (output, result) = execute_tool("unknown", "toolu_unknown", &input, &ctx).await;
         assert!(!output.is_ok());
         assert!(result.is_error);
-        assert!(result.content.contains(r#""code":"unknown_tool""#));
+        assert!(
+            result
+                .content
+                .as_text()
+                .unwrap()
+                .contains(r#""code":"unknown_tool""#)
+        );
     }
 }
