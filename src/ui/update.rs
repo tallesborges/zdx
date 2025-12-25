@@ -516,15 +516,14 @@ pub fn handle_engine_event(
 
             // If no streaming/running cells were marked, mark the last user cell
             // (this means we interrupted before any response was generated)
-            if !any_marked {
-                if let Some(last_user) = state
+            if !any_marked
+                && let Some(last_user) = state
                     .transcript
                     .iter_mut()
                     .rev()
                     .find(|c| matches!(c, HistoryCell::User { .. }))
-                {
-                    last_user.mark_request_interrupted();
-                }
+            {
+                last_user.mark_request_interrupted();
             }
 
             interrupt::reset();
