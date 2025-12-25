@@ -178,7 +178,7 @@ ApiContentBlock::ToolResult {
   - [x] `read::execute()` returns `ToolOutput::success_with_image()` (done in Slice 2)
   - [x] `execute_tool()` calls `ToolResult::from_output()` which handles images (done in Slice 3)
   - [x] `ApiMessage::from_chat_message()` converts to correct API format (done in Slice 3)
-  - [ ] Manual smoke test with real API call
+  - [x] Manual smoke test with real API call
 - **✅ Demo:**
   ```bash
   # Manual test with real API:
