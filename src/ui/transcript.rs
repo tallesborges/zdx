@@ -1156,7 +1156,8 @@ mod tests {
     fn test_bash_command_wrapping() {
         // Long bash command that exceeds 30 columns
         let long_cmd = "cd /Users/test/project && gemini \"Review the implementation\" -m model";
-        let cell = HistoryCell::tool_running("123", "bash", serde_json::json!({"command": long_cmd}));
+        let cell =
+            HistoryCell::tool_running("123", "bash", serde_json::json!({"command": long_cmd}));
         let lines = cell.display_lines(30, 0);
 
         // Should wrap to multiple lines
