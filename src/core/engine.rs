@@ -505,8 +505,9 @@ fn build_assistant_blocks(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use tokio::time::{Duration, timeout};
+
+    use super::*;
 
     /// Verifies engine emits ToolStarted and ToolFinished events (SPEC §7).
     #[tokio::test]

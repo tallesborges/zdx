@@ -14,8 +14,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 
-use crate::config::Config;
-use crate::config::paths;
+use crate::config::{Config, paths};
 
 /// Maximum size for a single AGENTS.md file (64KB).
 /// Files larger than this are truncated with a warning.

@@ -127,10 +127,11 @@ impl OAuthCache {
 
 /// Anthropic-specific OAuth helpers.
 pub mod anthropic {
-    use super::*;
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
+
+    use super::*;
 
     /// Provider key for Anthropic in the OAuth cache.
     pub const PROVIDER_KEY: &str = "anthropic";
