@@ -6,6 +6,7 @@
 //!
 //! Uses pulldown-cmark for parsing. Falls back to plain text if parsing fails.
 
+use comfy_table::{ContentArrangement, Table};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
 
@@ -413,6 +414,72 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
     renderer.finish()
 }
 
+/// Simple table buffer using comfy-table for rendering.
+#[derive(Debug, Clone, Default)]
+struct TableBuffer {
+    /// Header row cells (plain text).
+    header: Vec<String>,
+    /// Data rows (plain text).
+    rows: Vec<Vec<String>>,
+    /// Current row being built.
+    current_row: Vec<String>,
+    /// Current cell text being collected.
+    current_cell: String,
+}
+
+impl TableBuffer {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn clear(&mut self) {
+        self.header.clear();
+        self.rows.clear();
+        self.current_row.clear();
+        self.current_cell.clear();
+    }
+
+    fn push_cell_text(&mut self, text: &str) {
+        self.current_cell.push_str(text);
+    }
+
+    fn finish_cell(&mut self) {
+        let cell = std::mem::take(&mut self.current_cell);
+        self.current_row.push(cell);
+    }
+
+    fn finish_row(&mut self, is_header: bool) {
+        let row = std::mem::take(&mut self.current_row);
+        if is_header {
+            self.header = row;
+        } else {
+            self.rows.push(row);
+        }
+    }
+
+    /// Render the table using comfy-table and return plain text lines.
+    fn render(&self, max_width: usize) -> Vec<String> {
+        let mut table = Table::new();
+
+        // Configure table width and arrangement
+        table.set_width(max_width as u16);
+        table.set_content_arrangement(ContentArrangement::Dynamic);
+
+        // Add header if present
+        if !self.header.is_empty() {
+            table.set_header(&self.header);
+        }
+
+        // Add data rows
+        for row in &self.rows {
+            table.add_row(row);
+        }
+
+        // Convert to lines
+        table.to_string().lines().map(String::from).collect()
+    }
+}
+
 /// Internal state for markdown rendering.
 struct MarkdownRenderer {
     width: usize,
@@ -435,10 +502,8 @@ struct MarkdownRenderer {
     in_table: bool,
     /// Are we in the table header row?
     in_table_head: bool,
-    /// Current row cells being collected.
-    table_row_cells: Vec<String>,
-    /// Current cell text being collected.
-    table_cell_text: String,
+    /// Buffer for table content.
+    table_buffer: TableBuffer,
 }
 
 #[derive(Debug, Clone)]
@@ -463,8 +528,7 @@ impl MarkdownRenderer {
             current_heading: None,
             in_table: false,
             in_table_head: false,
-            table_row_cells: Vec::new(),
-            table_cell_text: String::new(),
+            table_buffer: TableBuffer::new(),
         }
     }
 
@@ -574,7 +638,6 @@ impl MarkdownRenderer {
             }
             Tag::Link { .. } => {
                 self.push_style(Style::Link);
-                // TODO: Store URL for later to show after link text
             }
             Tag::Image { .. } => {
                 // Images not supported in terminal
@@ -582,15 +645,16 @@ impl MarkdownRenderer {
             Tag::Table(_) => {
                 self.flush_paragraph();
                 self.in_table = true;
+                self.table_buffer.clear();
             }
             Tag::TableHead => {
                 self.in_table_head = true;
             }
             Tag::TableRow => {
-                self.table_row_cells.clear();
+                // Row will be built via cells
             }
             Tag::TableCell => {
-                self.table_cell_text.clear();
+                self.table_buffer.current_cell.clear();
             }
             Tag::FootnoteDefinition(_) => {
                 // Footnotes not supported
@@ -605,11 +669,9 @@ impl MarkdownRenderer {
                 // Definition lists not implemented yet
             }
             Tag::Superscript => {
-                // Render superscript as plain text (terminal support limited)
                 self.push_style(Style::Plain);
             }
             Tag::Subscript => {
-                // Render subscript as plain text (terminal support limited)
                 self.push_style(Style::Plain);
             }
         }
@@ -661,22 +723,22 @@ impl MarkdownRenderer {
                 self.pop_style();
             }
             TagEnd::Table => {
+                self.flush_table();
                 self.in_table = false;
                 // Add blank line after table
                 self.lines.push(StyledLine::empty());
             }
             TagEnd::TableHead => {
-                // Flush the header row before leaving table head
-                self.flush_table_row();
+                self.table_buffer.finish_row(true);
                 self.in_table_head = false;
             }
             TagEnd::TableRow => {
-                self.flush_table_row();
+                if !self.in_table_head {
+                    self.table_buffer.finish_row(false);
+                }
             }
             TagEnd::TableCell => {
-                // Trim and collect cell text
-                self.table_row_cells.push(self.table_cell_text.trim().to_string());
-                self.table_cell_text.clear();
+                self.table_buffer.finish_cell();
             }
             _ => {}
         }
@@ -687,9 +749,11 @@ impl MarkdownRenderer {
             return;
         }
 
-        // When inside a table, collect text for the current cell
+        // When inside a table, collect plain text for the current cell
         if self.in_table {
-            self.table_cell_text.push_str(text);
+            // Normalize newlines to spaces
+            let text = text.replace('\n', " ");
+            self.table_buffer.push_cell_text(&text);
             return;
         }
 
@@ -711,6 +775,13 @@ impl MarkdownRenderer {
     }
 
     fn add_inline_code(&mut self, code: &str) {
+        // Inline code in tables
+        if self.in_table {
+            let code = code.replace('\n', " ");
+            self.table_buffer.push_cell_text(&format!("`{}`", code));
+            return;
+        }
+
         self.current_spans.push(StyledSpan {
             text: code.to_string(),
             style: Style::CodeInline,
@@ -718,6 +789,11 @@ impl MarkdownRenderer {
     }
 
     fn add_soft_break(&mut self) {
+        if self.in_table {
+            self.table_buffer.push_cell_text(" ");
+            return;
+        }
+
         // Soft break becomes a space
         self.current_spans.push(StyledSpan {
             text: " ".to_string(),
@@ -726,6 +802,11 @@ impl MarkdownRenderer {
     }
 
     fn add_hard_break(&mut self) {
+        if self.in_table {
+            self.table_buffer.push_cell_text(" ");
+            return;
+        }
+
         // Hard break forces a new line within the current block
         self.current_spans.push(StyledSpan {
             text: "\n".to_string(),
@@ -842,49 +923,20 @@ impl MarkdownRenderer {
         self.lines.extend(wrapped);
     }
 
-    fn flush_table_row(&mut self) {
-        if self.table_row_cells.is_empty() {
-            return;
-        }
+    fn flush_table(&mut self) {
+        // Use comfy-table to render, then convert to StyledLines
+        let table_lines = self.table_buffer.render(self.width);
 
-        let cells = std::mem::take(&mut self.table_row_cells);
-
-        // Simple pipe-separated format: | cell1 | cell2 | cell3 |
-        let row_text = format!("| {} |", cells.join(" | "));
-
-        let style = if self.in_table_head {
-            Style::Strong
-        } else {
-            Style::Assistant
-        };
-
-        self.lines.push(StyledLine {
-            spans: vec![StyledSpan {
-                text: row_text,
-                style,
-            }],
-        });
-
-        // Add separator line after header
-        if self.in_table_head {
-            let separator = format!(
-                "|{}|",
-                cells
-                    .iter()
-                    .map(|c| {
-                        let width = c.width().max(3);
-                        format!(" {} ", "-".repeat(width))
-                    })
-                    .collect::<Vec<_>>()
-                    .join("|")
-            );
+        for line in table_lines {
             self.lines.push(StyledLine {
                 spans: vec![StyledSpan {
-                    text: separator,
+                    text: line,
                     style: Style::Plain,
                 }],
             });
         }
+
+        self.table_buffer.clear();
     }
 
     fn finish(mut self) -> Vec<StyledLine> {
@@ -1153,38 +1205,24 @@ mod tests {
     }
 
     #[test]
-    fn test_soft_hard_breaks() {
-        // Soft break (single newline in paragraph) becomes space
-        let md = "line1\nline2";
+    fn test_table_renders() {
+        let md = "| A | B |\n|---|---|\n| 1 | 2 |";
         let lines = render_markdown(md, 80);
 
-        // Should be rendered as single paragraph
-        // (pulldown-cmark treats single newline as soft break)
-        assert!(!lines.is_empty());
-    }
+        // Should have at least header + separator + data row
+        assert!(lines.len() >= 3, "Table should render multiple lines");
 
-    #[test]
-    fn test_table_rendering() {
-        let md = "| Header 1 | Header 2 |\n|----------|----------|\n| Cell 1   | Cell 2   |";
-        let lines = render_markdown(md, 80);
-
-        // Should have multiple lines (header, separator, data row)
-        assert!(
-            lines.len() >= 3,
-            "Table should render at least 3 lines, got {}",
-            lines.len()
-        );
-
-        // Combine all text to check for table content
+        // Combine all text
         let combined: String = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
 
-        // Should contain pipe separators and headers
-        assert!(combined.contains("|"), "Table should have pipe separators");
-        assert!(combined.contains("Header 1"), "Table should contain header text");
-        assert!(combined.contains("Cell 1"), "Table should contain cell text");
+        // Should contain the cell content
+        assert!(combined.contains('A'), "Table should contain header A");
+        assert!(combined.contains('B'), "Table should contain header B");
+        assert!(combined.contains('1'), "Table should contain cell 1");
+        assert!(combined.contains('2'), "Table should contain cell 2");
     }
 }

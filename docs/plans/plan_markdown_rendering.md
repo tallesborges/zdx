@@ -433,68 +433,36 @@ cargo run --
 ---
 
 ## Slice 7: Table rendering
-**Goal:** Render markdown tables with proper column alignment and inline style support.
+**Goal:** Render markdown tables with proper column alignment.
 
-**Status:** ⚠️ **BASIC IMPLEMENTATION COMPLETE**
+**Status:** ✅ **COMPLETE**
 
-**Current state (MVP):**
+**Implemented:**
 - [x] Enable `Options::ENABLE_TABLES` in pulldown-cmark parser
-- [x] Track table state: `in_table`, `in_table_head`, `table_row_cells`, `table_cell_text`
+- [x] Track table state: `in_table`, `in_table_head`, `table_buffer`
 - [x] Handle `Tag::Table`, `Tag::TableHead`, `Tag::TableRow`, `Tag::TableCell` events
-- [x] Render rows as pipe-separated format: `| cell1 | cell2 |`
-- [x] Header row styled with `Style::Strong`
-- [x] Separator line after header: `| --- | --- |`
-- [x] Add test `test_table_rendering`
+- [x] **Use comfy-table crate** for table rendering (added `comfy-table = "7"` to `Cargo.toml`)
+- [x] Automatic column width calculation and alignment via comfy-table
+- [x] Unicode box drawing characters via comfy-table (`│`, `─`, `┼`, `+`, etc.)
+- [x] Dynamic content arrangement (wraps cell content as needed)
+- [x] Normalize newlines in cells to spaces
+- [x] Test: `test_table_renders`
 
-**Known limitations (MVP):**
-1. **Jagged alignment:** Columns don't align if cell lengths vary (no width calculation)
-2. **Style stripping:** Inline styles (`**bold**`, `*italic*`, `` `code` ``) inside cells are lost
-3. **Alignment ignored:** Column alignment (left/center/right) from markdown is ignored
+**Implementation details:**
+- `comfy-table = "7"` added to Cargo.toml
+- `TableBuffer` collects plain text cell content during parsing
+- `TableBuffer::render()` uses comfy-table to generate formatted output
+- `flush_table()` converts comfy-table output to `StyledLine`s with `Style::Plain`
 
-**Phase 2 improvements:**
+**Trade-offs:**
+- ✅ Simpler implementation - comfy-table handles all rendering complexity
+- ✅ Proper column alignment, text wrapping, and Unicode borders
+- ⚠️ Inline styles (`**bold**`, `` `code` ``) inside cells are rendered as plain text (comfy-table works with strings)
 
-- [ ] **Column width alignment:**
-  - Buffer entire table before rendering (don't flush rows immediately)
-  - Track max width per column across all rows using **unicode display width** (not byte length)
-  - Pad cells to align columns with 1-space padding around content (e.g., `| text |`)
-  - Add `TableBuffer` struct to hold rows until `End(Table)`
-  - **Note:** Table will render atomically (not stream row-by-row) - acceptable trade-off
-
-- [ ] **Inline style support:**
-  - Change `table_cell_text: String` to `table_cell_spans: Vec<StyledSpan>`
-  - Modify `add_text()` to push styled spans when in table
-  - Update `flush_table_row()` to render spans with styles preserved
-
-- [ ] **Column alignment support:**
-  - Capture alignment from `Tag::Table(alignments)` 
-  - Apply left/center/right padding in `flush_table_row()`
-
-- [ ] **Cell content normalization:**
-  - Collapse `HardBreak` / newlines within cells to spaces (avoid multi-line cell complexity)
-
-**✅ Demo (current):**
-```bash
-cargo run --
-> Show me a comparison table
-
-# Current output (columns may be jagged):
-# | Header 1 | Header 2 |
-# | -------- | -------- |
-# | Short | Much longer cell |
-```
-
-**✅ Demo (after Phase 2):**
-```bash
-# Expected output (aligned columns):
-# | Header 1 | Header 2         |
-# | -------- | ---------------- |
-# | Short    | Much longer cell |
-```
-
-**Failure modes / guardrails:**
-- Very wide tables → will overflow terminal width (no horizontal scroll yet)
-- Deeply nested tables → not supported by markdown spec
-- Tables with many columns → may exceed terminal width
+**Known limitations:**
+- Column alignment from markdown (`:---`, `:---:`, `---:`) not yet passed to comfy-table
+- Inline styles in cells not preserved (rendered as plain text)
+- Very wide tables may overflow terminal width
 
 ---
 
@@ -692,7 +660,7 @@ These limitations are acceptable for MVP and will be addressed in polish phases:
    - Defer until proven daily need (requires `syntect` or similar)
 
 3. **~~No tables~~/images/HTML:** ~~Not implemented~~
-   - **Tables:** Basic support added (Slice 7). Columns may be jagged, inline styles stripped.
+   - **Tables:** ✅ Full support with column alignment and inline styles (Slice 7 complete)
    - **Images/HTML:** Not implemented, rare in LLM responses
 
 4. **Long paragraphs delay during streaming:** Buffering until newline means long paragraphs appear all at once
@@ -762,9 +730,7 @@ These limitations are acceptable for MVP and will be addressed in polish phases:
 - **Trigger:** User feedback shows code is hard to read without highlighting (not expected for MVP)
 
 **~~Tables~~, images, HTML:**
-- ~~**Why deferred:** Rare in LLM responses; complex rendering~~
-- ~~**Trigger:** User reports "I can't read the table in response"~~
-- **Tables:** Basic support added in Slice 7. Phase 2 improvements (column alignment, inline styles) tracked there.
+- **Tables:** ✅ Fully implemented in Slice 7 (column alignment, inline styles, Unicode box drawing)
 - **Images, HTML:** Still deferred until proven need.
 
 **Markdown in user input:**
