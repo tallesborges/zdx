@@ -43,7 +43,7 @@
 - `cargo run -- --help`
 - `cargo run --` (interactive; needs provider key via env)
 - `cargo test`
-- `cargo fmt`
+- `cargo +nightly fmt` (uses nightly for full rustfmt features; stable works but ignores some options)
 - `cargo clippy`
 
 ## Conventions
