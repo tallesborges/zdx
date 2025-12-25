@@ -160,6 +160,31 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     title_spans.push(Span::styled(" ", base_style));
 
+    // Build top-right title: token usage
+    let usage = &state.usage;
+    let usage_style = Style::default().fg(Color::DarkGray);
+    let usage_highlight = Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::DIM);
+    
+    let usage_spans = vec![
+        Span::styled("↑", usage_highlight),
+        Span::styled(
+            format!("{}", crate::ui::state::SessionUsage::format_tokens(usage.input_tokens)),
+            usage_style,
+        ),
+        Span::styled(" ↓", usage_highlight),
+        Span::styled(
+            format!("{}", crate::ui::state::SessionUsage::format_tokens(usage.output_tokens)),
+            usage_style,
+        ),
+        Span::styled(" R", usage_highlight),
+        Span::styled(
+            format!("{} ", crate::ui::state::SessionUsage::format_tokens(usage.cache_read_tokens)),
+            usage_style,
+        ),
+    ];
+
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {
         format!(" {} ({}) ", state.display_path, branch)
@@ -173,6 +198,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Line::from(title_spans))
+        .title_top(Line::from(usage_spans).alignment(Alignment::Right))
         .title_bottom(
             Line::from(Span::styled(
                 bottom_title,
@@ -184,58 +210,90 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     let inner_area = block.inner(area);
     let available_width = inner_area.width as usize;
 
-    let lines: Vec<Line> = state
-        .textarea
-        .lines()
-        .iter()
-        .map(|line| Line::from(Span::raw(line.clone())))
-        .collect();
-
-    let input_paragraph = Paragraph::new(lines)
-        .block(block)
-        .wrap(Wrap { trim: false });
-    frame.render_widget(input_paragraph, area);
-
     if inner_area.width == 0 || inner_area.height == 0 {
+        frame.render_widget(block, area);
         return;
     }
 
     let (cursor_line, cursor_col) = state.textarea.cursor();
     let cursor_line = cursor_line.min(state.textarea.lines().len().saturating_sub(1));
-    let line = state
-        .textarea
-        .lines()
-        .get(cursor_line)
-        .map(String::as_str)
-        .unwrap_or_default();
 
+    // Manually wrap lines at exact character widths (not word boundaries)
+    // This ensures cursor calculation matches the actual rendering
+    let mut wrapped_lines: Vec<Line> = Vec::new();
     let mut visual_row = 0usize;
-    for prior in state.textarea.lines().iter().take(cursor_line) {
-        let line_width = UnicodeWidthStr::width(prior.as_str());
-        let wrapped = if available_width == 0 {
+    let mut cursor_visual_row = 0usize;
+    let mut cursor_visual_col = 0usize;
+
+    for (line_idx, logical_line) in state.textarea.lines().iter().enumerate() {
+        let is_cursor_line = line_idx == cursor_line;
+        let line_visual_start = visual_row;
+
+        if logical_line.is_empty() {
+            // Empty line still takes one visual row
+            wrapped_lines.push(Line::from(""));
+            if is_cursor_line {
+                cursor_visual_row = visual_row;
+                cursor_visual_col = 0;
+            }
+            visual_row += 1;
+            continue;
+        }
+
+        // Wrap the line at exact character width boundaries
+        let mut current_width = 0usize;
+        let mut line_start_byte = 0usize;
+
+        for (byte_idx, ch) in logical_line.char_indices() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            if current_width + ch_width > available_width && current_width > 0 {
+                // Wrap here - emit the current segment
+                wrapped_lines.push(Line::from(Span::raw(
+                    logical_line[line_start_byte..byte_idx].to_string(),
+                )));
+                line_start_byte = byte_idx;
+                current_width = ch_width;
+            } else {
+                current_width += ch_width;
+            }
+        }
+
+        // Emit remaining text
+        wrapped_lines.push(Line::from(Span::raw(
+            logical_line[line_start_byte..].to_string(),
+        )));
+
+        // Calculate cursor position if on this line
+        if is_cursor_line {
+            // Calculate display width up to cursor position
+            let mut width_to_cursor = 0usize;
+            for ch in logical_line.chars().take(cursor_col) {
+                width_to_cursor += UnicodeWidthChar::width(ch).unwrap_or(0);
+            }
+
+            // Find which wrapped row and column
+            let row_offset = width_to_cursor / available_width;
+            let col_offset = width_to_cursor % available_width;
+            cursor_visual_row = line_visual_start + row_offset;
+            cursor_visual_col = col_offset;
+        }
+
+        // Count how many visual rows this logical line took
+        let line_width = UnicodeWidthStr::width(logical_line.as_str());
+        let wrapped_count = if available_width == 0 {
             1
         } else {
             line_width.div_ceil(available_width).max(1)
         };
-        visual_row += wrapped;
+        visual_row = line_visual_start + wrapped_count;
     }
 
-    let mut cursor_width = 0usize;
-    for ch in line.chars().take(cursor_col) {
-        cursor_width += UnicodeWidthChar::width(ch).unwrap_or(0);
-    }
+    let input_paragraph = Paragraph::new(wrapped_lines).block(block);
+    frame.render_widget(input_paragraph, area);
 
-    let (row_offset, col_offset) = if available_width == 0 {
-        (0usize, 0usize)
-    } else {
-        (
-            cursor_width / available_width,
-            cursor_width % available_width,
-        )
-    };
-
-    let cursor_x = inner_area.x + col_offset as u16;
-    let cursor_y = inner_area.y + (visual_row + row_offset) as u16;
+    let cursor_x = inner_area.x + cursor_visual_col as u16;
+    let cursor_y = inner_area.y + cursor_visual_row as u16;
 
     if cursor_x < inner_area.x + inner_area.width && cursor_y < inner_area.y + inner_area.height {
         frame.set_cursor_position((cursor_x, cursor_y));
