@@ -15,6 +15,7 @@ ratatui = "0.29"
 tui-textarea = "0.7"
 ctrlc = "3.4"
 dirs = "6.0"
+infer = "0.19"
 futures-util = "0.3.31"
 open = "5"
 reqwest = { version = "0.12.25", features = ["json", "stream"] }

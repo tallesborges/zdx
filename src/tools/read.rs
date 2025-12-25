@@ -2,8 +2,10 @@
 //!
 //! Allows the agent to read file contents from the filesystem.
 
-use std::fs;
+use std::fs::File;
+use std::io::Read;
 use std::path::Path;
+use std::{fs, path::PathBuf};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -13,6 +15,37 @@ use crate::core::events::ToolOutput;
 
 /// Maximum file size before truncation (50KB).
 const MAX_BYTES: usize = 50 * 1024;
+
+/// Supported image MIME types for Anthropic vision API.
+const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+/// Detects image MIME type from file magic bytes.
+///
+/// Returns `Some(mime_type)` if the file is a supported image format
+/// (JPEG, PNG, GIF, WebP), otherwise returns `None`.
+///
+/// Detection is based on file content (magic bytes), not extension.
+fn detect_image_mime(path: &Path) -> Option<String> {
+    // Read first 4KB for magic byte detection
+    let mut file = File::open(path).ok()?;
+    let mut buffer = [0u8; 4096];
+    let bytes_read = file.read(&mut buffer).ok()?;
+
+    if bytes_read == 0 {
+        return None;
+    }
+
+    // Use infer crate to detect MIME type from magic bytes
+    let kind = infer::get(&buffer[..bytes_read])?;
+    let mime = kind.mime_type();
+
+    // Only return if it's a supported image format
+    if SUPPORTED_IMAGE_MIMES.contains(&mime) {
+        Some(mime.to_string())
+    } else {
+        None
+    }
+}
 
 /// Returns the tool definition for the read tool.
 pub fn definition() -> ToolDefinition {
@@ -80,7 +113,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 }
 
 /// Resolves a path relative to the root directory.
-fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf, String> {
+fn resolve_path(path: &str, root: &Path) -> Result<PathBuf, String> {
     let requested = Path::new(path);
 
     // Join with root (handles both absolute and relative paths)
@@ -196,5 +229,157 @@ mod tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    // MIME detection tests
+
+    #[test]
+    fn test_detect_jpeg() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.jpg");
+        // Minimal JPEG: SOI marker + APP0 + EOI
+        let jpeg_bytes: &[u8] = &[
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+        ];
+        fs::write(&path, jpeg_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), Some("image/jpeg".to_string()));
+    }
+
+    #[test]
+    fn test_detect_png() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.png");
+        // Minimal PNG: signature + IHDR chunk + IEND chunk
+        #[rustfmt::skip]
+        let png_bytes: &[u8] = &[
+            // PNG signature
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            // IHDR chunk
+            0x00, 0x00, 0x00, 0x0D, // length
+            0x49, 0x48, 0x44, 0x52, // "IHDR"
+            0x00, 0x00, 0x00, 0x01, // width
+            0x00, 0x00, 0x00, 0x01, // height
+            0x08, 0x02,             // bit depth, color type
+            0x00, 0x00, 0x00,       // compression, filter, interlace
+            0x90, 0x77, 0x53, 0xDE, // CRC
+            // IEND chunk
+            0x00, 0x00, 0x00, 0x00,
+            0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&path, png_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), Some("image/png".to_string()));
+    }
+
+    #[test]
+    fn test_detect_gif() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.gif");
+        // Minimal GIF89a header
+        #[rustfmt::skip]
+        let gif_bytes: &[u8] = &[
+            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // "GIF89a"
+            0x01, 0x00, 0x01, 0x00,             // width, height
+            0x00, 0x00, 0x00,                   // flags, bg, aspect
+            0x3B,                               // trailer
+        ];
+        fs::write(&path, gif_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), Some("image/gif".to_string()));
+    }
+
+    #[test]
+    fn test_detect_webp() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.webp");
+        // Minimal WebP header (RIFF + WEBP)
+        #[rustfmt::skip]
+        let webp_bytes: &[u8] = &[
+            0x52, 0x49, 0x46, 0x46, // "RIFF"
+            0x1A, 0x00, 0x00, 0x00, // file size
+            0x57, 0x45, 0x42, 0x50, // "WEBP"
+            0x56, 0x50, 0x38, 0x20, // "VP8 "
+            0x0E, 0x00, 0x00, 0x00, // chunk size
+            0x30, 0x01, 0x00, 0x9D, // VP8 bitstream
+            0x01, 0x2A, 0x01, 0x00,
+            0x01, 0x00, 0x00, 0x34,
+            0x25, 0x9F, 0x00,
+        ];
+        fs::write(&path, webp_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), Some("image/webp".to_string()));
+    }
+
+    #[test]
+    fn test_detect_text_file_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.txt");
+        fs::write(&path, "Hello, world!").unwrap();
+
+        assert_eq!(detect_image_mime(&path), None);
+    }
+
+    #[test]
+    fn test_detect_nonexistent_file_returns_none() {
+        let path = Path::new("/nonexistent/path/to/file.jpg");
+        assert_eq!(detect_image_mime(path), None);
+    }
+
+    #[test]
+    fn test_detect_empty_file_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("empty.jpg");
+        File::create(&path).unwrap();
+
+        assert_eq!(detect_image_mime(&path), None);
+    }
+
+    #[test]
+    fn test_detect_unsupported_image_returns_none() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.bmp");
+        // BMP header (not supported by Anthropic)
+        #[rustfmt::skip]
+        let bmp_bytes: &[u8] = &[
+            0x42, 0x4D,             // "BM"
+            0x46, 0x00, 0x00, 0x00, // file size
+            0x00, 0x00, 0x00, 0x00, // reserved
+            0x36, 0x00, 0x00, 0x00, // offset to pixel data
+            0x28, 0x00, 0x00, 0x00, // DIB header size
+            0x01, 0x00, 0x00, 0x00, // width
+            0x01, 0x00, 0x00, 0x00, // height
+            0x01, 0x00,             // planes
+            0x18, 0x00,             // bits per pixel
+        ];
+        fs::write(&path, bmp_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), None);
+    }
+
+    #[test]
+    fn test_wrong_extension_detected_by_content() {
+        // A PNG file with .txt extension should still be detected as PNG
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("actually_png.txt");
+        #[rustfmt::skip]
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02,
+            0x00, 0x00, 0x00,
+            0x90, 0x77, 0x53, 0xDE,
+            0x00, 0x00, 0x00, 0x00,
+            0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&path, png_bytes).unwrap();
+
+        assert_eq!(detect_image_mime(&path), Some("image/png".to_string()));
     }
 }
