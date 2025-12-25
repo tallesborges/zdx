@@ -337,8 +337,20 @@ pub async fn run_turn(
                 }
                 StreamEvent::MessageDelta {
                     stop_reason: reason,
+                    usage,
                 } => {
                     stop_reason = reason;
+                    // Emit final output token count (message_delta has the total)
+                    // Only emit output_tokens here to avoid double-counting with message_start
+                    if let Some(u) = usage {
+                        sink.important(EngineEvent::UsageUpdate {
+                            input_tokens: 0, // Already counted in message_start
+                            output_tokens: u.output_tokens,
+                            cache_read_input_tokens: 0, // Already counted in message_start
+                            cache_creation_input_tokens: 0, // Already counted in message_start
+                        })
+                        .await;
+                    }
                 }
                 StreamEvent::Error {
                     error_type,
@@ -353,7 +365,18 @@ pub async fn run_turn(
                     .await;
                     return Err(anyhow::Error::new(provider_err));
                 }
-                // Ignore other events (Ping, MessageStart, MessageStop)
+                StreamEvent::MessageStart { usage, .. } => {
+                    // Emit initial usage: input tokens and cache info only
+                    // Output tokens come from message_delta to avoid double-counting
+                    sink.important(EngineEvent::UsageUpdate {
+                        input_tokens: usage.input_tokens,
+                        output_tokens: 0, // Will be set by message_delta
+                        cache_read_input_tokens: usage.cache_read_input_tokens,
+                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                    })
+                    .await;
+                }
+                // Ignore other events (Ping, MessageStop)
                 _ => {}
             }
         }

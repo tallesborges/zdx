@@ -18,7 +18,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::ui::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
 };
-use crate::ui::state::{AuthType, EngineState, OverlayState, TuiState};
+use crate::ui::state::{AuthType, EngineState, OverlayState, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
 /// Height of the input area (lines, including borders).
@@ -163,24 +163,24 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     // Build top-right title: token usage
     let usage = &state.usage;
     let usage_style = Style::default().fg(Color::DarkGray);
-    let usage_highlight = Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::DIM);
-    
+    let usage_highlight = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
+
     let usage_spans = vec![
         Span::styled("↑", usage_highlight),
-        Span::styled(
-            format!("{}", crate::ui::state::SessionUsage::format_tokens(usage.input_tokens)),
-            usage_style,
-        ),
+        Span::styled(SessionUsage::format_tokens(usage.input_tokens), usage_style),
         Span::styled(" ↓", usage_highlight),
         Span::styled(
-            format!("{}", crate::ui::state::SessionUsage::format_tokens(usage.output_tokens)),
+            SessionUsage::format_tokens(usage.output_tokens),
             usage_style,
         ),
         Span::styled(" R", usage_highlight),
         Span::styled(
-            format!("{} ", crate::ui::state::SessionUsage::format_tokens(usage.cache_read_tokens)),
+            SessionUsage::format_tokens(usage.cache_read_tokens),
+            usage_style,
+        ),
+        Span::styled(" W", usage_highlight),
+        Span::styled(
+            format!("{} ", SessionUsage::format_tokens(usage.cache_write_tokens)),
             usage_style,
         ),
     ];

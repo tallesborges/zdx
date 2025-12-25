@@ -448,11 +448,26 @@ impl AnthropicClient {
 
 // === Streaming Types ===
 
+/// Token usage information from Anthropic API.
+///
+/// Tracks input/output tokens and cache-related tokens for cost calculation.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Usage {
+    /// Input tokens (non-cached)
+    pub input_tokens: u64,
+    /// Output tokens
+    pub output_tokens: u64,
+    /// Tokens read from cache
+    pub cache_read_input_tokens: u64,
+    /// Tokens written to cache
+    pub cache_creation_input_tokens: u64,
+}
+
 /// Events emitted during streaming.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
-    /// Message started, contains model info
-    MessageStart { model: String },
+    /// Message started, contains model info and initial usage
+    MessageStart { model: String, usage: Usage },
     /// A content block has started (text or tool_use or thinking)
     ContentBlockStart {
         index: usize,
@@ -472,8 +487,11 @@ pub enum StreamEvent {
     SignatureDelta { index: usize, signature: String },
     /// A content block has ended
     ContentBlockStop { index: usize },
-    /// Message delta (e.g., stop_reason update)
-    MessageDelta { stop_reason: Option<String> },
+    /// Message delta (e.g., stop_reason update, final usage)
+    MessageDelta {
+        stop_reason: Option<String>,
+        usage: Option<Usage>,
+    },
     /// Message completed
     MessageStop,
     /// Ping event (keepalive)
@@ -589,6 +607,7 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
                 serde_json::from_str(data).context("Failed to parse message_start")?;
             Ok(StreamEvent::MessageStart {
                 model: parsed.message.model,
+                usage: parsed.message.usage.into(),
             })
         }
         "content_block_start" => {
@@ -640,6 +659,7 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
                 serde_json::from_str(data).context("Failed to parse message_delta")?;
             Ok(StreamEvent::MessageDelta {
                 stop_reason: parsed.delta.stop_reason.clone(),
+                usage: parsed.usage.map(|u| u.into()),
             })
         }
         "message_stop" => Ok(StreamEvent::MessageStop),
@@ -665,6 +685,32 @@ struct SseMessageStart {
 #[derive(Debug, Deserialize)]
 struct SseMessageInfo {
     model: String,
+    #[serde(default)]
+    usage: SseUsage,
+}
+
+/// Usage data from Anthropic SSE events.
+#[derive(Debug, Default, Deserialize)]
+struct SseUsage {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: u64,
+    #[serde(default)]
+    cache_creation_input_tokens: u64,
+}
+
+impl From<SseUsage> for Usage {
+    fn from(u: SseUsage) -> Self {
+        Usage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+            cache_read_input_tokens: u.cache_read_input_tokens,
+            cache_creation_input_tokens: u.cache_creation_input_tokens,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -711,6 +757,8 @@ struct SseContentBlockStop {
 #[derive(Debug, Deserialize)]
 struct SseMessageDelta {
     delta: SseMessageDeltaInner,
+    #[serde(default)]
+    usage: Option<SseUsage>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1157,7 +1205,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
 
         // Check specific events
         assert!(
-            matches!(&events[0], StreamEvent::MessageStart { model } if model == "claude-sonnet-4-20250514")
+            matches!(&events[0], StreamEvent::MessageStart { model, .. } if model == "claude-sonnet-4-20250514")
         );
         assert!(matches!(
             &events[1],
@@ -1193,7 +1241,8 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
         assert!(matches!(
             &events[7],
             StreamEvent::MessageDelta {
-                stop_reason: Some(reason)
+                stop_reason: Some(reason),
+                ..
             } if reason == "end_turn"
         ));
         assert_eq!(events[8], StreamEvent::MessageStop);
@@ -1250,7 +1299,8 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
         assert!(matches!(
             &events[6],
             StreamEvent::MessageDelta {
-                stop_reason: Some(reason)
+                stop_reason: Some(reason),
+                ..
             } if reason == "tool_use"
         ));
     }
@@ -1398,7 +1448,7 @@ data: {"type":"message_stop"}
 
         // Check message_start
         assert!(
-            matches!(&events[0], StreamEvent::MessageStart { model } if model == "claude-sonnet-4-20250514")
+            matches!(&events[0], StreamEvent::MessageStart { model, .. } if model == "claude-sonnet-4-20250514")
         );
 
         // Check thinking block start
@@ -1465,7 +1515,8 @@ data: {"type":"message_stop"}
         assert!(matches!(
             &events[9],
             StreamEvent::MessageDelta {
-                stop_reason: Some(reason)
+                stop_reason: Some(reason),
+                ..
             } if reason == "end_turn"
         ));
         assert_eq!(events[10], StreamEvent::MessageStop);

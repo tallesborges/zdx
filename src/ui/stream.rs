@@ -248,6 +248,9 @@ impl CliRenderer {
                 let _ = writeln!(self.stderr);
                 let _ = self.stderr.flush();
             }
+            EngineEvent::UsageUpdate { .. } => {
+                // Usage tracking not displayed in exec mode
+            }
         }
     }
 

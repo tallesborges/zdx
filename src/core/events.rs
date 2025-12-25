@@ -60,6 +60,21 @@ pub enum EngineEvent {
         /// Updated message history (includes assistant responses and tool results).
         messages: Vec<ChatMessage>,
     },
+
+    /// Token usage update from the provider.
+    ///
+    /// Emitted at message_start (initial) and message_delta (final output tokens).
+    /// The TUI accumulates these for session-wide tracking.
+    UsageUpdate {
+        /// Input tokens (non-cached)
+        input_tokens: u64,
+        /// Output tokens
+        output_tokens: u64,
+        /// Tokens read from cache
+        cache_read_input_tokens: u64,
+        /// Tokens written to cache
+        cache_creation_input_tokens: u64,
+    },
 }
 
 /// Error categories for EngineEvent::Error.

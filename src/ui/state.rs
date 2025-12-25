@@ -340,6 +340,57 @@ impl AuthType {
 }
 
 // ============================================================================
+// Session Usage
+// ============================================================================
+
+/// Cumulative token usage for the current session.
+///
+/// Tracks total tokens used across all turns for display in the status bar.
+#[derive(Debug, Clone, Default)]
+pub struct SessionUsage {
+    /// Total input tokens (non-cached)
+    pub input_tokens: u64,
+    /// Total output tokens
+    pub output_tokens: u64,
+    /// Total tokens read from cache
+    pub cache_read_tokens: u64,
+    /// Total tokens written to cache
+    pub cache_write_tokens: u64,
+}
+
+impl SessionUsage {
+    /// Creates a new empty SessionUsage.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Adds usage from a single API response.
+    pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
+        self.input_tokens += input;
+        self.output_tokens += output;
+        self.cache_read_tokens += cache_read;
+        self.cache_write_tokens += cache_write;
+    }
+
+    /// Total tokens (input + output + cache).
+    #[allow(dead_code)] // API for future use
+    pub fn total(&self) -> u64 {
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+
+    /// Formats token count for display (e.g., "12.5k" or "1.2M").
+    pub fn format_tokens(count: u64) -> String {
+        if count >= 1_000_000 {
+            format!("{:.1}M", count as f64 / 1_000_000.0)
+        } else if count >= 1_000 {
+            format!("{:.1}k", count as f64 / 1_000.0)
+        } else {
+            count.to_string()
+        }
+    }
+}
+
+// ============================================================================
 // TuiState
 // ============================================================================
 
@@ -388,6 +439,8 @@ pub struct TuiState {
     pub display_path: String,
     /// Cache for wrapped line rendering.
     pub wrap_cache: WrapCache,
+    /// Cumulative token usage for this session.
+    pub usage: SessionUsage,
 }
 
 impl TuiState {
@@ -464,6 +517,7 @@ impl TuiState {
             git_branch,
             display_path,
             wrap_cache: WrapCache::new(),
+            usage: SessionUsage::new(),
         }
     }
 
