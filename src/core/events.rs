@@ -106,17 +106,42 @@ impl fmt::Display for ErrorKind {
 /// All tool outputs must use this format:
 /// - Success: `{ "ok": true, "data": { ... } }`
 /// - Failure: `{ "ok": false, "error": { "code": "...", "message": "..." } }`
+///
+/// The optional `image` field is not serialized to JSON - it's handled
+/// separately when building API requests for vision-capable models.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum ToolOutput {
-    Success { ok: bool, data: Value },
-    Failure { ok: bool, error: ToolError },
+    Success {
+        ok: bool,
+        data: Value,
+        /// Optional image content (not serialized to JSON).
+        #[serde(skip)]
+        image: Option<ImageContent>,
+    },
+    Failure {
+        ok: bool,
+        error: ToolError,
+    },
 }
 
 impl ToolOutput {
     /// Creates a successful tool output.
     pub fn success(data: Value) -> Self {
-        ToolOutput::Success { ok: true, data }
+        ToolOutput::Success {
+            ok: true,
+            data,
+            image: None,
+        }
+    }
+
+    /// Creates a successful tool output with image content.
+    pub fn success_with_image(data: Value, image: ImageContent) -> Self {
+        ToolOutput::Success {
+            ok: true,
+            data,
+            image: Some(image),
+        }
     }
 
     /// Creates a failed tool output.
@@ -143,6 +168,14 @@ impl ToolOutput {
         }
     }
 
+    /// Returns the image content if present.
+    pub fn image(&self) -> Option<&ImageContent> {
+        match self {
+            ToolOutput::Success { image, .. } => image.as_ref(),
+            ToolOutput::Failure { .. } => None,
+        }
+    }
+
     /// Converts the tool output to a JSON string for sending to the model.
     pub fn to_json_string(&self) -> String {
         serde_json::to_string(self).unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string())
@@ -154,4 +187,16 @@ impl ToolOutput {
 pub struct ToolError {
     pub code: String,
     pub message: String,
+}
+
+/// Image content for vision-capable models.
+///
+/// Contains base64-encoded image data and MIME type.
+/// Used by the `read` tool when reading image files.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageContent {
+    /// MIME type (e.g., "image/png", "image/jpeg")
+    pub mime_type: String,
+    /// Base64-encoded image data
+    pub data: String,
 }

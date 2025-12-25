@@ -15,7 +15,7 @@
 - Supported formats: JPEG, PNG, GIF, WebP (Anthropic's supported formats)
 - Base64 encoding for image data
 - New dependency: `infer` crate for magic byte detection
-- **20MB client-side image size limit** (Anthropic API limit is ~5MB for base64)
+- **3.75MB client-side image size limit** (Anthropic API limit is ~5MB for base64, raw expands ~33%)
 
 **Success looks like:** Agent can read an image file with the `read` tool and Claude receives it as a vision-capable image block.
 
@@ -121,28 +121,29 @@ ApiContentBlock::ToolResult {
   - File too small to detect → return None
   - Unsupported image format → return None
 
-## Slice 2: Read tool returns image content
+## Slice 2: Read tool returns image content ✅
 - **Goal:** Read tool detects images and returns them as base64
 - **Scope checklist:**
-  - [ ] Add `ImageContent` struct to `src/core/events.rs`: `{ mime_type: String, data: String }`
-  - [ ] Update `ToolOutput` or add new return type for image content
-  - [ ] Modify `read::execute()` to:
+  - [x] Add `ImageContent` struct to `src/core/events.rs`: `{ mime_type: String, data: String }`
+  - [x] Update `ToolOutput` or add new return type for image content
+  - [x] Modify `read::execute()` to:
     1. First check MIME type via `mime::detect_image_mime()`
-    2. If image: check size ≤ 20MB, read binary, base64-encode, return `ImageContent`
+    2. If image: check size ≤ 3.75MB, read binary, base64-encode, return `ImageContent`
     3. If not image: existing text path
-  - [ ] **Add 20MB size limit** for images (Anthropic API ~5MB limit, base64 expands ~33%)
-  - [ ] Update tool description to mention image support
-  - [ ] Tests: read image file returns base64 data
-  - [ ] Test: image > 20MB returns error
+  - [x] **Add 3.75MB size limit** for images (Anthropic API ~5MB limit for base64, raw files expand ~33%)
+  - [x] Update tool description to mention image support
+  - [x] Tests: read image file returns base64 data
+  - [x] Test: image > 3.75MB returns error
 - **✅ Demo:**
   ```bash
-  cargo test --package zdx -- tools::read::test_read_image
-  # Test reads a small PNG, verifies base64 output and mime_type
+  cargo test --package zdx-cli -- tools::read::tests::test_read_image
+  # Tests: test_read_image_returns_base64, test_read_image_returns_correct_metadata,
+  #        test_read_image_too_large_returns_error, test_read_text_file_no_image_content
   ```
 - **Failure modes / guardrails:**
   - Image file doesn't exist → existing path_error
   - Image read fails → read_error with context
-  - Image > 20MB → `image_too_large` error with size info
+  - Image > 3.75MB → `image_too_large` error with size info
 
 ## Slice 3: Refactor ToolResult for mixed content + Image variant
 - **Goal:** ToolResult supports array of content blocks (text + image), add Image variant
@@ -189,7 +190,7 @@ ApiContentBlock::ToolResult {
   ```
 - **Failure modes / guardrails:**
   - API rejects image → error event propagates to UI (existing error handling)
-  - Image > 5MB (after base64) may hit API limits → 20MB client limit should prevent most cases
+  - Image > 5MB (after base64) may hit API limits → 3.75MB client limit should prevent this
 
 ---
 
@@ -198,7 +199,7 @@ ApiContentBlock::ToolResult {
 2. **Supported formats only**: JPEG, PNG, GIF, WebP - others return as text/error
 3. **Base64 encoding**: All image data transmitted as base64 strings
 4. **Anthropic format**: Tool result with image must be array: `[{type: "text"}, {type: "image", source: {...}}]`
-5. **20MB size limit**: Images larger than 20MB rejected with actionable error
+5. **3.75MB size limit**: Images larger than 3.75MB rejected with actionable error
 6. **Backwards compatible**: Text-only tool results continue to work unchanged
 
 # Key decisions (decide early)
@@ -207,7 +208,7 @@ ApiContentBlock::ToolResult {
 |----------|--------|-----------|
 | MIME detection library | `infer` crate | Lightweight, well-maintained, reads first bytes only |
 | ToolResult content type | `enum { Text(String), Blocks(Vec<Block>) }` | Anthropic API requires array for images, string for text-only |
-| Image size limit | 20MB client-side | Anthropic ~5MB limit, base64 expands 33%, prevents OOM |
+| Image size limit | 3.75MB client-side | Anthropic ~5MB base64 limit, raw expands ~33% (5MB ÷ 1.33 ≈ 3.75MB) |
 | Return format | Text description + Image block | Match pi-mono: `"Read image file [mime_type]"` + image data |
 | Backwards compatibility | Text-only results remain as strings | Avoids breaking existing tool result handling |
 
@@ -247,7 +248,7 @@ fn test_tool_result_with_image_serializes_as_array() {
 
 | Risk | Mitigation |
 |------|------------|
-| Large base64 strings cause memory pressure | 20MB limit, monitor in polish phase |
+| Large base64 strings cause memory pressure | 3.75MB limit, monitor in polish phase |
 | Serde serialization of large strings is slow | Accept for MVP, optimize if measured |
 | API rejects images silently | Add logging for API error responses |
 | Breaking existing tool results | Keep String path for text-only, test backwards compat |
