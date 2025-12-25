@@ -363,16 +363,45 @@ cargo run --
 ## Slice 5: Streaming markdown (incremental parsing)
 **Goal:** Stream markdown deltas and commit complete elements as they arrive. Based on openai/codex `MarkdownStreamCollector`.
 
+**Status:** ✅ **COMPLETE**
+
 **Scope checklist:**
-- [ ] Create `MarkdownStreamCollector` in `src/ui/markdown.rs`
-- [ ] `push_delta(delta: &str)` accumulates into buffer
-- [ ] `commit_complete_lines(width: usize) -> Vec<StyledLine>` parses buffer, returns lines ending in `\n`
-- [ ] `finalize(width: usize) -> Vec<StyledLine>` renders all remaining buffered content
-- [ ] In `HistoryCell::Assistant`, store raw markdown + committed line count
-- [ ] In `display_lines()`, if streaming → use collector to render committed prefix only
-- [ ] Cursor appears after committed content
-- [ ] **Caching concern:** Ensure streaming cells remain **non-cacheable** (content changes every delta)
-- [ ] **Buffer strategy:** Commit on hard boundaries (newline, code fence close, blank line) but add max buffered size fallback to avoid delaying long paragraphs
+- [x] Create `MarkdownStreamCollector` in `src/ui/markdown.rs`
+- [x] `push_delta(delta: &str)` accumulates into buffer
+- [x] `commit_complete_lines(width: usize) -> Vec<StyledLine>` parses buffer, returns lines ending in `\n`
+  - Implemented as `render_committed()` - finds safe commit points and renders
+- [x] `finalize(width: usize) -> Vec<StyledLine>` renders all remaining buffered content
+- [x] In `HistoryCell::Assistant`, use streaming-aware rendering
+  - Uses `render_markdown_streaming()` for streaming cells
+  - Falls back to empty line with cursor if no commit point yet
+- [x] In `display_lines()`, if streaming → use collector to render committed prefix only
+- [x] Cursor appears after committed content
+- [x] **Caching concern:** Streaming cells remain **non-cacheable** (already the case via `is_cacheable()`)
+- [x] **Buffer strategy:** Commit on hard boundaries (newline, code fence close) with max buffer fallback (500 bytes)
+
+**Implementation details:**
+- `MarkdownStreamCollector` tracks raw markdown buffer
+- `is_in_code_block()` counts code fences to detect incomplete code blocks
+- `find_commit_point()` determines safe commit position:
+  - If in code block: only commit after complete (closed) code blocks
+  - Otherwise: commit at last newline
+  - Force commit after 500 bytes without newline (for long paragraphs)
+- `render_committed()` parses and renders up to commit point
+- `render_markdown_streaming()` convenience function for one-shot use
+
+**Tests added:**
+- `test_stream_collector_empty` - empty buffer produces no lines
+- `test_stream_collector_no_newline` - no commit without newline
+- `test_stream_collector_with_newline` - commits line with newline
+- `test_stream_collector_multiple_lines` - commits multiple complete lines
+- `test_stream_collector_code_block_not_committed` - doesn't commit inside code block
+- `test_stream_collector_code_block_closed` - commits when code block closes
+- `test_stream_collector_finalize` - finalize renders all content
+- `test_stream_collector_incremental` - incremental delta handling
+- `test_stream_collector_buffer_access` - buffer accessor works
+- `test_stream_collector_is_in_code_block` - code fence detection
+- `test_stream_collector_inline_backticks_not_fence` - inline code doesn't trigger fence
+- `test_render_markdown_streaming` - convenience function works
 
 **✅ Demo:**
 ```bash

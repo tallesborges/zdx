@@ -402,13 +402,28 @@ impl HistoryCell {
                 ..
             } => {
                 // Use markdown rendering for assistant responses
-                use crate::ui::markdown::render_markdown;
+                // For streaming: render only committed lines (complete elements)
+                // For finalized: render everything
+                use crate::ui::markdown::{render_markdown, render_markdown_streaming};
 
-                let mut lines = render_markdown(content, width);
+                let mut lines = if *is_streaming {
+                    // Streaming: only render committed content (complete lines/blocks)
+                    let committed = render_markdown_streaming(content, width);
+                    if committed.is_empty() && !content.is_empty() {
+                        // No committed content yet, but we have text - show a placeholder line
+                        // with just the cursor (content is buffered waiting for commit point)
+                        vec![StyledLine { spans: vec![] }]
+                    } else {
+                        committed
+                    }
+                } else {
+                    // Finalized: render all content
+                    render_markdown(content, width)
+                };
 
                 // Add streaming indicator if still streaming
                 if *is_streaming && !content.is_empty() {
-                    // Append cursor to last line
+                    // Append cursor to last line (or first line if we created a placeholder)
                     if let Some(last) = lines.last_mut() {
                         last.spans.push(StyledSpan {
                             text: "▌".to_string(),
