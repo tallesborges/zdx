@@ -54,6 +54,61 @@ fn spans_display_width(spans: &[StyledSpan]) -> usize {
     spans.iter().map(|s| s.text.width()).sum()
 }
 
+/// Context for wrapping operations, reducing argument count for helper functions.
+struct WrapContext<'a> {
+    /// Completed lines.
+    lines: Vec<StyledLine>,
+    /// Spans for current line being built.
+    current_line_spans: Vec<StyledSpan>,
+    /// Display width of current line content.
+    current_line_width: usize,
+    /// Whether we're on the first line.
+    is_first_line: bool,
+    /// Available width for continuation lines.
+    rest_width: usize,
+    /// Prefix for first line.
+    first_prefix: &'a [StyledSpan],
+    /// Prefix for continuation lines.
+    rest_prefix: &'a [StyledSpan],
+}
+
+impl<'a> WrapContext<'a> {
+    fn new(opts: &'a WrapOptions, content_width_rest: usize) -> Self {
+        Self {
+            lines: Vec::new(),
+            current_line_spans: Vec::new(),
+            current_line_width: 0,
+            is_first_line: true,
+            rest_width: content_width_rest,
+            first_prefix: &opts.first_prefix,
+            rest_prefix: &opts.rest_prefix,
+        }
+    }
+
+    /// Flush current line to lines vec.
+    fn flush_line(&mut self) {
+        let prefix = if self.is_first_line {
+            self.first_prefix.to_vec()
+        } else {
+            self.rest_prefix.to_vec()
+        };
+
+        let mut final_spans = prefix;
+        final_spans.append(&mut self.current_line_spans);
+        self.lines.push(StyledLine { spans: final_spans });
+        self.is_first_line = false;
+    }
+
+    /// Get current available width based on line position.
+    fn current_avail(&self, first_line_width: usize) -> usize {
+        if self.is_first_line {
+            first_line_width
+        } else {
+            self.rest_width
+        }
+    }
+}
+
 /// Breaks a styled span into character-by-width fragments.
 ///
 /// Used for inline code or when word boundaries aren't available.
@@ -118,11 +173,6 @@ pub fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<Styled
         return vec![StyledLine { spans: all_spans }];
     }
 
-    let mut lines: Vec<StyledLine> = Vec::new();
-    let mut current_line_spans: Vec<StyledSpan> = Vec::new();
-    let mut current_line_width: usize = 0;
-    let mut is_first_line = true;
-
     // Calculate prefix widths
     let first_prefix_width = spans_display_width(&opts.first_prefix);
     let rest_prefix_width = spans_display_width(&opts.rest_prefix);
@@ -131,20 +181,16 @@ pub fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<Styled
     let content_width_first = opts.width.saturating_sub(first_prefix_width);
     let content_width_rest = opts.width.saturating_sub(rest_prefix_width);
 
+    let mut ctx = WrapContext::new(opts, content_width_rest);
+
     for span in spans {
         // Check for hard breaks (newlines in span text)
         if span.text.contains('\n') {
             for (i, part) in span.text.split('\n').enumerate() {
                 if i > 0 {
                     // Flush current line on newline
-                    flush_line_impl(
-                        &mut lines,
-                        &mut current_line_spans,
-                        &mut is_first_line,
-                        &opts.first_prefix,
-                        &opts.rest_prefix,
-                    );
-                    current_line_width = 0;
+                    ctx.flush_line();
+                    ctx.current_line_width = 0;
                 }
 
                 if !part.is_empty() {
@@ -152,201 +198,80 @@ pub fn wrap_styled_spans(spans: &[StyledSpan], opts: &WrapOptions) -> Vec<Styled
                         text: part.to_string(),
                         style: span.style,
                     };
-                    let available = if is_first_line {
-                        content_width_first
-                    } else {
-                        content_width_rest
-                    };
-                    process_span_impl(
-                        &part_span,
-                        &mut current_line_spans,
-                        &mut current_line_width,
-                        &mut is_first_line,
-                        available,
-                        content_width_rest,
-                        &mut lines,
-                        &opts.first_prefix,
-                        &opts.rest_prefix,
-                    );
+                    process_span_impl(&part_span, &mut ctx, content_width_first);
                 }
             }
             continue;
         }
 
-        let available = if is_first_line {
-            content_width_first
-        } else {
-            content_width_rest
-        };
-        process_span_impl(
-            span,
-            &mut current_line_spans,
-            &mut current_line_width,
-            &mut is_first_line,
-            available,
-            content_width_rest,
-            &mut lines,
-            &opts.first_prefix,
-            &opts.rest_prefix,
-        );
+        process_span_impl(span, &mut ctx, content_width_first);
     }
 
     // Flush remaining content
-    if !current_line_spans.is_empty() {
-        flush_line_impl(
-            &mut lines,
-            &mut current_line_spans,
-            &mut is_first_line,
-            &opts.first_prefix,
-            &opts.rest_prefix,
-        );
+    if !ctx.current_line_spans.is_empty() {
+        ctx.flush_line();
     }
 
     // Ensure at least one line with prefix
-    if lines.is_empty() {
-        lines.push(StyledLine {
+    if ctx.lines.is_empty() {
+        ctx.lines.push(StyledLine {
             spans: opts.first_prefix.clone(),
         });
     }
 
-    lines
-}
-
-/// Helper to flush current line to lines vec.
-fn flush_line_impl(
-    lines: &mut Vec<StyledLine>,
-    current_line_spans: &mut Vec<StyledSpan>,
-    is_first_line: &mut bool,
-    first_prefix: &[StyledSpan],
-    rest_prefix: &[StyledSpan],
-) {
-    let prefix = if *is_first_line {
-        first_prefix.to_vec()
-    } else {
-        rest_prefix.to_vec()
-    };
-
-    let mut final_spans = prefix;
-    final_spans.append(current_line_spans);
-    lines.push(StyledLine { spans: final_spans });
-    *is_first_line = false;
+    ctx.lines
 }
 
 /// Process a single span, handling word wrapping.
-fn process_span_impl(
-    span: &StyledSpan,
-    current_line_spans: &mut Vec<StyledSpan>,
-    current_line_width: &mut usize,
-    is_first_line: &mut bool,
-    available_width: usize,
-    rest_width: usize,
-    lines: &mut Vec<StyledLine>,
-    first_prefix: &[StyledSpan],
-    rest_prefix: &[StyledSpan],
-) {
+fn process_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_width: usize) {
     let is_code = matches!(span.style, Style::CodeInline | Style::CodeBlock);
 
     if is_code {
-        process_code_span_impl(
-            span,
-            current_line_spans,
-            current_line_width,
-            is_first_line,
-            available_width,
-            rest_width,
-            lines,
-            first_prefix,
-            rest_prefix,
-        );
+        process_code_span_impl(span, ctx, first_line_width);
     } else {
-        process_text_span_impl(
-            span,
-            current_line_spans,
-            current_line_width,
-            is_first_line,
-            available_width,
-            rest_width,
-            lines,
-            first_prefix,
-            rest_prefix,
-        );
+        process_text_span_impl(span, ctx, first_line_width);
     }
 }
 
 /// Process code span (preserve whitespace, break by character).
-fn process_code_span_impl(
-    span: &StyledSpan,
-    current_line_spans: &mut Vec<StyledSpan>,
-    current_line_width: &mut usize,
-    is_first_line: &mut bool,
-    available_width: usize,
-    rest_width: usize,
-    lines: &mut Vec<StyledLine>,
-    first_prefix: &[StyledSpan],
-    rest_prefix: &[StyledSpan],
-) {
+fn process_code_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_width: usize) {
     let span_width = span.text.width();
+    let available_width = ctx.current_avail(first_line_width);
 
-    if *current_line_width + span_width <= available_width {
+    if ctx.current_line_width + span_width <= available_width {
         // Fits on current line
-        current_line_spans.push(span.clone());
-        *current_line_width += span_width;
-    } else if span_width <= rest_width && *current_line_width > 0 {
+        ctx.current_line_spans.push(span.clone());
+        ctx.current_line_width += span_width;
+    } else if span_width <= ctx.rest_width && ctx.current_line_width > 0 {
         // Doesn't fit but would fit on fresh line
-        flush_line_impl(
-            lines,
-            current_line_spans,
-            is_first_line,
-            first_prefix,
-            rest_prefix,
-        );
-        *current_line_width = 0;
-        current_line_spans.push(span.clone());
-        *current_line_width = span_width;
+        ctx.flush_line();
+        ctx.current_line_width = 0;
+        ctx.current_line_spans.push(span.clone());
+        ctx.current_line_width = span_width;
     } else {
         // Need to break the span
-        let remaining_width = available_width.saturating_sub(*current_line_width);
+        let remaining_width = available_width.saturating_sub(ctx.current_line_width);
         let fragments = break_span_by_width(span, remaining_width.max(1));
 
         for (i, frag) in fragments.into_iter().enumerate() {
             let frag_width = frag.text.width();
-            let current_avail = if *is_first_line {
-                available_width
-            } else {
-                rest_width
-            };
+            let current_avail = ctx.current_avail(first_line_width);
 
-            if i > 0 && *current_line_width + frag_width > current_avail {
-                flush_line_impl(
-                    lines,
-                    current_line_spans,
-                    is_first_line,
-                    first_prefix,
-                    rest_prefix,
-                );
-                *current_line_width = 0;
+            if i > 0 && ctx.current_line_width + frag_width > current_avail {
+                ctx.flush_line();
+                ctx.current_line_width = 0;
             }
 
             if !frag.text.is_empty() {
-                current_line_spans.push(frag.clone());
-                *current_line_width += frag_width;
+                ctx.current_line_spans.push(frag.clone());
+                ctx.current_line_width += frag_width;
             }
         }
     }
 }
 
 /// Process normal text span (word boundaries, collapse whitespace).
-fn process_text_span_impl(
-    span: &StyledSpan,
-    current_line_spans: &mut Vec<StyledSpan>,
-    current_line_width: &mut usize,
-    is_first_line: &mut bool,
-    available_width: usize,
-    rest_width: usize,
-    lines: &mut Vec<StyledLine>,
-    first_prefix: &[StyledSpan],
-    rest_prefix: &[StyledSpan],
-) {
+fn process_text_span_impl(span: &StyledSpan, ctx: &mut WrapContext, first_line_width: usize) {
     // Check for leading/trailing whitespace before splitting
     let has_leading_space = span.text.starts_with(|c: char| c.is_whitespace());
     let has_trailing_space = span.text.ends_with(|c: char| c.is_whitespace());
@@ -356,142 +281,95 @@ fn process_text_span_impl(
 
     if words.is_empty() {
         // Only whitespace - add a single space if we have content
-        if !current_line_spans.is_empty() {
+        if !ctx.current_line_spans.is_empty() {
             let space_span = StyledSpan {
                 text: " ".to_string(),
                 style: span.style,
             };
-            let current_avail = if *is_first_line {
-                available_width
-            } else {
-                rest_width
-            };
-            if *current_line_width + 1 <= current_avail {
-                current_line_spans.push(space_span);
-                *current_line_width += 1;
+            let current_avail = ctx.current_avail(first_line_width);
+            if ctx.current_line_width < current_avail {
+                ctx.current_line_spans.push(space_span);
+                ctx.current_line_width += 1;
             }
         }
         return;
     }
 
     // Add leading space if original text had it and we have prior content
-    if has_leading_space && !current_line_spans.is_empty() {
-        let current_avail = if *is_first_line {
-            available_width
-        } else {
-            rest_width
-        };
-        if *current_line_width + 1 <= current_avail {
-            current_line_spans.push(StyledSpan {
+    if has_leading_space && !ctx.current_line_spans.is_empty() {
+        let current_avail = ctx.current_avail(first_line_width);
+        if ctx.current_line_width < current_avail {
+            ctx.current_line_spans.push(StyledSpan {
                 text: " ".to_string(),
                 style: span.style,
             });
-            *current_line_width += 1;
+            ctx.current_line_width += 1;
         }
     }
 
     for (i, word) in words.iter().enumerate() {
         let word_width = word.width();
-        let current_avail = if *is_first_line {
-            available_width
-        } else {
-            rest_width
-        };
+        let current_avail = ctx.current_avail(first_line_width);
 
         // Add space before word (except first word - leading space handled above)
         if i > 0 {
             // Check if space + word fits
-            if *current_line_width + 1 + word_width <= current_avail {
-                current_line_spans.push(StyledSpan {
+            if ctx.current_line_width + 1 + word_width <= current_avail {
+                ctx.current_line_spans.push(StyledSpan {
                     text: " ".to_string(),
                     style: span.style,
                 });
-                *current_line_width += 1;
+                ctx.current_line_width += 1;
             } else {
                 // Word doesn't fit, start new line
-                flush_line_impl(
-                    lines,
-                    current_line_spans,
-                    is_first_line,
-                    first_prefix,
-                    rest_prefix,
-                );
-                *current_line_width = 0;
+                ctx.flush_line();
+                ctx.current_line_width = 0;
             }
         }
 
-        let current_avail = if *is_first_line {
-            available_width
-        } else {
-            rest_width
-        };
+        let current_avail = ctx.current_avail(first_line_width);
 
         // Now add the word
-        if word_width <= current_avail.saturating_sub(*current_line_width) {
-            current_line_spans.push(StyledSpan {
+        if word_width <= current_avail.saturating_sub(ctx.current_line_width) {
+            ctx.current_line_spans.push(StyledSpan {
                 text: (*word).to_string(),
                 style: span.style,
             });
-            *current_line_width += word_width;
-        } else if word_width <= rest_width && *current_line_width > 0 {
+            ctx.current_line_width += word_width;
+        } else if word_width <= ctx.rest_width && ctx.current_line_width > 0 {
             // Word fits on fresh line
-            flush_line_impl(
-                lines,
-                current_line_spans,
-                is_first_line,
-                first_prefix,
-                rest_prefix,
-            );
-            *current_line_width = 0;
-            current_line_spans.push(StyledSpan {
+            ctx.flush_line();
+            ctx.current_line_width = 0;
+            ctx.current_line_spans.push(StyledSpan {
                 text: (*word).to_string(),
                 style: span.style,
             });
-            *current_line_width = word_width;
+            ctx.current_line_width = word_width;
         } else {
             // Word is too long, need to break it
-            if *current_line_width > 0 {
-                flush_line_impl(
-                    lines,
-                    current_line_spans,
-                    is_first_line,
-                    first_prefix,
-                    rest_prefix,
-                );
-                *current_line_width = 0;
+            if ctx.current_line_width > 0 {
+                ctx.flush_line();
+                ctx.current_line_width = 0;
             }
 
             let word_span = StyledSpan {
                 text: (*word).to_string(),
                 style: span.style,
             };
-            let break_width = if *is_first_line {
-                available_width
-            } else {
-                rest_width
-            };
+            let break_width = ctx.current_avail(first_line_width);
             let fragments = break_span_by_width(&word_span, break_width);
 
             for frag in fragments {
                 let frag_width = frag.text.width();
-                let current_avail = if *is_first_line {
-                    available_width
-                } else {
-                    rest_width
-                };
-                if *current_line_width + frag_width > current_avail && *current_line_width > 0 {
-                    flush_line_impl(
-                        lines,
-                        current_line_spans,
-                        is_first_line,
-                        first_prefix,
-                        rest_prefix,
-                    );
-                    *current_line_width = 0;
+                let current_avail = ctx.current_avail(first_line_width);
+                if ctx.current_line_width + frag_width > current_avail && ctx.current_line_width > 0
+                {
+                    ctx.flush_line();
+                    ctx.current_line_width = 0;
                 }
                 if !frag.text.is_empty() {
-                    current_line_spans.push(frag);
-                    *current_line_width += frag_width;
+                    ctx.current_line_spans.push(frag);
+                    ctx.current_line_width += frag_width;
                 }
             }
         }
@@ -499,17 +377,13 @@ fn process_text_span_impl(
 
     // Add trailing space if original text had it
     if has_trailing_space {
-        let current_avail = if *is_first_line {
-            available_width
-        } else {
-            rest_width
-        };
-        if *current_line_width + 1 <= current_avail {
-            current_line_spans.push(StyledSpan {
+        let current_avail = ctx.current_avail(first_line_width);
+        if ctx.current_line_width < current_avail {
+            ctx.current_line_spans.push(StyledSpan {
                 text: " ".to_string(),
                 style: span.style,
             });
-            *current_line_width += 1;
+            ctx.current_line_width += 1;
         }
     }
 }

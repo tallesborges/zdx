@@ -387,13 +387,11 @@ impl HistoryCell {
                     render_prefixed_content(prefix, content, width, Style::UserPrefix, Style::User);
 
                 // Append interrupted indicator to last line if request was cancelled
-                if *is_interrupted {
-                    if let Some(last) = lines.last_mut() {
-                        last.spans.push(StyledSpan {
-                            text: " (interrupted)".to_string(),
-                            style: Style::Interrupted,
-                        });
-                    }
+                if *is_interrupted && let Some(last) = lines.last_mut() {
+                    last.spans.push(StyledSpan {
+                        text: " (interrupted)".to_string(),
+                        style: Style::Interrupted,
+                    });
                 }
                 lines
             }
@@ -420,13 +418,11 @@ impl HistoryCell {
                 }
 
                 // Append interrupted indicator to last line
-                if *is_interrupted {
-                    if let Some(last) = lines.last_mut() {
-                        last.spans.push(StyledSpan {
-                            text: " (interrupted)".to_string(),
-                            style: Style::Interrupted,
-                        });
-                    }
+                if *is_interrupted && let Some(last) = lines.last_mut() {
+                    last.spans.push(StyledSpan {
+                        text: " (interrupted)".to_string(),
+                        style: Style::Interrupted,
+                    });
                 }
                 lines
             }
@@ -611,13 +607,11 @@ impl HistoryCell {
                 }
 
                 // Append interrupted indicator to last line
-                if *is_interrupted {
-                    if let Some(last) = lines.last_mut() {
-                        last.spans.push(StyledSpan {
-                            text: " (interrupted)".to_string(),
-                            style: Style::Interrupted,
-                        });
-                    }
+                if *is_interrupted && let Some(last) = lines.last_mut() {
+                    last.spans.push(StyledSpan {
+                        text: " (interrupted)".to_string(),
+                        style: Style::Interrupted,
+                    });
                 }
                 lines
             }
