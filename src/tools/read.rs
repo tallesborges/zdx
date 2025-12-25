@@ -1,20 +1,28 @@
 //! Read file tool.
 //!
 //! Allows the agent to read file contents from the filesystem.
+//! Supports both text files and images (JPEG, PNG, GIF, WebP).
 
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 use std::{fs, path::PathBuf};
 
+use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
-use crate::core::events::ToolOutput;
+use crate::core::events::{ImageContent, ToolOutput};
 
-/// Maximum file size before truncation (50KB).
-const MAX_BYTES: usize = 50 * 1024;
+/// Maximum text file size before truncation (50KB).
+const MAX_TEXT_BYTES: usize = 50 * 1024;
+
+/// Maximum image file size (3.75MB).
+/// Anthropic API limit is ~5MB for base64-encoded data.
+/// Base64 expands by ~33% (4/3 ratio), so: 5MB ÷ 1.33 ≈ 3.75MB raw.
+const MAX_IMAGE_BYTES: u64 = 3_932_160; // 3.75 * 1024 * 1024
 
 /// Supported image MIME types for Anthropic vision API.
 const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
@@ -51,7 +59,7 @@ fn detect_image_mime(path: &Path) -> Option<String> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "read".to_string(),
-        description: "Read the contents of a file. Returns the file content as text.".to_string(),
+        description: "Read the contents of a file. Returns the file content as text. Also supports reading image files (JPEG, PNG, GIF, WebP) for visual analysis.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -87,25 +95,91 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => return ToolOutput::failure("path_error", e),
     };
 
-    let content = match fs::read_to_string(&file_path) {
+    // Check if this is an image file
+    if let Some(mime_type) = detect_image_mime(&file_path) {
+        return read_image(&file_path, &mime_type);
+    }
+
+    // Read as text file
+    read_text(&file_path)
+}
+
+/// Reads an image file and returns it as base64-encoded content.
+fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
+    // Check file size
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            return ToolOutput::failure(
+                "read_error",
+                format!("Failed to read file metadata '{}': {}", path.display(), e),
+            );
+        }
+    };
+
+    let file_size = metadata.len();
+    if file_size > MAX_IMAGE_BYTES {
+        return ToolOutput::failure(
+            "image_too_large",
+            format!(
+                "Image file '{}' is too large ({:.2} MB). Maximum size is 3.75 MB.",
+                path.display(),
+                file_size as f64 / (1024.0 * 1024.0)
+            ),
+        );
+    }
+
+    // Read binary content
+    let data = match fs::read(path) {
+        Ok(d) => d,
+        Err(e) => {
+            return ToolOutput::failure(
+                "read_error",
+                format!("Failed to read image file '{}': {}", path.display(), e),
+            );
+        }
+    };
+
+    // Base64 encode
+    let base64_data = BASE64.encode(&data);
+
+    let image = ImageContent {
+        mime_type: mime_type.to_string(),
+        data: base64_data,
+    };
+
+    ToolOutput::success_with_image(
+        json!({
+            "path": path.display().to_string(),
+            "type": "image",
+            "mime_type": mime_type,
+            "bytes": file_size,
+        }),
+        image,
+    )
+}
+
+/// Reads a text file with truncation for large files.
+fn read_text(path: &Path) -> ToolOutput {
+    let content = match fs::read_to_string(path) {
         Ok(c) => c,
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
-                format!("Failed to read file '{}': {}", file_path.display(), e),
+                format!("Failed to read file '{}': {}", path.display(), e),
             );
         }
     };
 
     let bytes = content.len();
-    let (content, truncated) = if bytes > MAX_BYTES {
-        (content[..MAX_BYTES].to_string(), true)
+    let (content, truncated) = if bytes > MAX_TEXT_BYTES {
+        (content[..MAX_TEXT_BYTES].to_string(), true)
     } else {
         (content, false)
     };
 
     ToolOutput::success(json!({
-        "path": file_path.display().to_string(),
+        "path": path.display().to_string(),
         "content": content,
         "truncated": truncated,
         "bytes": bytes
@@ -381,5 +455,125 @@ mod tests {
         fs::write(&path, png_bytes).unwrap();
 
         assert_eq!(detect_image_mime(&path), Some("image/png".to_string()));
+    }
+
+    // Image reading tests
+
+    #[test]
+    fn test_read_image_returns_base64() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.png");
+
+        // Minimal PNG
+        #[rustfmt::skip]
+        let png_bytes: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01,
+            0x00, 0x00, 0x00, 0x01,
+            0x08, 0x02,
+            0x00, 0x00, 0x00,
+            0x90, 0x77, 0x53, 0xDE,
+            0x00, 0x00, 0x00, 0x00,
+            0x49, 0x45, 0x4E, 0x44,
+            0xAE, 0x42, 0x60, 0x82,
+        ];
+        fs::write(&path, png_bytes).unwrap();
+
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let input = json!({"path": "test.png"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        // Check JSON output (without image data)
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""ok":true"#));
+        assert!(json_str.contains(r#""type":"image""#));
+        assert!(json_str.contains(r#""mime_type":"image/png""#));
+
+        // Check image content is present
+        let image = result.image().expect("should have image content");
+        assert_eq!(image.mime_type, "image/png");
+
+        // Verify base64 decodes back to original
+        let decoded = BASE64.decode(&image.data).expect("should be valid base64");
+        assert_eq!(decoded, png_bytes);
+    }
+
+    #[test]
+    fn test_read_image_returns_correct_metadata() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("test.jpg");
+
+        // Minimal JPEG
+        let jpeg_bytes: &[u8] = &[
+            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
+        ];
+        fs::write(&path, jpeg_bytes).unwrap();
+
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let input = json!({"path": "test.jpg"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        // Check the data field contains expected metadata
+        let data = result.data().expect("should have data");
+        assert_eq!(data["type"], "image");
+        assert_eq!(data["mime_type"], "image/jpeg");
+        assert_eq!(data["bytes"], jpeg_bytes.len());
+    }
+
+    #[test]
+    fn test_read_image_too_large_returns_error() {
+        let temp = TempDir::new().unwrap();
+        let path = temp.path().join("large.png");
+
+        // Create a file with PNG header but larger than 3.75MB
+        // We use a sparse approach: write PNG header then seek/write at end
+        let mut file = File::create(&path).unwrap();
+
+        // PNG header
+        #[rustfmt::skip]
+        let png_header: &[u8] = &[
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D,
+            0x49, 0x48, 0x44, 0x52,
+        ];
+        use std::io::Write;
+        file.write_all(png_header).unwrap();
+
+        // Extend to 4MB (just over the 3.75MB limit)
+        file.set_len(4 * 1024 * 1024).unwrap();
+        drop(file);
+
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let input = json!({"path": "large.png"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"image_too_large""#));
+        assert!(json_str.contains("Maximum size is 3.75 MB"));
+    }
+
+    #[test]
+    fn test_read_text_file_no_image_content() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "hello world").unwrap();
+
+        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let input = json!({"path": "test.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        // Text files should NOT have image content
+        assert!(result.image().is_none());
     }
 }
