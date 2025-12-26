@@ -195,6 +195,16 @@ fn handle_main_key(
             state.scroll.scroll_to_bottom();
             vec![]
         }
+        KeyCode::Up if alt && !ctrl && !shift => {
+            // Alt+Up: Move cursor to first line of input
+            state.textarea.move_cursor(tui_textarea::CursorMove::Top);
+            vec![]
+        }
+        KeyCode::Down if alt && !ctrl && !shift => {
+            // Alt+Down: Move cursor to last line of input
+            state.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+            vec![]
+        }
         KeyCode::Up if !ctrl && !shift && !alt => {
             if should_navigate_history_up(state) {
                 navigate_history_up(state);

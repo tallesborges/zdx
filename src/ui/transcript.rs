@@ -762,10 +762,6 @@ pub enum Style {
     UserPrefix,
     /// User message content (italic).
     User,
-    /// Assistant message prefix (none).
-    /// Note: Not currently used since markdown rendering handles assistant output.
-    #[allow(dead_code)]
-    AssistantPrefix,
     /// Assistant message content.
     Assistant,
     /// Streaming cursor indicator.

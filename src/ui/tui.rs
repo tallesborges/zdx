@@ -164,7 +164,7 @@ impl TuiRuntime {
     fn transcript_height(&self) -> usize {
         self.terminal
             .size()
-            .map(|s| view::calculate_transcript_height(s.height))
+            .map(|s| view::calculate_transcript_height_with_state(&self.state, s.height))
             .unwrap_or(20)
     }
 
