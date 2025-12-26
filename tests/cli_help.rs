@@ -3,7 +3,7 @@ use predicates::prelude::*;
 
 #[test]
 fn test_help_shows_all_commands() {
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .arg("--help")
         .assert()
         .success()
@@ -13,7 +13,7 @@ fn test_help_shows_all_commands() {
 
 #[test]
 fn test_sessions_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .args(["sessions", "--help"])
         .assert()
         .success()
@@ -24,7 +24,7 @@ fn test_sessions_help_shows_subcommands() {
 
 #[test]
 fn test_version_flag() {
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .arg("--version")
         .assert()
         .success()

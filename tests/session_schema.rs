@@ -33,7 +33,7 @@ async fn test_new_session_starts_with_meta_event() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -90,7 +90,7 @@ async fn test_tool_use_persisted_to_session() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -153,7 +153,7 @@ async fn test_sessions_show_displays_tool_events() {
 {"type":"message","role":"assistant","text":"Here is the file.","ts":"2025-01-01T00:00:04Z"}"#;
     fs::write(&session_path, session_content).unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "show", "tool-session"])
         .assert()
@@ -179,7 +179,7 @@ async fn test_interrupted_session_mid_tool_is_resumable() {
     fs::write(&session_path, session_content).unwrap();
 
     // Session should be loadable and resumable
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "show", "interrupted"])
         .assert()

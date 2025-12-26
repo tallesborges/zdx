@@ -1,8 +1,8 @@
 [package]
-name = "zdx-cli"
+name = "zdx"
 version = "0.1.0"
 edition = "2024"
-default-run = "zdx-cli"
+default-run = "zdx"
 
 [dependencies]
 anyhow = "1.0.100"

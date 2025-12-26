@@ -32,7 +32,7 @@ fn create_session_file(temp_dir: &TempDir, session_id: &str, events: &[(String, 
 fn test_sessions_list_empty() {
     let temp_dir = TempDir::new().unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "list"])
         .assert()
@@ -64,7 +64,7 @@ fn test_sessions_list_shows_ids() {
         )],
     );
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "list"])
         .assert()
@@ -95,7 +95,7 @@ fn test_sessions_list_ignores_non_jsonl() {
     // Invalid file (not .jsonl)
     fs::write(sessions_dir.join("notes.txt"), "some notes").unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "list"])
         .assert()
@@ -130,7 +130,7 @@ fn test_sessions_show_prints_transcript() {
         ],
     );
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "show", "my-session"])
         .assert()
@@ -153,7 +153,7 @@ fn test_sessions_show_empty_session() {
     fs::create_dir_all(&sessions_dir).unwrap();
     fs::write(sessions_dir.join("empty-session.jsonl"), "").unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "show", "empty-session"])
         .assert()
@@ -165,7 +165,7 @@ fn test_sessions_show_empty_session() {
 fn test_sessions_show_nonexistent() {
     let temp_dir = TempDir::new().unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "show", "does-not-exist"])
         .assert()
@@ -201,7 +201,7 @@ fn test_sessions_list_shows_multiple_sorted() {
         )],
     );
 
-    let output = cargo_bin_cmd!("zdx-cli")
+    let output = cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .args(["sessions", "list"])
         .assert()

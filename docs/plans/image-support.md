@@ -1,6 +1,6 @@
 # Image Support Implementation Plan
 
-**Project/feature:** Add image reading support to zdx-cli's `read` tool, enabling the agent to read image files (JPEG, PNG, GIF, WebP) and send them to Claude for vision analysis.
+**Project/feature:** Add image reading support to zdx's `read` tool, enabling the agent to read image files (JPEG, PNG, GIF, WebP) and send them to Claude for vision analysis.
 
 **Existing state:**
 - `read` tool exists (`src/tools/read.rs`) - text-only, 50KB truncation
@@ -112,7 +112,7 @@ ApiContentBlock::ToolResult {
   - [x] Unit tests: detect each format, return None for text files
 - **✅ Demo:**
   ```bash
-  cargo test --package zdx-cli -- tools::read::tests::test_detect
+  cargo test --package zdx -- tools::read::tests::test_detect
   # Tests pass for .jpg, .png, .gif, .webp detection
   # Test passes for .txt returning None
   ```
@@ -136,7 +136,7 @@ ApiContentBlock::ToolResult {
   - [x] Test: image > 3.75MB returns error
 - **✅ Demo:**
   ```bash
-  cargo test --package zdx-cli -- tools::read::tests::test_read_image
+  cargo test --package zdx -- tools::read::tests::test_read_image
   # Tests: test_read_image_returns_base64, test_read_image_returns_correct_metadata,
   #        test_read_image_too_large_returns_error, test_read_text_file_no_image_content
   ```
@@ -163,7 +163,7 @@ ApiContentBlock::ToolResult {
   - [x] **Add test**: Verify exact JSON structure for tool_result with image matches Anthropic spec
 - **✅ Demo:**
   ```bash
-  cargo test --package zdx-cli -- providers::anthropic::tests::test_tool_result
+  cargo test --package zdx -- providers::anthropic::tests::test_tool_result
   # Verify: content is array, image block has correct source structure
   ```
 - **Failure modes / guardrails:**

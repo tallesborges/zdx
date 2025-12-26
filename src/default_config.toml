@@ -1,7 +1,7 @@
 # ZDX Configuration
 #
 # This file is auto-generated. Edit as needed.
-# Documentation: https://github.com/user/zdx-cli#configuration
+# Documentation: https://github.com/user/zdx#configuration
 
 # The Claude model to use
 model = "claude-haiku-4-5"

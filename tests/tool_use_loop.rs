@@ -58,7 +58,7 @@ async fn test_tool_use_loop_reads_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -110,7 +110,7 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -176,7 +176,7 @@ async fn test_tool_read_outside_root_allowed() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -227,7 +227,7 @@ async fn test_tool_shows_activity_indicator() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "Show indicator"])
@@ -269,7 +269,7 @@ async fn test_tool_use_loop_writes_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -347,7 +347,7 @@ async fn test_tool_use_loop_edits_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -416,7 +416,7 @@ async fn test_bash_tool_shows_debug_lines() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "Run bash"])

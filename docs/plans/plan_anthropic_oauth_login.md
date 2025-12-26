@@ -1,5 +1,5 @@
 Goals
-- Add Anthropic OAuth login to zdx-cli with local token cache in `~/.zdx/oauth.json` and provider wiring.
+- Add Anthropic OAuth login to zdx with local token cache in `~/.zdx/oauth.json` and provider wiring.
 - Ship a minimal CLI login flow first, then TUI `/login`, keeping core UI-agnostic and reducer-driven.
 - Update contracts in `docs/SPEC.md` to allow OAuth token caching while keeping API keys env-only.
 
