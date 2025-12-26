@@ -343,19 +343,35 @@ impl AuthType {
 // Session Usage
 // ============================================================================
 
-/// Cumulative token usage for the current session.
+/// Token usage for the current session.
 ///
-/// Tracks total tokens used across all turns for display in the status bar.
+/// Tracks both cumulative tokens (for cost calculation) and latest request
+/// tokens (for context window percentage).
+///
+/// The distinction matters because each API request's `input_tokens` already
+/// includes all previous conversation history. Summing across requests would
+/// double-count, but we need cumulative totals for accurate cost calculation.
 #[derive(Debug, Clone, Default)]
 pub struct SessionUsage {
-    /// Total input tokens (non-cached)
+    // ========================================================================
+    // Cumulative totals (for cost calculation and token breakdown display)
+    // ========================================================================
+    /// Total input tokens (non-cached) across all requests
     pub input_tokens: u64,
-    /// Total output tokens
+    /// Total output tokens across all requests
     pub output_tokens: u64,
-    /// Total tokens read from cache
+    /// Total tokens read from cache across all requests
     pub cache_read_tokens: u64,
-    /// Total tokens written to cache
+    /// Total tokens written to cache across all requests
     pub cache_write_tokens: u64,
+
+    // ========================================================================
+    // Latest request (for context window percentage)
+    // ========================================================================
+    /// Total input tokens from latest request (input + cache_read + cache_write)
+    latest_input: u64,
+    /// Output tokens from latest request
+    latest_output: u64,
 }
 
 impl SessionUsage {
@@ -365,34 +381,41 @@ impl SessionUsage {
     }
 
     /// Adds usage from a single API response.
+    ///
+    /// Updates both cumulative totals (for cost) and latest values (for context %).
     pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
+        // Cumulative totals for cost calculation
         self.input_tokens += input;
         self.output_tokens += output;
         self.cache_read_tokens += cache_read;
         self.cache_write_tokens += cache_write;
+
+        // Latest request for context window calculation
+        // Total input = uncached + cache_read + cache_write (all count toward context)
+        self.latest_input = input + cache_read + cache_write;
+        self.latest_output = output;
     }
 
-    /// Total tokens for context window calculation.
+    /// Context tokens for the latest request (for context window percentage).
     ///
-    /// Per Anthropic's official documentation, the context window includes
-    /// BOTH input and output tokens:
-    /// > "The 'context window' refers to the entirety of the amount of text
-    /// > a language model can look back on and reference when generating
-    /// > new text plus the new text it generates."
-    ///
+    /// Per Anthropic's documentation, the context window validation is:
     /// > "if the sum of prompt tokens and output tokens exceeds the model's
     /// > context window, the system will return a validation error"
     ///
-    /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
+    /// This applies to a single request, not cumulative across turns.
+    /// Each request's `input_tokens` already includes all previous conversation
+    /// history, so we only need the latest request's tokens.
     ///
-    /// Formula: input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+    /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
     pub fn context_tokens(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+        self.latest_input + self.latest_output
     }
 
-    /// Alias for context_tokens() for clarity.
+    /// Total cumulative tokens across all requests (for display/debugging).
+    ///
+    /// Note: This is NOT the context window usage. Use `context_tokens()` for that.
     pub fn total_tokens(&self) -> u64 {
-        self.context_tokens()
+        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
     }
 
     /// Calculates the percentage of context window used.
@@ -890,46 +913,68 @@ mod tests {
         assert_eq!(usage.output_tokens, 0);
         assert_eq!(usage.cache_read_tokens, 0);
         assert_eq!(usage.cache_write_tokens, 0);
+        assert_eq!(usage.context_tokens(), 0);
     }
 
     #[test]
     fn test_session_usage_add() {
         let mut usage = SessionUsage::new();
         usage.add(100, 50, 200, 25);
+        // Cumulative values
         assert_eq!(usage.input_tokens, 100);
         assert_eq!(usage.output_tokens, 50);
         assert_eq!(usage.cache_read_tokens, 200);
         assert_eq!(usage.cache_write_tokens, 25);
+        // Latest context = input + cache_read + cache_write + output = 100 + 200 + 25 + 50 = 375
+        assert_eq!(usage.context_tokens(), 375);
 
-        // Add more
+        // Add more (simulates second turn)
         usage.add(50, 25, 100, 10);
+        // Cumulative values update
         assert_eq!(usage.input_tokens, 150);
         assert_eq!(usage.output_tokens, 75);
         assert_eq!(usage.cache_read_tokens, 300);
         assert_eq!(usage.cache_write_tokens, 35);
+        // Latest context = only the second request: 50 + 100 + 10 + 25 = 185
+        assert_eq!(usage.context_tokens(), 185);
     }
 
     #[test]
     fn test_session_usage_total_tokens() {
         let mut usage = SessionUsage::new();
         usage.add(1000, 500, 2000, 100);
-        // total = input + output + cache_read + cache_write
+        // total_tokens = cumulative sum (for cost display)
         assert_eq!(usage.total_tokens(), 3600);
     }
 
     #[test]
-    fn test_session_usage_context_tokens() {
+    fn test_session_usage_context_tokens_uses_latest() {
         let mut usage = SessionUsage::new();
-        usage.add(1000, 500, 2000, 100);
-        // context_tokens = input + output + cache_read + cache_write (all tokens count)
-        assert_eq!(usage.context_tokens(), 3600);
+
+        // Turn 1: system=1000 (cache_write), user=100 (input), output=500
+        usage.add(100, 500, 0, 1000);
+        // Context = 100 + 0 + 1000 + 500 = 1600
+        assert_eq!(usage.context_tokens(), 1600);
+
+        // Turn 2: system=1000 (cache_read), prev_conv=600 (input), new_user=100 (input), output=400
+        // API reports: input=700, cache_read=1000, cache_write=0, output=400
+        usage.add(700, 400, 1000, 0);
+        // Context = 700 + 1000 + 0 + 400 = 2100 (NOT cumulative 3600!)
+        assert_eq!(usage.context_tokens(), 2100);
+
+        // But cumulative total is still correct for cost
+        // Turn 1: 100 + 500 + 0 + 1000 = 1600
+        // Turn 2: 700 + 400 + 1000 + 0 = 2100
+        // Total: 3700
+        assert_eq!(usage.total_tokens(), 3700);
     }
 
     #[test]
     fn test_session_usage_context_percentage() {
         let mut usage = SessionUsage::new();
+        // Latest request: input=10000, cache_read=4000, cache_write=1000, output=5000
+        // Context = 10000 + 4000 + 1000 + 5000 = 20000
         usage.add(10000, 5000, 4000, 1000);
-        // context_tokens = 10000 + 5000 + 4000 + 1000 = 20000
         // context_limit = 200000 -> 10%
         let pct = usage.context_percentage(200000);
         assert!((pct - 10.0).abs() < 0.001);
