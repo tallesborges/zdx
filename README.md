@@ -143,6 +143,15 @@ cargo fmt              # Format
 - `docs/plans/plan_<short_slug>.md` — commit-sized implementation plans
 - `docs/adr/` — Architecture Decision Records (the “why”)
 
+## Inspiration
+
+This project was inspired by several excellent tools in the agentic coding space:
+
+- [pi-mono](https://github.com/badlogic/pi-mono) — AI-powered coding agent with terminal UI and SDK for AI-assisted development
+- [codex](https://github.com/openai/codex) — OpenAI's open-source terminal-based agentic coding assistant
+- [AMP](https://ampcode.com/) — Great UX inspiration for agentic coding workflows
+- [opencode](https://github.com/sst/opencode) — Open-source AI coding agent with TUI, desktop app, and VS Code extension
+
 ## License
 
 MIT
