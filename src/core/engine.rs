@@ -513,7 +513,7 @@ async fn emit_abort_results_for_remaining(
     sink: &EventSink,
 ) {
     for tu in remaining_tools {
-        let abort_output = ToolOutput::failure("interrupted", "Interrupted by user");
+        let abort_output = ToolOutput::canceled("Interrupted by user");
         sink.important(EngineEvent::ToolFinished {
             id: tu.id.clone(),
             result: abort_output.clone(),

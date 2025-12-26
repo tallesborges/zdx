@@ -127,6 +127,7 @@ impl fmt::Display for ErrorKind {
 /// All tool outputs must use this format:
 /// - Success: `{ "ok": true, "data": { ... } }`
 /// - Failure: `{ "ok": false, "error": { "code": "...", "message": "..." } }`
+/// - Canceled: serializes as failure (for API compatibility) but is semantically distinct
 ///
 /// The optional `image` field is not serialized to JSON - it's handled
 /// separately when building API requests for vision-capable models.
@@ -143,6 +144,12 @@ pub enum ToolOutput {
     Failure {
         ok: bool,
         error: ToolError,
+    },
+    /// User canceled tool execution (serializes as failure for API, but semantically distinct).
+    Canceled {
+        /// User-facing message.
+        #[serde(skip)]
+        message: String,
     },
 }
 
@@ -176,6 +183,13 @@ impl ToolOutput {
         }
     }
 
+    /// Creates a canceled tool output (user interrupt).
+    pub fn canceled(message: impl Into<String>) -> Self {
+        ToolOutput::Canceled {
+            message: message.into(),
+        }
+    }
+
     /// Returns true if this output represents success.
     pub fn is_ok(&self) -> bool {
         matches!(self, ToolOutput::Success { .. })
@@ -185,7 +199,7 @@ impl ToolOutput {
     pub fn data(&self) -> Option<&Value> {
         match self {
             ToolOutput::Success { data, .. } => Some(data),
-            ToolOutput::Failure { .. } => None,
+            ToolOutput::Failure { .. } | ToolOutput::Canceled { .. } => None,
         }
     }
 
@@ -193,12 +207,23 @@ impl ToolOutput {
     pub fn image(&self) -> Option<&ImageContent> {
         match self {
             ToolOutput::Success { image, .. } => image.as_ref(),
-            ToolOutput::Failure { .. } => None,
+            ToolOutput::Failure { .. } | ToolOutput::Canceled { .. } => None,
         }
     }
 
     /// Converts the tool output to a JSON string for sending to the model.
     pub fn to_json_string(&self) -> String {
+        // For Canceled, serialize as a failure-like structure for API compatibility
+        if let ToolOutput::Canceled { message } = self {
+            return serde_json::to_string(&ToolOutput::Failure {
+                ok: false,
+                error: ToolError {
+                    code: "canceled".to_string(),
+                    message: message.clone(),
+                },
+            })
+            .unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string());
+        }
         serde_json::to_string(self).unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string())
     }
 }
