@@ -152,7 +152,7 @@ impl SessionEvent {
     /// Not all engine events are persisted. This returns `None` for events
     /// that don't need to be saved (e.g., `AssistantDelta`, `ToolStarted`).
     ///
-    /// Note: `AssistantFinal` and user messages are handled separately by the
+    /// Note: `AssistantComplete` and user messages are handled separately by the
     /// chat/agent modules since they have additional context.
     pub fn from_engine(event: &crate::core::events::EngineEvent) -> Option<Self> {
         use crate::core::events::EngineEvent;
@@ -166,12 +166,12 @@ impl SessionEvent {
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
             EngineEvent::Interrupted => Some(Self::interrupted()),
-            EngineEvent::ThinkingFinal { text, signature } => {
+            EngineEvent::ThinkingComplete { text, signature } => {
                 Some(Self::thinking(text.clone(), Some(signature.clone())))
             }
             // These are not persisted via this path:
             // - AssistantDelta: streamed chunks, not final
-            // - AssistantFinal: handled by caller with full context
+            // - AssistantComplete: handled by caller with full context
             // - ThinkingDelta: streamed chunks, not final
             // - ToolStarted: UI-only, not persisted
             // - Error: not persisted (may be in future)
@@ -203,8 +203,41 @@ pub struct Session {
 }
 
 impl Session {
+    /// Guard to prevent session creation in tests without proper isolation.
+    ///
+    /// # Panics
+    /// - In unit tests (`#[cfg(test)]`): panics if `ZDX_HOME` is not set
+    /// - At runtime: panics if `ZDX_BLOCK_SESSION_WRITES=1` is set
+    ///
+    /// This ensures tests don't pollute the user's home directory with session files.
+    fn guard_session_creation() {
+        // Compile-time guard for unit tests
+        #[cfg(test)]
+        if std::env::var("ZDX_HOME").is_err() {
+            panic!(
+                "Tests must set ZDX_HOME to a temp directory!\n\
+                 Session would be created in user's home directory.\n\
+                 Use `setup_temp_zdx_home()` or set ZDX_HOME env var."
+            );
+        }
+
+        // Runtime guard for integration tests
+        #[cfg(not(test))]
+        if std::env::var("ZDX_BLOCK_SESSION_WRITES").is_ok_and(|v| v == "1") {
+            panic!(
+                "ZDX_BLOCK_SESSION_WRITES=1 but trying to create a session!\n\
+                 Use --no-save flag or set ZDX_HOME to a temp directory."
+            );
+        }
+    }
+
     /// Creates a new session with a generated ID.
+    ///
+    /// # Panics
+    /// In tests, panics if `ZDX_HOME` is not set (to prevent polluting user's home).
     pub fn new() -> Result<Self> {
+        Self::guard_session_creation();
+
         let id = generate_session_id();
         let dir = sessions_dir();
         fs::create_dir_all(&dir).context("Failed to create sessions directory")?;
@@ -216,7 +249,12 @@ impl Session {
     }
 
     /// Creates or opens a session with a specific ID.
+    ///
+    /// # Panics
+    /// In tests, panics if `ZDX_HOME` is not set (to prevent polluting user's home).
     pub fn with_id(id: String) -> Result<Self> {
+        Self::guard_session_creation();
+
         let dir = sessions_dir();
         fs::create_dir_all(&dir).context("Failed to create sessions directory")?;
 
