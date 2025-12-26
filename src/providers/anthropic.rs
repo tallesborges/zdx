@@ -298,7 +298,38 @@ pub struct AnthropicClient {
 
 impl AnthropicClient {
     /// Creates a new Anthropic client with the given configuration.
+    ///
+    /// # Panics
+    /// - In test builds (`#[cfg(test)]`), panics if `base_url` is the production API.
+    /// - At runtime, panics if `ZDX_BLOCK_REAL_API=1` and `base_url` is the production API.
+    ///
+    /// This prevents tests from accidentally making real network requests.
+    /// Use `ANTHROPIC_BASE_URL` env var or config to point to a mock server.
     pub fn new(config: AnthropicConfig) -> Self {
+        // Compile-time guard for unit tests
+        #[cfg(test)]
+        if config.base_url == DEFAULT_BASE_URL {
+            panic!(
+                "Tests must not use the production Anthropic API!\n\
+                 Set ANTHROPIC_BASE_URL to a mock server (e.g., wiremock).\n\
+                 Found base_url: {}",
+                config.base_url
+            );
+        }
+
+        // Runtime guard for integration tests (set ZDX_BLOCK_REAL_API=1 in test harness)
+        #[cfg(not(test))]
+        if std::env::var("ZDX_BLOCK_REAL_API").is_ok_and(|v| v == "1")
+            && config.base_url == DEFAULT_BASE_URL
+        {
+            panic!(
+                "ZDX_BLOCK_REAL_API=1 but trying to use production Anthropic API!\n\
+                 Set ANTHROPIC_BASE_URL to a mock server.\n\
+                 Found base_url: {}",
+                config.base_url
+            );
+        }
+
         Self {
             config,
             http: reqwest::Client::new(),
