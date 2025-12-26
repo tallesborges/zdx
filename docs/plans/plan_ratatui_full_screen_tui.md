@@ -9,6 +9,30 @@ This plan outlines the steps to move from the current inline-viewport TUI to the
 - Tool execution status indicators within the TUI.
 - Persistent TUI state during engine execution.
 
+## Progress Summary
+
+**MVP Slices (Core Functionality):** ✅ Complete
+- ✅ Slice 0: Terminal safety + blank screen
+- ✅ Slice 1: Input works (even ugly)
+- ✅ Slice 2: Send loop (no streaming yet)
+- ✅ Slice 3: Streaming (throttled)
+- ✅ Slice 4: Scroll (read long answers)
+
+**Enhancement Slices (Better UX):** ⏳ In Progress
+- ⏳ Slice 5: Turn lifecycle events (TurnStarted)
+- ⏳ Slice 6: Tool output streaming (ToolOutputDelta)
+
+**Polish Phases:** Mostly Complete
+- ✅ Phase 1: Transcript foundations (UI-agnostic)
+- ✅ Phase 1b: Stable IDs + timestamps
+- ✅ Phase 2a: Plain text wrap + scroll
+- ⏳ Phase 2b: Markdown rendering (strict subset)
+- ⏳ Phase 2c: Selection + copy
+- ✅ Phase 3: Tool UI
+- ⏳ Phase 4: Streaming fidelity + performance
+- ✅ Phase 5: Input polish
+- ✅ Phase 6: Default + cleanup
+
 ## Design Principles
 
 ### Reducer pattern for TUI state
@@ -147,7 +171,7 @@ Goal: Stream responses smoothly without input lag.
 - `apply_pending_delta()` coalesces all buffered text into single append per tick.
 - `poll_engine_completion()` handles task finish and message history update.
 - 30fps frame rate via `FRAME_DURATION` constant (33ms poll timeout).
-- Streaming cell created on first delta, finalized on `AssistantFinal` event.
+- Streaming cell created on first delta, finalized on `AssistantComplete` event.
 
 ## Slice 4: Scroll (read long answers) ✅
 Goal: Navigate long transcripts.
@@ -178,6 +202,124 @@ Goal: Navigate long transcripts.
 ---
 
 At this point, TUI2 is **daily-usable enough to dogfood**.
+
+---
+
+# Enhancement Slices (progressive improvements)
+
+These slices improve the user experience with better feedback and real-time progress indicators. Each builds on the working MVP.
+
+## Slice 5: Turn lifecycle events ⏳
+Goal: Show immediate feedback when assistant starts working.
+
+**Problem:** Currently there's a 1-3 second gap between user hitting Enter and the first AssistantDelta arriving. User doesn't know if the request was received.
+
+**Solution:** Emit `TurnStarted` event immediately when `run_turn()` begins.
+
+**Engine changes:**
+- [ ] Add `sink.important(EngineEvent::TurnStarted).await;` at start of `run_turn()`
+- [ ] Event already defined in `src/core/events.rs` (from naming refactor)
+
+**UI changes:**
+- [ ] Update `EngineState::Waiting` to trigger on `TurnStarted` instead of on task spawn
+- [ ] Show "Assistant is thinking..." status immediately
+- [ ] Optional: Show spinner/animation while waiting for first delta
+- [ ] Handle in exec mode (currently no-op, which is fine)
+
+**Session persistence:**
+- [ ] Optional: Log turn boundaries in session file for analytics
+- [ ] `SessionEvent::from_engine()` can track turn starts if needed
+
+**Testing:**
+- [ ] Unit test: `run_turn()` emits `TurnStarted` before any other events
+- [ ] Integration test: TUI shows "thinking" indicator within <100ms of Enter
+
+**✅ Demo:** User sends message → "Thinking..." appears instantly → text starts streaming 1-2s later (but user knows work started).
+
+**Effort:** 🟢 Trivial (1-2 hours)
+- Engine: 1 line change
+- UI: Update existing handler to show spinner
+- Tests: Simple event ordering test
+
+**Impact:** 🟢 High (better perceived responsiveness)
+
+---
+
+## Slice 6: Tool output streaming ⏳
+Goal: Show real-time progress for long-running tool executions.
+
+**Problem:** When running `cargo test`, `cargo build --release`, or other long commands, the TUI shows "Tool running..." for 30-60 seconds with no feedback. Users don't know if it's frozen or making progress.
+
+**Solution:** Stream tool stdout/stderr chunks via `ToolOutputDelta` events as they arrive.
+
+**Engine changes:**
+- [ ] Modify `tools::execute_tool()` signature to accept `on_chunk: impl Fn(String)` callback
+- [ ] Update `execute_tools_async()` to wire up callback:
+  ```rust
+  let (output, result) = tools::execute_tool(
+      &tu.name, 
+      &tu.id, 
+      &tu.input, 
+      ctx,
+      |chunk| {
+          sink.delta(EngineEvent::ToolOutputDelta {
+              id: tu.id.clone(),
+              chunk,
+          });
+      }
+  ).await;
+  ```
+- [ ] Bash tool: Stream stdout/stderr line-by-line (or chunk-by-chunk)
+- [ ] Other tools: Can use same pattern if they have long output
+
+**Bash tool implementation:**
+- [ ] Use `tokio::process::Command` with piped stdout/stderr
+- [ ] Read output with `BufReader::lines()` or `BufReader::read_until()`
+- [ ] Call callback for each line/chunk
+- [ ] Accumulate full output for final `ToolOutput` result
+- [ ] Handle timeout with partial output
+
+**UI changes:**
+- [ ] Update `EngineEvent::ToolOutputDelta` handler in `update.rs`
+- [ ] Find tool cell by ID, append chunk to streaming output
+- [ ] Implement output size limit (e.g., keep last 100KB to prevent memory issues)
+- [ ] Auto-scroll to bottom when new chunks arrive (if in FollowLatest mode)
+- [ ] Show "▼ more" indicator if output exceeds viewport
+
+**Exec mode changes:**
+- [ ] Print chunks to stderr immediately (like ToolStarted/ToolFinished)
+- [ ] No buffering needed in exec mode
+
+**Session persistence:**
+- [ ] ToolOutputDelta is transient (not persisted)
+- [ ] Only final ToolFinished result goes to session file
+- [ ] Session replay shows final output, not streaming
+
+**Testing:**
+- [ ] Unit test: Bash tool calls callback for each line
+- [ ] Unit test: UI appends chunks to correct tool cell
+- [ ] Integration test: Long command shows incremental output
+- [ ] Integration test: Output size limit prevents memory issues
+
+**✅ Demo:** Run `cargo test` → see each test passing in real-time → user knows progress is happening.
+
+**Real-world use cases:**
+1. **Builds:** `cargo build --release` shows compilation progress
+2. **Tests:** `cargo test` shows each test result as it runs
+3. **Search:** `grep -r "pattern" .` shows matches as found
+4. **Downloads:** `curl` shows progress chunks
+
+**Effort:** 🟡 Medium (4-8 hours)
+- Engine: Modify tool execution signature (2 hours)
+- Bash tool: Implement streaming (2 hours)
+- UI: Update cell rendering (2 hours)
+- Tests: Integration tests (2 hours)
+
+**Impact:** 🟢 High (essential for long-running operations)
+
+**Implementation order:**
+1. Start with bash tool only (most common long-running case)
+2. Add to read/write/edit later if needed (less critical)
 
 ---
 
@@ -319,15 +461,14 @@ Goal: TUI2 becomes the default.
 
 # Later / Explicitly Deferred
 
-These items are **not** in MVP or Polish phases. Don't build until needed.
+These items are **not** in MVP, Enhancement, or Polish phases. Don't build until needed.
 
 - **Selection** — MVP has no selection; when added, use grapheme indices from day 1 (no byte-index intermediate state to undo)
 - **Full markdown spec** — lists, tables, links, images
-- **Tool output streaming** — show simple status line first
 - **Bidirectional position mapping** — only if needed for cursor-follow
-- **Session resume in TUI2** — works via existing session system
 - **Mouse selection** — keyboard-only is fine for MVP
 - **Focus toggle mode** — start with "always input focused"; add toggle only if needed
+- **Tool output preview in cell** — current implementation shows full output; preview/expand could be added later
 
 ---
 
