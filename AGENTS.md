@@ -1,4 +1,4 @@
-# zdx-cli development guide
+# zdx development guide
 
 `docs/SPEC.md` is the source of truth for product behavior (contracts). This file is about working in the repo.
 

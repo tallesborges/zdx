@@ -87,7 +87,7 @@
 - failure: two matches with expected=1 → `ok:false`, `code:"replacement_count_mismatch"`, file unchanged
 - failure: invalid input (`old==""` or `expected_replacements==0`) → `ok:false`, `code:"invalid_input"`
 
-**Verification:** `cargo test -p zdx-cli tools::edit`
+**Verification:** `cargo test -p zdx tools::edit`
 
 ---
 

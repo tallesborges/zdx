@@ -22,7 +22,7 @@ async fn test_exec_creates_session_file() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -84,7 +84,7 @@ async fn test_exec_no_save_skips_session() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -113,7 +113,7 @@ async fn test_exec_appends_to_existing_session() {
         .await;
 
     // First exec creates a session
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -122,7 +122,7 @@ async fn test_exec_appends_to_existing_session() {
         .success();
 
     // Second exec appends to the same session
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())

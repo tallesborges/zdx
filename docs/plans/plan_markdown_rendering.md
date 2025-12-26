@@ -22,7 +22,7 @@
 
 ## Inputs
 
-**Project/feature:** Add markdown rendering to zdx-cli assistant responses. Currently shows plain text; want styled headings, code blocks, lists, emphasis, and links to improve readability of technical responses.
+**Project/feature:** Add markdown rendering to zdx assistant responses. Currently shows plain text; want styled headings, code blocks, lists, emphasis, and links to improve readability of technical responses.
 
 **Existing state:**
 - Ratatui-based TUI with reducer pattern (state.rs, update.rs, view.rs)
@@ -49,7 +49,7 @@ Daily-usable markdown viewing in TUI: headings stand out, code blocks are readab
 
 **Core architecture:**
 - Uses `pulldown-cmark` for parsing markdown into events
-- Uses `ratatui` for terminal rendering (same as zdx-cli!)
+- Uses `ratatui` for terminal rendering (same as zdx!)
 - `MarkdownStyles` struct defines ratatui styles for different elements
 - `render_markdown_text_with_width` function converts markdown → styled ratatui spans/lines
 - `MarkdownStreamCollector` buffers deltas and commits only complete lines (newline-delimited)

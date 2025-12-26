@@ -1,4 +1,4 @@
-# ZDX CLI
+# ZDX
 
 An agentic CLI tool powered by Claude for interactive coding assistance.
 

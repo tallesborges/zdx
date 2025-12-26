@@ -46,7 +46,7 @@ async fn test_bash_executes_command() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -111,7 +111,7 @@ async fn test_bash_runs_in_root_directory() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
@@ -169,7 +169,7 @@ async fn test_bash_times_out_when_configured() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())

@@ -8,7 +8,7 @@
 
 ## Inputs
 
-- **Project/feature:** Add thinking (extended thinking) support to zdx-cli, following pi-mono's implementation pattern
+- **Project/feature:** Add thinking (extended thinking) support to zdx, following pi-mono's implementation pattern
 - **Existing state:** Anthropic provider with streaming, events system (`AssistantDelta`/`AssistantComplete`), transcript model (User/Assistant/Tool/System cells), TUI renderer, beta headers already include `interleaved-thinking-2025-05-14`
 - **Constraints:** Rust/Anthropic API only, must preserve existing streaming behavior, thinking must work with tool loop
 - **Success looks like:** User can enable thinking via config, see thinking blocks stream in TUI, thinking persists in sessions

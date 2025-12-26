@@ -28,7 +28,7 @@ async fn test_exec_streams_text_response() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -50,7 +50,7 @@ async fn test_exec_streaming_preserves_text_order() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "describe rust"])
@@ -72,7 +72,7 @@ async fn test_exec_handles_empty_delta_events() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -86,7 +86,7 @@ async fn test_exec_handles_empty_delta_events() {
 async fn test_exec_fails_without_api_key() {
     let zdx_home = temp_zdx_home();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env_remove("ANTHROPIC_API_KEY")
         .args(["exec", "-p", "hello"])
@@ -113,7 +113,7 @@ async fn test_exec_handles_api_error() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "invalid-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -137,7 +137,7 @@ async fn test_exec_handles_api_error_midstream() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -171,7 +171,7 @@ async fn test_exec_tool_use_midstream() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "run echo hello"])
@@ -192,7 +192,7 @@ async fn test_exec_handles_ping_events() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "ping"])
@@ -226,7 +226,7 @@ async fn test_exec_includes_system_prompt_from_config() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -274,7 +274,7 @@ async fn test_exec_system_prompt_flag_overrides_config() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -329,7 +329,7 @@ async fn test_exec_system_prompt_flag_empty_clears_config() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -384,7 +384,7 @@ async fn test_exec_includes_agents_md_context() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -434,7 +434,7 @@ async fn test_exec_uses_config_base_url_when_env_absent() {
         .await;
 
     // Note: ANTHROPIC_BASE_URL is NOT set - should use config
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env_remove("ANTHROPIC_BASE_URL")
@@ -468,7 +468,7 @@ async fn test_exec_empty_config_base_url_treated_as_unset() {
 
     // Even though config has empty base_url, env var takes precedence
     // This proves empty config doesn't cause URL validation errors
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -507,7 +507,7 @@ async fn test_exec_env_base_url_takes_precedence_over_config() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
@@ -529,7 +529,7 @@ async fn test_exec_invalid_config_base_url_exits_with_error() {
     )
     .unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp_dir.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env_remove("ANTHROPIC_BASE_URL")
@@ -569,7 +569,7 @@ async fn test_exec_stdout_contains_only_assistant_text() {
         .mount(&mock_server)
         .await;
 
-    let output = cargo_bin_cmd!("zdx-cli")
+    let output = cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "run echo hello"])
@@ -627,7 +627,7 @@ async fn test_exec_handles_non_json_error_body() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -643,7 +643,7 @@ async fn test_exec_handles_non_json_error_body() {
 #[tokio::test]
 async fn test_exec_connection_refused_error() {
     // Use a port that's unlikely to have anything listening
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", "http://127.0.0.1:9999")
         .args(["--no-save", "exec", "-p", "hello"])
@@ -674,7 +674,7 @@ async fn test_exec_error_shows_details_when_available() {
         .mount(&mock_server)
         .await;
 
-    let output = cargo_bin_cmd!("zdx-cli")
+    let output = cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -715,7 +715,7 @@ async fn test_exec_error_exit_code_is_one() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args(["--no-save", "exec", "-p", "hello"])
@@ -760,7 +760,7 @@ async fn test_exec_uses_oauth_bearer_header_when_logged_in() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         // Note: No ANTHROPIC_API_KEY needed when OAuth is available
@@ -792,7 +792,7 @@ async fn test_exec_uses_api_key_when_no_oauth() {
         .mount(&mock_server)
         .await;
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "my-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())

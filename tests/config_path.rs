@@ -8,7 +8,7 @@ use tempfile::tempdir;
 fn test_config_path_command() {
     let dir = tempdir().unwrap();
 
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
         .args(["config", "path"])
         .assert()
@@ -25,7 +25,7 @@ fn test_config_init_creates_file() {
     assert!(!config_path.exists());
 
     // Run zdx config init
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])
         .assert()
@@ -50,7 +50,7 @@ fn test_config_init_fails_if_exists() {
     fs::write(&config_path, "# existing config").unwrap();
 
     // Run zdx config init should fail
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])
         .assert()
@@ -60,7 +60,7 @@ fn test_config_init_fails_if_exists() {
 
 #[test]
 fn test_config_help_shows_subcommands() {
-    cargo_bin_cmd!("zdx-cli")
+    cargo_bin_cmd!("zdx")
         .args(["config", "--help"])
         .assert()
         .success()
