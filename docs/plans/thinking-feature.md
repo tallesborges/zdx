@@ -9,7 +9,7 @@
 ## Inputs
 
 - **Project/feature:** Add thinking (extended thinking) support to zdx-cli, following pi-mono's implementation pattern
-- **Existing state:** Anthropic provider with streaming, events system (`AssistantDelta`/`AssistantFinal`), transcript model (User/Assistant/Tool/System cells), TUI renderer, beta headers already include `interleaved-thinking-2025-05-14`
+- **Existing state:** Anthropic provider with streaming, events system (`AssistantDelta`/`AssistantComplete`), transcript model (User/Assistant/Tool/System cells), TUI renderer, beta headers already include `interleaved-thinking-2025-05-14`
 - **Constraints:** Rust/Anthropic API only, must preserve existing streaming behavior, thinking must work with tool loop
 - **Success looks like:** User can enable thinking via config, see thinking blocks stream in TUI, thinking persists in sessions
 
@@ -52,7 +52,7 @@
 | SSE streaming parser | `anthropic.rs:520+` | No `thinking_delta`/`signature_delta` parsing |
 | StreamEvent enum | `anthropic.rs:431` | No thinking variants |
 | SseDelta struct | `anthropic.rs:660` | No `thinking`/`signature` fields |
-| EngineEvent enum | `events.rs:16` | No `ThinkingDelta`/`ThinkingFinal` |
+| EngineEvent enum | `events.rs:16` | No `ThinkingDelta`/`ThinkingComplete` |
 | Engine content block tracking | `engine.rs:246+` | Works by index ✓ — reuse for thinking |
 | Turn grouping | `engine.rs:336` | Already groups blocks into single message ✓ |
 | HistoryCell enum | `transcript.rs:70` | No `Thinking` cell variant |
@@ -148,7 +148,7 @@ cargo test -- sse_parser_thinking
 - [x] Add to `EngineEvent` enum:
   ```rust
   ThinkingDelta { text: String },
-  ThinkingFinal { text: String, signature: String },
+  ThinkingComplete { text: String, signature: String },
   ```
 - [x] Add `ThinkingBlock` tracking in engine loop (similar to `ToolUseBuilder`):
   ```rust
@@ -160,7 +160,7 @@ cargo test -- sse_parser_thinking
   ```
 - [x] Handle `StreamEvent::ThinkingDelta` → accumulate text, emit `EngineEvent::ThinkingDelta`
 - [x] Handle `StreamEvent::SignatureDelta` → accumulate signature
-- [x] Handle `StreamEvent::ContentBlockStop` for thinking → emit `EngineEvent::ThinkingFinal`
+- [x] Handle `StreamEvent::ContentBlockStop` for thinking → emit `EngineEvent::ThinkingComplete`
 - [x] Add `ChatContentBlock::Thinking { thinking: String, signature: String }` variant
 - [x] Include thinking blocks in `assistant_blocks` for `TurnComplete.messages`
 - [x] Add stub handlers in TUI update.rs (display deferred to Slice 4)
@@ -200,7 +200,7 @@ RUST_LOG=debug cargo run
 - [x] Add `HistoryCell::finalize_thinking()` method
 - [x] Update `handle_engine_event()` in `update.rs`:
   - `ThinkingDelta` → create or append to thinking cell
-  - `ThinkingFinal` → finalize cell, store signature
+  - `ThinkingComplete` → finalize cell, store signature
 - [x] Render thinking cells with distinct style:
   - Prefix: `💭 ` (or `[thinking]` for non-emoji terminals)
   - Style: dim/italic text (magenta prefix, dark gray content)
@@ -236,7 +236,7 @@ cargo run
       ts: String,
   }
   ```
-- [x] Update `SessionEvent::from_engine()` to convert `ThinkingFinal`
+- [x] Update `SessionEvent::from_engine()` to convert `ThinkingComplete`
 - [x] Update session loading to reconstruct thinking cells
 - [x] Update `ChatMessage` / `ApiMessage` serialization:
   - Add `ApiContentBlock::Thinking` variant (already existed)
@@ -311,7 +311,7 @@ zdx sessions resume <id>
 ### Per-slice smoke tests
 - **Slice 1:** Config loads with new fields, effective_max_tokens() returns safe value ✅
 - **Slice 2:** SSE fixture test parses thinking events ✅
-- **Slice 3:** Engine emits ThinkingDelta/ThinkingFinal events ✅
+- **Slice 3:** Engine emits ThinkingDelta/ThinkingComplete events ✅
 - **Slice 4:** TUI displays thinking cells with distinct style ✅
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
 - **Slice 6:** ThinkingLevel enum maps to correct budget values ✅
