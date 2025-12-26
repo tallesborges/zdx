@@ -14,17 +14,20 @@ use crate::providers::anthropic::{ChatMessage, ProviderErrorKind};
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum EngineEvent {
+    /// Turn has started processing.
+    TurnStarted,
+
     /// Incremental thinking chunk from the assistant (extended thinking).
     ThinkingDelta { text: String },
 
-    /// Final complete thinking block from the assistant (extended thinking).
-    ThinkingFinal { text: String, signature: String },
+    /// Complete thinking block from the assistant (extended thinking).
+    ThinkingComplete { text: String, signature: String },
 
     /// Incremental text chunk from the assistant.
     AssistantDelta { text: String },
 
-    /// Final complete response from the assistant.
-    AssistantFinal { text: String },
+    /// Complete response from the assistant.
+    AssistantComplete { text: String },
 
     /// Model has decided to call a tool (before execution begins).
     ToolRequested {
@@ -35,6 +38,9 @@ pub enum EngineEvent {
 
     /// A tool invocation has started execution.
     ToolStarted { id: String, name: String },
+
+    /// Incremental output from a running tool (stdout/stderr).
+    ToolOutputDelta { id: String, chunk: String },
 
     /// A tool invocation has completed.
     ToolFinished { id: String, result: ToolOutput },
