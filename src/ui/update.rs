@@ -369,6 +369,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     state.messages.clear();
     state.command_history.clear();
     state.scroll.reset();
+    state.usage = crate::ui::state::SessionUsage::new();
 
     if state.session.is_some() {
         vec![UiEffect::CreateNewSession]
