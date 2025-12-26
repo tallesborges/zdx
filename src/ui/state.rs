@@ -106,15 +106,6 @@ impl OverlayState {
             _ => None,
         }
     }
-
-    /// Returns the login state mutably if active.
-    #[cfg(test)]
-    pub fn as_login_mut(&mut self) -> Option<&mut LoginState> {
-        match self {
-            OverlayState::Login(l) => Some(l),
-            _ => None,
-        }
-    }
 }
 
 // ============================================================================
