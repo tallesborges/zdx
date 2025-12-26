@@ -50,7 +50,7 @@ pub fn create_event_channel() -> (EventTx, EventRx) {
 ///
 /// Use `delta()` for high-volume events (TextDelta) that can be dropped
 /// if the consumer is slow. Use `important()` for events that must be
-/// delivered (ToolStarted, ToolFinished, Final, Error, Interrupted).
+/// delivered (ToolStarted, ToolFinished, Complete, Error, Interrupted).
 #[derive(Clone)]
 pub struct EventSink {
     tx: EventTx,
@@ -312,7 +312,7 @@ pub async fn run_turn(
                 StreamEvent::ContentBlockStop { index } => {
                     // Check if this is a thinking block finishing
                     if let Some(tb) = thinking_blocks.iter().find(|t| t.index == index) {
-                        sink.important(EngineEvent::ThinkingFinal {
+                        sink.important(EngineEvent::ThinkingComplete {
                             text: tb.text.clone(),
                             signature: tb.signature.clone(),
                         })
@@ -401,10 +401,10 @@ pub async fn run_turn(
                 }
             }
 
-            // Emit AssistantFinal to signal this message is complete
+            // Emit AssistantComplete to signal this message is complete
             // This allows the TUI to finalize the current streaming cell before tools
             if !full_text.is_empty() {
-                sink.important(EngineEvent::AssistantFinal {
+                sink.important(EngineEvent::AssistantComplete {
                     text: full_text.clone(),
                 })
                 .await;
@@ -427,7 +427,7 @@ pub async fn run_turn(
 
         // Emit final assistant text
         if !full_text.is_empty() {
-            sink.important(EngineEvent::AssistantFinal {
+            sink.important(EngineEvent::AssistantComplete {
                 text: full_text.clone(),
             })
             .await;
