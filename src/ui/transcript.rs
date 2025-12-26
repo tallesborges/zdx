@@ -320,6 +320,8 @@ impl HistoryCell {
             HistoryCell::Tool { state, result, .. } => {
                 *state = if tool_result.is_ok() {
                     ToolState::Done
+                } else if matches!(tool_result, ToolOutput::Canceled { .. }) {
+                    ToolState::Cancelled
                 } else {
                     ToolState::Error
                 };
@@ -1159,6 +1161,28 @@ mod tests {
         // State should be Error
         match cell {
             HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Error),
+            _ => panic!("Expected tool cell"),
+        }
+    }
+
+    #[test]
+    fn test_tool_canceled() {
+        let mut cell =
+            HistoryCell::tool_running("123", "bash", serde_json::json!({"command": "sleep 10"}));
+        cell.set_tool_result(ToolOutput::canceled("Interrupted by user"));
+
+        let lines = cell.display_lines(80, 0);
+        // Should show "(interrupted)" suffix, not "Failed"
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(all_text.contains("(interrupted)"));
+        assert!(!all_text.contains("Failed"));
+
+        // State should be Cancelled, not Error
+        match cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Cancelled),
             _ => panic!("Expected tool cell"),
         }
     }

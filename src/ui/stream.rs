@@ -279,6 +279,9 @@ impl CliRenderer {
                     error.message
                 );
             }
+            ToolOutput::Canceled { message } => {
+                let _ = writeln!(self.stderr, "Tool finished: bash canceled ({})", message);
+            }
         }
     }
 
