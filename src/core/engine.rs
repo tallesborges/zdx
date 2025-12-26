@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
-use crate::core::events::{EngineEvent, ErrorKind};
+use crate::core::events::{EngineEvent, ErrorKind, ToolOutput};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
@@ -417,9 +417,22 @@ pub async fn run_turn(
             let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &finalized);
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
-            // Execute tools and get results
-            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sink).await?;
+            // Execute tools and get results (may be partial on interrupt)
+            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sink).await;
             messages.push(ChatMessage::tool_results(tool_results));
+
+            // Check if interrupted during tool execution
+            if crate::core::interrupt::is_interrupted() {
+                // Emit TurnComplete with partial messages before Interrupted
+                // This ensures the TUI has the complete conversation state
+                sink.important(EngineEvent::TurnComplete {
+                    final_text: full_text.clone(),
+                    messages: messages.clone(),
+                })
+                .await;
+                sink.important(EngineEvent::Interrupted).await;
+                return Err(crate::core::interrupt::InterruptedError.into());
+            }
 
             // Continue the loop for the next response
             continue;
@@ -451,19 +464,18 @@ pub async fn run_turn(
 }
 
 /// Executes all tool uses and emits events via async channel.
+///
+/// On interrupt, adds abort results for ALL remaining tools (not just the current one)
+/// and returns. The caller should check `is_interrupted()` after this function
+/// returns to determine if an interrupt occurred.
 async fn execute_tools_async(
     tool_uses: &[ToolUse],
     ctx: &ToolContext,
     sink: &EventSink,
-) -> Result<Vec<ToolResult>> {
+) -> Vec<ToolResult> {
     let mut results = Vec::with_capacity(tool_uses.len());
 
-    for tu in tool_uses {
-        if crate::core::interrupt::is_interrupted() {
-            sink.important(EngineEvent::Interrupted).await;
-            return Err(crate::core::interrupt::InterruptedError.into());
-        }
-
+    for (i, tu) in tool_uses.iter().enumerate() {
         // Emit ToolStarted
         sink.important(EngineEvent::ToolStarted {
             id: tu.id.clone(),
@@ -474,8 +486,9 @@ async fn execute_tools_async(
         let (output, result) = tokio::select! {
             biased;
             _ = crate::core::interrupt::wait_for_interrupt() => {
-                sink.important(EngineEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                // Emit abort results for ALL remaining tools (including current)
+                emit_abort_results_for_remaining(&tool_uses[i..], &mut results, sink).await;
+                return results;
             }
             res = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx) => res,
         };
@@ -490,7 +503,24 @@ async fn execute_tools_async(
         results.push(result);
     }
 
-    Ok(results)
+    results
+}
+
+/// Emits abort ToolFinished events and adds abort results for all remaining tools.
+async fn emit_abort_results_for_remaining(
+    remaining_tools: &[ToolUse],
+    results: &mut Vec<ToolResult>,
+    sink: &EventSink,
+) {
+    for tu in remaining_tools {
+        let abort_output = ToolOutput::failure("interrupted", "Interrupted by user");
+        sink.important(EngineEvent::ToolFinished {
+            id: tu.id.clone(),
+            result: abort_output.clone(),
+        })
+        .await;
+        results.push(ToolResult::from_output(tu.id.clone(), &abort_output));
+    }
 }
 
 /// Builds assistant content blocks from accumulated thinking, text, and tool uses.
@@ -566,7 +596,7 @@ mod tests {
             events.push((*ev).clone());
         }
 
-        let results = handle.await.unwrap().unwrap();
+        let results = handle.await.unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(events.len(), 2); // ToolStarted, ToolFinished
 
