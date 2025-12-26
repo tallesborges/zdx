@@ -336,12 +336,27 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
         ));
         output.push_str(&format!("        family: {:?},\n", model.family));
         output.push_str("        pricing: ModelPricing {\n");
-        output.push_str(&format!("            input: {},\n", format_f64(model.pricing.input)));
-        output.push_str(&format!("            output: {},\n", format_f64(model.pricing.output)));
-        output.push_str(&format!("            cache_read: {},\n", format_f64(model.pricing.cache_read)));
-        output.push_str(&format!("            cache_write: {},\n", format_f64(model.pricing.cache_write)));
+        output.push_str(&format!(
+            "            input: {},\n",
+            format_f64(model.pricing.input)
+        ));
+        output.push_str(&format!(
+            "            output: {},\n",
+            format_f64(model.pricing.output)
+        ));
+        output.push_str(&format!(
+            "            cache_read: {},\n",
+            format_f64(model.pricing.cache_read)
+        ));
+        output.push_str(&format!(
+            "            cache_write: {},\n",
+            format_f64(model.pricing.cache_write)
+        ));
         output.push_str("        },\n");
-        output.push_str(&format!("        context_limit: {},\n", model.context_limit));
+        output.push_str(&format!(
+            "        context_limit: {},\n",
+            model.context_limit
+        ));
         output.push_str(&format!("        output_limit: {},\n", model.output_limit));
         output.push_str("    },\n");
     }

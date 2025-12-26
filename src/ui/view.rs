@@ -22,8 +22,11 @@ use crate::ui::overlays::{
 use crate::ui::state::{AuthType, EngineState, OverlayState, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
-/// Height of the input area (lines, including borders).
-const INPUT_HEIGHT: u16 = 5;
+/// Minimum height of the input area (lines, including borders).
+const INPUT_HEIGHT_MIN: u16 = 5;
+
+/// Maximum height of the input area as a percentage of screen height.
+const INPUT_HEIGHT_MAX_PERCENT: f32 = 0.4;
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
@@ -38,6 +41,29 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 /// At 30fps render rate, 3 gives ~10fps spinner animation.
 const SPINNER_SPEED_DIVISOR: usize = 3;
 
+/// Calculates the dynamic input height based on content and terminal size.
+///
+/// - Minimum: INPUT_HEIGHT_MIN (5 lines with borders)
+/// - Maximum: 40% of terminal height
+/// - Expands when content has more than 3 lines
+fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
+    let line_count = state.textarea.lines().len() as u16;
+
+    // If 3 lines or fewer, use minimum height
+    if line_count <= 3 {
+        return INPUT_HEIGHT_MIN;
+    }
+
+    // Calculate max height (40% of screen)
+    let max_height = ((terminal_height as f32) * INPUT_HEIGHT_MAX_PERCENT) as u16;
+
+    // Add 2 for borders (top and bottom)
+    let desired_height = line_count + 2;
+
+    // Clamp between min and max
+    desired_height.max(INPUT_HEIGHT_MIN).min(max_height)
+}
+
 /// Renders the entire TUI to the frame.
 ///
 /// This is a pure render function - it only reads state and draws to frame.
@@ -45,11 +71,14 @@ const SPINNER_SPEED_DIVISOR: usize = 3;
 pub fn view(state: &TuiState, frame: &mut Frame) {
     let area = frame.area();
 
+    // Calculate dynamic input height based on content
+    let input_height = calculate_input_height(state, area.height);
+
     // Get terminal size for transcript rendering (account for margins)
     let transcript_width = area.width.saturating_sub(TRANSCRIPT_MARGIN * 2) as usize;
 
     // Calculate transcript pane height (no header now)
-    let transcript_height = area.height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize;
+    let transcript_height = area.height.saturating_sub(input_height + STATUS_HEIGHT) as usize;
 
     // Pre-render transcript lines
     let all_lines = render_transcript(state, transcript_width);
@@ -88,7 +117,7 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),                // Transcript
-            Constraint::Length(INPUT_HEIGHT),  // Input
+            Constraint::Length(input_height),  // Input (dynamic)
             Constraint::Length(STATUS_HEIGHT), // Status line
         ])
         .split(area);
@@ -273,11 +302,43 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         visual_row = line_visual_start + wrapped_count;
     }
 
-    let input_paragraph = Paragraph::new(wrapped_lines).block(block);
+    // Calculate vertical scroll offset to keep cursor visible
+    let total_visual_rows = wrapped_lines.len();
+    let viewport_height = inner_area.height as usize;
+
+    let scroll_offset = if total_visual_rows <= viewport_height {
+        // All content fits, no scrolling needed
+        0
+    } else {
+        // Content doesn't fit, calculate scroll to show cursor
+        // Keep cursor in the middle third of the viewport when possible
+        let ideal_cursor_position = viewport_height / 2;
+
+        if cursor_visual_row < ideal_cursor_position {
+            // Near top, show from beginning
+            0
+        } else if cursor_visual_row >= total_visual_rows.saturating_sub(ideal_cursor_position) {
+            // Near bottom, show the last viewport_height lines
+            total_visual_rows.saturating_sub(viewport_height)
+        } else {
+            // In middle, center the cursor
+            cursor_visual_row.saturating_sub(ideal_cursor_position)
+        }
+    };
+
+    // Slice visible lines based on scroll offset
+    let visible_lines: Vec<Line> = wrapped_lines
+        .into_iter()
+        .skip(scroll_offset)
+        .take(viewport_height)
+        .collect();
+
+    let input_paragraph = Paragraph::new(visible_lines).block(block);
     frame.render_widget(input_paragraph, area);
 
+    // Adjust cursor position by scroll offset
     let cursor_x = inner_area.x + cursor_visual_col as u16;
-    let cursor_y = inner_area.y + cursor_visual_row as u16;
+    let cursor_y = inner_area.y + (cursor_visual_row.saturating_sub(scroll_offset) as u16);
 
     if cursor_x < inner_area.x + inner_area.width && cursor_y < inner_area.y + inner_area.height {
         frame.set_cursor_position((cursor_x, cursor_y));
@@ -349,7 +410,10 @@ fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static
             let mut spans = vec![
                 Span::styled(format!("{:.0}%", percentage), percentage_style),
                 Span::styled(
-                    format!(" of {} · ", SessionUsage::format_context_limit(m.context_limit)),
+                    format!(
+                        " of {} · ",
+                        SessionUsage::format_context_limit(m.context_limit)
+                    ),
                     usage_style,
                 ),
                 Span::styled(SessionUsage::format_cost(cost), cost_style),
@@ -399,7 +463,10 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
         Span::styled(" ↑", input_style),
         Span::styled(SessionUsage::format_tokens(usage.input_tokens), label_style),
         Span::styled(" ↓", output_style),
-        Span::styled(SessionUsage::format_tokens(usage.output_tokens), label_style),
+        Span::styled(
+            SessionUsage::format_tokens(usage.output_tokens),
+            label_style,
+        ),
         Span::styled(" R", cache_read_style),
         Span::styled(
             SessionUsage::format_tokens(usage.cache_read_tokens),
@@ -456,9 +523,6 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::User => Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::ITALIC),
-        TranscriptStyle::AssistantPrefix => Style::default()
-            .fg(Color::Blue)
-            .add_modifier(Modifier::BOLD),
         TranscriptStyle::Assistant => Style::default().fg(Color::White),
         TranscriptStyle::StreamingCursor => Style::default()
             .fg(Color::Yellow)
@@ -520,8 +584,9 @@ pub fn calculate_line_count(state: &TuiState, terminal_width: usize) -> usize {
     render_transcript(state, effective_width).len()
 }
 
-/// Calculates the available height for the transcript given the terminal height.
-/// Encapsulates layout logic so callers don't need to know about INPUT_HEIGHT/STATUS_HEIGHT.
-pub fn calculate_transcript_height(terminal_height: u16) -> usize {
-    terminal_height.saturating_sub(INPUT_HEIGHT + STATUS_HEIGHT) as usize
+/// Calculates the available height for the transcript given the terminal height and state.
+/// Encapsulates layout logic so callers don't need to know about input/status heights.
+pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height: u16) -> usize {
+    let input_height = calculate_input_height(state, terminal_height);
+    terminal_height.saturating_sub(input_height + STATUS_HEIGHT) as usize
 }

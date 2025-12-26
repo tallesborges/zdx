@@ -45,7 +45,7 @@ pub enum OverlayState {
 
 impl OverlayState {
     /// Returns true if any overlay is active.
-    #[allow(dead_code)] // Public API for tests and future use
+    #[cfg(test)]
     pub fn is_active(&self) -> bool {
         !matches!(self, OverlayState::None)
     }
@@ -99,7 +99,7 @@ impl OverlayState {
     }
 
     /// Returns the login state if active.
-    #[allow(dead_code)] // Public API for tests and future use
+    #[cfg(test)]
     pub fn as_login(&self) -> Option<&LoginState> {
         match self {
             OverlayState::Login(l) => Some(l),
@@ -108,7 +108,7 @@ impl OverlayState {
     }
 
     /// Returns the login state mutably if active.
-    #[allow(dead_code)] // Public API for tests and future use
+    #[cfg(test)]
     pub fn as_login_mut(&mut self) -> Option<&mut LoginState> {
         match self {
             OverlayState::Login(l) => Some(l),
@@ -204,7 +204,7 @@ impl ScrollState {
     }
 
     /// Returns true if there's content below the current viewport.
-    #[allow(dead_code)] // Public API for external use
+    #[cfg(test)]
     pub fn has_content_below(&self, viewport_height: usize) -> bool {
         let offset = self.get_offset(viewport_height);
         offset + viewport_height < self.cached_line_count
@@ -557,7 +557,7 @@ pub struct TuiState {
 
 impl TuiState {
     /// Creates a new TuiState.
-    #[allow(dead_code)] // Convenience constructor for future use
+    #[cfg(test)]
     pub fn new(
         config: Config,
         root: PathBuf,
