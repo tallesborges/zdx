@@ -129,7 +129,7 @@ pub async fn execute_prompt_streaming(
 /// CLI renderer that writes engine events to stdout/stderr.
 ///
 /// # Output contract
-/// - `AssistantDelta` and `AssistantFinal` → stdout
+/// - `AssistantDelta` and `AssistantComplete` → stdout
 /// - `ToolStarted`, `ToolFinished`, `Error`, etc. → stderr
 pub struct CliRenderer {
     stdout: Stdout,
@@ -170,7 +170,7 @@ impl CliRenderer {
                     self.needs_final_newline = true;
                 }
             }
-            EngineEvent::AssistantFinal { text } => {
+            EngineEvent::AssistantComplete { text } => {
                 // Final text is already streamed via deltas; track newline state
                 if !text.is_empty() {
                     self.needs_final_newline = true;
@@ -243,13 +243,20 @@ impl CliRenderer {
                     let _ = self.stderr.flush();
                 }
             }
-            EngineEvent::ThinkingFinal { .. } => {
+            EngineEvent::ThinkingComplete { .. } => {
                 // Thinking complete - ensure newline after thinking output
                 let _ = writeln!(self.stderr);
                 let _ = self.stderr.flush();
             }
             EngineEvent::UsageUpdate { .. } => {
                 // Usage tracking not displayed in exec mode
+            }
+            EngineEvent::TurnStarted => {
+                // Turn start not displayed in exec mode
+            }
+            EngineEvent::ToolOutputDelta { .. } => {
+                // TODO: Stream tool output in real-time
+                // For now, we only show final output in ToolFinished
             }
         }
     }

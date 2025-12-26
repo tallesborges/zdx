@@ -478,10 +478,10 @@ pub fn handle_engine_event(
             }
             vec![]
         }
-        EngineEvent::AssistantFinal { .. } => {
+        EngineEvent::AssistantComplete { .. } => {
             // Apply any pending delta before finalizing to ensure no content is lost.
             // This is critical because multiple events can be processed in one loop
-            // iteration, and TurnComplete may follow immediately after AssistantFinal.
+            // iteration, and TurnComplete may follow immediately after AssistantComplete.
             apply_pending_delta(state);
 
             if let EngineState::Streaming { cell_id, .. } = &state.engine_state
@@ -567,7 +567,7 @@ pub fn handle_engine_event(
             messages,
         } => {
             // Apply any pending delta before resetting engine state to ensure no
-            // content is lost. This handles edge cases where AssistantFinal wasn't
+            // content is lost. This handles edge cases where AssistantComplete wasn't
             // received or didn't have a chance to apply the delta.
             apply_pending_delta(state);
 
@@ -629,7 +629,7 @@ pub fn handle_engine_event(
             }
             vec![]
         }
-        EngineEvent::ThinkingFinal { signature, .. } => {
+        EngineEvent::ThinkingComplete { signature, .. } => {
             // Find the last streaming thinking cell and finalize it
             if let Some(cell) = state.transcript.iter_mut().rev().find(|c| {
                 matches!(
@@ -657,6 +657,15 @@ pub fn handle_engine_event(
                 *cache_read_input_tokens,
                 *cache_creation_input_tokens,
             );
+            vec![]
+        }
+        EngineEvent::TurnStarted => {
+            // Turn start - no UI updates needed yet
+            vec![]
+        }
+        EngineEvent::ToolOutputDelta { .. } => {
+            // TODO: Update tool cell with streaming output
+            // For now, we only show final output in ToolFinished
             vec![]
         }
     }
