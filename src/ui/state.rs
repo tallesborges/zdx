@@ -383,6 +383,12 @@ impl SessionUsage {
     /// Adds usage from a single API response.
     ///
     /// Updates both cumulative totals (for cost) and latest values (for context %).
+    ///
+    /// Note: Usage updates for a single API request come in two parts:
+    /// 1. MessageStart: input_tokens, cache_read, cache_write (output_tokens=0)
+    /// 2. MessageDelta: output_tokens (other fields=0)
+    ///
+    /// We accumulate the latest values to handle split updates correctly.
     pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
         // Cumulative totals for cost calculation
         self.input_tokens += input;
@@ -391,9 +397,16 @@ impl SessionUsage {
         self.cache_write_tokens += cache_write;
 
         // Latest request for context window calculation
-        // Total input = uncached + cache_read + cache_write (all count toward context)
-        self.latest_input = input + cache_read + cache_write;
-        self.latest_output = output;
+        // Accumulate (don't replace) to handle split updates from MessageStart + MessageDelta
+        if input > 0 || cache_read > 0 || cache_write > 0 {
+            // This is a new request (MessageStart) - reset and set input
+            self.latest_input = input + cache_read + cache_write;
+            self.latest_output = 0; // Will be updated by MessageDelta
+        }
+        if output > 0 {
+            // This is the output update (MessageDelta) - add to latest
+            self.latest_output += output;
+        }
     }
 
     /// Context tokens for the latest request (for context window percentage).
@@ -919,23 +932,36 @@ mod tests {
     #[test]
     fn test_session_usage_add() {
         let mut usage = SessionUsage::new();
-        usage.add(100, 50, 200, 25);
-        // Cumulative values
+        // Simulate split update: MessageStart first (input, cache, no output)
+        usage.add(100, 0, 200, 25);
+        // Cumulative values (partial)
         assert_eq!(usage.input_tokens, 100);
-        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.output_tokens, 0);
         assert_eq!(usage.cache_read_tokens, 200);
         assert_eq!(usage.cache_write_tokens, 25);
-        // Latest context = input + cache_read + cache_write + output = 100 + 200 + 25 + 50 = 375
+        // Latest context = input + cache_read + cache_write (no output yet)
+        assert_eq!(usage.context_tokens(), 325);
+
+        // Simulate MessageDelta (output only)
+        usage.add(0, 50, 0, 0);
+        // Cumulative values now complete
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        // Latest context now includes output: 325 + 50 = 375
         assert_eq!(usage.context_tokens(), 375);
 
-        // Add more (simulates second turn)
-        usage.add(50, 25, 100, 10);
+        // Add more (simulates second turn with split updates)
+        usage.add(50, 0, 100, 10); // MessageStart
         // Cumulative values update
         assert_eq!(usage.input_tokens, 150);
-        assert_eq!(usage.output_tokens, 75);
+        assert_eq!(usage.output_tokens, 50); // Not updated yet
         assert_eq!(usage.cache_read_tokens, 300);
         assert_eq!(usage.cache_write_tokens, 35);
-        // Latest context = only the second request: 50 + 100 + 10 + 25 = 185
+        // Latest context = only the second request input: 50 + 100 + 10 = 160 (no output yet)
+        assert_eq!(usage.context_tokens(), 160);
+
+        usage.add(0, 25, 0, 0); // MessageDelta
+        // Latest context now includes second request output: 160 + 25 = 185
         assert_eq!(usage.context_tokens(), 185);
     }
 
@@ -951,15 +977,27 @@ mod tests {
     fn test_session_usage_context_tokens_uses_latest() {
         let mut usage = SessionUsage::new();
 
-        // Turn 1: system=1000 (cache_write), user=100 (input), output=500
-        usage.add(100, 500, 0, 1000);
+        // Turn 1: system=1000 (cache_write), user=100 (input)
+        // Simulate MessageStart
+        usage.add(100, 0, 0, 1000);
+        // Context = 100 + 0 + 1000 (no output yet)
+        assert_eq!(usage.context_tokens(), 1100);
+
+        // Simulate MessageDelta with output=500
+        usage.add(0, 500, 0, 0);
         // Context = 100 + 0 + 1000 + 500 = 1600
         assert_eq!(usage.context_tokens(), 1600);
 
-        // Turn 2: system=1000 (cache_read), prev_conv=600 (input), new_user=100 (input), output=400
-        // API reports: input=700, cache_read=1000, cache_write=0, output=400
-        usage.add(700, 400, 1000, 0);
-        // Context = 700 + 1000 + 0 + 400 = 2100 (NOT cumulative 3600!)
+        // Turn 2: system=1000 (cache_read), prev_conv=600 (input), new_user=100 (input)
+        // API reports: input=700, cache_read=1000, cache_write=0
+        // Simulate MessageStart
+        usage.add(700, 0, 1000, 0);
+        // Context = 700 + 1000 + 0 (no output yet) = 1700
+        assert_eq!(usage.context_tokens(), 1700);
+
+        // Simulate MessageDelta with output=400
+        usage.add(0, 400, 0, 0);
+        // Context = 700 + 1000 + 0 + 400 = 2100 (NOT cumulative!)
         assert_eq!(usage.context_tokens(), 2100);
 
         // But cumulative total is still correct for cost
@@ -990,9 +1028,9 @@ mod tests {
     fn test_session_usage_calculate_cost() {
         use crate::models::ModelPricing;
         let pricing = ModelPricing {
-            input: 3.0,       // $3 per million
-            output: 15.0,     // $15 per million
-            cache_read: 0.3,  // $0.30 per million
+            input: 3.0,        // $3 per million
+            output: 15.0,      // $15 per million
+            cache_read: 0.3,   // $0.30 per million
             cache_write: 3.75, // $3.75 per million
         };
 
