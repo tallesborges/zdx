@@ -118,7 +118,7 @@ Engine emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 a
 
 ### Required engine event types (Shipped)
 
-- `AssistantDelta { text }`, `AssistantFinal { text }`
+- `AssistantDelta { text }`, `AssistantComplete { text }`
 - `ToolRequested { id, name, input }`, `ToolStarted { id, name }`, `ToolFinished { id, result }`
 - `Error { kind, message, details? }`
 - `Interrupted`
