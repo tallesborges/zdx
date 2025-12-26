@@ -63,6 +63,34 @@ struct ProviderEntry {
     models: Option<BTreeMap<String, ModelEntry>>,
 }
 
+/// Cost information from the API (prices per million tokens).
+#[derive(Debug, Deserialize, Default, Clone)]
+struct CostEntry {
+    /// Input tokens cost per million.
+    #[serde(default)]
+    input: f64,
+    /// Output tokens cost per million.
+    #[serde(default)]
+    output: f64,
+    /// Cache read cost per million tokens.
+    #[serde(default)]
+    cache_read: f64,
+    /// Cache write cost per million tokens.
+    #[serde(default)]
+    cache_write: f64,
+}
+
+/// Limit information from the API.
+#[derive(Debug, Deserialize, Default, Clone)]
+struct LimitEntry {
+    /// Context window size in tokens.
+    #[serde(default)]
+    context: u64,
+    /// Maximum output tokens.
+    #[serde(default)]
+    output: u64,
+}
+
 /// A model entry from the API.
 /// We only parse the fields we need for the picker.
 #[derive(Debug, Deserialize)]
@@ -80,10 +108,40 @@ struct ModelEntry {
     /// Release date (YYYY-MM-DD format).
     #[serde(default)]
     release_date: Option<String>,
+    /// Pricing information.
+    #[serde(default)]
+    cost: CostEntry,
+    /// Token limits.
+    #[serde(default)]
+    limit: LimitEntry,
+}
+
+/// Pricing information for a model (prices per million tokens).
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+struct ModelPricing {
+    /// Input tokens cost per million.
+    input: f64,
+    /// Output tokens cost per million.
+    output: f64,
+    /// Cache read cost per million tokens.
+    cache_read: f64,
+    /// Cache write cost per million tokens.
+    cache_write: f64,
+}
+
+impl From<CostEntry> for ModelPricing {
+    fn from(cost: CostEntry) -> Self {
+        Self {
+            input: cost.input,
+            output: cost.output,
+            cache_read: cost.cache_read,
+            cache_write: cost.cache_write,
+        }
+    }
 }
 
 /// A processed model option for code generation.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
 struct ModelOption {
     /// Model family for sorting/grouping (e.g., "claude-sonnet").
     family: String,
@@ -91,6 +149,12 @@ struct ModelOption {
     display_name: String,
     /// Model ID (sent to API).
     id: String,
+    /// Pricing information.
+    pricing: ModelPricing,
+    /// Context window size in tokens.
+    context_limit: u64,
+    /// Maximum output tokens.
+    output_limit: u64,
 }
 
 #[tokio::main]
@@ -199,12 +263,15 @@ async fn fetch_and_filter_models(url: &str, provider: &str) -> Result<Vec<ModelO
                 family: family.to_string(),
                 display_name: best.name.clone(),
                 id: best.id.clone(),
+                pricing: best.cost.clone().into(),
+                context_limit: best.limit.context,
+                output_limit: best.limit.output,
             }
         })
         .collect();
 
     // Sort by family for deterministic output
-    models.sort();
+    models.sort_by(|a, b| a.family.cmp(&b.family));
 
     Ok(models)
 }
@@ -221,10 +288,25 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
     output.push_str("// Filter: provider=anthropic, tool_call=true, one per family\n");
     output.push('\n');
 
+    // Pricing struct definition
+    output.push_str("/// Pricing information for a model (prices per million tokens).\n");
+    output.push_str("#[derive(Debug, Clone, Copy)]\n");
+    output.push_str("pub struct ModelPricing {\n");
+    output.push_str("    /// Input tokens cost per million\n");
+    output.push_str("    pub input: f64,\n");
+    output.push_str("    /// Output tokens cost per million\n");
+    output.push_str("    pub output: f64,\n");
+    output.push_str("    /// Cache read cost per million tokens\n");
+    output.push_str("    pub cache_read: f64,\n");
+    output.push_str("    /// Cache write cost per million tokens\n");
+    output.push_str("    pub cache_write: f64,\n");
+    output.push_str("}\n");
+    output.push('\n');
+
     // Model struct definition
     output.push_str("/// Definition of an available model.\n");
     output.push_str("#[derive(Debug, Clone)]\n");
-    output.push_str("#[allow(dead_code)] // family is reserved for future use\n");
+    output.push_str("#[allow(dead_code)] // Some fields reserved for future use\n");
     output.push_str("pub struct ModelOption {\n");
     output.push_str("    /// Model ID (sent to API)\n");
     output.push_str("    pub id: &'static str,\n");
@@ -232,6 +314,12 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
     output.push_str("    pub display_name: &'static str,\n");
     output.push_str("    /// Model family (e.g., \"claude-sonnet\")\n");
     output.push_str("    pub family: &'static str,\n");
+    output.push_str("    /// Pricing information\n");
+    output.push_str("    pub pricing: ModelPricing,\n");
+    output.push_str("    /// Context window size in tokens\n");
+    output.push_str("    pub context_limit: u64,\n");
+    output.push_str("    /// Maximum output tokens\n");
+    output.push_str("    pub output_limit: u64,\n");
     output.push_str("}\n");
     output.push('\n');
 
@@ -247,12 +335,31 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
             model.display_name
         ));
         output.push_str(&format!("        family: {:?},\n", model.family));
+        output.push_str("        pricing: ModelPricing {\n");
+        output.push_str(&format!("            input: {},\n", format_f64(model.pricing.input)));
+        output.push_str(&format!("            output: {},\n", format_f64(model.pricing.output)));
+        output.push_str(&format!("            cache_read: {},\n", format_f64(model.pricing.cache_read)));
+        output.push_str(&format!("            cache_write: {},\n", format_f64(model.pricing.cache_write)));
+        output.push_str("        },\n");
+        output.push_str(&format!("        context_limit: {},\n", model.context_limit));
+        output.push_str(&format!("        output_limit: {},\n", model.output_limit));
         output.push_str("    },\n");
     }
 
     output.push_str("];\n");
 
     output
+}
+
+/// Formats an f64 for Rust code generation.
+/// Ensures the value is formatted as a float literal (with decimal point).
+fn format_f64(value: f64) -> String {
+    let s = value.to_string();
+    if s.contains('.') {
+        s
+    } else {
+        format!("{}.0", s)
+    }
 }
 
 /// Writes the generated code to the output file.
@@ -284,6 +391,15 @@ fn check_up_to_date(path: &PathBuf, expected: &str) -> Result<()> {
 mod tests {
     use super::*;
 
+    fn test_pricing() -> ModelPricing {
+        ModelPricing {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        }
+    }
+
     #[test]
     fn test_generate_rust_code_deterministic() {
         let models = vec![
@@ -291,11 +407,17 @@ mod tests {
                 family: "claude-sonnet".to_string(),
                 id: "claude-sonnet-4-5".to_string(),
                 display_name: "Claude Sonnet 4.5 (latest)".to_string(),
+                pricing: test_pricing(),
+                context_limit: 200000,
+                output_limit: 64000,
             },
             ModelOption {
                 family: "claude-haiku".to_string(),
                 id: "claude-haiku-4-5".to_string(),
                 display_name: "Claude Haiku 4.5 (latest)".to_string(),
+                pricing: test_pricing(),
+                context_limit: 200000,
+                output_limit: 64000,
             },
         ];
 
@@ -306,24 +428,32 @@ mod tests {
         assert!(output1.contains("claude-sonnet-4-5"));
         assert!(output1.contains("Claude Sonnet 4.5 (latest)"));
         assert!(output1.contains("claude-sonnet"));
+        assert!(output1.contains("context_limit: 200000"));
+        assert!(output1.contains("output_limit: 64000"));
     }
 
     #[test]
     fn test_model_option_sorting() {
-        let mut models = [
+        let mut models = vec![
             ModelOption {
                 family: "z-family".to_string(),
                 id: "z-model".to_string(),
                 display_name: "Zeta Model".to_string(),
+                pricing: test_pricing(),
+                context_limit: 100000,
+                output_limit: 32000,
             },
             ModelOption {
                 family: "a-family".to_string(),
                 id: "a-model".to_string(),
                 display_name: "Alpha Model".to_string(),
+                pricing: test_pricing(),
+                context_limit: 100000,
+                output_limit: 32000,
             },
         ];
 
-        models.sort();
+        models.sort_by(|a, b| a.family.cmp(&b.family));
 
         // Should sort by family first
         assert_eq!(models[0].family, "a-family");
@@ -331,16 +461,36 @@ mod tests {
     }
 
     #[test]
-    fn test_generate_includes_family_field() {
+    fn test_generate_includes_pricing_fields() {
         let models = vec![ModelOption {
             family: "claude-opus".to_string(),
             id: "claude-opus-4-5".to_string(),
             display_name: "Claude Opus 4.5 (latest)".to_string(),
+            pricing: ModelPricing {
+                input: 15.0,
+                output: 75.0,
+                cache_read: 1.5,
+                cache_write: 18.75,
+            },
+            context_limit: 200000,
+            output_limit: 64000,
         }];
 
         let output = generate_rust_code(&models);
 
-        assert!(output.contains("pub family: &'static str"));
-        assert!(output.contains("family: \"claude-opus\""));
+        assert!(output.contains("pub struct ModelPricing"));
+        assert!(output.contains("input: 15.0"));
+        assert!(output.contains("output: 75.0"));
+        assert!(output.contains("cache_read: 1.5"));
+        assert!(output.contains("cache_write: 18.75"));
+    }
+
+    #[test]
+    fn test_format_f64_ensures_decimal() {
+        assert_eq!(format_f64(3.0), "3.0");
+        assert_eq!(format_f64(3.5), "3.5");
+        assert_eq!(format_f64(0.3), "0.3");
+        // Integer-like values should still have .0
+        assert_eq!(format_f64(15.0), "15.0");
     }
 }

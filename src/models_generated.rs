@@ -4,9 +4,22 @@
 // Source: https://models.dev/api.json
 // Filter: provider=anthropic, tool_call=true, one per family
 
+/// Pricing information for a model (prices per million tokens).
+#[derive(Debug, Clone, Copy)]
+pub struct ModelPricing {
+    /// Input tokens cost per million
+    pub input: f64,
+    /// Output tokens cost per million
+    pub output: f64,
+    /// Cache read cost per million tokens
+    pub cache_read: f64,
+    /// Cache write cost per million tokens
+    pub cache_write: f64,
+}
+
 /// Definition of an available model.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // family is reserved for future use
+#[allow(dead_code)] // Some fields reserved for future use
 pub struct ModelOption {
     /// Model ID (sent to API)
     pub id: &'static str,
@@ -14,6 +27,12 @@ pub struct ModelOption {
     pub display_name: &'static str,
     /// Model family (e.g., "claude-sonnet")
     pub family: &'static str,
+    /// Pricing information
+    pub pricing: ModelPricing,
+    /// Context window size in tokens
+    pub context_limit: u64,
+    /// Maximum output tokens
+    pub output_limit: u64,
 }
 
 /// Available models for the picker (one per family).
@@ -22,15 +41,39 @@ pub const AVAILABLE_MODELS: &[ModelOption] = &[
         id: "claude-haiku-4-5",
         display_name: "Claude Haiku 4.5 (latest)",
         family: "claude-haiku",
+        pricing: ModelPricing {
+            input: 1.0,
+            output: 5.0,
+            cache_read: 0.1,
+            cache_write: 1.25,
+        },
+        context_limit: 200000,
+        output_limit: 64000,
     },
     ModelOption {
         id: "claude-opus-4-5",
         display_name: "Claude Opus 4.5 (latest)",
         family: "claude-opus",
+        pricing: ModelPricing {
+            input: 5.0,
+            output: 25.0,
+            cache_read: 0.5,
+            cache_write: 6.25,
+        },
+        context_limit: 200000,
+        output_limit: 64000,
     },
     ModelOption {
         id: "claude-sonnet-4-5",
         display_name: "Claude Sonnet 4.5 (latest)",
         family: "claude-sonnet",
+        pricing: ModelPricing {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        },
+        context_limit: 200000,
+        output_limit: 64000,
     },
 ];

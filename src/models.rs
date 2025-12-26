@@ -7,6 +7,12 @@
 #[path = "models_generated.rs"]
 mod generated;
 
-// ModelOption is re-exported for future use (e.g., filtering, grouping)
-#[allow(unused_imports)]
-pub use generated::{AVAILABLE_MODELS, ModelOption};
+// Re-export types for use throughout the application
+pub use generated::{AVAILABLE_MODELS, ModelOption, ModelPricing};
+
+impl ModelOption {
+    /// Finds a model by its ID.
+    pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
+        AVAILABLE_MODELS.iter().find(|m| m.id == id)
+    }
+}

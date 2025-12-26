@@ -12,9 +12,10 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
+use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+use crate::models::ModelOption;
 use crate::ui::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
 };
@@ -93,9 +94,9 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         .split(area);
 
     // Transcript area with horizontal margins
-    let transcript = Paragraph::new(visible_lines)
-        .wrap(Wrap { trim: false })
-        .block(Block::default().borders(Borders::NONE));
+    // NOTE: No .wrap() here - content is already pre-wrapped by render_transcript()
+    // Adding wrap would cause double-wrapping and visual artifacts
+    let transcript = Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
     let transcript_area = Rect {
         x: chunks[0].x + TRANSCRIPT_MARGIN,
         y: chunks[0].y,
@@ -160,30 +161,12 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     title_spans.push(Span::styled(" ", base_style));
 
-    // Build top-right title: token usage
-    let usage = &state.usage;
-    let usage_style = Style::default().fg(Color::DarkGray);
-    let usage_highlight = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
+    // Build top-right title: AMP-style usage display
+    // Format: "{percentage}% of {context} · ${cost} (cached: ${savings})"
+    let usage_spans = build_usage_display(&state.usage, &state.config.model);
 
-    let usage_spans = vec![
-        Span::styled("↑", usage_highlight),
-        Span::styled(SessionUsage::format_tokens(usage.input_tokens), usage_style),
-        Span::styled(" ↓", usage_highlight),
-        Span::styled(
-            SessionUsage::format_tokens(usage.output_tokens),
-            usage_style,
-        ),
-        Span::styled(" R", usage_highlight),
-        Span::styled(
-            SessionUsage::format_tokens(usage.cache_read_tokens),
-            usage_style,
-        ),
-        Span::styled(" W", usage_highlight),
-        Span::styled(
-            format!("{} ", SessionUsage::format_tokens(usage.cache_write_tokens)),
-            usage_style,
-        ),
-    ];
+    // Build bottom-left title: detailed token breakdown
+    let token_spans = build_token_breakdown(&state.usage);
 
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {
@@ -199,6 +182,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         .border_style(Style::default().fg(Color::DarkGray))
         .title(Line::from(title_spans))
         .title_top(Line::from(usage_spans).alignment(Alignment::Right))
+        .title_bottom(Line::from(token_spans).alignment(Alignment::Left))
         .title_bottom(
             Line::from(Span::styled(
                 bottom_title,
@@ -339,6 +323,94 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     let status = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
     frame.render_widget(status, area);
+}
+
+/// Builds the AMP-style usage display spans.
+///
+/// Format: "{percentage}% of {context} · ${cost} (cached)"
+/// Example: "11% of 200k · $0.008 (cached)"
+fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static>> {
+    let usage_style = Style::default().fg(Color::DarkGray);
+    let percentage_style = Style::default().fg(Color::Cyan);
+    let cost_style = Style::default().fg(Color::Green);
+    let cached_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::DIM);
+
+    // Try to find the model to get pricing and context limit
+    let model = ModelOption::find_by_id(model_id);
+
+    match model {
+        Some(m) => {
+            let percentage = usage.context_percentage(m.context_limit);
+            let cost = usage.calculate_cost(&m.pricing);
+            let savings = usage.cache_savings(&m.pricing);
+
+            let mut spans = vec![
+                Span::styled(format!("{:.0}%", percentage), percentage_style),
+                Span::styled(
+                    format!(" of {} · ", SessionUsage::format_context_limit(m.context_limit)),
+                    usage_style,
+                ),
+                Span::styled(SessionUsage::format_cost(cost), cost_style),
+            ];
+
+            // Show cache savings indicator if there are cache hits
+            if savings > 0.001 {
+                spans.push(Span::styled(
+                    format!(" (saved {})", SessionUsage::format_cost(savings)),
+                    cached_style,
+                ));
+            } else if usage.cache_read_tokens > 0 {
+                spans.push(Span::styled(" (cached)", cached_style));
+            }
+
+            spans.push(Span::styled(" ", usage_style));
+            spans
+        }
+        None => {
+            // Fallback: show raw token counts if model not found
+            let total = usage.total_tokens();
+            vec![
+                Span::styled(SessionUsage::format_tokens(total), usage_style),
+                Span::styled(" tokens ", usage_style),
+            ]
+        }
+    }
+}
+
+/// Builds the detailed token breakdown for bottom-left display.
+///
+/// Format: "↑{input} ↓{output} R{cache_read} W{cache_write}"
+fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
+    let label_style = Style::default().fg(Color::DarkGray);
+    let input_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
+    let output_style = Style::default()
+        .fg(Color::Yellow)
+        .add_modifier(Modifier::DIM);
+    let cache_read_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::DIM);
+    let cache_write_style = Style::default()
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::DIM);
+
+    vec![
+        Span::styled(" ↑", input_style),
+        Span::styled(SessionUsage::format_tokens(usage.input_tokens), label_style),
+        Span::styled(" ↓", output_style),
+        Span::styled(SessionUsage::format_tokens(usage.output_tokens), label_style),
+        Span::styled(" R", cache_read_style),
+        Span::styled(
+            SessionUsage::format_tokens(usage.cache_read_tokens),
+            label_style,
+        ),
+        Span::styled(" W", cache_write_style),
+        Span::styled(
+            format!("{} ", SessionUsage::format_tokens(usage.cache_write_tokens)),
+            label_style,
+        ),
+    ]
 }
 
 /// Renders the transcript into ratatui Lines.
