@@ -2,6 +2,8 @@
 
 An agentic TUI powered by Claude for interactive coding assistance.
 
+![zdx demo](docs/assets/demo.gif)
+
 ## Why this exists
 
 This is a **personal learning project**, built for fun and curiosity. The goal is to explore how agentic coding tools work by building one from scratch.
