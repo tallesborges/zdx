@@ -1,6 +1,12 @@
 # ZDX
 
-An agentic CLI tool powered by Claude for interactive coding assistance.
+An agentic TUI powered by Claude for interactive coding assistance.
+
+## Why this exists
+
+This is a **personal learning project**, built for fun and curiosity. The goal is to explore how agentic coding tools work by building one from scratch.
+
+It's not designed for public or general usage — it's focused on my own needs and what I think makes a good coding assistant. If you find it useful, great! But expect opinionated choices and features that match my workflow rather than broad compatibility.
 
 ## Quickstart
 
