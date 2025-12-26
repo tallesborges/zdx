@@ -1,8 +1,7 @@
 # ZDX Specification
 
 **Product:** ZDX (TUI-first terminal assistant for developers)  
-**Status:** Source of truth for *vision + user-visible contracts*. ADRs explain “why”; plans explain “how”.  
-**Notation:** **Shipped** = present in this repo today. **Target (TUI2)** = intended full-screen TUI behavior.
+**Status:** Source of truth for *vision + user-visible contracts*. ADRs explain "why"; plans explain "how".
 
 ---
 
@@ -18,7 +17,7 @@ The TUI is the product. A CLI mode exists to support automation and scripting.
 
 Terminal AI tools often break the parts that matter daily:
 - flicker/jank from naive redraw
-- resize bugs and “lost” history
+- resize bugs and "lost" history
 - mixed stdout/stderr corrupting the screen
 - weak transcript UX (scroll/select/copy)
 - no durable history you can trust
@@ -47,7 +46,6 @@ ZDX solves this with a boring, reliable core:
 
 ### Current focus (non-contract)
 
-- TUI2 baseline: alt-screen + raw mode + clean restore
 - Transcript cells + width-agnostic rendering + resize-safe reflow
 - Smooth streaming (throttled redraw, no flicker)
 - Scroll model: follow-latest vs anchored
@@ -71,7 +69,7 @@ ZDX solves this with a boring, reliable core:
 - **Own the viewport:** redraw from in-memory state; the terminal is a render target, not a data store.
 - **Engine/UI separation:** engine emits events; renderers do terminal I/O.
 - **KISS/YAGNI:** ship the smallest daily-driver value; refactor only after usage proves shape.
-- **YOLO default:** prioritize speed/flow on the user’s machine; guardrails are opt-in and low friction.
+- **YOLO default:** prioritize speed/flow on the user's machine; guardrails are opt-in and low friction.
 - **User journey drives order:** build in the order the user experiences it: start → input → submit → see output → stream → scroll/navigate → follow-up interactions → polish.
 - **Ship-first:** prioritize a daily-usable MVP early; refactor later (YAGNI).
 - **Demoable slices:** every slice must be runnable and include ✅ Demo criteria.
@@ -104,9 +102,8 @@ Exit codes (v0.1): `0` success, `1` runtime error, `2` CLI usage error, `130` in
 
 ### `zdx` (interactive)
 
-- **Shipped (v0.1):** transcript streams to stdout; editor/tool status use stderr.
-- **Target (TUI2):** full-screen alt-screen TUI; **does not print transcript to stdout while active**.
-  - Any diagnostics should be shown in the UI; optional file logging is acceptable.
+- Full-screen alt-screen TUI; **does not print transcript to stdout while active**.
+- Any diagnostics are shown in the UI; optional file logging is acceptable.
 
 ---
 
@@ -125,7 +122,7 @@ Engine emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 a
 
 ---
 
-## 9) Transcript model (Target: TUI2)
+## 9) Transcript model
 
 The transcript is the source of truth and is **width-agnostic**:
 
@@ -141,16 +138,16 @@ Each cell is a logical unit: user block, assistant block (streaming/final), tool
 - Wrapping happens at display time for the current width.
 - Per draw: flatten rendered lines → apply scroll → render visible slice → apply selection overlay.
 
-### Scroll / selection / copy (Target: TUI2)
+### Scroll / selection / copy
 
 - Scrolling operates on flattened visual lines (not terminal scrollback).
 - Two scroll states: `FollowLatest` and `Anchored`.
 - Selection is defined over the flattened transcript (line/col), excluding any left gutter/prefix.
 - Copy reconstructs text using the same wrapping rules (including code block indentation and emoji/wide glyph widths).
 
-### Streaming (Target: TUI2)
+### Streaming
 
-- Store raw markdown (append-only) + a logical “commit cursor”.
+- Store raw markdown (append-only) + a logical "commit cursor".
 - Render by parsing markdown → styling spans → wrapping at current width → revealing committed prefix.
 - Throttle redraw during streaming; avoid flicker and whole-transcript rewrap per frame.
 
@@ -224,7 +221,7 @@ Tests protect contracts, not internals.
 
 - Tool loop sequencing (`tool_use` ↔ `tool_result`) and offline provider fixtures
 - Session JSONL read/write resilience (incl. interrupts)
-- Target (TUI2): wrapping + resize reflow, scroll model, selection/copy fidelity, streaming invariants
+- Wrapping + resize reflow, scroll model, selection/copy fidelity, streaming invariants
 
 ---
 
