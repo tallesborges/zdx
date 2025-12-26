@@ -372,10 +372,64 @@ impl SessionUsage {
         self.cache_write_tokens += cache_write;
     }
 
-    /// Total tokens (input + output + cache).
-    #[allow(dead_code)] // API for future use
-    pub fn total(&self) -> u64 {
+    /// Total tokens for context window calculation.
+    ///
+    /// Per Anthropic's official documentation, the context window includes
+    /// BOTH input and output tokens:
+    /// > "The 'context window' refers to the entirety of the amount of text
+    /// > a language model can look back on and reference when generating
+    /// > new text plus the new text it generates."
+    ///
+    /// > "if the sum of prompt tokens and output tokens exceeds the model's
+    /// > context window, the system will return a validation error"
+    ///
+    /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
+    ///
+    /// Formula: input_tokens + output_tokens + cache_read_tokens + cache_write_tokens
+    pub fn context_tokens(&self) -> u64 {
         self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
+    }
+
+    /// Alias for context_tokens() for clarity.
+    pub fn total_tokens(&self) -> u64 {
+        self.context_tokens()
+    }
+
+    /// Calculates the percentage of context window used.
+    ///
+    /// Uses all tokens (input + output + cache) per Anthropic's documentation.
+    pub fn context_percentage(&self, context_limit: u64) -> f64 {
+        if context_limit == 0 {
+            return 0.0;
+        }
+        (self.context_tokens() as f64 / context_limit as f64) * 100.0
+    }
+
+    /// Calculates the total cost for this session in USD.
+    ///
+    /// Uses the pricing from the model (prices are per million tokens).
+    pub fn calculate_cost(&self, pricing: &crate::models::ModelPricing) -> f64 {
+        let million = 1_000_000.0;
+
+        let input_cost = (self.input_tokens as f64 / million) * pricing.input;
+        let output_cost = (self.output_tokens as f64 / million) * pricing.output;
+        let cache_read_cost = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
+        let cache_write_cost = (self.cache_write_tokens as f64 / million) * pricing.cache_write;
+
+        input_cost + output_cost + cache_read_cost + cache_write_cost
+    }
+
+    /// Calculates the cost savings from cache hits.
+    ///
+    /// Returns the amount saved by using cache_read instead of regular input pricing.
+    pub fn cache_savings(&self, pricing: &crate::models::ModelPricing) -> f64 {
+        let million = 1_000_000.0;
+
+        // Savings = what we would have paid at input price - what we actually paid at cache_read price
+        let would_have_paid = (self.cache_read_tokens as f64 / million) * pricing.input;
+        let actually_paid = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
+
+        would_have_paid - actually_paid
     }
 
     /// Formats token count for display (e.g., "12.5k" or "1.2M").
@@ -386,6 +440,28 @@ impl SessionUsage {
             format!("{:.1}k", count as f64 / 1_000.0)
         } else {
             count.to_string()
+        }
+    }
+
+    /// Formats a context limit for display (e.g., "200k").
+    pub fn format_context_limit(limit: u64) -> String {
+        if limit >= 1_000_000 {
+            format!("{:.0}M", limit as f64 / 1_000_000.0)
+        } else if limit >= 1_000 {
+            format!("{:.0}k", limit as f64 / 1_000.0)
+        } else {
+            limit.to_string()
+        }
+    }
+
+    /// Formats a cost for display (e.g., "$0.008").
+    pub fn format_cost(cost: f64) -> String {
+        if cost < 0.001 {
+            format!("${:.4}", cost)
+        } else if cost < 0.01 {
+            format!("${:.3}", cost)
+        } else {
+            format!("${:.2}", cost)
         }
     }
 }
@@ -801,5 +877,127 @@ mod tests {
 
         let login = OverlayState::Login(LoginState::Exchanging);
         assert!(login.as_login().is_some());
+    }
+
+    // ========================================================================
+    // SessionUsage Tests
+    // ========================================================================
+
+    #[test]
+    fn test_session_usage_default() {
+        let usage = SessionUsage::new();
+        assert_eq!(usage.input_tokens, 0);
+        assert_eq!(usage.output_tokens, 0);
+        assert_eq!(usage.cache_read_tokens, 0);
+        assert_eq!(usage.cache_write_tokens, 0);
+    }
+
+    #[test]
+    fn test_session_usage_add() {
+        let mut usage = SessionUsage::new();
+        usage.add(100, 50, 200, 25);
+        assert_eq!(usage.input_tokens, 100);
+        assert_eq!(usage.output_tokens, 50);
+        assert_eq!(usage.cache_read_tokens, 200);
+        assert_eq!(usage.cache_write_tokens, 25);
+
+        // Add more
+        usage.add(50, 25, 100, 10);
+        assert_eq!(usage.input_tokens, 150);
+        assert_eq!(usage.output_tokens, 75);
+        assert_eq!(usage.cache_read_tokens, 300);
+        assert_eq!(usage.cache_write_tokens, 35);
+    }
+
+    #[test]
+    fn test_session_usage_total_tokens() {
+        let mut usage = SessionUsage::new();
+        usage.add(1000, 500, 2000, 100);
+        // total = input + output + cache_read + cache_write
+        assert_eq!(usage.total_tokens(), 3600);
+    }
+
+    #[test]
+    fn test_session_usage_context_tokens() {
+        let mut usage = SessionUsage::new();
+        usage.add(1000, 500, 2000, 100);
+        // context_tokens = input + output + cache_read + cache_write (all tokens count)
+        assert_eq!(usage.context_tokens(), 3600);
+    }
+
+    #[test]
+    fn test_session_usage_context_percentage() {
+        let mut usage = SessionUsage::new();
+        usage.add(10000, 5000, 4000, 1000);
+        // context_tokens = 10000 + 5000 + 4000 + 1000 = 20000
+        // context_limit = 200000 -> 10%
+        let pct = usage.context_percentage(200000);
+        assert!((pct - 10.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_session_usage_context_percentage_zero_limit() {
+        let usage = SessionUsage::new();
+        assert_eq!(usage.context_percentage(0), 0.0);
+    }
+
+    #[test]
+    fn test_session_usage_calculate_cost() {
+        use crate::models::ModelPricing;
+        let pricing = ModelPricing {
+            input: 3.0,       // $3 per million
+            output: 15.0,     // $15 per million
+            cache_read: 0.3,  // $0.30 per million
+            cache_write: 3.75, // $3.75 per million
+        };
+
+        let mut usage = SessionUsage::new();
+        // 1 million tokens of each type
+        usage.add(1_000_000, 1_000_000, 1_000_000, 1_000_000);
+
+        let cost = usage.calculate_cost(&pricing);
+        // Expected: 3 + 15 + 0.3 + 3.75 = 22.05
+        assert!((cost - 22.05).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_session_usage_cache_savings() {
+        use crate::models::ModelPricing;
+        let pricing = ModelPricing {
+            input: 3.0,
+            output: 15.0,
+            cache_read: 0.3,
+            cache_write: 3.75,
+        };
+
+        let mut usage = SessionUsage::new();
+        // 1 million cache_read tokens
+        usage.add(0, 0, 1_000_000, 0);
+
+        let savings = usage.cache_savings(&pricing);
+        // Savings = (1M * $3/M) - (1M * $0.3/M) = 3.0 - 0.3 = 2.7
+        assert!((savings - 2.7).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_session_usage_format_tokens() {
+        assert_eq!(SessionUsage::format_tokens(500), "500");
+        assert_eq!(SessionUsage::format_tokens(1500), "1.5k");
+        assert_eq!(SessionUsage::format_tokens(1_500_000), "1.5M");
+    }
+
+    #[test]
+    fn test_session_usage_format_context_limit() {
+        assert_eq!(SessionUsage::format_context_limit(500), "500");
+        assert_eq!(SessionUsage::format_context_limit(200_000), "200k");
+        assert_eq!(SessionUsage::format_context_limit(1_000_000), "1M");
+    }
+
+    #[test]
+    fn test_session_usage_format_cost() {
+        assert_eq!(SessionUsage::format_cost(0.0001), "$0.0001");
+        assert_eq!(SessionUsage::format_cost(0.008), "$0.008");
+        assert_eq!(SessionUsage::format_cost(0.15), "$0.15");
+        assert_eq!(SessionUsage::format_cost(1.50), "$1.50");
     }
 }
