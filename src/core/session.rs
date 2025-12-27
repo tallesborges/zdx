@@ -203,6 +203,11 @@ pub struct Session {
 }
 
 impl Session {
+    /// Returns the path to the session file.
+    pub fn path(&self) -> &PathBuf {
+        &self.path
+    }
+
     /// Guard to prevent session creation in tests without proper isolation.
     ///
     /// # Panics
