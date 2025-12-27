@@ -58,6 +58,12 @@ impl WrapCache {
             .borrow_mut()
             .insert((cell_id, width, content_len), lines);
     }
+
+    /// Returns true if the cache is empty (test-only).
+    #[cfg(test)]
+    pub fn is_empty(&self) -> bool {
+        self.cache.borrow().is_empty()
+    }
 }
 
 /// Global counter for generating unique cell IDs.
