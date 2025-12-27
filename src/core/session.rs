@@ -158,7 +158,8 @@ impl SessionEvent {
         use crate::core::events::AgentEvent;
 
         match event {
-            AgentEvent::ToolRequested { id, name, input } => {
+            // ToolInputReady has the complete input (ToolRequested is emitted early with empty input)
+            AgentEvent::ToolInputReady { id, name, input } => {
                 Some(Self::tool_use(id.clone(), name.clone(), input.clone()))
             }
             AgentEvent::ToolFinished { id, result } => {
@@ -173,6 +174,7 @@ impl SessionEvent {
             // - AssistantDelta: streamed chunks, not final
             // - AssistantComplete: handled by caller with full context
             // - ThinkingDelta: streamed chunks, not final
+            // - ToolRequested: early notification with empty input (ToolInputReady has full input)
             // - ToolStarted: UI-only, not persisted
             // - Error: not persisted (may be in future)
             _ => None,
