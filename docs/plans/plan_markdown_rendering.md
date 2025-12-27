@@ -96,7 +96,7 @@ Daily-usable markdown viewing in TUI: headings stand out, code blocks are readab
 # User journey
 1. User sends prompt
 2. Assistant streams response with markdown syntax (`# Heading`, `` `code` ``, `**bold**`)
-3. Engine emits AssistantDelta events with raw markdown
+3. Agent emits AssistantDelta events with raw markdown
 4. TUI accumulates markdown in transcript cell
 5. Renderer parses markdown → styled spans → wraps at current width → displays
 6. User sees formatted output (headings bold, code blocks preserved, lists indented)

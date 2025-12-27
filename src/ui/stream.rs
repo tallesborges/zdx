@@ -1,7 +1,7 @@
 //! Streamed stdout/stderr rendering and exec wrapper.
 //!
 //! This module provides:
-//! - `CliRenderer` + `spawn_renderer_task` for engine events
+//! - `CliRenderer` + `spawn_renderer_task` for agent events
 //! - `execute_prompt_streaming` for single-shot exec mode
 
 use std::collections::HashMap;
@@ -13,8 +13,8 @@ use anyhow::Result;
 use tokio::task::JoinHandle;
 
 use crate::config::Config;
-use crate::core::engine::EngineOptions;
-use crate::core::events::{EngineEvent, ToolOutput};
+use crate::core::agent::AgentOptions;
+use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::session::{self, Session, SessionEvent};
 use crate::providers::anthropic::ChatMessage;
 
@@ -25,9 +25,9 @@ pub struct ExecOptions {
     pub root: PathBuf,
 }
 
-impl From<&ExecOptions> for EngineOptions {
+impl From<&ExecOptions> for AgentOptions {
     fn from(opts: &ExecOptions) -> Self {
-        EngineOptions {
+        AgentOptions {
             root: opts.root.clone(),
         }
     }
@@ -40,7 +40,7 @@ impl From<&ExecOptions> for EngineOptions {
 /// Implements tool loop - if the model requests tools, executes them and continues.
 /// Returns the complete response text.
 ///
-/// This is a backward-compatible wrapper that uses the engine internally.
+/// This is a backward-compatible wrapper that uses the agent internally.
 pub async fn execute_prompt_streaming(
     prompt: &str,
     config: &Config,
@@ -77,34 +77,34 @@ pub async fn execute_prompt_streaming(
     }
 
     let messages = vec![ChatMessage::user(prompt)];
-    let engine_opts = EngineOptions::from(options);
+    let agent_opts = AgentOptions::from(options);
 
     // Create channels for fan-out
-    let (engine_tx, engine_rx) = crate::core::engine::create_event_channel();
-    let (render_tx, render_rx) = crate::core::engine::create_event_channel();
+    let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
+    let (render_tx, render_rx) = crate::core::agent::create_event_channel();
 
     // Spawn renderer task
     let renderer_handle = spawn_renderer_task(render_rx);
 
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {
-        let (persist_tx, persist_rx) = crate::core::engine::create_event_channel();
-        let fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx, persist_tx]);
+        let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
+        let fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![render_tx, persist_tx]);
         let persist = session::spawn_persist_task(sess, persist_rx);
         Some((fanout, persist))
     } else {
         // No session - just fan out to renderer
-        let fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![render_tx]);
+        let fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![render_tx]);
         Some((fanout, tokio::spawn(async {}))) // Dummy persist task
     };
 
-    // Run the engine turn
-    let result = crate::core::engine::run_turn(
+    // Run the agent turn
+    let result = crate::core::agent::run_turn(
         messages,
         config,
-        &engine_opts,
+        &agent_opts,
         effective.prompt.as_deref(),
-        engine_tx,
+        agent_tx,
     )
     .await;
 
@@ -126,7 +126,7 @@ pub async fn execute_prompt_streaming(
     Ok(final_text)
 }
 
-/// CLI renderer that writes engine events to stdout/stderr.
+/// CLI renderer that writes agent events to stdout/stderr.
 ///
 /// # Output contract
 /// - `AssistantDelta` and `AssistantComplete` → stdout
@@ -160,23 +160,23 @@ impl CliRenderer {
         }
     }
 
-    /// Handles a single engine event by writing to the appropriate stream.
-    pub fn handle_event(&mut self, event: EngineEvent) {
+    /// Handles a single agent event by writing to the appropriate stream.
+    pub fn handle_event(&mut self, event: AgentEvent) {
         match event {
-            EngineEvent::AssistantDelta { text } => {
+            AgentEvent::AssistantDelta { text } => {
                 if !text.is_empty() {
                     let _ = write!(self.stdout, "{}", text);
                     let _ = self.stdout.flush();
                     self.needs_final_newline = true;
                 }
             }
-            EngineEvent::AssistantComplete { text } => {
+            AgentEvent::AssistantComplete { text } => {
                 // Final text is already streamed via deltas; track newline state
                 if !text.is_empty() {
                     self.needs_final_newline = true;
                 }
             }
-            EngineEvent::ToolRequested { id, name, input } => {
+            AgentEvent::ToolRequested { id, name, input } => {
                 // Ensure newline after assistant text before tool status
                 if self.needs_final_newline {
                     let _ = writeln!(self.stdout);
@@ -194,12 +194,12 @@ impl CliRenderer {
                     let _ = writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
                 }
             }
-            EngineEvent::ToolStarted { id, name } => {
+            AgentEvent::ToolStarted { id, name } => {
                 self.tool_start_times.insert(id, Instant::now());
                 let _ = write!(self.stderr, "⚙ Running {}...", name);
                 let _ = self.stderr.flush();
             }
-            EngineEvent::ToolFinished { id, result } => {
+            AgentEvent::ToolFinished { id, result } => {
                 // Calculate duration if we have a start time
                 let duration_str = self
                     .tool_start_times
@@ -216,7 +216,7 @@ impl CliRenderer {
                     self.emit_bash_finish_details(&result);
                 }
             }
-            EngineEvent::Error {
+            AgentEvent::Error {
                 kind,
                 message,
                 details,
@@ -228,33 +228,33 @@ impl CliRenderer {
                     let _ = writeln!(self.stderr, "  Details: {}", detail_text);
                 }
             }
-            EngineEvent::Interrupted => {
+            AgentEvent::Interrupted => {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
-            EngineEvent::TurnComplete { .. } => {
+            AgentEvent::TurnComplete { .. } => {
                 // Turn complete - no action needed in exec mode.
                 // The caller handles the final result from run_turn.
             }
-            EngineEvent::ThinkingDelta { text } => {
+            AgentEvent::ThinkingDelta { text } => {
                 // In exec mode, stream thinking text with a prefix (dim)
                 if !text.is_empty() {
                     let _ = write!(self.stderr, "\x1b[2m{}\x1b[0m", text);
                     let _ = self.stderr.flush();
                 }
             }
-            EngineEvent::ThinkingComplete { .. } => {
+            AgentEvent::ThinkingComplete { .. } => {
                 // Thinking complete - ensure newline after thinking output
                 let _ = writeln!(self.stderr);
                 let _ = self.stderr.flush();
             }
-            EngineEvent::UsageUpdate { .. } => {
+            AgentEvent::UsageUpdate { .. } => {
                 // Usage tracking not displayed in exec mode
             }
-            EngineEvent::TurnStarted => {
+            AgentEvent::TurnStarted => {
                 // Turn start not displayed in exec mode
             }
-            EngineEvent::ToolOutputDelta { .. } => {
+            AgentEvent::ToolOutputDelta { .. } => {
                 // TODO: Stream tool output in real-time
                 // For now, we only show final output in ToolFinished
             }
@@ -298,7 +298,7 @@ impl CliRenderer {
 ///
 /// The task owns the `CliRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-pub fn spawn_renderer_task(mut rx: crate::core::engine::EventRx) -> JoinHandle<()> {
+pub fn spawn_renderer_task(mut rx: crate::core::agent::EventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut renderer = CliRenderer::new();
 

@@ -18,11 +18,11 @@ pub enum UiEffect {
     /// Quit the application.
     Quit,
 
-    /// Start an engine turn with the current input.
-    StartEngineTurn,
+    /// Start an agent turn with the current input.
+    StartAgentTurn,
 
-    /// Interrupt the running engine task.
-    InterruptEngine,
+    /// Interrupt the running agent task.
+    InterruptAgent,
 
     /// Spawn async token exchange for login.
     SpawnTokenExchange { code: String, verifier: String },

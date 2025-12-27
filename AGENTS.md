@@ -10,10 +10,10 @@
 - `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
 - `src/bin/generate_models.rs`: binary to generate model data from API
 - `src/core/`: UI-agnostic domain + runtime
-  - `src/core/events.rs`: engine event types for streaming
+  - `src/core/events.rs`: agent event types for streaming
   - `src/core/context.rs`: project context loading (AGENTS.md files)
   - `src/core/interrupt.rs`: signal handling
-  - `src/core/engine.rs`: engine loop + event channels
+  - `src/core/agent.rs`: agent loop + event channels
   - `src/core/session.rs`: session persistence
 - `src/ui/`: terminal UI (Elm-like architecture)
   - `src/ui/tui.rs`: TuiRuntime - owns terminal, runs event loop, executes effects

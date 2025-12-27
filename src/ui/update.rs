@@ -16,7 +16,7 @@ use crate::ui::overlays::{
     handle_palette_key, handle_thinking_picker_key, open_command_palette, open_model_picker,
     open_thinking_picker,
 };
-use crate::ui::state::{EngineState, OverlayState, TuiState};
+use crate::ui::state::{AgentState, OverlayState, TuiState};
 use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
@@ -36,7 +36,7 @@ pub fn update(state: &mut TuiState, event: UiEvent, viewport_height: usize) -> V
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event, viewport_height),
-        UiEvent::Engine(engine_event) => handle_engine_event(state, &engine_event),
+        UiEvent::Agent(agent_event) => handle_agent_event(state, &agent_event),
         UiEvent::LoginResult(result) => {
             handle_login_result(state, result);
             vec![]
@@ -157,8 +157,8 @@ fn handle_main_key(
             vec![]
         }
         KeyCode::Char('c') if ctrl => {
-            if state.engine_state.is_running() {
-                vec![UiEffect::InterruptEngine]
+            if state.agent_state.is_running() {
+                vec![UiEffect::InterruptAgent]
             } else if !state.get_input_text().is_empty() {
                 state.clear_input();
                 vec![]
@@ -172,8 +172,8 @@ fn handle_main_key(
             vec![]
         }
         KeyCode::Esc => {
-            if state.engine_state.is_running() {
-                vec![UiEffect::InterruptEngine]
+            if state.agent_state.is_running() {
+                vec![UiEffect::InterruptAgent]
             } else {
                 state.clear_input();
                 vec![]
@@ -230,11 +230,11 @@ fn handle_main_key(
 }
 
 // ============================================================================
-// Submit / Engine
+// Submit / Agent
 // ============================================================================
 
 fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
-    if !matches!(state.engine_state, EngineState::Idle) {
+    if !matches!(state.agent_state, AgentState::Idle) {
         return vec![];
     }
 
@@ -256,10 +256,10 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
             UiEffect::SaveSession {
                 event: SessionEvent::user_message(&text),
             },
-            UiEffect::StartEngineTurn,
+            UiEffect::StartAgentTurn,
         ]
     } else {
-        vec![UiEffect::StartEngineTurn]
+        vec![UiEffect::StartAgentTurn]
     };
 
     state.clear_input();
@@ -368,7 +368,7 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
 // ============================================================================
 
 fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
-    if state.engine_state.is_running() {
+    if state.agent_state.is_running() {
         state
             .transcript
             .push(HistoryCell::system("Cannot clear while streaming."));
@@ -415,42 +415,42 @@ fn execute_logout(state: &mut TuiState) {
 }
 
 fn execute_quit(state: &mut TuiState) -> Vec<UiEffect> {
-    if state.engine_state.is_running() {
-        vec![UiEffect::InterruptEngine, UiEffect::Quit]
+    if state.agent_state.is_running() {
+        vec![UiEffect::InterruptAgent, UiEffect::Quit]
     } else {
         vec![UiEffect::Quit]
     }
 }
 
 // ============================================================================
-// Engine Event Handlers
+// Agent Event Handlers
 // ============================================================================
 
-pub fn handle_engine_event(
+pub fn handle_agent_event(
     state: &mut TuiState,
-    event: &crate::core::events::EngineEvent,
+    event: &crate::core::events::AgentEvent,
 ) -> Vec<UiEffect> {
-    use crate::core::events::EngineEvent;
+    use crate::core::events::AgentEvent;
 
     match event {
-        EngineEvent::AssistantDelta { text } => {
-            match &mut state.engine_state {
-                EngineState::Waiting { .. } => {
+        AgentEvent::AssistantDelta { text } => {
+            match &mut state.agent_state {
+                AgentState::Waiting { .. } => {
                     // Create streaming cell and transition to Streaming state
                     let cell = HistoryCell::assistant_streaming("");
                     let cell_id = cell.id();
                     state.transcript.push(cell);
 
-                    let old_state = std::mem::replace(&mut state.engine_state, EngineState::Idle);
-                    if let EngineState::Waiting { rx } = old_state {
-                        state.engine_state = EngineState::Streaming {
+                    let old_state = std::mem::replace(&mut state.agent_state, AgentState::Idle);
+                    if let AgentState::Waiting { rx } = old_state {
+                        state.agent_state = AgentState::Streaming {
                             rx,
                             cell_id,
                             pending_delta: text.clone(),
                         };
                     }
                 }
-                EngineState::Streaming {
+                AgentState::Streaming {
                     cell_id,
                     pending_delta,
                     ..
@@ -484,37 +484,37 @@ pub fn handle_engine_event(
                         pending_delta.push_str(text);
                     }
                 }
-                EngineState::Idle => {}
+                AgentState::Idle => {}
             }
             vec![]
         }
-        EngineEvent::AssistantComplete { .. } => {
+        AgentEvent::AssistantComplete { .. } => {
             // Apply any pending delta before finalizing to ensure no content is lost.
             // This is critical because multiple events can be processed in one loop
             // iteration, and TurnComplete may follow immediately after AssistantComplete.
             apply_pending_delta(state);
 
-            if let EngineState::Streaming { cell_id, .. } = &state.engine_state
+            if let AgentState::Streaming { cell_id, .. } = &state.agent_state
                 && let Some(cell) = state.transcript.iter_mut().find(|c| c.id() == *cell_id)
             {
                 cell.finalize_assistant();
             }
             vec![]
         }
-        EngineEvent::Error { message, .. } => {
-            // Apply any pending delta before resetting engine state to preserve
+        AgentEvent::Error { message, .. } => {
+            // Apply any pending delta before resetting agent state to preserve
             // partial content that was streamed before the error occurred.
             apply_pending_delta(state);
 
             state
                 .transcript
                 .push(HistoryCell::system(format!("Error: {}", message)));
-            // Reset engine state - the turn is over due to the error
-            state.engine_state = EngineState::Idle;
+            // Reset agent state - the turn is over due to the error
+            state.agent_state = AgentState::Idle;
             vec![]
         }
-        EngineEvent::Interrupted => {
-            // Apply any pending delta before resetting engine state to preserve
+        AgentEvent::Interrupted => {
+            // Apply any pending delta before resetting agent state to preserve
             // partial content that was streamed before the interruption.
             apply_pending_delta(state);
 
@@ -553,16 +553,16 @@ pub fn handle_engine_event(
             }
 
             interrupt::reset();
-            state.engine_state = EngineState::Idle;
+            state.agent_state = AgentState::Idle;
             vec![]
         }
-        EngineEvent::ToolRequested { id, name, input } => {
+        AgentEvent::ToolRequested { id, name, input } => {
             let tool_cell = HistoryCell::tool_running(id, name, input.clone());
             state.transcript.push(tool_cell);
             vec![]
         }
-        EngineEvent::ToolStarted { .. } => vec![],
-        EngineEvent::ToolFinished { id, result } => {
+        AgentEvent::ToolStarted { .. } => vec![],
+        AgentEvent::ToolFinished { id, result } => {
             if let Some(cell) = state
                 .transcript
                 .iter_mut()
@@ -572,18 +572,18 @@ pub fn handle_engine_event(
             }
             vec![]
         }
-        EngineEvent::TurnComplete {
+        AgentEvent::TurnComplete {
             final_text,
             messages,
         } => {
-            // Apply any pending delta before resetting engine state to ensure no
+            // Apply any pending delta before resetting agent state to ensure no
             // content is lost. This handles edge cases where AssistantComplete wasn't
             // received or didn't have a chance to apply the delta.
             apply_pending_delta(state);
 
-            // Turn completed - update messages and reset engine state
+            // Turn completed - update messages and reset agent state
             state.messages = messages.clone();
-            state.engine_state = EngineState::Idle;
+            state.agent_state = AgentState::Idle;
 
             // Save assistant message to session if enabled
             if !final_text.is_empty() && state.session.is_some() {
@@ -595,15 +595,15 @@ pub fn handle_engine_event(
             }
         }
         // Thinking events - create or update thinking cells in transcript
-        EngineEvent::ThinkingDelta { text } => {
+        AgentEvent::ThinkingDelta { text } => {
             // Transition from Waiting to Streaming
-            if let EngineState::Waiting { .. } = &state.engine_state {
-                let old_state = std::mem::replace(&mut state.engine_state, EngineState::Idle);
-                if let EngineState::Waiting { rx } = old_state {
+            if let AgentState::Waiting { .. } = &state.agent_state {
+                let old_state = std::mem::replace(&mut state.agent_state, AgentState::Idle);
+                if let AgentState::Waiting { rx } = old_state {
                     let cell = HistoryCell::thinking_streaming(text);
                     let cell_id = cell.id();
                     state.transcript.push(cell);
-                    state.engine_state = EngineState::Streaming {
+                    state.agent_state = AgentState::Streaming {
                         rx,
                         cell_id,
                         pending_delta: String::new(),
@@ -639,7 +639,7 @@ pub fn handle_engine_event(
             }
             vec![]
         }
-        EngineEvent::ThinkingComplete { signature, .. } => {
+        AgentEvent::ThinkingComplete { signature, .. } => {
             // Find the last streaming thinking cell and finalize it
             if let Some(cell) = state.transcript.iter_mut().rev().find(|c| {
                 matches!(
@@ -654,7 +654,7 @@ pub fn handle_engine_event(
             }
             vec![]
         }
-        EngineEvent::UsageUpdate {
+        AgentEvent::UsageUpdate {
             input_tokens,
             output_tokens,
             cache_read_input_tokens,
@@ -669,11 +669,11 @@ pub fn handle_engine_event(
             );
             vec![]
         }
-        EngineEvent::TurnStarted => {
+        AgentEvent::TurnStarted => {
             // Turn start - no UI updates needed yet
             vec![]
         }
-        EngineEvent::ToolOutputDelta { .. } => {
+        AgentEvent::ToolOutputDelta { .. } => {
             // TODO: Update tool cell with streaming output
             // For now, we only show final output in ToolFinished
             vec![]
@@ -683,11 +683,11 @@ pub fn handle_engine_event(
 
 /// Applies any pending delta to the streaming cell (coalescing).
 pub fn apply_pending_delta(state: &mut TuiState) {
-    if let EngineState::Streaming {
+    if let AgentState::Streaming {
         cell_id,
         pending_delta,
         ..
-    } = &mut state.engine_state
+    } = &mut state.agent_state
         && !pending_delta.is_empty()
     {
         if let Some(cell) = state.transcript.iter_mut().find(|c| c.id() == *cell_id) {

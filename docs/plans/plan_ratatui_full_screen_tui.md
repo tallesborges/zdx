@@ -7,7 +7,7 @@ This plan outlines the steps to move from the current inline-viewport TUI to the
 - Scrollable, width-aware transcript rendering.
 - Real-time streaming of assistant responses.
 - Tool execution status indicators within the TUI.
-- Persistent TUI state during engine execution.
+- Persistent TUI state during agent execution.
 
 ## Progress Summary
 
@@ -37,7 +37,7 @@ This plan outlines the steps to move from the current inline-viewport TUI to the
 
 ### Reducer pattern for TUI state
 Treat TUI state updates like a reducer:
-- `EngineEvent` (and user input events) go into a single `update(state, event)` function
+- `AgentEvent` (and user input events) go into a single `update(state, event)` function
 - Rendering reads state only
 - Tests become: "given events A, B, C → state matches snapshot"
 - Aligns with "resumable conversations" goal (event stream is serializable)
@@ -68,7 +68,7 @@ Many terminals don't send distinct keycodes for Ctrl+Enter.
 - `Esc` = clear input
 
 **Ctrl+C behavior (progressive):**
-1. If engine is generating / tool running → **interrupt/cancel**
+1. If agent is generating / tool running → **interrupt/cancel**
 2. Else if input is non-empty → **clear input**
 3. Else → **quit**
 
@@ -123,7 +123,7 @@ Goal: Functional input editing. Use `tui-textarea` (already in deps).
 - [x] Multiline input support.
 - [x] Submit vs newline: Enter submits, Shift+Enter or Ctrl+J for newline.
 - [x] Paste handling (terminal paste works via EnableBracketedPaste).
-- [x] On submit: create a `User` cell in transcript (in-memory only, no engine yet).
+- [x] On submit: create a `User` cell in transcript (in-memory only, no agent yet).
 - [x] ✅ **Demo:** `cargo run -- dev tui2` — type/edit/paste, submit shows "You: ..." in transcript pane.
 
 **Implementation notes:**
@@ -134,17 +134,17 @@ Goal: Functional input editing. Use `tui-textarea` (already in deps).
 - Arrow keys always control input cursor (focus model: always input focused).
 
 ## Slice 2: Send loop (no streaming yet) ✅
-Goal: Actually call the engine and get a response.
+Goal: Actually call the agent and get a response.
 
-- [x] On submit: spawn engine turn (non-blocking).
+- [x] On submit: spawn agent turn (non-blocking).
 - [x] Show "thinking..." or spinner while waiting.
 - [x] When response arrives: append `Assistant` cell with full text.
 - [x] No streaming, no markdown, plain text only.
 - [x] ✅ **Demo:** ask a question, get an answer displayed in TUI.
 
 **Implementation notes:**
-- `EngineState` enum tracks Idle vs Waiting states.
-- Engine task spawned via `tokio::spawn`, polled via `is_finished()`.
+- `AgentState` enum tracks Idle vs Waiting states.
+- Agent task spawned via `tokio::spawn`, polled via `is_finished()`.
 - "thinking..." indicator shown in transcript while waiting.
 - Error handling: shows error in transcript, removes failed user message from history.
 - Ctrl+J added for terminal-reliable newline insertion.
@@ -152,7 +152,7 @@ Goal: Actually call the engine and get a response.
 ## Slice 3: Streaming (throttled) ✅
 Goal: Stream responses smoothly without input lag.
 
-- [x] Create bounded channel from engine to TUI.
+- [x] Create bounded channel from agent to TUI.
 - [x] Map `AssistantDelta { cell_id, text_chunk }` events into transcript updates.
 - [x] Coalesce rapid deltas (don't redraw per-character).
 - [x] Tick-based redraw (e.g., 30fps max during streaming).
@@ -166,10 +166,10 @@ Goal: Stream responses smoothly without input lag.
 - Streaming cursor width affects wrapping (account for ▌ in unicode-width later)
 
 **Implementation notes:**
-- `EngineState` enum: `Idle`, `Waiting` (before first delta), `Streaming` (actively receiving).
-- `poll_engine_events()` drains channel with `try_recv()` (non-blocking).
+- `AgentState` enum: `Idle`, `Waiting` (before first delta), `Streaming` (actively receiving).
+- `poll_agent_events()` drains channel with `try_recv()` (non-blocking).
 - `apply_pending_delta()` coalesces all buffered text into single append per tick.
-- `poll_engine_completion()` handles task finish and message history update.
+- `poll_agent_completion()` handles task finish and message history update.
 - 30fps frame rate via `FRAME_DURATION` constant (33ms poll timeout).
 - Streaming cell created on first delta, finalized on `AssistantComplete` event.
 
@@ -216,19 +216,19 @@ Goal: Show immediate feedback when assistant starts working.
 
 **Solution:** Emit `TurnStarted` event immediately when `run_turn()` begins.
 
-**Engine changes:**
-- [ ] Add `sink.important(EngineEvent::TurnStarted).await;` at start of `run_turn()`
+**Agent changes:**
+- [ ] Add `sink.important(AgentEvent::TurnStarted).await;` at start of `run_turn()`
 - [ ] Event already defined in `src/core/events.rs` (from naming refactor)
 
 **UI changes:**
-- [ ] Update `EngineState::Waiting` to trigger on `TurnStarted` instead of on task spawn
+- [ ] Update `AgentState::Waiting` to trigger on `TurnStarted` instead of on task spawn
 - [ ] Show "Assistant is thinking..." status immediately
 - [ ] Optional: Show spinner/animation while waiting for first delta
 - [ ] Handle in exec mode (currently no-op, which is fine)
 
 **Session persistence:**
 - [ ] Optional: Log turn boundaries in session file for analytics
-- [ ] `SessionEvent::from_engine()` can track turn starts if needed
+- [ ] `SessionEvent::from_agent()` can track turn starts if needed
 
 **Testing:**
 - [ ] Unit test: `run_turn()` emits `TurnStarted` before any other events
@@ -237,7 +237,7 @@ Goal: Show immediate feedback when assistant starts working.
 **✅ Demo:** User sends message → "Thinking..." appears instantly → text starts streaming 1-2s later (but user knows work started).
 
 **Effort:** 🟢 Trivial (1-2 hours)
-- Engine: 1 line change
+- Agent: 1 line change
 - UI: Update existing handler to show spinner
 - Tests: Simple event ordering test
 
@@ -252,7 +252,7 @@ Goal: Show real-time progress for long-running tool executions.
 
 **Solution:** Stream tool stdout/stderr chunks via `ToolOutputDelta` events as they arrive.
 
-**Engine changes:**
+**Agent changes:**
 - [ ] Modify `tools::execute_tool()` signature to accept `on_chunk: impl Fn(String)` callback
 - [ ] Update `execute_tools_async()` to wire up callback:
   ```rust
@@ -262,7 +262,7 @@ Goal: Show real-time progress for long-running tool executions.
       &tu.input, 
       ctx,
       |chunk| {
-          sink.delta(EngineEvent::ToolOutputDelta {
+          sink.delta(AgentEvent::ToolOutputDelta {
               id: tu.id.clone(),
               chunk,
           });
@@ -280,7 +280,7 @@ Goal: Show real-time progress for long-running tool executions.
 - [ ] Handle timeout with partial output
 
 **UI changes:**
-- [ ] Update `EngineEvent::ToolOutputDelta` handler in `update.rs`
+- [ ] Update `AgentEvent::ToolOutputDelta` handler in `update.rs`
 - [ ] Find tool cell by ID, append chunk to streaming output
 - [ ] Implement output size limit (e.g., keep last 100KB to prevent memory issues)
 - [ ] Auto-scroll to bottom when new chunks arrive (if in FollowLatest mode)
@@ -310,7 +310,7 @@ Goal: Show real-time progress for long-running tool executions.
 4. **Downloads:** `curl` shows progress chunks
 
 **Effort:** 🟡 Medium (4-8 hours)
-- Engine: Modify tool execution signature (2 hours)
+- Agent: Modify tool execution signature (2 hours)
 - Bash tool: Implement streaming (2 hours)
 - UI: Update cell rendering (2 hours)
 - Tests: Integration tests (2 hours)
@@ -413,14 +413,14 @@ Goal: Show tool execution in transcript.
 
 - [x] "Tool running..." indicator when tool starts.
 - [x] Show tool name and status (running/done/failed).
-- [x] ESC or Ctrl+C interrupts running engine/tool.
+- [x] ESC or Ctrl+C interrupts running agent/tool.
 - [ ] Optionally show tool output preview (deferred).
 - [x] ✅ Check-in: tool use shows status in TUI, not stdout.
 
 **Implementation notes:**
 - Handle `ToolRequested` → create `HistoryCell::tool_running()` in transcript.
 - Handle `ToolFinished` → update tool cell with `set_tool_result()`.
-- ESC/Ctrl+C when engine running → `interrupt::trigger_ctrl_c()`.
+- ESC/Ctrl+C when agent running → `interrupt::trigger_ctrl_c()`.
 - Ctrl+C progressive: interrupt → clear input → quit.
 
 ## Phase 4: Streaming fidelity + performance

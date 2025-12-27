@@ -32,7 +32,7 @@
 
 - **User journey drives order**: wire end-to-end first, then polish display
 - **Ugly but functional**: stream raw thinking text before styling
-- **Engine/UI separation**: engine emits thinking events; TUI renders them
+- **Agent/UI separation**: agent emits thinking events; TUI renders them
 - **Turn-grouped content**: thinking + text belong to same assistant turn for API compatibility
 
 ## User journey
@@ -52,9 +52,9 @@
 | SSE streaming parser | `anthropic.rs:520+` | No `thinking_delta`/`signature_delta` parsing |
 | StreamEvent enum | `anthropic.rs:431` | No thinking variants |
 | SseDelta struct | `anthropic.rs:660` | No `thinking`/`signature` fields |
-| EngineEvent enum | `events.rs:16` | No `ThinkingDelta`/`ThinkingComplete` |
-| Engine content block tracking | `engine.rs:246+` | Works by index ✓ — reuse for thinking |
-| Turn grouping | `engine.rs:336` | Already groups blocks into single message ✓ |
+| AgentEvent enum | `events.rs:16` | No `ThinkingDelta`/`ThinkingComplete` |
+| Agent content block tracking | `agent.rs:246+` | Works by index ✓ — reuse for thinking |
+| Turn grouping | `agent.rs:336` | Already groups blocks into single message ✓ |
 | HistoryCell enum | `transcript.rs:70` | No `Thinking` cell variant |
 | UI event handler | `update.rs:398+` | No thinking event handling |
 | Config struct | `config.rs:51` | No `thinking_enabled` / `thinking_budget_tokens` |
@@ -140,17 +140,17 @@ cargo test -- sse_parser_thinking
 
 ---
 
-### Slice 3: Engine events + turn tracking ✅
+### Slice 3: Agent events + turn tracking ✅
 
-**Goal:** Engine emits thinking events, tracks turn content for proper grouping
+**Goal:** Agent emits thinking events, tracks turn content for proper grouping
 
 **Scope checklist:**
-- [x] Add to `EngineEvent` enum:
+- [x] Add to `AgentEvent` enum:
   ```rust
   ThinkingDelta { text: String },
   ThinkingComplete { text: String, signature: String },
   ```
-- [x] Add `ThinkingBlock` tracking in engine loop (similar to `ToolUseBuilder`):
+- [x] Add `ThinkingBlock` tracking in agent loop (similar to `ToolUseBuilder`):
   ```rust
   struct ThinkingBuilder {
       index: usize,
@@ -158,9 +158,9 @@ cargo test -- sse_parser_thinking
       signature: String,
   }
   ```
-- [x] Handle `StreamEvent::ThinkingDelta` → accumulate text, emit `EngineEvent::ThinkingDelta`
+- [x] Handle `StreamEvent::ThinkingDelta` → accumulate text, emit `AgentEvent::ThinkingDelta`
 - [x] Handle `StreamEvent::SignatureDelta` → accumulate signature
-- [x] Handle `StreamEvent::ContentBlockStop` for thinking → emit `EngineEvent::ThinkingComplete`
+- [x] Handle `StreamEvent::ContentBlockStop` for thinking → emit `AgentEvent::ThinkingComplete`
 - [x] Add `ChatContentBlock::Thinking { thinking: String, signature: String }` variant
 - [x] Include thinking blocks in `assistant_blocks` for `TurnComplete.messages`
 - [x] Add stub handlers in TUI update.rs (display deferred to Slice 4)
@@ -198,7 +198,7 @@ RUST_LOG=debug cargo run
 - [x] Add `HistoryCell::thinking_streaming()` constructor
 - [x] Add `HistoryCell::append_thinking_delta()` method
 - [x] Add `HistoryCell::finalize_thinking()` method
-- [x] Update `handle_engine_event()` in `update.rs`:
+- [x] Update `handle_agent_event()` in `update.rs`:
   - `ThinkingDelta` → create or append to thinking cell
   - `ThinkingComplete` → finalize cell, store signature
 - [x] Render thinking cells with distinct style:
@@ -236,7 +236,7 @@ cargo run
       ts: String,
   }
   ```
-- [x] Update `SessionEvent::from_engine()` to convert `ThinkingComplete`
+- [x] Update `SessionEvent::from_agent()` to convert `ThinkingComplete`
 - [x] Update session loading to reconstruct thinking cells
 - [x] Update `ChatMessage` / `ApiMessage` serialization:
   - Add `ApiContentBlock::Thinking` variant (already existed)
@@ -290,7 +290,7 @@ zdx sessions resume <id>
 | Thinking cell vs Assistant variant | Separate cell OR flag on Assistant | **Separate cell** | Cleaner state, distinct rendering, simpler pattern matching |
 | Signature storage | Store in cell OR derive from API | **Store in cell** | Needed for session resume and API reconstruction |
 | Missing signature handling | Error OR convert to text | **Convert to text** | Matches pi-mono pattern, API compatible |
-| Turn association | Implicit (adjacent) OR explicit (turn_id) | **Implicit** | Engine already groups by turn; no need for explicit ID |
+| Turn association | Implicit (adjacent) OR explicit (turn_id) | **Implicit** | Agent already groups by turn; no need for explicit ID |
 | Max tokens adjustment | Auto-adjust OR error | **Auto-adjust with log** | Better UX, user can still override explicitly |
 
 ### Phase 2 key decisions
@@ -311,7 +311,7 @@ zdx sessions resume <id>
 ### Per-slice smoke tests
 - **Slice 1:** Config loads with new fields, effective_max_tokens() returns safe value ✅
 - **Slice 2:** SSE fixture test parses thinking events ✅
-- **Slice 3:** Engine emits ThinkingDelta/ThinkingComplete events ✅
+- **Slice 3:** Agent emits ThinkingDelta/ThinkingComplete events ✅
 - **Slice 4:** TUI displays thinking cells with distinct style ✅
 - **Slice 5:** Session round-trip preserves thinking, resume works ✅
 - **Slice 6:** ThinkingLevel enum maps to correct budget values ✅
@@ -339,7 +339,7 @@ Slice 1 (Config)
 Slice 2 (API + SSE parsing)
     │
     ▼
-Slice 3 (Engine events)
+Slice 3 (Agent events)
     │
     ▼
 Slice 4 (TUI display)
@@ -405,7 +405,7 @@ Each slice is independently demoable. Slices 4 and 5 can be developed in paralle
 - [x] Replace `thinking_enabled: bool` + `thinking_budget_tokens: u32` with `thinking_level: ThinkingLevel`
 - [x] Update `effective_max_tokens()` to use `thinking_level.budget_tokens()`
 - [x] Update `default_config.toml` template with `thinking_level`
-- [x] Update `engine.rs` to translate `ThinkingLevel` to raw API values
+- [x] Update `agent.rs` to translate `ThinkingLevel` to raw API values
 
 **Demo:**
 ```bash

@@ -12,7 +12,7 @@ use tokio::sync::mpsc;
 use tui_textarea::TextArea;
 
 use crate::config::Config;
-use crate::core::engine::EngineOptions;
+use crate::core::agent::AgentOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 // Re-export overlay types for backwards compatibility
@@ -262,21 +262,21 @@ impl ScrollState {
 }
 
 // ============================================================================
-// Engine State
+// Agent State
 // ============================================================================
 
-/// Engine execution state.
+/// Agent execution state.
 ///
-/// Tracks the current engine task and its event channel.
+/// Tracks the current agent task and its event channel.
 /// The task sends events through the channel, including `TurnComplete` when done.
 #[derive(Debug)]
-pub enum EngineState {
-    /// No engine task running, ready for input.
+pub enum AgentState {
+    /// No agent task running, ready for input.
     Idle,
     /// Streaming response in progress.
     Streaming {
-        /// Receiver for engine events.
-        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::EngineEvent>>,
+        /// Receiver for agent events.
+        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::AgentEvent>>,
         /// ID of the streaming assistant cell in transcript.
         cell_id: crate::ui::transcript::CellId,
         /// Buffered delta text to apply on next tick (coalescing).
@@ -284,15 +284,15 @@ pub enum EngineState {
     },
     /// Waiting for first response.
     Waiting {
-        /// Receiver for engine events.
-        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::EngineEvent>>,
+        /// Receiver for agent events.
+        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::AgentEvent>>,
     },
 }
 
-impl EngineState {
-    /// Returns true if the engine is currently running (waiting or streaming).
+impl AgentState {
+    /// Returns true if the agent is currently running (waiting or streaming).
     pub fn is_running(&self) -> bool {
-        !matches!(self, EngineState::Idle)
+        !matches!(self, AgentState::Idle)
     }
 }
 
@@ -508,16 +508,16 @@ pub struct TuiState {
     pub textarea: TextArea<'static>,
     /// Transcript cells (in-memory display).
     pub transcript: Vec<HistoryCell>,
-    /// Engine configuration.
+    /// Agent configuration.
     pub config: Config,
-    /// Engine options (root path, etc).
-    pub engine_opts: EngineOptions,
-    /// System prompt for the engine.
+    /// Agent options (root path, etc).
+    pub agent_opts: AgentOptions,
+    /// System prompt for the agent.
     pub system_prompt: Option<String>,
-    /// Message history for the engine.
+    /// Message history for the agent.
     pub messages: Vec<ChatMessage>,
-    /// Current engine state.
-    pub engine_state: EngineState,
+    /// Current agent state.
+    pub agent_state: AgentState,
     /// Scroll state for transcript (mode, offset, cached line count).
     pub scroll: ScrollState,
     /// Session for persistence (if enabled).
@@ -578,11 +578,11 @@ impl TuiState {
                 .title(" Input (Enter=send, Shift+Enter=newline, Ctrl+J=newline) "),
         );
 
-        let engine_opts = EngineOptions { root };
+        let agent_opts = AgentOptions { root };
 
         // Cache display values at startup (avoids I/O during render)
-        let git_branch = get_git_branch(&engine_opts.root);
-        let display_path = shorten_path(&engine_opts.root);
+        let git_branch = get_git_branch(&agent_opts.root);
+        let display_path = shorten_path(&agent_opts.root);
 
         // Build transcript from history
         let transcript = Self::build_transcript_from_history(&history);
@@ -604,10 +604,10 @@ impl TuiState {
             textarea,
             transcript,
             config,
-            engine_opts,
+            agent_opts,
             system_prompt,
             messages: history,
-            engine_state: EngineState::Idle,
+            agent_state: AgentState::Idle,
             scroll: ScrollState::new(),
             session,
             command_history,

@@ -24,7 +24,7 @@ use crate::core::session::{self, Session};
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::effects::UiEffect;
 use crate::ui::events::UiEvent;
-use crate::ui::state::{EngineState, TuiState};
+use crate::ui::state::{AgentState, TuiState};
 use crate::ui::transcript::HistoryCell;
 use crate::ui::{terminal, update, view};
 
@@ -170,10 +170,10 @@ impl TuiRuntime {
 
     fn event_loop(&mut self) -> Result<()> {
         while !self.state.should_quit {
-            // Check for Ctrl+C signal (only quit if engine is idle)
-            // If engine is running, the interrupt is meant to cancel it, not quit the app.
-            // The engine will send an Interrupted event which resets the flag.
-            if interrupt::is_interrupted() && !self.state.engine_state.is_running() {
+            // Check for Ctrl+C signal (only quit if agent is idle)
+            // If agent is running, the interrupt is meant to cancel it, not quit the app.
+            // The agent will send an Interrupted event which resets the flag.
+            if interrupt::is_interrupted() && !self.state.agent_state.is_running() {
                 self.state.should_quit = true;
                 break;
             }
@@ -205,15 +205,15 @@ impl TuiRuntime {
         Ok(())
     }
 
-    /// Collects events from all sources (terminal, engine, async tasks).
+    /// Collects events from all sources (terminal, agent, async tasks).
     fn collect_events(&mut self) -> Result<Vec<UiEvent>> {
         let mut events = Vec::new();
 
         // Always emit a tick for animation/polling
         events.push(UiEvent::Tick);
 
-        // Poll engine events (streaming deltas, tool events, completion, etc.)
-        self.collect_engine_events(&mut events);
+        // Poll agent events (streaming deltas, tool events, completion, etc.)
+        self.collect_agent_events(&mut events);
 
         // Poll for login exchange result
         self.collect_login_result(&mut events);
@@ -226,10 +226,10 @@ impl TuiRuntime {
         Ok(events)
     }
 
-    /// Collects engine events from the channel.
-    fn collect_engine_events(&mut self, events: &mut Vec<UiEvent>) {
-        while let EngineState::Waiting { rx, .. } | EngineState::Streaming { rx, .. } =
-            &mut self.state.engine_state
+    /// Collects agent events from the channel.
+    fn collect_agent_events(&mut self, events: &mut Vec<UiEvent>) {
+        while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } =
+            &mut self.state.agent_state
         {
             let event = match rx.try_recv() {
                 Ok(ev) => ev,
@@ -237,7 +237,7 @@ impl TuiRuntime {
                 Err(mpsc::error::TryRecvError::Disconnected) => break,
             };
 
-            events.push(UiEvent::Engine((*event).clone()));
+            events.push(UiEvent::Agent((*event).clone()));
         }
     }
 
@@ -273,11 +273,11 @@ impl TuiRuntime {
             UiEffect::Quit => {
                 self.state.should_quit = true;
             }
-            UiEffect::StartEngineTurn => {
-                self.spawn_engine_turn();
+            UiEffect::StartAgentTurn => {
+                self.spawn_agent_turn();
             }
-            UiEffect::InterruptEngine => {
-                self.interrupt_engine();
+            UiEffect::InterruptAgent => {
+                self.interrupt_agent();
             }
             UiEffect::SpawnTokenExchange { code, verifier } => {
                 self.spawn_token_exchange(&code, &verifier);
@@ -355,44 +355,43 @@ impl TuiRuntime {
     // Effect Implementations (async spawning, etc.)
     // ========================================================================
 
-    fn interrupt_engine(&mut self) {
-        if self.state.engine_state.is_running() {
+    fn interrupt_agent(&mut self) {
+        if self.state.agent_state.is_running() {
             interrupt::trigger_ctrl_c();
         }
     }
 
-    fn spawn_engine_turn(&mut self) {
-        let (engine_tx, engine_rx) = crate::core::engine::create_event_channel();
+    fn spawn_agent_turn(&mut self) {
+        let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
         let messages = self.state.messages.clone();
         let config = self.state.config.clone();
-        let engine_opts = self.state.engine_opts.clone();
+        let agent_opts = self.state.agent_opts.clone();
         let system_prompt = self.state.system_prompt.clone();
 
-        let (tui_tx, tui_rx) = crate::core::engine::create_event_channel();
+        let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
         if let Some(sess) = self.state.session.clone() {
-            let (persist_tx, persist_rx) = crate::core::engine::create_event_channel();
-            let _fanout =
-                crate::core::engine::spawn_fanout_task(engine_rx, vec![tui_tx, persist_tx]);
+            let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
+            let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx, persist_tx]);
             let _persist = session::spawn_persist_task(sess, persist_rx);
         } else {
-            let _fanout = crate::core::engine::spawn_fanout_task(engine_rx, vec![tui_tx]);
+            let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx]);
         }
 
-        // Spawn the engine task - it will send TurnComplete when done
+        // Spawn the agent task - it will send TurnComplete when done
         tokio::spawn(async move {
-            let _ = crate::core::engine::run_turn(
+            let _ = crate::core::agent::run_turn(
                 messages,
                 &config,
-                &engine_opts,
+                &agent_opts,
                 system_prompt.as_deref(),
-                engine_tx,
+                agent_tx,
             )
             .await;
         });
 
-        self.state.engine_state = EngineState::Waiting { rx: tui_rx };
+        self.state.agent_state = AgentState::Waiting { rx: tui_rx };
     }
 
     fn spawn_token_exchange(&mut self, code: &str, verifier: &str) {

@@ -19,7 +19,7 @@ use crate::models::ModelOption;
 use crate::ui::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
 };
-use crate::ui::state::{AuthType, EngineState, OverlayState, SessionUsage, TuiState};
+use crate::ui::state::{AgentState, AuthType, OverlayState, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
 /// Minimum height of the input area (lines, including borders).
@@ -350,8 +350,8 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let spinner_idx = (state.spinner_frame / SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len();
     let spinner = SPINNER_FRAMES[spinner_idx];
 
-    let spans: Vec<Span> = match &state.engine_state {
-        EngineState::Idle => {
+    let spans: Vec<Span> = match &state.agent_state {
+        AgentState::Idle => {
             // Show helpful shortcuts when idle
             vec![
                 Span::styled("Ctrl+P", Style::default().fg(Color::DarkGray)),
@@ -360,7 +360,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
                 Span::raw(" quit"),
             ]
         }
-        EngineState::Waiting { .. } => {
+        AgentState::Waiting { .. } => {
             vec![
                 Span::styled(spinner, Style::default().fg(Color::Yellow)),
                 Span::raw(" "),
@@ -370,7 +370,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
                 Span::raw(" to cancel"),
             ]
         }
-        EngineState::Streaming { .. } => {
+        AgentState::Streaming { .. } => {
             vec![
                 Span::styled(spinner, Style::default().fg(Color::Cyan)),
                 Span::raw(" "),
