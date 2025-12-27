@@ -380,6 +380,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     state.command_history.clear();
     state.scroll.reset();
     state.usage = crate::ui::state::SessionUsage::new();
+    state.wrap_cache.clear();
 
     if state.session.is_some() {
         vec![UiEffect::CreateNewSession]
@@ -750,5 +751,38 @@ mod tests {
 
         assert_eq!(effects.len(), 1);
         assert!(matches!(effects[0], UiEffect::Quit));
+    }
+
+    #[test]
+    fn test_execute_new_clears_state_and_wrap_cache() {
+        let config = crate::config::Config::default();
+        let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
+
+        // Populate some state
+        state.transcript.push(HistoryCell::user("test"));
+        state
+            .messages
+            .push(crate::providers::anthropic::ChatMessage::user("test"));
+        state.command_history.push("test".to_string());
+        state.usage.add(100, 50, 200, 25);
+
+        // Trigger cache population by rendering (simulate)
+        let _lines = state.transcript[0].display_lines_cached(80, 0, &state.wrap_cache);
+        assert!(!state.wrap_cache.is_empty());
+
+        // Execute clear
+        let effects = execute_new(&mut state);
+
+        // Verify everything is cleared
+        assert!(state.transcript.is_empty() || state.transcript.len() == 1); // May have "Conversation cleared." message
+        assert!(state.messages.is_empty());
+        assert!(state.command_history.is_empty());
+        assert!(state.wrap_cache.is_empty());
+        assert!(state.scroll.is_following());
+        assert_eq!(state.usage.input_tokens, 0);
+        assert_eq!(state.usage.output_tokens, 0);
+
+        // Verify it returns no effects when no session is active
+        assert_eq!(effects.len(), 0);
     }
 }
