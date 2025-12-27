@@ -80,6 +80,15 @@ pub async fn run_interactive_chat_with_history(
         TuiRuntime::with_history(config.clone(), root, effective.prompt, session, history)?
     };
 
+    // Add system message for session path
+    if let Some(ref s) = runtime.state.session {
+        let session_path_msg = format!("Session path: {}", s.path().display());
+        runtime
+            .state
+            .transcript
+            .push(HistoryCell::system(session_path_msg));
+    }
+
     // Add system message for loaded AGENTS.md files to transcript
     if !effective.loaded_agents_paths.is_empty() {
         let paths_list: Vec<String> = effective
@@ -328,11 +337,39 @@ impl TuiRuntime {
             }
             UiEffect::CreateNewSession => match session::Session::new() {
                 Ok(new_session) => {
-                    let new_id = new_session.id.clone();
+                    let new_path = new_session.path().display().to_string();
                     self.state.session = Some(new_session);
+
+                    // Show session path
                     self.state
                         .transcript
-                        .push(HistoryCell::system(format!("New session: {}", new_id)));
+                        .push(HistoryCell::system(format!("Session path: {}", new_path)));
+
+                    // Show loaded AGENTS.md files (same as on startup)
+                    let effective =
+                        match crate::core::context::build_effective_system_prompt_with_paths(
+                            &self.state.config,
+                            &self.state.agent_opts.root,
+                        ) {
+                            Ok(e) => e,
+                            Err(err) => {
+                                self.state.transcript.push(HistoryCell::system(format!(
+                                    "Warning: Failed to load context: {}",
+                                    err
+                                )));
+                                return;
+                            }
+                        };
+
+                    if !effective.loaded_agents_paths.is_empty() {
+                        let paths_list: Vec<String> = effective
+                            .loaded_agents_paths
+                            .iter()
+                            .map(|p| format!("  - {}", p.display()))
+                            .collect();
+                        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
+                        self.state.transcript.push(HistoryCell::system(message));
+                    }
                 }
                 Err(e) => {
                     self.state.transcript.push(HistoryCell::system(format!(
