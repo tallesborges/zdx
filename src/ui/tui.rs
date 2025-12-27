@@ -108,8 +108,8 @@ pub async fn run_interactive_chat_with_history(
     Ok(())
 }
 
-/// Target frame rate for streaming updates (30fps = ~33ms per frame).
-const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(33);
+/// Target frame rate for streaming updates (60fps = ~16ms per frame).
+const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);
 
 /// Full-screen TUI runtime.
 ///
@@ -178,6 +178,8 @@ impl TuiRuntime {
     }
 
     fn event_loop(&mut self) -> Result<()> {
+        let mut dirty = true; // Start dirty to ensure initial render
+
         while !self.state.should_quit {
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
@@ -192,23 +194,38 @@ impl TuiRuntime {
 
             // Process each event through the reducer
             let viewport_height = self.transcript_height();
+
             for event in events {
+                // Tick marks dirty only if agent is running (spinner animation)
+                // Other events always mark dirty
+                let marks_dirty = match &event {
+                    UiEvent::Tick => self.state.agent_state.is_running(),
+                    _ => true,
+                };
                 let effects = update::update(&mut self.state, event, viewport_height);
+                if marks_dirty || !effects.is_empty() {
+                    dirty = true;
+                }
                 self.execute_effects(effects);
             }
 
-            // Apply any pending deltas before render (coalescing)
-            update::apply_pending_delta(&mut self.state);
+            // Only render if something changed
+            if dirty {
+                // Apply any pending deltas before render (coalescing)
+                update::apply_pending_delta(&mut self.state);
 
-            // Update cached line count for scroll calculations
-            let size = self.terminal.size()?;
-            let line_count = view::calculate_line_count(&self.state, size.width as usize);
-            self.state.scroll.update_line_count(line_count);
+                // Update cached line count for scroll calculations
+                let size = self.terminal.size()?;
+                let line_count = view::calculate_line_count(&self.state, size.width as usize);
+                self.state.scroll.update_line_count(line_count);
 
-            // Render - state is a separate field, no borrow conflict
-            self.terminal.draw(|frame| {
-                view::view(&self.state, frame);
-            })?;
+                // Render - state is a separate field, no borrow conflict
+                self.terminal.draw(|frame| {
+                    view::view(&self.state, frame);
+                })?;
+
+                dirty = false;
+            }
         }
 
         Ok(())
@@ -228,8 +245,13 @@ impl TuiRuntime {
         self.collect_login_result(&mut events);
 
         // Poll terminal events with short timeout for responsive streaming
+        // Batch ALL available events to avoid one-event-per-frame lag on fast scroll
         if event::poll(FRAME_DURATION)? {
             events.push(UiEvent::Terminal(event::read()?));
+            // Drain any remaining buffered events (non-blocking)
+            while event::poll(std::time::Duration::ZERO)? {
+                events.push(UiEvent::Terminal(event::read()?));
+            }
         }
 
         Ok(events)
