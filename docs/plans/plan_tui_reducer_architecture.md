@@ -53,7 +53,7 @@ Refactor `src/ui/tui.rs` (2500 lines) into a clean reducer-based architecture th
 │  - input: TextArea                                          │
 │  - scroll: ScrollState                                      │
 │  - overlay: OverlayState (None | Palette | ModelPicker | Login) │
-│  - engine: EngineState                                      │
+│  - agent: AgentState                                      │
 │  - config, session, history, auth_type, etc.                │
 │                                                             │
 │  NO Terminal, NO crossterm — pure data                      │
@@ -64,7 +64,7 @@ Refactor `src/ui/tui.rs` (2500 lines) into a clean reducer-based architecture th
 │                                                             │
 │  - Tick                                                     │
 │  - Terminal(crossterm::event::Event)                        │
-│  - Engine(EngineEvent)                                      │
+│  - Agent(AgentEvent)                                      │
 │  - TurnFinished(Result<Vec<ChatMessage>, Error>)            │
 │  - LoginResult(Result<(), String>)                          │
 └─────────────────────────────────────────────────────────────┘
@@ -74,8 +74,8 @@ Refactor `src/ui/tui.rs` (2500 lines) into a clean reducer-based architecture th
 │                                                             │
 │  - Render                                                   │
 │  - Quit                                                     │
-│  - StartEngineTurn { prompt, options }                      │
-│  - InterruptEngine                                          │
+│  - StartAgentTurn { prompt, options }                      │
+│  - InterruptAgent                                          │
 │  - SpawnTokenExchange { code, verifier }                    │
 │  - OpenBrowser { url }                                      │
 │  - SaveSession { messages }                                 │
@@ -151,7 +151,7 @@ impl TuiRuntime {
 - Full-screen alt-screen TUI + raw mode + panic hook + Drop restore
     - ✅ Demo: `cargo run --` then quit with `q`; terminal returns to normal
     - Gaps: `restore_terminal()` doesn't disable bracketed paste/mouse capture
-- Input + submit + engine turn spawn + session append
+- Input + submit + agent turn spawn + session append
     - ✅ Demo: type → Enter → see assistant response
     - Gaps: state mutations spread across many methods
 - Streaming + tool events + delta coalescing
@@ -210,7 +210,7 @@ impl TuiRuntime {
     - `command_palette: Option<CommandPaletteState>`
     - `model_picker: Option<ModelPickerState>`
     - `login_state: LoginState`
-    - `engine_state: EngineState`
+    - `agent_state: AgentState`
     - `config`, `session`, `messages`, `command_history`, etc.
 - [x] Migrate initialization logic from `TuiApp::new()` and `with_history()` to `TuiState::new()` / `TuiState::with_history()`
     - Transcript building, command history setup, textarea styling
@@ -236,7 +236,7 @@ impl TuiRuntime {
 
 **Files touched:**
 - `src/ui/tui.rs`: Renamed `TuiApp` to `TuiRuntime`, moved state to separate module
-- `src/ui/state.rs` (new): `TuiState`, `EngineState`, `LoginState`, `CommandPaletteState`, `ModelPickerState`, `ScrollMode`, `AuthType`
+- `src/ui/state.rs` (new): `TuiState`, `AgentState`, `LoginState`, `CommandPaletteState`, `ModelPickerState`, `ScrollMode`, `AuthType`
 - `src/ui/view.rs` (new): `view()`, `render_header()`, `render_transcript()`, overlay render functions
 - `src/ui/commands.rs` (new): `SlashCommand`, `SLASH_COMMANDS`
 - `src/ui/mod.rs`: Updated exports
@@ -255,7 +255,7 @@ impl TuiRuntime {
     pub enum UiEvent {
         Tick,
         Terminal(crossterm::event::Event),
-        Engine(EngineEvent),
+        Agent(AgentEvent),
         TurnFinished(TurnResult),  // Uses dedicated enum instead of Result
         LoginResult(Result<(), String>),
     }
@@ -267,13 +267,13 @@ impl TuiRuntime {
         match event {
             UiEvent::Tick => { state.spinner_frame = ...; vec![] }
             UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event, viewport_height),
-            UiEvent::Engine(e) => { handle_engine_event(state, &e); vec![] }
+            UiEvent::Agent(e) => { handle_agent_event(state, &e); vec![] }
             UiEvent::TurnFinished(r) => handle_turn_finished(state, r),
             UiEvent::LoginResult(r) => { handle_login_result(state, r); vec![] }
         }
     }
     ```
-- [x] Migrate existing `handle_key`, `handle_mouse`, `handle_engine_event` logic into reducer
+- [x] Migrate existing `handle_key`, `handle_mouse`, `handle_agent_event` logic into reducer
 - [x] Handle `tui-textarea` input in reducer: `state.textarea.input(event)` for text input keys
     - Note: `tui-textarea` manages its own undo/redo history internally
 - [x] Keep `LoginEvent` as internal to reducer (subsumed into `update_login()` helper)
@@ -303,15 +303,15 @@ impl TuiRuntime {
 
 ### Slice 4: Effects System ✅
 
-**Goal:** Make engine orchestration and async work explicit effects, not mixed into UI state mutations.
+**Goal:** Make agent orchestration and async work explicit effects, not mixed into UI state mutations.
 
 **Scope checklist:**
 - [x] Create `src/ui/effects.rs` with `UiEffect` enum:
     ```rust
     pub enum UiEffect {
         Quit,
-        StartEngineTurn,  // Reads prompt/options from state
-        InterruptEngine,
+        StartAgentTurn,  // Reads prompt/options from state
+        InterruptAgent,
         SpawnTokenExchange { code: String, verifier: String },
         OpenBrowser { url: String },
         SaveSession { event: SessionEvent },
@@ -325,8 +325,8 @@ impl TuiRuntime {
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
             UiEffect::Quit => self.state.should_quit = true,
-            UiEffect::StartEngineTurn => self.spawn_engine_turn(),
-            UiEffect::InterruptEngine => self.interrupt_engine(),
+            UiEffect::StartAgentTurn => self.spawn_agent_turn(),
+            UiEffect::InterruptAgent => self.interrupt_agent(),
             UiEffect::SpawnTokenExchange { code, verifier } => { ... }
             UiEffect::OpenBrowser { url } => { let _ = open::that(&url); }
             UiEffect::SaveSession { event } => { ... }
@@ -348,7 +348,7 @@ impl TuiRuntime {
 - Effects must not mutate state directly ✓
 
 **Implementation notes:**
-- `StartEngineTurn` has no parameters (cleaner than plan); reads from `state.messages` and `state.config`
+- `StartAgentTurn` has no parameters (cleaner than plan); reads from `state.messages` and `state.config`
 - Added `CreateNewSession` effect for the `/new` command (improvement over plan)
 - Effects executed synchronously in main loop; async work spawns tasks that send results back via channels
 
@@ -499,7 +499,7 @@ src/ui/
 
 | Risk | Mitigation |
 |------|------------|
-| **`JoinHandle` drop semantics** — `EngineState` owns the `JoinHandle`. When moved to `TuiState`, dropping the state aborts the running task. | Preserve current drop behavior. Be careful in reducer not to accidentally drop `EngineState` (and thus the running task) when transitioning states unless intended. |
+| **`JoinHandle` drop semantics** — `AgentState` owns the `JoinHandle`. When moved to `TuiState`, dropping the state aborts the running task. | Preserve current drop behavior. Be careful in reducer not to accidentally drop `AgentState` (and thus the running task) when transitioning states unless intended. |
 | **`TextArea` is not `Clone`** — Cannot derive `Clone` for `TuiState`. | This is fine and intended. Plan eliminates render-time clones. No part of the design relies on cloning `TuiState`. |
 | **Effect ordering** — If effect A must happen before effect B, need explicit sequencing. | For now, effects execute in returned order. Add explicit deps if needed later. |
 

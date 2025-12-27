@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use super::engine::EventRx;
+use super::agent::EventRx;
 use crate::config::paths::sessions_dir;
 
 /// Current schema version for new sessions.
@@ -149,24 +149,24 @@ impl SessionEvent {
 
     /// Converts an `EngineEvent` to a `SessionEvent` if applicable.
     ///
-    /// Not all engine events are persisted. This returns `None` for events
+    /// Not all agent events are persisted. This returns `None` for events
     /// that don't need to be saved (e.g., `AssistantDelta`, `ToolStarted`).
     ///
     /// Note: `AssistantComplete` and user messages are handled separately by the
     /// chat/agent modules since they have additional context.
-    pub fn from_engine(event: &crate::core::events::EngineEvent) -> Option<Self> {
-        use crate::core::events::EngineEvent;
+    pub fn from_agent(event: &crate::core::events::AgentEvent) -> Option<Self> {
+        use crate::core::events::AgentEvent;
 
         match event {
-            EngineEvent::ToolRequested { id, name, input } => {
+            AgentEvent::ToolRequested { id, name, input } => {
                 Some(Self::tool_use(id.clone(), name.clone(), input.clone()))
             }
-            EngineEvent::ToolFinished { id, result } => {
+            AgentEvent::ToolFinished { id, result } => {
                 let output = serde_json::to_value(result).unwrap_or_default();
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
-            EngineEvent::Interrupted => Some(Self::interrupted()),
-            EngineEvent::ThinkingComplete { text, signature } => {
+            AgentEvent::Interrupted => Some(Self::interrupted()),
+            AgentEvent::ThinkingComplete { text, signature } => {
                 Some(Self::thinking(text.clone(), Some(signature.clone())))
             }
             // These are not persisted via this path:
@@ -347,7 +347,7 @@ fn generate_session_id() -> String {
 ///
 /// ```ignore
 /// let session = Session::new()?;
-/// let (tx, rx) = engine::create_event_channel();
+/// let (tx, rx) = agent::create_event_channel();
 /// let persist_handle = spawn_persist_task(session, rx);
 ///
 /// // ... send events to tx ...
@@ -358,7 +358,7 @@ fn generate_session_id() -> String {
 pub fn spawn_persist_task(mut session: Session, mut rx: EventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            if let Some(session_event) = SessionEvent::from_engine(&event) {
+            if let Some(session_event) = SessionEvent::from_agent(&event) {
                 // Best-effort persistence - log errors but don't panic
                 if let Err(e) = session.append(&session_event) {
                     eprintln!("Warning: Failed to persist session event: {}", e);

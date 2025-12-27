@@ -1,12 +1,12 @@
 //! UI event types.
 //!
 //! This module defines the unified event enum for the TUI.
-//! All external inputs (terminal, engine, async results) are converted to `UiEvent`
+//! All external inputs (terminal, agent, async results) are converted to `UiEvent`
 //! before being processed by the reducer.
 
 use crossterm::event::Event as CrosstermEvent;
 
-use crate::core::events::EngineEvent;
+use crate::core::events::AgentEvent;
 
 /// Unified event enum for the TUI.
 ///
@@ -20,8 +20,8 @@ pub enum UiEvent {
     /// Terminal input event (key, mouse, paste, resize).
     Terminal(CrosstermEvent),
 
-    /// Engine event (streaming deltas, tool events, completion, etc.).
-    Engine(EngineEvent),
+    /// Agent event (streaming deltas, tool events, completion, etc.).
+    Agent(AgentEvent),
 
     /// Async login token exchange completed.
     LoginResult(Result<(), String>),

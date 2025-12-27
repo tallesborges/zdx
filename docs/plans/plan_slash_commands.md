@@ -91,7 +91,7 @@
 
 **Failure modes:**
 - Double `/` opens popup twice → guarded with `if self.command_popup.is_none()`
-- Popup open during engine streaming → works (popup is overlay)
+- Popup open during agent streaming → works (popup is overlay)
 
 ---
 
@@ -166,14 +166,14 @@
 
 **Implementation notes:**
 - `/new` now starts a fresh session (creates new session file) rather than just clearing UI
-- `/quit` interrupts any running engine before exiting
+- `/quit interrupts any running agent before exiting
 
 **Checklist:**
 - [x] `/quit` sets `should_quit = true`
 - [x] `/new` clears transcript, messages, resets scroll
 - [x] `/new` starts a new session (if sessions enabled)
 - [x] `/new` shows system message with new session ID
-- [x] Engine state check: block `/new` while streaming (show message)
+- [x] Agent state check: block `/new` while streaming (show message)
 - [x] `/quit` during streaming: interrupt first, then quit
 
 **✅ Demo:** 

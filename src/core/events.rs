@@ -1,6 +1,6 @@
-//! Engine event types for streaming and TUI.
+//! Agent event types for streaming and TUI.
 //!
-//! This module defines the contract for events emitted by the engine.
+//! This module defines the contract for events emitted by the agent.
 //! Events are serializable for future JSON output mode support.
 
 use std::fmt;
@@ -10,10 +10,10 @@ use serde_json::Value;
 
 use crate::providers::anthropic::{ChatMessage, ProviderErrorKind};
 
-/// Events emitted by the engine during execution.
+/// Events emitted by the agent during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum EngineEvent {
+pub enum AgentEvent {
     /// Turn has started processing.
     TurnStarted,
 
@@ -83,7 +83,7 @@ pub enum EngineEvent {
     },
 }
 
-/// Error categories for EngineEvent::Error.
+/// Error categories for AgentEvent::Error.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {

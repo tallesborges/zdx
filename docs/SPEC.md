@@ -25,7 +25,7 @@ Terminal AI tools often break the parts that matter daily:
 ZDX solves this with a boring, reliable core:
 - own the viewport (TUI)
 - transcript as the source of truth
-- UI-agnostic engine (events)
+- UI-agnostic agent (events)
 - deterministic tools
 - append-only session log
 
@@ -42,7 +42,7 @@ ZDX solves this with a boring, reliable core:
 ### Secondary: `zdx exec ...` (non-interactive)
 
 - Script-friendly execution with clean stdout/stderr separation.
-- Same engine, different renderer.
+- Same agent, different renderer.
 
 ### Current focus (non-contract)
 
@@ -67,7 +67,7 @@ ZDX solves this with a boring, reliable core:
 
 - **TUI-first UX:** optimize for reading/navigation/editing in a full-screen terminal app.
 - **Own the viewport:** redraw from in-memory state; the terminal is a render target, not a data store.
-- **Engine/UI separation:** engine emits events; renderers do terminal I/O.
+- **Agent/UI separation:** agent emits events; renderers do terminal I/O.
 - **KISS/YAGNI:** ship the smallest daily-driver value; refactor only after usage proves shape.
 - **YOLO default:** prioritize speed/flow on the user's machine; guardrails are opt-in and low friction.
 - **User journey drives order:** build in the order the user experiences it: start → input → submit → see output → stream → scroll/navigate → follow-up interactions → polish.
@@ -107,13 +107,13 @@ Exit codes (v0.1): `0` success, `1` runtime error, `2` CLI usage error, `130` in
 
 ---
 
-## 8) Architecture contract (engine + renderers)
+## 8) Architecture contract (agent + renderers)
 
-Engine emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 and ADR-0003.
+Agent emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 and ADR-0003.
 
-**Hard rule:** engine performs no terminal I/O (`println!`, styling, cursor moves). Renderers own stdout/stderr and raw mode.
+**Hard rule:** agent performs no terminal I/O (`println!`, styling, cursor moves). Renderers own stdout/stderr and raw mode.
 
-### Required engine event types (Shipped)
+### Required agent event types (Shipped)
 
 - `AssistantDelta { text }`, `AssistantComplete { text }`
 - `ToolRequested { id, name, input }`, `ToolStarted { id, name }`, `ToolFinished { id, result }`

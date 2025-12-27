@@ -5,10 +5,10 @@ Status: Accepted
 
 ## Context
 
-ADR-0002 established that the engine emits `EngineEvent` values into a renderer-provided sink. The current implementation uses a callback-based sink:
+ADR-0002 established that the agent emits `AgentEvent` values into a renderer-provided sink. The current implementation uses a callback-based sink:
 
 ```rust
-pub type EventSink = Box<dyn FnMut(EngineEvent) + Send>;
+pub type EventSink = Box<dyn FnMut(AgentEvent) + Send>;
 ```
 
 This approach has deadlock risks when combined with bounded async channels:
@@ -29,14 +29,14 @@ These issues block progress toward:
 Replace the callback-based `EventSink` with `tokio::sync::mpsc` bounded channels and concurrent worker tasks:
 
 ```rust
-pub type EventTx = mpsc::Sender<Arc<EngineEvent>>;
-pub type EventRx = mpsc::Receiver<Arc<EngineEvent>>;
+pub type EventTx = mpsc::Sender<Arc<AgentEvent>>;
+pub type EventRx = mpsc::Receiver<Arc<AgentEvent>>;
 ```
 
 ### Architecture
 
 ```
-Engine (run_turn)
+Agent (run_turn)
     │
     └── tx.send(Arc<Event>).await
             │
@@ -63,7 +63,7 @@ Engine (run_turn)
 
 - **Bounded channels** (~64 capacity) provide backpressure
 - **Owned state** — each task owns its renderer/session (no shared mutex)
-- **Arc<EngineEvent>** for efficient cloning across tasks
+- **Arc<AgentEvent>** for efficient cloning across tasks
 - **Fan-out task** preserves event ordering to all consumers
 - **Clean shutdown** via sender drop (tasks exit when channel closes)
 
@@ -76,7 +76,7 @@ Engine (run_turn)
 
 ### Positive
 - Eliminates deadlock risks from mutex + async interaction
-- Enables concurrent rendering while engine streams
+- Enables concurrent rendering while agent streams
 - Prepares architecture for TUI (swap renderer task)
 - Testable via channel inspection (no callback mocking)
 - Bounded memory usage under fast streams
@@ -84,7 +84,7 @@ Engine (run_turn)
 ### Negative
 - Breaking change to `EventSink` type (all callers must update)
 - Slight complexity increase (task spawning, channel wiring)
-- `Arc<EngineEvent>` adds allocation per event (mitigated by coalescing)
+- `Arc<AgentEvent>` adds allocation per event (mitigated by coalescing)
 
 ### Migration
 
@@ -102,5 +102,5 @@ Engine (run_turn)
 
 ## References
 
-- ADR-0002: Engine emits events to a renderer sink
+- ADR-0002: Agent emits events to a renderer sink
 - Plans: `docs/plans/` (implementation checklists)

@@ -14,6 +14,6 @@ The original custom `InputState` + `TtyHandler` implementation was replaced with
 
 - **Input handling:** Now uses `tui-textarea` crate instead of custom `InputState`
 - **Rendering:** Uses ratatui's `Viewport::Inline` for fixed input area at bottom
-- **Interrupt handling:** Engine tool execution made interruptible via `tokio::select!` (kept from this plan)
+- **Interrupt handling:** Agent tool execution made interruptible via `tokio::select!` (kept from this plan)
 
 See `plan_ratatui_minimal.md` for the current implementation.
