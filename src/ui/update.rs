@@ -562,6 +562,17 @@ pub fn handle_agent_event(
             state.transcript.push(tool_cell);
             vec![]
         }
+        AgentEvent::ToolInputReady { id, input, .. } => {
+            // Update the existing tool cell with the complete input
+            if let Some(cell) = state
+                .transcript
+                .iter_mut()
+                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == id))
+            {
+                cell.set_tool_input(input.clone());
+            }
+            vec![]
+        }
         AgentEvent::ToolStarted { .. } => vec![],
         AgentEvent::ToolFinished { id, result } => {
             if let Some(cell) = state

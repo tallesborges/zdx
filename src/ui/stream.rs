@@ -176,7 +176,7 @@ impl CliRenderer {
                     self.needs_final_newline = true;
                 }
             }
-            AgentEvent::ToolRequested { id, name, input } => {
+            AgentEvent::ToolRequested { id, name, .. } => {
                 // Ensure newline after assistant text before tool status
                 if self.needs_final_newline {
                     let _ = writeln!(self.stdout);
@@ -186,13 +186,18 @@ impl CliRenderer {
 
                 // Track tool name for ToolFinished rendering
                 self.tool_names.insert(id.clone(), name.clone());
-
+            }
+            AgentEvent::ToolInputReady { id, name, input } => {
                 // Emit debug line for bash tool (per SPEC §10)
+                // This is emitted here (not ToolRequested) because we now have the full input
                 if name == "bash"
                     && let Some(command) = input.get("command").and_then(|v| v.as_str())
                 {
                     let _ = writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
                 }
+
+                // Track tool name for ToolFinished rendering (if not already tracked)
+                self.tool_names.entry(id.clone()).or_insert(name.clone());
             }
             AgentEvent::ToolStarted { id, name } => {
                 self.tool_start_times.insert(id, Instant::now());

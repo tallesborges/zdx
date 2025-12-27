@@ -276,10 +276,23 @@ pub async fn run_turn(
                     name,
                 } => {
                     if block_type == "tool_use" {
+                        let tool_id = id.unwrap_or_default();
+                        let tool_name = name.unwrap_or_default();
+
+                        // Emit ToolRequested immediately so UI shows the tool with a spinner
+                        // while the JSON input is still streaming. This is especially important
+                        // for tools like `write` where the content field can be very large.
+                        sink.important(AgentEvent::ToolRequested {
+                            id: tool_id.clone(),
+                            name: tool_name.clone(),
+                            input: serde_json::json!({}),
+                        })
+                        .await;
+
                         tool_uses.push(ToolUseBuilder {
                             index,
-                            id: id.unwrap_or_default(),
-                            name: name.unwrap_or_default(),
+                            id: tool_id,
+                            name: tool_name,
                             input_json: String::new(),
                         });
                     } else if block_type == "thinking" {
@@ -319,15 +332,14 @@ pub async fn run_turn(
                         .await;
                     }
 
-                    // Check if this is a tool_use block finishing - emit ToolRequested
-                    // immediately so UI can show the tool with its command while
-                    // other content blocks may still be streaming.
+                    // Check if this is a tool_use block finishing - emit ToolInputReady
+                    // with the complete input for session persistence.
                     if let Some(tu) = tool_uses.iter().find(|t| t.index == index) {
                         // Try to parse the input JSON; if it fails, use empty object
                         // (the full error will be handled later when finalizing)
                         let input: Value = serde_json::from_str(&tu.input_json)
                             .unwrap_or_else(|_| serde_json::json!({}));
-                        sink.important(AgentEvent::ToolRequested {
+                        sink.important(AgentEvent::ToolInputReady {
                             id: tu.id.clone(),
                             name: tu.name.clone(),
                             input,
@@ -411,7 +423,7 @@ pub async fn run_turn(
             }
 
             // Note: ToolRequested events are already emitted during streaming
-            // (at ContentBlockStop for each tool_use block) for immediate UI feedback.
+            // (at ContentBlockStart for each tool_use block) for immediate UI feedback.
 
             // Build the assistant response with thinking + tool_use blocks
             let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &finalized);

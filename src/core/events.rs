@@ -29,8 +29,17 @@ pub enum AgentEvent {
     /// Complete response from the assistant.
     AssistantComplete { text: String },
 
-    /// Model has decided to call a tool (before execution begins).
+    /// Model has decided to call a tool (emitted early for UI feedback).
+    /// The input may be empty at this point; ToolInputReady follows with full input.
     ToolRequested {
+        id: String,
+        name: String,
+        input: Value,
+    },
+
+    /// Tool input JSON is fully received (for session persistence).
+    /// Emitted after ToolRequested once all input JSON has been streamed.
+    ToolInputReady {
         id: String,
         name: String,
         input: Value,

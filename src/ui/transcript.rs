@@ -318,6 +318,21 @@ impl HistoryCell {
         }
     }
 
+    /// Updates the input on a tool cell.
+    ///
+    /// Used when ToolInputReady arrives with the complete input after
+    /// ToolRequested created the cell with empty input.
+    ///
+    /// Panics if called on a non-tool cell.
+    pub fn set_tool_input(&mut self, new_input: serde_json::Value) {
+        match self {
+            HistoryCell::Tool { input, .. } => {
+                *input = new_input;
+            }
+            _ => panic!("set_tool_input called on non-tool cell"),
+        }
+    }
+
     /// Sets the result on a tool cell and updates state to Done or Error.
     ///
     /// Panics if called on a non-tool cell.
