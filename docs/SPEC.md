@@ -7,13 +7,17 @@
 
 ## 1) Vision
 
-ZDX is a **daily-driver terminal app** you can keep open all day: calm, fast, and dependable under real work.
+ZDX is a **daily-driver terminal app** you can keep open all day: calm, fast, and focused on developer productivity.
 
 The TUI is the product. A CLI mode exists to support automation and scripting.
 
 ---
 
 ## 2) Why
+
+**Learning by building.** This project exists to explore how agentic coding tools work by implementing one from scratch. It won't have the cleanest architecture — features ship fast, and design emerges from iteration.
+
+**Developer UX is the priority.** Every feature should reduce friction and help developers move faster. If it doesn't improve the daily workflow, it doesn't belong.
 
 Terminal AI tools often break the parts that matter daily:
 - flicker/jank from naive redraw
@@ -65,16 +69,13 @@ ZDX solves this with a boring, reliable core:
 
 ## 5) Principles
 
+- **Developer UX is the priority:** features that improve daily workflow win. Ship fast unless it degrades core UX.
 - **TUI-first UX:** optimize for reading/navigation/editing in a full-screen terminal app.
-- **Own the viewport:** redraw from in-memory state; the terminal is a render target, not a data store.
-- **Agent/UI separation:** agent emits events; renderers do terminal I/O.
 - **KISS/YAGNI:** ship the smallest daily-driver value; refactor only after usage proves shape.
-- **YOLO default:** prioritize speed/flow on the user's machine; guardrails are opt-in and low friction.
+- **Ship-first:** get it working, ship it, learn from usage. Refactor when the shape is proven.
 - **User journey drives order:** build in the order the user experiences it: start → input → submit → see output → stream → scroll/navigate → follow-up interactions → polish.
-- **Ship-first:** prioritize a daily-usable MVP early; refactor later (YAGNI).
-- **Demoable slices:** every slice must be runnable and include ✅ Demo criteria.
-- **For UI work:** prefer reducer pattern: update(state, event); render reads state only.
-- **Call out key decisions/risks early:** (keybindings + focus, input vs navigation conflicts, backpressure, performance).
+- **Learn by doing:** explore TUI tech hands-on; accept messy code as part of the learning process.
+- **YOLO default:** no guardrails, prioritize speed and flow.
 
 ---
 
