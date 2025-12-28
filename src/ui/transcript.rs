@@ -405,9 +405,15 @@ impl HistoryCell {
                 is_interrupted,
                 ..
             } => {
-                let prefix = "| ";
-                let mut lines =
-                    render_prefixed_content(prefix, content, width, Style::UserPrefix, Style::User);
+                let prefix = "│ ";
+                let mut lines = render_prefixed_content(
+                    prefix,
+                    content,
+                    width,
+                    Style::UserPrefix,
+                    Style::User,
+                    true,
+                );
 
                 // Append interrupted indicator to last line if request was cancelled
                 if *is_interrupted && let Some(last) = lines.last_mut() {
@@ -628,7 +634,14 @@ impl HistoryCell {
             }
             HistoryCell::System { content, .. } => {
                 let prefix = "System: ";
-                render_prefixed_content(prefix, content, width, Style::SystemPrefix, Style::System)
+                render_prefixed_content(
+                    prefix,
+                    content,
+                    width,
+                    Style::SystemPrefix,
+                    Style::System,
+                    false,
+                )
             }
             HistoryCell::Thinking {
                 content,
@@ -643,6 +656,7 @@ impl HistoryCell {
                     width,
                     Style::ThinkingPrefix,
                     Style::Thinking,
+                    false,
                 );
 
                 // Add streaming indicator if still streaming
@@ -781,7 +795,7 @@ impl StyledLine {
 pub enum Style {
     /// No styling.
     Plain,
-    /// User message prefix ("| ").
+    /// User message prefix ("│ ").
     UserPrefix,
     /// User message content (italic).
     User,
@@ -844,13 +858,15 @@ pub enum Style {
 /// Renders content with a prefix, handling line wrapping.
 ///
 /// The prefix appears on the first line; subsequent wrapped lines
-/// are indented to align with the content start.
+/// are indented to align with the content start (or repeat the prefix
+/// if `repeat_prefix` is true).
 fn render_prefixed_content(
     prefix: &str,
     content: &str,
     width: usize,
     prefix_style: Style,
     content_style: Style,
+    repeat_prefix: bool,
 ) -> Vec<StyledLine> {
     let mut lines = Vec::new();
     // Use display width for prefix
@@ -866,22 +882,15 @@ fn render_prefixed_content(
     // Split content into paragraphs (preserve blank lines)
     let paragraphs: Vec<&str> = content.split('\n').collect();
 
-    let mut is_first_line = true;
-
     for paragraph in paragraphs {
         if paragraph.is_empty() {
-            // Empty paragraph = blank line (with indent for continuation)
-            if is_first_line {
-                lines.push(StyledLine {
-                    spans: vec![StyledSpan {
-                        text: prefix.to_string(),
-                        style: prefix_style,
-                    }],
-                });
-                is_first_line = false;
-            } else {
-                lines.push(StyledLine::empty());
-            }
+            // Empty paragraph = blank line with prefix
+            lines.push(StyledLine {
+                spans: vec![StyledSpan {
+                    text: prefix.to_string(),
+                    style: prefix_style,
+                }],
+            });
             continue;
         }
 
@@ -891,12 +900,18 @@ fn render_prefixed_content(
         for wrapped_line in wrapped {
             let mut spans = Vec::new();
 
-            if is_first_line {
+            if repeat_prefix {
+                // Repeat the styled prefix on every line
                 spans.push(StyledSpan {
                     text: prefix.to_string(),
                     style: prefix_style,
                 });
-                is_first_line = false;
+            } else if lines.is_empty() {
+                // First line gets the prefix
+                spans.push(StyledSpan {
+                    text: prefix.to_string(),
+                    style: prefix_style,
+                });
             } else {
                 // Indent continuation lines (use display width for proper alignment)
                 spans.push(StyledSpan {
@@ -1073,7 +1088,7 @@ mod tests {
 
         assert_eq!(lines.len(), 1);
         assert_eq!(lines[0].spans.len(), 2);
-        assert_eq!(lines[0].spans[0].text, "| ");
+        assert_eq!(lines[0].spans[0].text, "│ ");
         assert_eq!(lines[0].spans[1].text, "Hello, world!");
     }
 
@@ -1082,14 +1097,14 @@ mod tests {
         let cell = HistoryCell::user("This is a longer message that should wrap");
         let lines = cell.display_lines(25, 0);
 
-        // "| " is 2 bytes, leaving 23 for content
+        // "│ " is 1 char (3 bytes) + space = 2 display columns, leaving 23 for content
         assert!(lines.len() > 1, "Should wrap to multiple lines");
 
         // First line has prefix
-        assert_eq!(lines[0].spans[0].text, "| ");
+        assert_eq!(lines[0].spans[0].text, "│ ");
 
-        // Continuation lines have indent (2 spaces)
-        assert_eq!(lines[1].spans[0].text, "  ");
+        // Continuation lines also have the prefix (not just spaces)
+        assert_eq!(lines[1].spans[0].text, "│ ");
     }
 
     #[test]
@@ -1261,11 +1276,10 @@ mod tests {
         let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 3);
-        // First line has prefix
-        assert_eq!(lines[0].spans[0].text, "| ");
-        // Other lines have indent (2 spaces)
-        assert_eq!(lines[1].spans[0].text, "  ");
-        assert_eq!(lines[2].spans[0].text, "  ");
+        // All lines have the vertical bar prefix
+        assert_eq!(lines[0].spans[0].text, "│ ");
+        assert_eq!(lines[1].spans[0].text, "│ ");
+        assert_eq!(lines[2].spans[0].text, "│ ");
     }
 
     #[test]
@@ -1274,7 +1288,7 @@ mod tests {
         let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 1);
-        assert_eq!(lines[0].spans[0].text, "| ");
+        assert_eq!(lines[0].spans[0].text, "│ ");
     }
 
     #[test]
@@ -1479,16 +1493,15 @@ mod tests {
 
     #[test]
     fn test_user_prefix_alignment_with_unicode() {
-        // User prefix "| " is 2 bytes and 2 columns
-        // Continuation lines should align correctly
+        // User prefix "│ " is 4 bytes (3 for │ + 1 for space) and 2 display columns
+        // All lines should have the prefix (not just indentation)
         let cell = HistoryCell::user("First line\nSecond line");
         let lines = cell.display_lines(80, 0);
 
         assert_eq!(lines.len(), 2);
-        // First line has "| " prefix
-        assert_eq!(lines[0].spans[0].text, "| ");
-        // Second line has 2-space indent for alignment
-        assert_eq!(lines[1].spans[0].text, "  ");
+        // All lines have "│ " prefix
+        assert_eq!(lines[0].spans[0].text, "│ ");
+        assert_eq!(lines[1].spans[0].text, "│ ");
     }
 
     // ========================================================================
