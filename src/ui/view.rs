@@ -86,10 +86,10 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     // Use ScrollState for offset calculation (uses cached line count)
     let scroll_offset = {
         let max_offset = total_lines.saturating_sub(transcript_height);
-        if state.scroll.is_following() {
+        if state.transcript.scroll.is_following() {
             total_lines.saturating_sub(transcript_height)
         } else {
-            state.scroll.get_offset(transcript_height).min(max_offset)
+            state.transcript.scroll.get_offset(transcript_height).min(max_offset)
         }
     };
 
@@ -483,11 +483,11 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    for cell in &state.transcript {
+    for cell in &state.transcript.cells {
         let styled_lines = cell.display_lines_cached(
             width,
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
-            &state.wrap_cache,
+            &state.transcript.wrap_cache,
         );
         for styled_line in styled_lines {
             lines.push(convert_styled_line(styled_line));

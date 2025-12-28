@@ -115,6 +115,7 @@ fn execute_model_selection(state: &mut TuiState) -> Vec<UiEffect> {
 
     state
         .transcript
+        .cells
         .push(HistoryCell::system(format!("Switched to {}", display_name)));
 
     vec![UiEffect::PersistModel { model: model_id }]

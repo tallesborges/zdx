@@ -262,6 +262,87 @@ impl ScrollState {
 }
 
 // ============================================================================
+// Transcript State
+// ============================================================================
+
+/// Transcript display state.
+///
+/// Encapsulates all state related to displaying the transcript: cells, scroll,
+/// layout dimensions, and rendering cache.
+#[derive(Debug)]
+pub struct TranscriptState {
+    /// Transcript cells (in-memory display).
+    pub cells: Vec<crate::ui::transcript::HistoryCell>,
+
+    /// Scroll state (mode, offset, cached line count).
+    pub scroll: ScrollState,
+
+    /// Cache for wrapped line rendering.
+    pub wrap_cache: crate::ui::transcript::WrapCache,
+
+    /// Available height for transcript viewport.
+    pub viewport_height: usize,
+
+    /// Current terminal dimensions (width, height).
+    pub terminal_size: (u16, u16),
+}
+
+impl Default for TranscriptState {
+    fn default() -> Self {
+        Self {
+            cells: Vec::new(),
+            scroll: ScrollState::default(),
+            wrap_cache: crate::ui::transcript::WrapCache::new(),
+            viewport_height: 20,
+            terminal_size: (80, 24),
+        }
+    }
+}
+
+impl TranscriptState {
+    /// Creates a new TranscriptState with default values.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Scrolls up by the given number of lines.
+    pub fn scroll_up(&mut self, lines: usize) {
+        self.scroll.scroll_up(lines, self.viewport_height);
+    }
+
+    /// Scrolls down by the given number of lines.
+    pub fn scroll_down(&mut self, lines: usize) {
+        self.scroll.scroll_down(lines, self.viewport_height);
+    }
+
+    /// Scrolls up by one page.
+    pub fn page_up(&mut self) {
+        self.scroll.page_up(self.viewport_height);
+    }
+
+    /// Scrolls down by one page.
+    pub fn page_down(&mut self) {
+        self.scroll.page_down(self.viewport_height);
+    }
+
+    /// Scrolls to the top of the transcript.
+    pub fn scroll_to_top(&mut self) {
+        self.scroll.scroll_to_top();
+    }
+
+    /// Scrolls to the bottom of the transcript.
+    pub fn scroll_to_bottom(&mut self) {
+        self.scroll.scroll_to_bottom();
+    }
+
+    /// Updates layout dimensions based on terminal size and input height.
+    pub fn update_layout(&mut self, terminal_size: (u16, u16), viewport_height: usize) {
+        self.terminal_size = terminal_size;
+        self.viewport_height = viewport_height;
+    }
+}
+
+// ============================================================================
 // Agent State
 // ============================================================================
 
@@ -506,8 +587,8 @@ pub struct TuiState {
     pub should_quit: bool,
     /// Text area for input.
     pub textarea: TextArea<'static>,
-    /// Transcript cells (in-memory display).
-    pub transcript: Vec<HistoryCell>,
+    /// Transcript display state (cells, scroll, layout, cache).
+    pub transcript: TranscriptState,
     /// Agent configuration.
     pub config: Config,
     /// Agent options (root path, etc).
@@ -518,8 +599,6 @@ pub struct TuiState {
     pub messages: Vec<ChatMessage>,
     /// Current agent state.
     pub agent_state: AgentState,
-    /// Scroll state for transcript (mode, offset, cached line count).
-    pub scroll: ScrollState,
     /// Session for persistence (if enabled).
     pub session: Option<Session>,
     /// Command history for ↑/↓ navigation.
@@ -540,8 +619,6 @@ pub struct TuiState {
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
-    /// Cache for wrapped line rendering.
-    pub wrap_cache: WrapCache,
     /// Cumulative token usage for this session.
     pub usage: SessionUsage,
 }
@@ -585,10 +662,10 @@ impl TuiState {
         let display_path = shorten_path(&agent_opts.root);
 
         // Build transcript from history
-        let transcript = Self::build_transcript_from_history(&history);
+        let transcript_cells = Self::build_transcript_from_history(&history);
 
         // Build command history from previous user messages
-        let command_history: Vec<String> = transcript
+        let command_history: Vec<String> = transcript_cells
             .iter()
             .filter_map(|cell| {
                 if let HistoryCell::User { content, .. } = cell {
@@ -599,6 +676,10 @@ impl TuiState {
             })
             .collect();
 
+        // Create transcript state with history
+        let mut transcript = TranscriptState::new();
+        transcript.cells = transcript_cells;
+
         Self {
             should_quit: false,
             textarea,
@@ -608,7 +689,6 @@ impl TuiState {
             system_prompt,
             messages: history,
             agent_state: AgentState::Idle,
-            scroll: ScrollState::new(),
             session,
             command_history,
             history_index: None,
@@ -619,7 +699,6 @@ impl TuiState {
             auth_type: AuthType::detect(),
             git_branch,
             display_path,
-            wrap_cache: WrapCache::new(),
             usage: SessionUsage::new(),
         }
     }
