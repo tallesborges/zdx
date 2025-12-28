@@ -4,6 +4,17 @@ An agentic TUI powered by Claude for interactive coding assistance.
 
 ![zdx demo](docs/assets/demo.gif)
 
+## Features
+
+- **Tools:** bash, read (files + images), edit, write
+- **Streaming markdown** with syntax highlighting and table support
+- **Extended thinking** with configurable levels and block display
+- **Model picker** (Ctrl+K) and **thinking level picker** (Ctrl+T)
+- **Command palette** with `/` commands
+- **Token usage** display with pricing
+- **Session persistence** — resume any previous conversation
+- **Project context** via `AGENTS.md` files
+
 ## Why this exists
 
 This is a **personal learning project**, built for fun and curiosity. The goal is to explore how agentic coding tools work by building one from scratch.
