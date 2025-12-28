@@ -9,8 +9,8 @@ An agentic TUI powered by Claude for interactive coding assistance.
 - **Tools:** bash, read (files + images), edit, write
 - **Streaming markdown** with syntax highlighting and table support
 - **Extended thinking** with configurable levels and block display
-- **Model picker** and **thinking level picker** (Ctrl+T)
-- **Command palette** with `/` commands
+- **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
+- **Thinking level picker** (Ctrl+T)
 - **Token usage** display with pricing
 - **Session persistence** — resume any previous conversation
 - **Project context** via `AGENTS.md` files
