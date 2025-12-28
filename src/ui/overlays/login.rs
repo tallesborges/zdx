@@ -89,6 +89,7 @@ pub fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
             state.refresh_auth_type();
             state
                 .transcript
+                .cells
                 .push(HistoryCell::system("Logged in with Anthropic OAuth."));
             vec![]
         }

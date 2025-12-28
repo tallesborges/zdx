@@ -119,7 +119,7 @@ fn execute_thinking_selection(state: &mut TuiState) -> Vec<UiEffect> {
     } else {
         format!("Thinking level set to {}", level.display_name())
     };
-    state.transcript.push(HistoryCell::system(message));
+    state.transcript.cells.push(HistoryCell::system(message));
 
     vec![UiEffect::PersistThinking { level }]
 }
