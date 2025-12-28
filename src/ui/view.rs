@@ -38,8 +38,7 @@ const TRANSCRIPT_MARGIN: u16 = 1;
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Spinner speed divisor (render frames per spinner frame).
-/// At 30fps render rate, 3 gives ~10fps spinner animation.
-const SPINNER_SPEED_DIVISOR: usize = 3;
+const SPINNER_SPEED_DIVISOR: usize = 6;
 
 /// Calculates the dynamic input height based on content and terminal size.
 ///
