@@ -27,7 +27,7 @@ This plan outlines the steps to move from the current inline-viewport TUI to the
 - ✅ Phase 1b: Stable IDs + timestamps
 - ✅ Phase 2a: Plain text wrap + scroll
 - ⏳ Phase 2b: Markdown rendering (strict subset)
-- ⏳ Phase 2c: Selection + copy
+- ✅ Phase 2c: Selection + copy
 - ✅ Phase 3: Tool UI
 - ⏳ Phase 4: Streaming fidelity + performance
 - ✅ Phase 5: Input polish
@@ -390,23 +390,32 @@ Deliverables
 - [ ] Store raw markdown in cells; render styled at display time.
 - [ ] ✅ Check-in: code blocks render with background, bold/italic work.
 
-## Phase 2c: Selection + copy
+## Phase 2c: Selection + copy ✅
 Goal: Select and copy transcript text.
 
 ### Unicode/grapheme decision
 - **grapheme index** for selection (user-visible character)
-- Add `unicode-segmentation` crate
+- [x] Add `unicode-segmentation` crate
 
 ### Copy transport decision
-- [ ] **OSC 52** (terminal clipboard): works in many terminals
-- [ ] **System clipboard** fallback (`arboard` crate)
-- [ ] **Internal buffer** fallback if both fail
+- [x] **OSC 52** (terminal clipboard): works in many terminals
+- [x] **System clipboard** fallback (`arboard` crate)
+- [ ] **Internal buffer** fallback if both fail (deferred - OSC52 + arboard covers most cases)
 
 Deliverables
-- [ ] Position mapping: `(visual_line, column)` ↔ `(cell_id, raw_text_range)`.
-- [ ] Selection overlay on visible lines.
-- [ ] Copy reconstructs text with correct wrapping.
-- [ ] ✅ Check-in: select text, copy, paste elsewhere matches.
+- [x] Position mapping: `(visual_line, column)` ↔ `(cell_id, raw_text_range)`.
+- [x] Selection overlay on visible lines.
+- [x] Copy reconstructs text with correct wrapping.
+- [x] ✅ Check-in: select text, copy, paste elsewhere matches.
+
+**Implementation notes:**
+- `src/ui/selection.rs`: New module with `SelectionState`, `PositionMap`, `LineMapping`, `Clipboard`.
+- Uses `RefCell` for `PositionMap` (like `WrapCache`) to allow updates during immutable render.
+- Mouse events: Left-click starts selection, drag extends, release finishes.
+- Keyboard: `Ctrl+C` copies if selection exists (else original behavior), `Esc` clears selection.
+- Selection highlighted with `Modifier::REVERSED` style overlay.
+- OSC 52 clipboard tried first (works over SSH), then `arboard` system clipboard.
+- Position map built during `render_transcript()` to track visual line → cell/grapheme mappings.
 
 ## Phase 3: Tool UI ✅
 Goal: Show tool execution in transcript.

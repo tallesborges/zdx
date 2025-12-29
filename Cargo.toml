@@ -26,6 +26,8 @@ sha2 = "0.10"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "time", "process", "macros", "sync"] }
 toml = "0.8"
 unicode-width = "0.2"
+unicode-segmentation = "1.12"
+arboard = { version = "3", default-features = false }
 pulldown-cmark = "0.13"
 comfy-table = "7"
 toml_edit = "0.22"

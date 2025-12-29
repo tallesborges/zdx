@@ -13,12 +13,14 @@
 //! - `transcript`: Virtual transcript model for chat cells
 //! - `terminal`: Terminal lifecycle management (setup/restore/panic hook)
 //! - `markdown`: Markdown parsing and styled text wrapping for assistant responses
+//! - `selection`: Transcript text selection and copy functionality
 
 pub mod commands;
 pub mod effects;
 pub mod events;
 pub mod markdown;
 pub mod overlays;
+pub mod selection;
 pub mod state;
 pub mod stream;
 pub mod terminal;
