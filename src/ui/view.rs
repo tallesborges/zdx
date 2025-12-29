@@ -19,6 +19,7 @@ use crate::models::ModelOption;
 use crate::ui::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
 };
+use crate::ui::selection::SelectionState;
 use crate::ui::state::{AgentState, AuthType, OverlayState, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
@@ -32,7 +33,8 @@ const INPUT_HEIGHT_MAX_PERCENT: f32 = 0.4;
 const STATUS_HEIGHT: u16 = 1;
 
 /// Horizontal margin for the transcript area (left and right).
-const TRANSCRIPT_MARGIN: u16 = 1;
+/// Transcript horizontal margin (padding on each side).
+pub const TRANSCRIPT_MARGIN: u16 = 1;
 
 /// Spinner frames for status line animation.
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
@@ -484,8 +486,17 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 }
 
 /// Renders the transcript into ratatui Lines.
+///
+/// Also builds the position map for selection coordinate translation.
 fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    use crate::ui::selection::LineMapping;
+
     let mut lines = Vec::new();
+
+    // Clear and rebuild the position map
+    state.transcript.position_map.clear();
 
     for cell in &state.transcript.cells {
         let styled_lines = cell.display_lines_cached(
@@ -493,10 +504,33 @@ fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
             &state.transcript.wrap_cache,
         );
+
         for styled_line in styled_lines {
-            lines.push(convert_styled_line(styled_line));
+            // Build the line text for position mapping
+            let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
+            let grapheme_count = line_text.graphemes(true).count();
+
+            // Add to position map
+            state
+                .transcript
+                .position_map
+                .push(LineMapping { text: line_text });
+
+            // Convert and add the line
+            let line_idx = lines.len();
+            let converted = convert_styled_line_with_selection(
+                styled_line,
+                &state.transcript.selection,
+                line_idx,
+                grapheme_count,
+            );
+            lines.push(converted);
         }
-        // Add blank line between cells
+
+        // Add blank line between cells (also tracked in position map)
+        state.transcript.position_map.push(LineMapping {
+            text: String::new(),
+        });
         lines.push(Line::default());
     }
 
@@ -514,6 +548,71 @@ fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
         })
         .collect();
     Line::from(spans)
+}
+
+/// Converts a StyledLine to a ratatui Line with selection highlighting.
+///
+/// If the line (at `line_idx`) is within the selection range, the selected
+/// portion is rendered with a reversed background.
+fn convert_styled_line_with_selection(
+    styled_line: StyledLine,
+    selection: &SelectionState,
+    line_idx: usize,
+    grapheme_count: usize,
+) -> Line<'static> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    // Check if this line has any selection
+    let Some((sel_start, sel_end)) = selection.line_selection(line_idx, grapheme_count) else {
+        // No selection on this line, use normal rendering
+        return convert_styled_line(styled_line);
+    };
+
+    // Build spans with selection highlighting
+    let mut result_spans: Vec<Span<'static>> = Vec::new();
+    let mut current_grapheme = 0usize;
+
+    for span in styled_line.spans {
+        let span_graphemes: Vec<&str> = span.text.graphemes(true).collect();
+        let span_len = span_graphemes.len();
+        let span_end = current_grapheme + span_len;
+
+        let base_style = convert_style(span.style);
+        let selected_style = base_style.add_modifier(Modifier::REVERSED);
+
+        // Check overlap with selection
+        let overlap_start = sel_start.max(current_grapheme);
+        let overlap_end = sel_end.min(span_end);
+
+        if overlap_start >= overlap_end {
+            // No overlap with selection
+            result_spans.push(Span::styled(span.text, base_style));
+        } else {
+            // Partial or full overlap - split the span
+            let rel_start = overlap_start - current_grapheme;
+            let rel_end = overlap_end - current_grapheme;
+
+            // Before selection
+            if rel_start > 0 {
+                let before: String = span_graphemes[..rel_start].join("");
+                result_spans.push(Span::styled(before, base_style));
+            }
+
+            // Selected portion
+            let selected: String = span_graphemes[rel_start..rel_end].join("");
+            result_spans.push(Span::styled(selected, selected_style));
+
+            // After selection
+            if rel_end < span_len {
+                let after: String = span_graphemes[rel_end..].join("");
+                result_spans.push(Span::styled(after, base_style));
+            }
+        }
+
+        current_grapheme = span_end;
+    }
+
+    Line::from(result_spans)
 }
 
 /// Converts a transcript Style to a ratatui Style.

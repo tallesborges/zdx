@@ -20,9 +20,7 @@ use crate::ui::state::{AgentState, OverlayState, TuiState};
 use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
-/// Set to 1 for smooth scrolling on macOS trackpads (which generate many events
-/// per gesture). Traditional mouse wheels work fine with single-line increments.
-const MOUSE_SCROLL_LINES: usize = 1;
+const MOUSE_SCROLL_LINES: usize = 3;
 
 /// The main reducer function.
 ///
@@ -33,6 +31,8 @@ pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::Tick => {
             // Advance spinner animation
             state.spinner_frame = state.spinner_frame.wrapping_add(1);
+            // Check if selection should be auto-cleared after copy
+            state.transcript.check_selection_timeout();
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event),
@@ -77,6 +77,8 @@ fn handle_paste(state: &mut TuiState, text: &str) {
 }
 
 fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent) {
+    use crate::ui::view::TRANSCRIPT_MARGIN;
+
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             // Accumulate negative delta (up = negative)
@@ -92,8 +94,108 @@ fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent) {
                 .scroll_accumulator
                 .accumulate(MOUSE_SCROLL_LINES as i32);
         }
+        MouseEventKind::Down(crossterm::event::MouseButton::Left) => {
+            // Start selection at clicked position
+            if let Some((line, col)) =
+                screen_to_transcript_pos(state, mouse.column, mouse.row, TRANSCRIPT_MARGIN)
+            {
+                state.transcript.start_selection(line, col);
+            }
+        }
+        MouseEventKind::Drag(crossterm::event::MouseButton::Left) => {
+            // Extend selection while dragging
+            if state.transcript.selection.is_selecting
+                && let Some((line, col)) =
+                    screen_to_transcript_pos(state, mouse.column, mouse.row, TRANSCRIPT_MARGIN)
+            {
+                state.transcript.extend_selection(line, col);
+            }
+        }
+        MouseEventKind::Up(crossterm::event::MouseButton::Left) => {
+            // Finish selection and auto-copy if there's selected text
+            state.transcript.finish_selection();
+            if state.transcript.has_selection() {
+                // Copy to clipboard and schedule visual clear
+                let _ = state.transcript.copy_and_schedule_clear();
+            }
+        }
         _ => {}
     }
+}
+
+/// Converts screen coordinates to transcript position (line index, grapheme column).
+///
+/// Returns `None` if the position is outside the transcript area.
+fn screen_to_transcript_pos(
+    state: &TuiState,
+    screen_x: u16,
+    screen_y: u16,
+    margin: u16,
+) -> Option<(usize, usize)> {
+    use unicode_segmentation::UnicodeSegmentation;
+    use unicode_width::UnicodeWidthStr;
+
+    // Check if position is within transcript area horizontally
+    if screen_x < margin {
+        return None;
+    }
+
+    let content_x = (screen_x - margin) as usize;
+
+    // Check if position is within transcript area vertically
+    // The transcript area is at the top, from y=0 to y=viewport_height-1
+    let viewport_height = state.transcript.viewport_height;
+    if screen_y as usize >= viewport_height {
+        return None; // Click is in input or status area, not transcript
+    }
+
+    // Get total line count from position map
+    let total_lines = state.transcript.position_map.len();
+    if total_lines == 0 {
+        return None; // No content to select
+    }
+
+    // Calculate bottom-align padding (when content is shorter than viewport)
+    // This matches the padding logic in view.rs
+    let scroll_offset = state.transcript.scroll.get_offset(viewport_height);
+    let visible_content_lines = total_lines
+        .saturating_sub(scroll_offset)
+        .min(viewport_height);
+    let padding = viewport_height.saturating_sub(visible_content_lines);
+
+    // Adjust screen_y for bottom-align padding
+    let screen_y = screen_y as usize;
+    if screen_y < padding {
+        return None; // Click is in padding area, not content
+    }
+    let content_y = screen_y - padding;
+
+    // Convert to absolute transcript line index
+    let absolute_line = scroll_offset + content_y;
+
+    // Bounds check
+    if absolute_line >= total_lines {
+        return None;
+    }
+
+    // Get the line mapping if available
+    let mapping = state.transcript.position_map.get(absolute_line)?;
+
+    // Convert display column (x position) to grapheme index
+    // We need to count graphemes until we've accumulated enough display width
+    let mut accumulated_width = 0usize;
+    let mut grapheme_idx = 0usize;
+
+    for grapheme in mapping.text.graphemes(true) {
+        let grapheme_width = grapheme.width();
+        if accumulated_width + grapheme_width > content_x {
+            break;
+        }
+        accumulated_width += grapheme_width;
+        grapheme_idx += 1;
+    }
+
+    Some((absolute_line, grapheme_idx))
 }
 
 fn handle_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
@@ -161,6 +263,7 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
             vec![]
         }
         KeyCode::Char('c') if ctrl => {
+            // Ctrl+C: interrupt agent, clear input, or quit
             if state.agent_state.is_running() {
                 vec![UiEffect::InterruptAgent]
             } else if !state.get_input_text().is_empty() {

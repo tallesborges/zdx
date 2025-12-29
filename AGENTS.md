@@ -30,6 +30,7 @@
     - `src/ui/overlays/login.rs`: OAuth login flow overlay
   - `src/ui/commands.rs`: slash command definitions for command palette
   - `src/ui/transcript.rs`: transcript view model (styles, wrapping, rendering)
+  - `src/ui/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
   - `src/ui/stream.rs`: streamed stdout/stderr rendering + exec mode wrapper
   - `src/ui/terminal.rs`: terminal setup, restore, panic hooks
 - `src/tools/`: tool implementations + schemas (bash, edit, read, write)

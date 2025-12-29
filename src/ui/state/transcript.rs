@@ -1,7 +1,9 @@
 //! Transcript display state.
 //!
-//! Manages scroll position, viewport dimensions, and rendering cache for
-//! the transcript area.
+//! Manages scroll position, viewport dimensions, selection state, and
+//! rendering cache for the transcript area.
+
+use crate::ui::selection::{PositionMap, SelectionState};
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -163,7 +165,7 @@ impl ScrollAccumulator {
 /// Transcript display state.
 ///
 /// Encapsulates all state related to displaying the transcript: cells, scroll,
-/// layout dimensions, and rendering cache.
+/// layout dimensions, selection, and rendering cache.
 #[derive(Debug)]
 pub struct TranscriptState {
     /// Transcript cells (in-memory display).
@@ -183,6 +185,13 @@ pub struct TranscriptState {
 
     /// Current terminal dimensions (width, height).
     pub terminal_size: (u16, u16),
+
+    /// Selection state (anchor, cursor, active flag).
+    pub selection: SelectionState,
+
+    /// Position map for selection coordinate translation.
+    /// Rebuilt each render to track visual line → cell/text mappings.
+    pub position_map: PositionMap,
 }
 
 impl Default for TranscriptState {
@@ -194,6 +203,8 @@ impl Default for TranscriptState {
             wrap_cache: crate::ui::transcript::WrapCache::new(),
             viewport_height: 20,
             terminal_size: (80, 24),
+            selection: SelectionState::new(),
+            position_map: PositionMap::new(),
         }
     }
 }
@@ -238,6 +249,54 @@ impl TranscriptState {
     pub fn update_layout(&mut self, terminal_size: (u16, u16), viewport_height: usize) {
         self.terminal_size = terminal_size;
         self.viewport_height = viewport_height;
+    }
+
+    /// Returns true if text is currently selected.
+    pub fn has_selection(&self) -> bool {
+        self.selection.has_selection()
+    }
+
+    /// Starts a new selection at the given visual position.
+    pub fn start_selection(&mut self, line: usize, column: usize) {
+        use crate::ui::selection::VisualPosition;
+        self.selection.start(VisualPosition::new(line, column));
+    }
+
+    /// Extends the selection to the given visual position.
+    pub fn extend_selection(&mut self, line: usize, column: usize) {
+        use crate::ui::selection::VisualPosition;
+        self.selection.extend(VisualPosition::new(line, column));
+    }
+
+    /// Finishes an active selection (mouse button released).
+    pub fn finish_selection(&mut self) {
+        self.selection.finish();
+    }
+
+    /// Gets the selected text using the position map.
+    pub fn get_selected_text(&self) -> Option<String> {
+        let (start, end) = self.selection.get_range()?;
+        Some(self.position_map.get_text_range(start, end))
+    }
+
+    /// Copies the selected text to the clipboard and schedules clear.
+    ///
+    /// Returns `Ok(())` if successful, or an error message if failed.
+    pub fn copy_and_schedule_clear(&mut self) -> Result<(), String> {
+        let text = self.get_selected_text().ok_or("No selection")?;
+        if text.is_empty() {
+            return Err("Selection is empty".to_string());
+        }
+        crate::ui::selection::Clipboard::copy(&text).map_err(|e| e.to_string())?;
+        self.selection.schedule_clear();
+        Ok(())
+    }
+
+    /// Checks if the selection timeout has passed and clears if so.
+    ///
+    /// Returns true if the selection was cleared.
+    pub fn check_selection_timeout(&mut self) -> bool {
+        self.selection.check_and_clear()
     }
 }
 
