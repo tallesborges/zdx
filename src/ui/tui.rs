@@ -81,11 +81,12 @@ pub async fn run_interactive_chat_with_history(
     };
 
     // Add system message for session path
-    if let Some(ref s) = runtime.state.session {
+    if let Some(ref s) = runtime.state.conversation.session {
         let session_path_msg = format!("Session path: {}", s.path().display());
         runtime
             .state
             .transcript
+            .cells
             .push(HistoryCell::system(session_path_msg));
     }
 
@@ -97,7 +98,7 @@ pub async fn run_interactive_chat_with_history(
             .map(|p| format!("  - {}", p.display()))
             .collect();
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        runtime.state.transcript.push(HistoryCell::system(message));
+        runtime.state.transcript.cells.push(HistoryCell::system(message));
     }
 
     runtime.run()?;
@@ -192,9 +193,12 @@ impl TuiRuntime {
             // Collect events from various sources
             let events = self.collect_events()?;
 
-            // Process each event through the reducer
-            let viewport_height = self.transcript_height();
+            // Update transcript layout before processing events
+            let size = self.terminal.size()?;
+            let viewport_height = view::calculate_transcript_height_with_state(&self.state, size.height);
+            self.state.transcript.update_layout((size.width, size.height), viewport_height);
 
+            // Process each event through the reducer
             for event in events {
                 // Tick marks dirty only if agent is running (spinner animation)
                 // Other events always mark dirty
@@ -202,7 +206,7 @@ impl TuiRuntime {
                     UiEvent::Tick => self.state.agent_state.is_running(),
                     _ => true,
                 };
-                let effects = update::update(&mut self.state, event, viewport_height);
+                let effects = update::update(&mut self.state, event);
                 if marks_dirty || !effects.is_empty() {
                     dirty = true;
                 }
@@ -215,9 +219,8 @@ impl TuiRuntime {
                 update::apply_pending_delta(&mut self.state);
 
                 // Update cached line count for scroll calculations
-                let size = self.terminal.size()?;
                 let line_count = view::calculate_line_count(&self.state, size.width as usize);
-                self.state.scroll.update_line_count(line_count);
+                self.state.transcript.scroll.update_line_count(line_count);
 
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {
@@ -274,7 +277,7 @@ impl TuiRuntime {
 
     /// Collects login exchange result if available.
     fn collect_login_result(&mut self, events: &mut Vec<UiEvent>) {
-        let Some(rx) = &mut self.state.login_exchange_rx else {
+        let Some(rx) = &mut self.state.auth.login_rx else {
             return;
         };
 
@@ -322,20 +325,21 @@ impl TuiRuntime {
                     if let Err(e) = open::that(&config_path) {
                         self.state
                             .transcript
+                            .cells
                             .push(HistoryCell::system(format!("Failed to open config: {}", e)));
                     }
                 } else {
-                    self.state.transcript.push(HistoryCell::system(format!(
+                    self.state.transcript.cells.push(HistoryCell::system(format!(
                         "Config file not found: {}",
                         config_path.display()
                     )));
                 }
             }
             UiEffect::SaveSession { event } => {
-                if let Some(ref mut s) = self.state.session
+                if let Some(ref mut s) = self.state.conversation.session
                     && let Err(e) = s.append(&event)
                 {
-                    self.state.transcript.push(HistoryCell::system(format!(
+                    self.state.transcript.cells.push(HistoryCell::system(format!(
                         "Warning: Failed to save session: {}",
                         e
                     )));
@@ -343,7 +347,7 @@ impl TuiRuntime {
             }
             UiEffect::PersistModel { model } => {
                 if let Err(e) = crate::config::Config::save_model(&model) {
-                    self.state.transcript.push(HistoryCell::system(format!(
+                    self.state.transcript.cells.push(HistoryCell::system(format!(
                         "Warning: Failed to save model preference: {}",
                         e
                     )));
@@ -351,7 +355,7 @@ impl TuiRuntime {
             }
             UiEffect::PersistThinking { level } => {
                 if let Err(e) = crate::config::Config::save_thinking_level(level) {
-                    self.state.transcript.push(HistoryCell::system(format!(
+                    self.state.transcript.cells.push(HistoryCell::system(format!(
                         "Warning: Failed to save thinking level: {}",
                         e
                     )));
@@ -360,11 +364,12 @@ impl TuiRuntime {
             UiEffect::CreateNewSession => match session::Session::new() {
                 Ok(new_session) => {
                     let new_path = new_session.path().display().to_string();
-                    self.state.session = Some(new_session);
+                    self.state.conversation.session = Some(new_session);
 
                     // Show session path
                     self.state
                         .transcript
+                        .cells
                         .push(HistoryCell::system(format!("Session path: {}", new_path)));
 
                     // Show loaded AGENTS.md files (same as on startup)
@@ -375,7 +380,7 @@ impl TuiRuntime {
                         ) {
                             Ok(e) => e,
                             Err(err) => {
-                                self.state.transcript.push(HistoryCell::system(format!(
+                                self.state.transcript.cells.push(HistoryCell::system(format!(
                                     "Warning: Failed to load context: {}",
                                     err
                                 )));
@@ -390,16 +395,17 @@ impl TuiRuntime {
                             .map(|p| format!("  - {}", p.display()))
                             .collect();
                         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-                        self.state.transcript.push(HistoryCell::system(message));
+                        self.state.transcript.cells.push(HistoryCell::system(message));
                     }
                 }
                 Err(e) => {
-                    self.state.transcript.push(HistoryCell::system(format!(
+                    self.state.transcript.cells.push(HistoryCell::system(format!(
                         "Warning: Failed to create new session: {}",
                         e
                     )));
                     self.state
                         .transcript
+                        .cells
                         .push(HistoryCell::system("Conversation cleared."));
                 }
             },
@@ -423,14 +429,14 @@ impl TuiRuntime {
     fn spawn_agent_turn(&mut self) {
         let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
-        let messages = self.state.messages.clone();
+        let messages = self.state.conversation.messages.clone();
         let config = self.state.config.clone();
         let agent_opts = self.state.agent_opts.clone();
         let system_prompt = self.state.system_prompt.clone();
 
         let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
-        if let Some(sess) = self.state.session.clone() {
+        if let Some(sess) = self.state.conversation.session.clone() {
             let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
             let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx, persist_tx]);
             let _persist = session::spawn_persist_task(sess, persist_rx);
@@ -460,7 +466,7 @@ impl TuiRuntime {
         let pkce_verifier = verifier.to_string();
 
         let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
-        self.state.login_exchange_rx = Some(rx);
+        self.state.auth.login_rx = Some(rx);
 
         tokio::spawn(async move {
             let pkce = anthropic::Pkce {

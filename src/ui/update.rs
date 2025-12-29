@@ -28,14 +28,14 @@ const MOUSE_SCROLL_LINES: usize = 1;
 ///
 /// Takes the current state and an event, mutates state, and returns effects
 /// for the runtime to execute.
-pub fn update(state: &mut TuiState, event: UiEvent, viewport_height: usize) -> Vec<UiEffect> {
+pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
     match event {
         UiEvent::Tick => {
             // Advance spinner animation
             state.spinner_frame = state.spinner_frame.wrapping_add(1);
             vec![]
         }
-        UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event, viewport_height),
+        UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event),
         UiEvent::Agent(agent_event) => handle_agent_event(state, &agent_event),
         UiEvent::LoginResult(result) => {
             handle_login_result(state, result);
@@ -48,15 +48,11 @@ pub fn update(state: &mut TuiState, event: UiEvent, viewport_height: usize) -> V
 // Terminal Event Handlers
 // ============================================================================
 
-fn handle_terminal_event(
-    state: &mut TuiState,
-    event: Event,
-    viewport_height: usize,
-) -> Vec<UiEffect> {
+fn handle_terminal_event(state: &mut TuiState, event: Event) -> Vec<UiEffect> {
     match event {
-        Event::Key(key) => handle_key(state, key, viewport_height),
+        Event::Key(key) => handle_key(state, key),
         Event::Mouse(mouse) => {
-            handle_mouse(state, mouse, viewport_height);
+            handle_mouse(state, mouse);
             vec![]
         }
         Event::Paste(text) => {
@@ -65,7 +61,7 @@ fn handle_terminal_event(
         }
         Event::Resize(_, _) => {
             // Clear wrap cache on resize since line wrapping depends on width
-            state.wrap_cache.clear();
+            state.transcript.wrap_cache.clear();
             vec![]
         }
         _ => vec![],
@@ -76,44 +72,34 @@ fn handle_paste(state: &mut TuiState, text: &str) {
     if let OverlayState::Login(LoginState::AwaitingCode { ref mut input, .. }) = state.overlay {
         input.push_str(text);
     } else {
-        state.textarea.insert_str(text);
+        state.input.textarea.insert_str(text);
     }
 }
 
-fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent, viewport_height: usize) {
+fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
-            state.scroll.scroll_up(MOUSE_SCROLL_LINES, viewport_height);
+            state.transcript.scroll_up(MOUSE_SCROLL_LINES);
         }
         MouseEventKind::ScrollDown => {
-            state
-                .scroll
-                .scroll_down(MOUSE_SCROLL_LINES, viewport_height);
+            state.transcript.scroll_down(MOUSE_SCROLL_LINES);
         }
         _ => {}
     }
 }
 
-fn handle_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
-    viewport_height: usize,
-) -> Vec<UiEffect> {
+fn handle_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     // Route by active overlay - single match, no cascade
     match &state.overlay {
         OverlayState::Login(_) => handle_login_key(state, key),
         OverlayState::CommandPalette(_) => handle_palette_key(state, key),
         OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
         OverlayState::ThinkingPicker(_) => handle_thinking_picker_key(state, key),
-        OverlayState::None => handle_main_key(state, key, viewport_height),
+        OverlayState::None => handle_main_key(state, key),
     }
 }
 
-fn handle_main_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
-    viewport_height: usize,
-) -> Vec<UiEffect> {
+fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -121,8 +107,9 @@ fn handle_main_key(
     match key.code {
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
         KeyCode::Char('u') if ctrl && !shift && !alt => {
-            let (row, _) = state.textarea.cursor();
+            let (row, _) = state.input.textarea.cursor();
             let current_line = state
+                .input
                 .textarea
                 .lines()
                 .get(row)
@@ -130,13 +117,13 @@ fn handle_main_key(
                 .unwrap_or("");
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
-                state.textarea.move_cursor(tui_textarea::CursorMove::Up);
-                state.textarea.move_cursor(tui_textarea::CursorMove::End);
-                state.textarea.delete_next_char(); // delete the newline
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::Up);
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::End);
+                state.input.textarea.delete_next_char(); // delete the newline
             } else {
                 // Clear current line
-                state.textarea.move_cursor(tui_textarea::CursorMove::Head);
-                state.textarea.delete_line_by_end();
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                state.input.textarea.delete_line_by_end();
             }
             vec![]
         }
@@ -144,7 +131,7 @@ fn handle_main_key(
             if state.get_input_text().is_empty() {
                 open_command_palette(state, false);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
@@ -168,7 +155,7 @@ fn handle_main_key(
         }
         KeyCode::Enter if !shift && !alt => submit_input(state),
         KeyCode::Char('j') if ctrl => {
-            state.textarea.insert_newline();
+            state.input.textarea.insert_newline();
             vec![]
         }
         KeyCode::Esc => {
@@ -180,36 +167,36 @@ fn handle_main_key(
             }
         }
         KeyCode::PageUp => {
-            state.scroll.page_up(viewport_height);
+            state.transcript.page_up();
             vec![]
         }
         KeyCode::PageDown => {
-            state.scroll.page_down(viewport_height);
+            state.transcript.page_down();
             vec![]
         }
         KeyCode::Home if ctrl => {
-            state.scroll.scroll_to_top();
+            state.transcript.scroll_to_top();
             vec![]
         }
         KeyCode::End if ctrl => {
-            state.scroll.scroll_to_bottom();
+            state.transcript.scroll_to_bottom();
             vec![]
         }
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
-            state.textarea.move_cursor(tui_textarea::CursorMove::Top);
+            state.input.textarea.move_cursor(tui_textarea::CursorMove::Top);
             vec![]
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
-            state.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+            state.input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
             vec![]
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
             if should_navigate_history_up(state) {
                 navigate_history_up(state);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
@@ -217,13 +204,13 @@ fn handle_main_key(
             if should_navigate_history_down(state) {
                 navigate_history_down(state);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
         _ => {
             state.reset_history_navigation();
-            state.textarea.input(key);
+            state.input.textarea.input(key);
             vec![]
         }
     }
@@ -243,15 +230,16 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
-    state.command_history.push(text.clone());
+    state.input.history.push(text.clone());
     state.reset_history_navigation();
 
-    state.transcript.push(HistoryCell::user(&text));
+    state.transcript.cells.push(HistoryCell::user(&text));
     state
+        .conversation
         .messages
         .push(crate::providers::anthropic::ChatMessage::user(&text));
 
-    let effects = if state.session.is_some() {
+    let effects = if state.conversation.session.is_some() {
         vec![
             UiEffect::SaveSession {
                 event: SessionEvent::user_message(&text),
@@ -271,65 +259,19 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
 // ============================================================================
 
 fn should_navigate_history_up(state: &TuiState) -> bool {
-    if state.command_history.is_empty() {
-        return false;
-    }
-    if state.history_index.is_some() {
-        return true;
-    }
-    if state.get_input_text().is_empty() {
-        return true;
-    }
-    let (row, _col) = state.textarea.cursor();
-    row == 0
+    state.input.should_navigate_up()
 }
 
 fn should_navigate_history_down(state: &TuiState) -> bool {
-    if state.history_index.is_none() {
-        return false;
-    }
-    let (row, _col) = state.textarea.cursor();
-    let line_count = state.textarea.lines().len();
-    row >= line_count.saturating_sub(1)
+    state.input.should_navigate_down()
 }
 
 fn navigate_history_up(state: &mut TuiState) {
-    if state.command_history.is_empty() {
-        return;
-    }
-
-    if state.history_index.is_none() {
-        let current = state.get_input_text();
-        state.input_draft = Some(current);
-        state.history_index = Some(state.command_history.len() - 1);
-    } else if let Some(idx) = state.history_index
-        && idx > 0
-    {
-        state.history_index = Some(idx - 1);
-    }
-
-    if let Some(idx) = state.history_index
-        && let Some(entry) = state.command_history.get(idx).cloned()
-    {
-        state.set_input_text(&entry);
-    }
+    state.input.navigate_up();
 }
 
 fn navigate_history_down(state: &mut TuiState) {
-    let Some(idx) = state.history_index else {
-        return;
-    };
-
-    if idx + 1 < state.command_history.len() {
-        state.history_index = Some(idx + 1);
-        if let Some(entry) = state.command_history.get(idx + 1).cloned() {
-            state.set_input_text(&entry);
-        }
-    } else {
-        let draft = state.input_draft.take().unwrap_or_default();
-        state.history_index = None;
-        state.set_input_text(&draft);
-    }
+    state.input.navigate_down();
 }
 
 // ============================================================================
@@ -371,22 +313,24 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     if state.agent_state.is_running() {
         state
             .transcript
+            .cells
             .push(HistoryCell::system("Cannot clear while streaming."));
         return vec![];
     }
 
-    state.transcript.clear();
-    state.messages.clear();
-    state.command_history.clear();
-    state.scroll.reset();
-    state.usage = crate::ui::state::SessionUsage::new();
-    state.wrap_cache.clear();
+    state.transcript.cells.clear();
+    state.conversation.messages.clear();
+    state.input.history.clear();
+    state.transcript.scroll.reset();
+    state.conversation.usage = crate::ui::state::SessionUsage::new();
+    state.transcript.wrap_cache.clear();
 
-    if state.session.is_some() {
+    if state.conversation.session.is_some() {
         vec![UiEffect::CreateNewSession]
     } else {
         state
             .transcript
+            .cells
             .push(HistoryCell::system("Conversation cleared."));
         vec![]
     }
@@ -400,16 +344,19 @@ fn execute_logout(state: &mut TuiState) {
             state.refresh_auth_type();
             state
                 .transcript
+                .cells
                 .push(HistoryCell::system("Logged out from Anthropic OAuth."));
         }
         Ok(false) => {
             state
                 .transcript
+                .cells
                 .push(HistoryCell::system("No OAuth credentials to clear."));
         }
         Err(e) => {
             state
                 .transcript
+                .cells
                 .push(HistoryCell::system(format!("Logout failed: {}", e)));
         }
     }
@@ -440,7 +387,7 @@ pub fn handle_agent_event(
                     // Create streaming cell and transition to Streaming state
                     let cell = HistoryCell::assistant_streaming("");
                     let cell_id = cell.id();
-                    state.transcript.push(cell);
+                    state.transcript.cells.push(cell);
 
                     let old_state = std::mem::replace(&mut state.agent_state, AgentState::Idle);
                     if let AgentState::Waiting { rx } = old_state {
@@ -461,6 +408,7 @@ pub fn handle_agent_event(
                     // - current cell is not an assistant (e.g., thinking cell)
                     let needs_new_cell = state
                         .transcript
+                        .cells
                         .iter()
                         .find(|c| c.id() == *cell_id)
                         .map(|c| {
@@ -477,7 +425,7 @@ pub fn handle_agent_event(
                     if needs_new_cell {
                         let new_cell = HistoryCell::assistant_streaming("");
                         let new_cell_id = new_cell.id();
-                        state.transcript.push(new_cell);
+                        state.transcript.cells.push(new_cell);
                         *cell_id = new_cell_id;
                         pending_delta.clear();
                         pending_delta.push_str(text);
@@ -496,7 +444,7 @@ pub fn handle_agent_event(
             apply_pending_delta(state);
 
             if let AgentState::Streaming { cell_id, .. } = &state.agent_state
-                && let Some(cell) = state.transcript.iter_mut().find(|c| c.id() == *cell_id)
+                && let Some(cell) = state.transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
             {
                 cell.finalize_assistant();
             }
@@ -509,6 +457,7 @@ pub fn handle_agent_event(
 
             state
                 .transcript
+                .cells
                 .push(HistoryCell::system(format!("Error: {}", message)));
             // Reset agent state - the turn is over due to the error
             state.agent_state = AgentState::Idle;
@@ -521,7 +470,7 @@ pub fn handle_agent_event(
 
             // Mark any running tools or streaming cells as cancelled
             let mut any_marked = false;
-            for cell in &mut state.transcript {
+            for cell in &mut state.transcript.cells {
                 let was_active = matches!(
                     cell,
                     HistoryCell::Assistant {
@@ -546,6 +495,7 @@ pub fn handle_agent_event(
             if !any_marked
                 && let Some(last_user) = state
                     .transcript
+                    .cells
                     .iter_mut()
                     .rev()
                     .find(|c| matches!(c, HistoryCell::User { .. }))
@@ -559,15 +509,16 @@ pub fn handle_agent_event(
         }
         AgentEvent::ToolRequested { id, name, input } => {
             let tool_cell = HistoryCell::tool_running(id, name, input.clone());
-            state.transcript.push(tool_cell);
+            state.transcript.cells.push(tool_cell);
             vec![]
         }
         AgentEvent::ToolInputReady { id, input, .. } => {
             // Update the existing tool cell with the complete input
             if let Some(cell) = state
                 .transcript
+                .cells
                 .iter_mut()
-                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == id))
+                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id))
             {
                 cell.set_tool_input(input.clone());
             }
@@ -577,8 +528,9 @@ pub fn handle_agent_event(
         AgentEvent::ToolFinished { id, result } => {
             if let Some(cell) = state
                 .transcript
+                .cells
                 .iter_mut()
-                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == id))
+                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id))
             {
                 cell.set_tool_result(result.clone());
             }
@@ -594,11 +546,11 @@ pub fn handle_agent_event(
             apply_pending_delta(state);
 
             // Turn completed - update messages and reset agent state
-            state.messages = messages.clone();
+            state.conversation.messages = messages.clone();
             state.agent_state = AgentState::Idle;
 
             // Save assistant message to session if enabled
-            if !final_text.is_empty() && state.session.is_some() {
+            if !final_text.is_empty() && state.conversation.session.is_some() {
                 vec![UiEffect::SaveSession {
                     event: SessionEvent::assistant_message(final_text),
                 }]
@@ -614,7 +566,7 @@ pub fn handle_agent_event(
                 if let AgentState::Waiting { rx } = old_state {
                     let cell = HistoryCell::thinking_streaming(text);
                     let cell_id = cell.id();
-                    state.transcript.push(cell);
+                    state.transcript.cells.push(cell);
                     state.agent_state = AgentState::Streaming {
                         rx,
                         cell_id,
@@ -627,6 +579,7 @@ pub fn handle_agent_event(
             // Find the last cell and check if it's a streaming thinking cell
             let should_create_new = state
                 .transcript
+                .cells
                 .last()
                 .map(|cell| {
                     !matches!(
@@ -642,10 +595,10 @@ pub fn handle_agent_event(
             if should_create_new {
                 // Create a new streaming thinking cell
                 let cell = HistoryCell::thinking_streaming(text);
-                state.transcript.push(cell);
+                state.transcript.cells.push(cell);
             } else {
                 // Append to the existing streaming thinking cell
-                if let Some(cell) = state.transcript.last_mut() {
+                if let Some(cell) = state.transcript.cells.last_mut() {
                     cell.append_thinking_delta(text);
                 }
             }
@@ -653,7 +606,7 @@ pub fn handle_agent_event(
         }
         AgentEvent::ThinkingComplete { signature, .. } => {
             // Find the last streaming thinking cell and finalize it
-            if let Some(cell) = state.transcript.iter_mut().rev().find(|c| {
+            if let Some(cell) = state.transcript.cells.iter_mut().rev().find(|c| {
                 matches!(
                     c,
                     HistoryCell::Thinking {
@@ -673,7 +626,7 @@ pub fn handle_agent_event(
             cache_creation_input_tokens,
         } => {
             // Accumulate usage for session-wide tracking
-            state.usage.add(
+            state.conversation.usage.add(
                 *input_tokens,
                 *output_tokens,
                 *cache_read_input_tokens,
@@ -702,7 +655,7 @@ pub fn apply_pending_delta(state: &mut TuiState) {
     } = &mut state.agent_state
         && !pending_delta.is_empty()
     {
-        if let Some(cell) = state.transcript.iter_mut().find(|c| c.id() == *cell_id) {
+        if let Some(cell) = state.transcript.cells.iter_mut().find(|c| c.id() == *cell_id) {
             cell.append_assistant_delta(pending_delta);
         }
         pending_delta.clear();
@@ -719,10 +672,10 @@ mod tests {
         let config = crate::config::Config::default();
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
 
-        state.scroll.scroll_to_top();
+        state.transcript.scroll_to_top();
 
         assert!(matches!(
-            state.scroll.mode,
+            state.transcript.scroll.mode,
             ScrollMode::Anchored { offset: 0 }
         ));
     }
@@ -731,26 +684,26 @@ mod tests {
     fn test_scroll_to_bottom() {
         let config = crate::config::Config::default();
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
-        state.scroll.scroll_to_top(); // Start from top
+        state.transcript.scroll_to_top(); // Start from top
 
-        state.scroll.scroll_to_bottom();
+        state.transcript.scroll_to_bottom();
 
-        assert!(matches!(state.scroll.mode, ScrollMode::FollowLatest));
+        assert!(matches!(state.transcript.scroll.mode, ScrollMode::FollowLatest));
     }
 
     #[test]
     fn test_scroll_up_and_down() {
         let config = crate::config::Config::default();
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
-        state.scroll.update_line_count(100);
+        state.transcript.scroll.update_line_count(100);
 
         // Start following, scroll up should anchor
-        state.scroll.scroll_up(5, 20);
-        assert!(matches!(state.scroll.mode, ScrollMode::Anchored { .. }));
+        state.transcript.scroll.scroll_up(5, 20);
+        assert!(matches!(state.transcript.scroll.mode, ScrollMode::Anchored { .. }));
 
         // Scroll down should move towards bottom
-        state.scroll.scroll_down(100, 20);
-        assert!(matches!(state.scroll.mode, ScrollMode::FollowLatest));
+        state.transcript.scroll.scroll_down(100, 20);
+        assert!(matches!(state.transcript.scroll.mode, ScrollMode::FollowLatest));
     }
 
     #[test]
@@ -770,28 +723,29 @@ mod tests {
         let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
 
         // Populate some state
-        state.transcript.push(HistoryCell::user("test"));
+        state.transcript.cells.push(HistoryCell::user("test"));
         state
+            .conversation
             .messages
             .push(crate::providers::anthropic::ChatMessage::user("test"));
-        state.command_history.push("test".to_string());
-        state.usage.add(100, 50, 200, 25);
+        state.input.history.push("test".to_string());
+        state.conversation.usage.add(100, 50, 200, 25);
 
         // Trigger cache population by rendering (simulate)
-        let _lines = state.transcript[0].display_lines_cached(80, 0, &state.wrap_cache);
-        assert!(!state.wrap_cache.is_empty());
+        let _lines = state.transcript.cells[0].display_lines_cached(80, 0, &state.transcript.wrap_cache);
+        assert!(!state.transcript.wrap_cache.is_empty());
 
         // Execute clear
         let effects = execute_new(&mut state);
 
         // Verify everything is cleared
-        assert!(state.transcript.is_empty() || state.transcript.len() == 1); // May have "Conversation cleared." message
-        assert!(state.messages.is_empty());
-        assert!(state.command_history.is_empty());
-        assert!(state.wrap_cache.is_empty());
-        assert!(state.scroll.is_following());
-        assert_eq!(state.usage.input_tokens, 0);
-        assert_eq!(state.usage.output_tokens, 0);
+        assert!(state.transcript.cells.is_empty() || state.transcript.cells.len() == 1); // May have "Conversation cleared." message
+        assert!(state.conversation.messages.is_empty());
+        assert!(state.input.history.is_empty());
+        assert!(state.transcript.wrap_cache.is_empty());
+        assert!(state.transcript.scroll.is_following());
+        assert_eq!(state.conversation.usage.input_tokens, 0);
+        assert_eq!(state.conversation.usage.output_tokens, 0);
 
         // Verify it returns no effects when no session is active
         assert_eq!(effects.len(), 0);

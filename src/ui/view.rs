@@ -46,7 +46,7 @@ const SPINNER_SPEED_DIVISOR: usize = 6;
 /// - Maximum: 40% of terminal height
 /// - Expands when content has more than 3 lines
 fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
-    let line_count = state.textarea.lines().len() as u16;
+    let line_count = state.input.textarea.lines().len() as u16;
 
     // If 3 lines or fewer, use minimum height
     if line_count <= 3 {
@@ -86,10 +86,10 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     // Use ScrollState for offset calculation (uses cached line count)
     let scroll_offset = {
         let max_offset = total_lines.saturating_sub(transcript_height);
-        if state.scroll.is_following() {
+        if state.transcript.scroll.is_following() {
             total_lines.saturating_sub(transcript_height)
         } else {
-            state.scroll.get_offset(transcript_height).min(max_offset)
+            state.transcript.scroll.get_offset(transcript_height).min(max_offset)
         }
     };
 
@@ -162,7 +162,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     use crate::config::ThinkingLevel;
 
     // Build top-left title: model name + auth type + thinking level
-    let auth_indicator = match state.auth_type {
+    let auth_indicator = match state.auth.auth_type {
         AuthType::OAuth => " (oauth)",
         AuthType::ApiKey => " (api-key)",
         AuthType::None => "",
@@ -191,10 +191,10 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     // Build top-right title: AMP-style usage display
     // Format: "{percentage}% of {context} · ${cost} (cached: ${savings})"
-    let usage_spans = build_usage_display(&state.usage, &state.config.model);
+    let usage_spans = build_usage_display(&state.conversation.usage, &state.config.model);
 
     // Build bottom-left title: detailed token breakdown
-    let token_spans = build_token_breakdown(&state.usage);
+    let token_spans = build_token_breakdown(&state.conversation.usage);
 
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {
@@ -227,8 +227,8 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let (cursor_line, cursor_col) = state.textarea.cursor();
-    let cursor_line = cursor_line.min(state.textarea.lines().len().saturating_sub(1));
+    let (cursor_line, cursor_col) = state.input.textarea.cursor();
+    let cursor_line = cursor_line.min(state.input.textarea.lines().len().saturating_sub(1));
 
     // Manually wrap lines at exact character widths (not word boundaries)
     // This ensures cursor calculation matches the actual rendering
@@ -237,7 +237,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     let mut cursor_visual_row = 0usize;
     let mut cursor_visual_col = 0usize;
 
-    for (line_idx, logical_line) in state.textarea.lines().iter().enumerate() {
+    for (line_idx, logical_line) in state.input.textarea.lines().iter().enumerate() {
         let is_cursor_line = line_idx == cursor_line;
         let line_visual_start = visual_row;
 
@@ -483,11 +483,11 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     let mut lines = Vec::new();
 
-    for cell in &state.transcript {
+    for cell in &state.transcript.cells {
         let styled_lines = cell.display_lines_cached(
             width,
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
-            &state.wrap_cache,
+            &state.transcript.wrap_cache,
         );
         for styled_line in styled_lines {
             lines.push(convert_styled_line(styled_line));
