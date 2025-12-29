@@ -3,6 +3,7 @@
 //! The agent drives the provider + tool loop and emits `AgentEvent`s
 //! via async channels. No direct stdout/stderr writes occur in this module.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -10,7 +11,7 @@ use anyhow::{Result, bail};
 use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc::error::TrySendError;
-use tokio::task::JoinHandle;
+use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
@@ -475,64 +476,111 @@ pub async fn run_turn(
     }
 }
 
-/// Executes all tool uses and emits events via async channel.
+/// Executes all tool uses in parallel and emits events via async channel.
 ///
-/// On interrupt, adds abort results for ALL remaining tools (not just the current one)
-/// and returns. The caller should check `is_interrupted()` after this function
-/// returns to determine if an interrupt occurred.
+/// Tools are spawned concurrently using `tokio::JoinSet`. ToolStarted events
+/// are emitted sequentially before spawning to preserve CLI output order.
+/// ToolFinished events are emitted as each task completes.
+///
+/// On interrupt, aborts all remaining tasks and emits abort results for
+/// incomplete tools. The caller should check `is_interrupted()` after this
+/// function returns to determine if an interrupt occurred.
 async fn execute_tools_async(
     tool_uses: &[ToolUse],
     ctx: &ToolContext,
     sink: &EventSink,
 ) -> Vec<ToolResult> {
-    let mut results = Vec::with_capacity(tool_uses.len());
+    let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
+    let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
+    let mut completed: HashSet<usize> = HashSet::new();
 
+    // Emit ToolStarted sequentially, then spawn tasks
     for (i, tu) in tool_uses.iter().enumerate() {
-        // Emit ToolStarted
         sink.important(AgentEvent::ToolStarted {
             id: tu.id.clone(),
             name: tu.name.clone(),
         })
         .await;
 
-        let (output, result) = tokio::select! {
+        // Clone for 'static requirement
+        let tu = tu.clone();
+        let ctx = ctx.clone();
+
+        join_set.spawn(async move {
+            let (output, result) = tools::execute_tool(&tu.name, &tu.id, &tu.input, &ctx).await;
+            (i, tu.id.clone(), output, result)
+        });
+    }
+
+    // Collect results with interrupt handling
+    loop {
+        tokio::select! {
             biased;
             _ = crate::core::interrupt::wait_for_interrupt() => {
-                // Emit abort results for ALL remaining tools (including current)
-                emit_abort_results_for_remaining(&tool_uses[i..], &mut results, sink).await;
-                return results;
+                // Abort all remaining tasks
+                join_set.abort_all();
+
+                // Drain any already-completed tasks to avoid missing results
+                while let Some(task_result) = join_set.try_join_next() {
+                    if let Ok((idx, id, output, result)) = task_result
+                        && !completed.contains(&idx)
+                    {
+                        completed.insert(idx);
+                        sink.important(AgentEvent::ToolFinished {
+                            id,
+                            result: output.clone(),
+                        })
+                        .await;
+                        results[idx] = Some((output, result));
+                    }
+                }
+
+                // Emit abort for incomplete tools
+                for (i, tu) in tool_uses.iter().enumerate() {
+                    if !completed.contains(&i) {
+                        let abort_output = ToolOutput::canceled("Interrupted by user");
+                        sink.important(AgentEvent::ToolFinished {
+                            id: tu.id.clone(),
+                            result: abort_output.clone(),
+                        })
+                        .await;
+                        results[i] = Some((
+                            abort_output.clone(),
+                            ToolResult::from_output(tu.id.clone(), &abort_output),
+                        ));
+                    }
+                }
+                break;
             }
-            res = tools::execute_tool(&tu.name, &tu.id, &tu.input, ctx) => res,
-        };
-
-        // Emit ToolFinished with structured output
-        sink.important(AgentEvent::ToolFinished {
-            id: tu.id.clone(),
-            result: output,
-        })
-        .await;
-
-        results.push(result);
+            task_result = join_set.join_next() => {
+                match task_result {
+                    Some(Ok((idx, id, output, result))) => {
+                        completed.insert(idx);
+                        sink.important(AgentEvent::ToolFinished {
+                            id,
+                            result: output.clone(),
+                        })
+                        .await;
+                        results[idx] = Some((output, result));
+                    }
+                    Some(Err(e)) => {
+                        // JoinError: panic or cancellation
+                        // This is rare and typically only happens if a task panics.
+                        // Log it but continue - the slot will remain None and be
+                        // caught by the expect below (which is a bug if it happens).
+                        eprintln!("Task join error: {:?}", e);
+                    }
+                    None => break, // All tasks completed
+                }
+            }
+        }
     }
 
+    // Convert to Vec<ToolResult>, unwrapping Options
     results
-}
-
-/// Emits abort ToolFinished events and adds abort results for all remaining tools.
-async fn emit_abort_results_for_remaining(
-    remaining_tools: &[ToolUse],
-    results: &mut Vec<ToolResult>,
-    sink: &EventSink,
-) {
-    for tu in remaining_tools {
-        let abort_output = ToolOutput::canceled("Interrupted by user");
-        sink.important(AgentEvent::ToolFinished {
-            id: tu.id.clone(),
-            result: abort_output.clone(),
-        })
-        .await;
-        results.push(ToolResult::from_output(tu.id.clone(), &abort_output));
-    }
+        .into_iter()
+        .map(|opt| opt.expect("all slots should be filled").1)
+        .collect()
 }
 
 /// Builds assistant content blocks from accumulated thinking, text, and tool uses.
