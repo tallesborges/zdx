@@ -98,7 +98,11 @@ pub async fn run_interactive_chat_with_history(
             .map(|p| format!("  - {}", p.display()))
             .collect();
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        runtime.state.transcript.cells.push(HistoryCell::system(message));
+        runtime
+            .state
+            .transcript
+            .cells
+            .push(HistoryCell::system(message));
     }
 
     runtime.run()?;
@@ -170,14 +174,6 @@ impl TuiRuntime {
         result
     }
 
-    /// Returns the viewport height for the transcript area.
-    fn transcript_height(&self) -> usize {
-        self.terminal
-            .size()
-            .map(|s| view::calculate_transcript_height_with_state(&self.state, s.height))
-            .unwrap_or(20)
-    }
-
     fn event_loop(&mut self) -> Result<()> {
         let mut dirty = true; // Start dirty to ensure initial render
 
@@ -195,8 +191,11 @@ impl TuiRuntime {
 
             // Update transcript layout before processing events
             let size = self.terminal.size()?;
-            let viewport_height = view::calculate_transcript_height_with_state(&self.state, size.height);
-            self.state.transcript.update_layout((size.width, size.height), viewport_height);
+            let viewport_height =
+                view::calculate_transcript_height_with_state(&self.state, size.height);
+            self.state
+                .transcript
+                .update_layout((size.width, size.height), viewport_height);
 
             // Process each event through the reducer
             for event in events {
@@ -329,36 +328,48 @@ impl TuiRuntime {
                             .push(HistoryCell::system(format!("Failed to open config: {}", e)));
                     }
                 } else {
-                    self.state.transcript.cells.push(HistoryCell::system(format!(
-                        "Config file not found: {}",
-                        config_path.display()
-                    )));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Config file not found: {}",
+                            config_path.display()
+                        )));
                 }
             }
             UiEffect::SaveSession { event } => {
                 if let Some(ref mut s) = self.state.conversation.session
                     && let Err(e) = s.append(&event)
                 {
-                    self.state.transcript.cells.push(HistoryCell::system(format!(
-                        "Warning: Failed to save session: {}",
-                        e
-                    )));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Warning: Failed to save session: {}",
+                            e
+                        )));
                 }
             }
             UiEffect::PersistModel { model } => {
                 if let Err(e) = crate::config::Config::save_model(&model) {
-                    self.state.transcript.cells.push(HistoryCell::system(format!(
-                        "Warning: Failed to save model preference: {}",
-                        e
-                    )));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Warning: Failed to save model preference: {}",
+                            e
+                        )));
                 }
             }
             UiEffect::PersistThinking { level } => {
                 if let Err(e) = crate::config::Config::save_thinking_level(level) {
-                    self.state.transcript.cells.push(HistoryCell::system(format!(
-                        "Warning: Failed to save thinking level: {}",
-                        e
-                    )));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Warning: Failed to save thinking level: {}",
+                            e
+                        )));
                 }
             }
             UiEffect::CreateNewSession => match session::Session::new() {
@@ -380,10 +391,13 @@ impl TuiRuntime {
                         ) {
                             Ok(e) => e,
                             Err(err) => {
-                                self.state.transcript.cells.push(HistoryCell::system(format!(
-                                    "Warning: Failed to load context: {}",
-                                    err
-                                )));
+                                self.state
+                                    .transcript
+                                    .cells
+                                    .push(HistoryCell::system(format!(
+                                        "Warning: Failed to load context: {}",
+                                        err
+                                    )));
                                 return;
                             }
                         };
@@ -395,14 +409,20 @@ impl TuiRuntime {
                             .map(|p| format!("  - {}", p.display()))
                             .collect();
                         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-                        self.state.transcript.cells.push(HistoryCell::system(message));
+                        self.state
+                            .transcript
+                            .cells
+                            .push(HistoryCell::system(message));
                     }
                 }
                 Err(e) => {
-                    self.state.transcript.cells.push(HistoryCell::system(format!(
-                        "Warning: Failed to create new session: {}",
-                        e
-                    )));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Warning: Failed to create new session: {}",
+                            e
+                        )));
                     self.state
                         .transcript
                         .cells

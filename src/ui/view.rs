@@ -89,7 +89,11 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         if state.transcript.scroll.is_following() {
             total_lines.saturating_sub(transcript_height)
         } else {
-            state.transcript.scroll.get_offset(transcript_height).min(max_offset)
+            state
+                .transcript
+                .scroll
+                .get_offset(transcript_height)
+                .min(max_offset)
         }
     };
 

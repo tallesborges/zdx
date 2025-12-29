@@ -43,22 +43,6 @@ impl SessionState {
             usage: SessionUsage::new(),
         }
     }
-
-    /// Returns true if a session is active.
-    pub fn is_active(&self) -> bool {
-        self.session.is_some()
-    }
-
-    /// Adds a message to the conversation.
-    pub fn add_message(&mut self, message: crate::providers::anthropic::ChatMessage) {
-        self.messages.push(message);
-    }
-
-    /// Clears all messages and resets usage.
-    pub fn clear(&mut self) {
-        self.messages.clear();
-        self.usage = SessionUsage::new();
-    }
 }
 
 /// Token usage for the current session.
