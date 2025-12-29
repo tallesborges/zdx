@@ -884,12 +884,21 @@ fn render_prefixed_content(
 
     for paragraph in paragraphs {
         if paragraph.is_empty() {
-            // Empty paragraph = blank line with prefix
-            lines.push(StyledLine {
-                spans: vec![StyledSpan {
+            // Empty paragraph = blank line
+            // Use prefix or indentation based on repeat_prefix and whether it's the first line
+            let line_prefix = if repeat_prefix || lines.is_empty() {
+                StyledSpan {
                     text: prefix.to_string(),
                     style: prefix_style,
-                }],
+                }
+            } else {
+                StyledSpan {
+                    text: " ".repeat(prefix_display_width),
+                    style: Style::Plain,
+                }
+            };
+            lines.push(StyledLine {
+                spans: vec![line_prefix],
             });
             continue;
         }
@@ -1607,5 +1616,62 @@ mod tests {
         let mut thinking = HistoryCell::thinking_streaming("test");
         thinking.finalize_thinking("sig".to_string());
         assert!(thinking.is_cacheable());
+    }
+
+    #[test]
+    fn test_thinking_multiline_prefix_behavior() {
+        let cell = HistoryCell::thinking_streaming("Line 1\nLine 2\nLine 3");
+        let lines = cell.display_lines(80, 0);
+
+        // Should have 3 content lines
+        assert_eq!(lines.len(), 3, "Expected 3 lines");
+
+        // Debug: print what we actually get
+        for (i, line) in lines.iter().enumerate() {
+            let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
+            eprintln!("Line {}: {:?}", i, texts);
+        }
+
+        // First line should have "Thinking:" prefix
+        assert_eq!(lines[0].spans[0].text, "Thinking: ");
+
+        // Second and third lines should have spaces (indentation), NOT the prefix
+        // "Thinking: " is 10 characters
+        assert_eq!(
+            lines[1].spans[0].text, "          ",
+            "Second line should be indented, not prefixed"
+        );
+        assert_eq!(
+            lines[2].spans[0].text, "          ",
+            "Third line should be indented, not prefixed"
+        );
+    }
+
+    #[test]
+    fn test_thinking_with_blank_lines() {
+        // Test thinking with blank lines between paragraphs
+        let cell = HistoryCell::thinking_streaming("Para 1\n\nPara 2\n\nPara 3");
+        let lines = cell.display_lines(80, 0);
+
+        eprintln!("\n=== Thinking with blank lines ===");
+        for (i, line) in lines.iter().enumerate() {
+            let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
+            eprintln!("Line {}: {:?}", i, texts);
+        }
+
+        // Should have 5 lines: Para1, blank, Para2, blank, Para3
+        assert_eq!(lines.len(), 5, "Expected 5 lines");
+
+        // Only first line should have "Thinking:" prefix
+        assert_eq!(lines[0].spans[0].text, "Thinking: ");
+
+        // All other lines (including blank lines) should have indentation
+        for i in 1..lines.len() {
+            assert_eq!(
+                lines[i].spans[0].text, "          ",
+                "Line {} should be indented, not prefixed",
+                i
+            );
+        }
     }
 }
