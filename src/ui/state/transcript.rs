@@ -35,6 +35,7 @@ impl Default for ScrollState {
 
 impl ScrollState {
     /// Creates a new ScrollState in follow mode.
+    #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
     }

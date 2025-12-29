@@ -117,12 +117,21 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
                 .unwrap_or("");
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
-                state.input.textarea.move_cursor(tui_textarea::CursorMove::Up);
-                state.input.textarea.move_cursor(tui_textarea::CursorMove::End);
+                state
+                    .input
+                    .textarea
+                    .move_cursor(tui_textarea::CursorMove::Up);
+                state
+                    .input
+                    .textarea
+                    .move_cursor(tui_textarea::CursorMove::End);
                 state.input.textarea.delete_next_char(); // delete the newline
             } else {
                 // Clear current line
-                state.input.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                state
+                    .input
+                    .textarea
+                    .move_cursor(tui_textarea::CursorMove::Head);
                 state.input.textarea.delete_line_by_end();
             }
             vec![]
@@ -184,12 +193,18 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
         }
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
-            state.input.textarea.move_cursor(tui_textarea::CursorMove::Top);
+            state
+                .input
+                .textarea
+                .move_cursor(tui_textarea::CursorMove::Top);
             vec![]
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
-            state.input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+            state
+                .input
+                .textarea
+                .move_cursor(tui_textarea::CursorMove::Bottom);
             vec![]
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
@@ -444,7 +459,11 @@ pub fn handle_agent_event(
             apply_pending_delta(state);
 
             if let AgentState::Streaming { cell_id, .. } = &state.agent_state
-                && let Some(cell) = state.transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
+                && let Some(cell) = state
+                    .transcript
+                    .cells
+                    .iter_mut()
+                    .find(|c| c.id() == *cell_id)
             {
                 cell.finalize_assistant();
             }
@@ -514,11 +533,10 @@ pub fn handle_agent_event(
         }
         AgentEvent::ToolInputReady { id, input, .. } => {
             // Update the existing tool cell with the complete input
-            if let Some(cell) = state
-                .transcript
-                .cells
-                .iter_mut()
-                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id))
+            if let Some(cell) =
+                state.transcript.cells.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
+                )
             {
                 cell.set_tool_input(input.clone());
             }
@@ -526,11 +544,10 @@ pub fn handle_agent_event(
         }
         AgentEvent::ToolStarted { .. } => vec![],
         AgentEvent::ToolFinished { id, result } => {
-            if let Some(cell) = state
-                .transcript
-                .cells
-                .iter_mut()
-                .find(|c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id))
+            if let Some(cell) =
+                state.transcript.cells.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
+                )
             {
                 cell.set_tool_result(result.clone());
             }
@@ -655,7 +672,12 @@ pub fn apply_pending_delta(state: &mut TuiState) {
     } = &mut state.agent_state
         && !pending_delta.is_empty()
     {
-        if let Some(cell) = state.transcript.cells.iter_mut().find(|c| c.id() == *cell_id) {
+        if let Some(cell) = state
+            .transcript
+            .cells
+            .iter_mut()
+            .find(|c| c.id() == *cell_id)
+        {
             cell.append_assistant_delta(pending_delta);
         }
         pending_delta.clear();
@@ -688,7 +710,10 @@ mod tests {
 
         state.transcript.scroll_to_bottom();
 
-        assert!(matches!(state.transcript.scroll.mode, ScrollMode::FollowLatest));
+        assert!(matches!(
+            state.transcript.scroll.mode,
+            ScrollMode::FollowLatest
+        ));
     }
 
     #[test]
@@ -699,11 +724,17 @@ mod tests {
 
         // Start following, scroll up should anchor
         state.transcript.scroll.scroll_up(5, 20);
-        assert!(matches!(state.transcript.scroll.mode, ScrollMode::Anchored { .. }));
+        assert!(matches!(
+            state.transcript.scroll.mode,
+            ScrollMode::Anchored { .. }
+        ));
 
         // Scroll down should move towards bottom
         state.transcript.scroll.scroll_down(100, 20);
-        assert!(matches!(state.transcript.scroll.mode, ScrollMode::FollowLatest));
+        assert!(matches!(
+            state.transcript.scroll.mode,
+            ScrollMode::FollowLatest
+        ));
     }
 
     #[test]
@@ -732,7 +763,8 @@ mod tests {
         state.conversation.usage.add(100, 50, 200, 25);
 
         // Trigger cache population by rendering (simulate)
-        let _lines = state.transcript.cells[0].display_lines_cached(80, 0, &state.transcript.wrap_cache);
+        let _lines =
+            state.transcript.cells[0].display_lines_cached(80, 0, &state.transcript.wrap_cache);
         assert!(!state.transcript.wrap_cache.is_empty());
 
         // Execute clear

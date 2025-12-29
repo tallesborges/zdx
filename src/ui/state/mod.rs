@@ -24,7 +24,10 @@ mod transcript;
 pub use auth::{AuthState, AuthType};
 pub use input::InputState;
 pub use session::{SessionState, SessionUsage};
-pub use transcript::{ScrollMode, ScrollState, TranscriptState};
+pub use transcript::TranscriptState;
+// Re-export scroll types for tests only
+#[cfg(test)]
+pub use transcript::{ScrollMode, ScrollState};
 
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::overlays::{
@@ -109,6 +112,7 @@ impl OverlayState {
     }
 
     /// Returns the login state if active.
+    #[cfg(test)]
     pub fn as_login(&self) -> Option<&LoginState> {
         match self {
             OverlayState::Login(l) => Some(l),
@@ -340,11 +344,6 @@ impl TuiState {
     /// Clears the input textarea.
     pub fn clear_input(&mut self) {
         self.input.clear();
-    }
-
-    /// Sets the input textarea to the given text.
-    pub fn set_input_text(&mut self, text: &str) {
-        self.input.set_text(text);
     }
 
     /// Resets history navigation state.
