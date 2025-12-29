@@ -81,7 +81,7 @@ pub async fn run_interactive_chat_with_history(
     };
 
     // Add system message for session path
-    if let Some(ref s) = runtime.state.session {
+    if let Some(ref s) = runtime.state.conversation.session {
         let session_path_msg = format!("Session path: {}", s.path().display());
         runtime
             .state
@@ -277,7 +277,7 @@ impl TuiRuntime {
 
     /// Collects login exchange result if available.
     fn collect_login_result(&mut self, events: &mut Vec<UiEvent>) {
-        let Some(rx) = &mut self.state.login_exchange_rx else {
+        let Some(rx) = &mut self.state.auth.login_rx else {
             return;
         };
 
@@ -336,7 +336,7 @@ impl TuiRuntime {
                 }
             }
             UiEffect::SaveSession { event } => {
-                if let Some(ref mut s) = self.state.session
+                if let Some(ref mut s) = self.state.conversation.session
                     && let Err(e) = s.append(&event)
                 {
                     self.state.transcript.cells.push(HistoryCell::system(format!(
@@ -364,7 +364,7 @@ impl TuiRuntime {
             UiEffect::CreateNewSession => match session::Session::new() {
                 Ok(new_session) => {
                     let new_path = new_session.path().display().to_string();
-                    self.state.session = Some(new_session);
+                    self.state.conversation.session = Some(new_session);
 
                     // Show session path
                     self.state
@@ -429,14 +429,14 @@ impl TuiRuntime {
     fn spawn_agent_turn(&mut self) {
         let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
-        let messages = self.state.messages.clone();
+        let messages = self.state.conversation.messages.clone();
         let config = self.state.config.clone();
         let agent_opts = self.state.agent_opts.clone();
         let system_prompt = self.state.system_prompt.clone();
 
         let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
-        if let Some(sess) = self.state.session.clone() {
+        if let Some(sess) = self.state.conversation.session.clone() {
             let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
             let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx, persist_tx]);
             let _persist = session::spawn_persist_task(sess, persist_rx);
@@ -466,7 +466,7 @@ impl TuiRuntime {
         let pkce_verifier = verifier.to_string();
 
         let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
-        self.state.login_exchange_rx = Some(rx);
+        self.state.auth.login_rx = Some(rx);
 
         tokio::spawn(async move {
             let pkce = anthropic::Pkce {

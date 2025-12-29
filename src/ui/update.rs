@@ -235,10 +235,11 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
 
     state.transcript.cells.push(HistoryCell::user(&text));
     state
+        .conversation
         .messages
         .push(crate::providers::anthropic::ChatMessage::user(&text));
 
-    let effects = if state.session.is_some() {
+    let effects = if state.conversation.session.is_some() {
         vec![
             UiEffect::SaveSession {
                 event: SessionEvent::user_message(&text),
@@ -318,13 +319,13 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     }
 
     state.transcript.cells.clear();
-    state.messages.clear();
+    state.conversation.messages.clear();
     state.input.history.clear();
     state.transcript.scroll.reset();
-    state.usage = crate::ui::state::SessionUsage::new();
+    state.conversation.usage = crate::ui::state::SessionUsage::new();
     state.transcript.wrap_cache.clear();
 
-    if state.session.is_some() {
+    if state.conversation.session.is_some() {
         vec![UiEffect::CreateNewSession]
     } else {
         state
@@ -545,11 +546,11 @@ pub fn handle_agent_event(
             apply_pending_delta(state);
 
             // Turn completed - update messages and reset agent state
-            state.messages = messages.clone();
+            state.conversation.messages = messages.clone();
             state.agent_state = AgentState::Idle;
 
             // Save assistant message to session if enabled
-            if !final_text.is_empty() && state.session.is_some() {
+            if !final_text.is_empty() && state.conversation.session.is_some() {
                 vec![UiEffect::SaveSession {
                     event: SessionEvent::assistant_message(final_text),
                 }]
@@ -625,7 +626,7 @@ pub fn handle_agent_event(
             cache_creation_input_tokens,
         } => {
             // Accumulate usage for session-wide tracking
-            state.usage.add(
+            state.conversation.usage.add(
                 *input_tokens,
                 *output_tokens,
                 *cache_read_input_tokens,
@@ -724,10 +725,11 @@ mod tests {
         // Populate some state
         state.transcript.cells.push(HistoryCell::user("test"));
         state
+            .conversation
             .messages
             .push(crate::providers::anthropic::ChatMessage::user("test"));
         state.input.history.push("test".to_string());
-        state.usage.add(100, 50, 200, 25);
+        state.conversation.usage.add(100, 50, 200, 25);
 
         // Trigger cache population by rendering (simulate)
         let _lines = state.transcript.cells[0].display_lines_cached(80, 0, &state.transcript.wrap_cache);
@@ -738,12 +740,12 @@ mod tests {
 
         // Verify everything is cleared
         assert!(state.transcript.cells.is_empty() || state.transcript.cells.len() == 1); // May have "Conversation cleared." message
-        assert!(state.messages.is_empty());
+        assert!(state.conversation.messages.is_empty());
         assert!(state.input.history.is_empty());
         assert!(state.transcript.wrap_cache.is_empty());
         assert!(state.transcript.scroll.is_following());
-        assert_eq!(state.usage.input_tokens, 0);
-        assert_eq!(state.usage.output_tokens, 0);
+        assert_eq!(state.conversation.usage.input_tokens, 0);
+        assert_eq!(state.conversation.usage.output_tokens, 0);
 
         // Verify it returns no effects when no session is active
         assert_eq!(effects.len(), 0);

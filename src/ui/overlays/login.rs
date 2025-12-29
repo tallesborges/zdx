@@ -106,7 +106,7 @@ pub fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
         }
         LoginEvent::LoginCancelled => {
             state.overlay = OverlayState::None;
-            state.login_exchange_rx = None;
+            state.auth.login_rx = None;
             vec![]
         }
     }
@@ -152,7 +152,7 @@ pub fn handle_login_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -
 
 /// Handles the result of an async token exchange.
 pub fn handle_login_result(state: &mut TuiState, result: Result<(), String>) {
-    state.login_exchange_rx = None;
+    state.auth.login_rx = None;
     match result {
         Ok(()) => {
             let _ = update_login(state, LoginEvent::LoginSucceeded);

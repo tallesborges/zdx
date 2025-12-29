@@ -162,7 +162,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     use crate::config::ThinkingLevel;
 
     // Build top-left title: model name + auth type + thinking level
-    let auth_indicator = match state.auth_type {
+    let auth_indicator = match state.auth.auth_type {
         AuthType::OAuth => " (oauth)",
         AuthType::ApiKey => " (api-key)",
         AuthType::None => "",
@@ -191,10 +191,10 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     // Build top-right title: AMP-style usage display
     // Format: "{percentage}% of {context} · ${cost} (cached: ${savings})"
-    let usage_spans = build_usage_display(&state.usage, &state.config.model);
+    let usage_spans = build_usage_display(&state.conversation.usage, &state.config.model);
 
     // Build bottom-left title: detailed token breakdown
-    let token_spans = build_token_breakdown(&state.usage);
+    let token_spans = build_token_breakdown(&state.conversation.usage);
 
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {

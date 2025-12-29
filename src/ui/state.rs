@@ -485,6 +485,69 @@ impl InputState {
 }
 
 // ============================================================================
+// Session State
+// ============================================================================
+
+/// Session and conversation state.
+///
+/// Encapsulates the active session, message history, and usage tracking.
+pub struct SessionState {
+    /// Active session for persistence (if enabled).
+    pub session: Option<crate::core::session::Session>,
+
+    /// Conversation messages (API format).
+    pub messages: Vec<crate::providers::anthropic::ChatMessage>,
+
+    /// Cumulative token usage for this session.
+    pub usage: SessionUsage,
+}
+
+impl Default for SessionState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl SessionState {
+    /// Creates a new SessionState with no active session.
+    pub fn new() -> Self {
+        Self {
+            session: None,
+            messages: Vec::new(),
+            usage: SessionUsage::new(),
+        }
+    }
+
+    /// Creates a SessionState with an active session and message history.
+    pub fn with_session(
+        session: Option<crate::core::session::Session>,
+        messages: Vec<crate::providers::anthropic::ChatMessage>,
+    ) -> Self {
+        Self {
+            session,
+            messages,
+            usage: SessionUsage::new(),
+        }
+    }
+
+    /// Returns true if a session is active.
+    pub fn is_active(&self) -> bool {
+        self.session.is_some()
+    }
+
+    /// Adds a message to the conversation.
+    pub fn add_message(&mut self, message: crate::providers::anthropic::ChatMessage) {
+        self.messages.push(message);
+    }
+
+    /// Clears all messages and resets usage.
+    pub fn clear(&mut self) {
+        self.messages.clear();
+        self.usage = SessionUsage::new();
+    }
+}
+
+// ============================================================================
 // Agent State
 // ============================================================================
 
@@ -520,7 +583,7 @@ impl AgentState {
 }
 
 // ============================================================================
-// Auth Type
+// Auth State
 // ============================================================================
 
 /// Authentication type indicator for status line.
@@ -550,6 +613,38 @@ impl AuthType {
         }
 
         AuthType::None
+    }
+}
+
+/// Authentication state.
+///
+/// Encapsulates the current auth type and login flow state.
+pub struct AuthState {
+    /// Current auth type indicator (cached, refreshed on login/logout).
+    pub auth_type: AuthType,
+
+    /// Receiver for async login token exchange result.
+    pub login_rx: Option<tokio::sync::mpsc::Receiver<Result<(), String>>>,
+}
+
+impl Default for AuthState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AuthState {
+    /// Creates a new AuthState by detecting the current auth type.
+    pub fn new() -> Self {
+        Self {
+            auth_type: AuthType::detect(),
+            login_rx: None,
+        }
+    }
+
+    /// Refreshes the auth type by re-detecting it.
+    pub fn refresh(&mut self) {
+        self.auth_type = AuthType::detect();
     }
 }
 
@@ -731,32 +826,26 @@ pub struct TuiState {
     pub input: InputState,
     /// Transcript display state (cells, scroll, layout, cache).
     pub transcript: TranscriptState,
+    /// Session and conversation state (session, messages, usage).
+    pub conversation: SessionState,
+    /// Authentication state (auth type, login flow).
+    pub auth: AuthState,
     /// Agent configuration.
     pub config: Config,
     /// Agent options (root path, etc).
     pub agent_opts: AgentOptions,
     /// System prompt for the agent.
     pub system_prompt: Option<String>,
-    /// Message history for the agent.
-    pub messages: Vec<ChatMessage>,
     /// Current agent state.
     pub agent_state: AgentState,
-    /// Session for persistence (if enabled).
-    pub session: Option<Session>,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
     /// Active overlay state (command palette, model picker, or login).
     pub overlay: OverlayState,
-    /// Receiver for async login token exchange result.
-    pub login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
-    /// Current auth type indicator (cached, refreshed on login/logout).
-    pub auth_type: AuthType,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
-    /// Cumulative token usage for this session.
-    pub usage: SessionUsage,
 }
 
 impl TuiState {
@@ -810,23 +899,26 @@ impl TuiState {
         let mut input = InputState::new();
         input.history = command_history;
 
+        // Create session state with history
+        let conversation = SessionState::with_session(session, history);
+
+        // Create auth state
+        let auth = AuthState::new();
+
         Self {
             should_quit: false,
             input,
             transcript,
+            conversation,
+            auth,
             config,
             agent_opts,
             system_prompt,
-            messages: history,
             agent_state: AgentState::Idle,
-            session,
             spinner_frame: 0,
             overlay: OverlayState::None,
-            login_exchange_rx: None,
-            auth_type: AuthType::detect(),
             git_branch,
             display_path,
-            usage: SessionUsage::new(),
         }
     }
 
@@ -872,7 +964,7 @@ impl TuiState {
 
     /// Refreshes the cached auth type (call after login/logout).
     pub fn refresh_auth_type(&mut self) {
-        self.auth_type = AuthType::detect();
+        self.auth.refresh();
     }
 
     /// Gets the current input text.
