@@ -46,7 +46,7 @@ const SPINNER_SPEED_DIVISOR: usize = 6;
 /// - Maximum: 40% of terminal height
 /// - Expands when content has more than 3 lines
 fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
-    let line_count = state.textarea.lines().len() as u16;
+    let line_count = state.input.textarea.lines().len() as u16;
 
     // If 3 lines or fewer, use minimum height
     if line_count <= 3 {
@@ -227,8 +227,8 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let (cursor_line, cursor_col) = state.textarea.cursor();
-    let cursor_line = cursor_line.min(state.textarea.lines().len().saturating_sub(1));
+    let (cursor_line, cursor_col) = state.input.textarea.cursor();
+    let cursor_line = cursor_line.min(state.input.textarea.lines().len().saturating_sub(1));
 
     // Manually wrap lines at exact character widths (not word boundaries)
     // This ensures cursor calculation matches the actual rendering
@@ -237,7 +237,7 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     let mut cursor_visual_row = 0usize;
     let mut cursor_visual_col = 0usize;
 
-    for (line_idx, logical_line) in state.textarea.lines().iter().enumerate() {
+    for (line_idx, logical_line) in state.input.textarea.lines().iter().enumerate() {
         let is_cursor_line = line_idx == cursor_line;
         let line_visual_start = visual_row;
 

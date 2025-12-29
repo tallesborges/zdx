@@ -77,7 +77,7 @@ pub fn open_command_palette(state: &mut TuiState, insert_slash_on_escape: bool) 
 pub fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
     state.overlay = OverlayState::None;
     if insert_slash {
-        state.textarea.insert_char('/');
+        state.input.textarea.insert_char('/');
     }
 }
 
