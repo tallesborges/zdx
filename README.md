@@ -16,6 +16,7 @@ It's not designed for public or general usage — it's focused on my own needs a
 - **Streaming markdown** with syntax highlighting and table support
 - **Extended thinking** with configurable levels and block display
 - **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
+- **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume any previous conversation
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
