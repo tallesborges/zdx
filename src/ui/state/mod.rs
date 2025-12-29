@@ -6,20 +6,30 @@
 
 use std::path::PathBuf;
 
-use ratatui::style::{Color, Style};
-use ratatui::widgets::{Block, Borders};
 use tokio::sync::mpsc;
-use tui_textarea::TextArea;
 
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
+use crate::ui::transcript::HistoryCell;
+
+// Module declarations
+mod auth;
+mod input;
+mod session;
+mod transcript;
+
+// Re-export types from submodules
+pub use auth::{AuthState, AuthType};
+pub use input::InputState;
+pub use session::{SessionState, SessionUsage};
+pub use transcript::{ScrollMode, ScrollState, TranscriptState};
+
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::overlays::{
     CommandPaletteState, LoginState, ModelPickerState, ThinkingPickerState,
 };
-use crate::ui::transcript::{HistoryCell, WrapCache};
 
 // ============================================================================
 // Overlay State (Unified)
@@ -99,7 +109,6 @@ impl OverlayState {
     }
 
     /// Returns the login state if active.
-    #[cfg(test)]
     pub fn as_login(&self) -> Option<&LoginState> {
         match self {
             OverlayState::Login(l) => Some(l),
@@ -133,132 +142,6 @@ fn shorten_path(path: &std::path::Path) -> String {
         return format!("~/{}", relative.display());
     }
     path.display().to_string()
-}
-
-// ============================================================================
-// Scroll State
-// ============================================================================
-
-/// Scroll mode for the transcript pane.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ScrollMode {
-    /// Auto-scroll to show latest content (bottom of transcript).
-    FollowLatest,
-    /// User scrolled manually; offset is line index from top.
-    Anchored { offset: usize },
-}
-
-/// Scroll state for the transcript pane.
-///
-/// Encapsulates scroll mode, cached line count, and all scroll navigation logic.
-/// This keeps scroll math in one place and simplifies the reducer.
-#[derive(Debug, Clone)]
-pub struct ScrollState {
-    /// Current scroll mode (follow latest or anchored at offset).
-    pub mode: ScrollMode,
-    /// Cached total line count from last render (for scroll calculations).
-    pub cached_line_count: usize,
-}
-
-impl Default for ScrollState {
-    fn default() -> Self {
-        Self {
-            mode: ScrollMode::FollowLatest,
-            cached_line_count: 0,
-        }
-    }
-}
-
-impl ScrollState {
-    /// Creates a new ScrollState in follow mode.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns true if currently following output (auto-scroll).
-    pub fn is_following(&self) -> bool {
-        matches!(self.mode, ScrollMode::FollowLatest)
-    }
-
-    /// Returns the current scroll offset for rendering.
-    ///
-    /// In FollowLatest mode, calculates offset to show bottom of content.
-    /// In Anchored mode, returns the stored offset (clamped to valid range).
-    pub fn get_offset(&self, viewport_height: usize) -> usize {
-        match &self.mode {
-            ScrollMode::FollowLatest => self.cached_line_count.saturating_sub(viewport_height),
-            ScrollMode::Anchored { offset } => {
-                let max_offset = self.cached_line_count.saturating_sub(viewport_height);
-                (*offset).min(max_offset)
-            }
-        }
-    }
-
-    /// Returns true if there's content below the current viewport.
-    #[cfg(test)]
-    pub fn has_content_below(&self, viewport_height: usize) -> bool {
-        let offset = self.get_offset(viewport_height);
-        offset + viewport_height < self.cached_line_count
-    }
-
-    /// Scrolls up by the given number of lines.
-    pub fn scroll_up(&mut self, lines: usize, viewport_height: usize) {
-        let current_offset = self.get_offset(viewport_height);
-        let new_offset = current_offset.saturating_sub(lines);
-        self.mode = ScrollMode::Anchored { offset: new_offset };
-    }
-
-    /// Scrolls down by the given number of lines.
-    ///
-    /// Transitions to FollowLatest mode when reaching the bottom.
-    pub fn scroll_down(&mut self, lines: usize, viewport_height: usize) {
-        if matches!(self.mode, ScrollMode::FollowLatest) {
-            return; // Already at bottom
-        }
-
-        let current_offset = self.get_offset(viewport_height);
-        let max_offset = self.cached_line_count.saturating_sub(viewport_height);
-        let new_offset = (current_offset + lines).min(max_offset);
-
-        if new_offset >= max_offset {
-            self.mode = ScrollMode::FollowLatest;
-        } else {
-            self.mode = ScrollMode::Anchored { offset: new_offset };
-        }
-    }
-
-    /// Scrolls to the top of the transcript.
-    pub fn scroll_to_top(&mut self) {
-        self.mode = ScrollMode::Anchored { offset: 0 };
-    }
-
-    /// Scrolls to the bottom of the transcript (enables follow mode).
-    pub fn scroll_to_bottom(&mut self) {
-        self.mode = ScrollMode::FollowLatest;
-    }
-
-    /// Scrolls up by one page.
-    pub fn page_up(&mut self, viewport_height: usize) {
-        self.scroll_up(viewport_height.max(1), viewport_height);
-    }
-
-    /// Scrolls down by one page.
-    pub fn page_down(&mut self, viewport_height: usize) {
-        self.scroll_down(viewport_height.max(1), viewport_height);
-    }
-
-    /// Updates the cached line count.
-    ///
-    /// Call this after rendering to keep scroll calculations accurate.
-    pub fn update_line_count(&mut self, line_count: usize) {
-        self.cached_line_count = line_count;
-    }
-
-    /// Resets scroll state to follow mode (e.g., after clearing transcript).
-    pub fn reset(&mut self) {
-        self.mode = ScrollMode::FollowLatest;
-        self.cached_line_count = 0;
-    }
 }
 
 // ============================================================================
@@ -297,253 +180,37 @@ impl AgentState {
 }
 
 // ============================================================================
-// Auth Type
-// ============================================================================
-
-/// Authentication type indicator for status line.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AuthType {
-    /// Using OAuth token from ~/.zdx/oauth.json
-    OAuth,
-    /// Using API key from environment
-    ApiKey,
-    /// No authentication configured
-    None,
-}
-
-impl AuthType {
-    /// Detects the current authentication type.
-    pub fn detect() -> Self {
-        use crate::providers::oauth::anthropic;
-
-        // Check for OAuth credentials first
-        if let Ok(Some(_creds)) = anthropic::load_credentials() {
-            return AuthType::OAuth;
-        }
-
-        // Check for API key in environment
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
-            return AuthType::ApiKey;
-        }
-
-        AuthType::None
-    }
-}
-
-// ============================================================================
-// Session Usage
-// ============================================================================
-
-/// Token usage for the current session.
-///
-/// Tracks both cumulative tokens (for cost calculation) and latest request
-/// tokens (for context window percentage).
-///
-/// The distinction matters because each API request's `input_tokens` already
-/// includes all previous conversation history. Summing across requests would
-/// double-count, but we need cumulative totals for accurate cost calculation.
-#[derive(Debug, Clone, Default)]
-pub struct SessionUsage {
-    // ========================================================================
-    // Cumulative totals (for cost calculation and token breakdown display)
-    // ========================================================================
-    /// Total input tokens (non-cached) across all requests
-    pub input_tokens: u64,
-    /// Total output tokens across all requests
-    pub output_tokens: u64,
-    /// Total tokens read from cache across all requests
-    pub cache_read_tokens: u64,
-    /// Total tokens written to cache across all requests
-    pub cache_write_tokens: u64,
-
-    // ========================================================================
-    // Latest request (for context window percentage)
-    // ========================================================================
-    /// Total input tokens from latest request (input + cache_read + cache_write)
-    latest_input: u64,
-    /// Output tokens from latest request
-    latest_output: u64,
-}
-
-impl SessionUsage {
-    /// Creates a new empty SessionUsage.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Adds usage from a single API response.
-    ///
-    /// Updates both cumulative totals (for cost) and latest values (for context %).
-    ///
-    /// Note: Usage updates for a single API request come in two parts:
-    /// 1. MessageStart: input_tokens, cache_read, cache_write (output_tokens=0)
-    /// 2. MessageDelta: output_tokens (other fields=0)
-    ///
-    /// We accumulate the latest values to handle split updates correctly.
-    pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
-        // Cumulative totals for cost calculation
-        self.input_tokens += input;
-        self.output_tokens += output;
-        self.cache_read_tokens += cache_read;
-        self.cache_write_tokens += cache_write;
-
-        // Latest request for context window calculation
-        // Accumulate (don't replace) to handle split updates from MessageStart + MessageDelta
-        if input > 0 || cache_read > 0 || cache_write > 0 {
-            // This is a new request (MessageStart) - reset and set input
-            self.latest_input = input + cache_read + cache_write;
-            self.latest_output = 0; // Will be updated by MessageDelta
-        }
-        if output > 0 {
-            // This is the output update (MessageDelta) - add to latest
-            self.latest_output += output;
-        }
-    }
-
-    /// Context tokens for the latest request (for context window percentage).
-    ///
-    /// Per Anthropic's documentation, the context window validation is:
-    /// > "if the sum of prompt tokens and output tokens exceeds the model's
-    /// > context window, the system will return a validation error"
-    ///
-    /// This applies to a single request, not cumulative across turns.
-    /// Each request's `input_tokens` already includes all previous conversation
-    /// history, so we only need the latest request's tokens.
-    ///
-    /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
-    pub fn context_tokens(&self) -> u64 {
-        self.latest_input + self.latest_output
-    }
-
-    /// Total cumulative tokens across all requests (for display/debugging).
-    ///
-    /// Note: This is NOT the context window usage. Use `context_tokens()` for that.
-    pub fn total_tokens(&self) -> u64 {
-        self.input_tokens + self.output_tokens + self.cache_read_tokens + self.cache_write_tokens
-    }
-
-    /// Calculates the percentage of context window used.
-    ///
-    /// Uses all tokens (input + output + cache) per Anthropic's documentation.
-    pub fn context_percentage(&self, context_limit: u64) -> f64 {
-        if context_limit == 0 {
-            return 0.0;
-        }
-        (self.context_tokens() as f64 / context_limit as f64) * 100.0
-    }
-
-    /// Calculates the total cost for this session in USD.
-    ///
-    /// Uses the pricing from the model (prices are per million tokens).
-    pub fn calculate_cost(&self, pricing: &crate::models::ModelPricing) -> f64 {
-        let million = 1_000_000.0;
-
-        let input_cost = (self.input_tokens as f64 / million) * pricing.input;
-        let output_cost = (self.output_tokens as f64 / million) * pricing.output;
-        let cache_read_cost = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
-        let cache_write_cost = (self.cache_write_tokens as f64 / million) * pricing.cache_write;
-
-        input_cost + output_cost + cache_read_cost + cache_write_cost
-    }
-
-    /// Calculates the cost savings from cache hits.
-    ///
-    /// Returns the amount saved by using cache_read instead of regular input pricing.
-    pub fn cache_savings(&self, pricing: &crate::models::ModelPricing) -> f64 {
-        let million = 1_000_000.0;
-
-        // Savings = what we would have paid at input price - what we actually paid at cache_read price
-        let would_have_paid = (self.cache_read_tokens as f64 / million) * pricing.input;
-        let actually_paid = (self.cache_read_tokens as f64 / million) * pricing.cache_read;
-
-        would_have_paid - actually_paid
-    }
-
-    /// Formats token count for display (e.g., "12.5k" or "1.2M").
-    pub fn format_tokens(count: u64) -> String {
-        if count >= 1_000_000 {
-            format!("{:.1}M", count as f64 / 1_000_000.0)
-        } else if count >= 1_000 {
-            format!("{:.1}k", count as f64 / 1_000.0)
-        } else {
-            count.to_string()
-        }
-    }
-
-    /// Formats a context limit for display (e.g., "200k").
-    pub fn format_context_limit(limit: u64) -> String {
-        if limit >= 1_000_000 {
-            format!("{:.0}M", limit as f64 / 1_000_000.0)
-        } else if limit >= 1_000 {
-            format!("{:.0}k", limit as f64 / 1_000.0)
-        } else {
-            limit.to_string()
-        }
-    }
-
-    /// Formats a cost for display (e.g., "$0.008").
-    pub fn format_cost(cost: f64) -> String {
-        if cost < 0.001 {
-            format!("${:.4}", cost)
-        } else if cost < 0.01 {
-            format!("${:.3}", cost)
-        } else {
-            format!("${:.2}", cost)
-        }
-    }
-}
-
-// ============================================================================
 // TuiState
 // ============================================================================
 
 /// TUI application state.
-///
-/// Contains all state for the TUI, separate from terminal ownership.
-/// This separation allows pure rendering without borrow conflicts.
 pub struct TuiState {
     /// Flag indicating the app should quit.
     pub should_quit: bool,
-    /// Text area for input.
-    pub textarea: TextArea<'static>,
-    /// Transcript cells (in-memory display).
-    pub transcript: Vec<HistoryCell>,
+    /// User input state (textarea, history, navigation).
+    pub input: InputState,
+    /// Transcript display state (cells, scroll, layout, cache).
+    pub transcript: TranscriptState,
+    /// Session and conversation state (session, messages, usage).
+    pub conversation: SessionState,
+    /// Authentication state (auth type, login flow).
+    pub auth: AuthState,
     /// Agent configuration.
     pub config: Config,
     /// Agent options (root path, etc).
     pub agent_opts: AgentOptions,
     /// System prompt for the agent.
     pub system_prompt: Option<String>,
-    /// Message history for the agent.
-    pub messages: Vec<ChatMessage>,
     /// Current agent state.
     pub agent_state: AgentState,
-    /// Scroll state for transcript (mode, offset, cached line count).
-    pub scroll: ScrollState,
-    /// Session for persistence (if enabled).
-    pub session: Option<Session>,
-    /// Command history for ↑/↓ navigation.
-    pub command_history: Vec<String>,
-    /// Current position in command history (None = not navigating).
-    pub history_index: Option<usize>,
-    /// Draft text saved when navigating history.
-    pub input_draft: Option<String>,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
     /// Active overlay state (command palette, model picker, or login).
     pub overlay: OverlayState,
-    /// Receiver for async login token exchange result.
-    pub login_exchange_rx: Option<mpsc::Receiver<Result<(), String>>>,
-    /// Current auth type indicator (cached, refreshed on login/logout).
-    pub auth_type: AuthType,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
-    /// Cache for wrapped line rendering.
-    pub wrap_cache: WrapCache,
-    /// Cumulative token usage for this session.
-    pub usage: SessionUsage,
 }
 
 impl TuiState {
@@ -568,16 +235,6 @@ impl TuiState {
         session: Option<Session>,
         history: Vec<ChatMessage>,
     ) -> Self {
-        // Set up textarea with styling
-        let mut textarea = TextArea::default();
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Input (Enter=send, Shift+Enter=newline, Ctrl+J=newline) "),
-        );
-
         let agent_opts = AgentOptions { root };
 
         // Cache display values at startup (avoids I/O during render)
@@ -585,10 +242,10 @@ impl TuiState {
         let display_path = shorten_path(&agent_opts.root);
 
         // Build transcript from history
-        let transcript = Self::build_transcript_from_history(&history);
+        let transcript_cells = Self::build_transcript_from_history(&history);
 
         // Build command history from previous user messages
-        let command_history: Vec<String> = transcript
+        let command_history: Vec<String> = transcript_cells
             .iter()
             .filter_map(|cell| {
                 if let HistoryCell::User { content, .. } = cell {
@@ -599,28 +256,34 @@ impl TuiState {
             })
             .collect();
 
+        // Create transcript state with history
+        let mut transcript = TranscriptState::new();
+        transcript.cells = transcript_cells;
+
+        // Create input state with command history
+        let mut input = InputState::new();
+        input.history = command_history;
+
+        // Create session state with history
+        let conversation = SessionState::with_session(session, history);
+
+        // Create auth state
+        let auth = AuthState::new();
+
         Self {
             should_quit: false,
-            textarea,
+            input,
             transcript,
+            conversation,
+            auth,
             config,
             agent_opts,
             system_prompt,
-            messages: history,
             agent_state: AgentState::Idle,
-            scroll: ScrollState::new(),
-            session,
-            command_history,
-            history_index: None,
-            input_draft: None,
             spinner_frame: 0,
             overlay: OverlayState::None,
-            login_exchange_rx: None,
-            auth_type: AuthType::detect(),
             git_branch,
             display_path,
-            wrap_cache: WrapCache::new(),
-            usage: SessionUsage::new(),
         }
     }
 
@@ -666,32 +329,27 @@ impl TuiState {
 
     /// Refreshes the cached auth type (call after login/logout).
     pub fn refresh_auth_type(&mut self) {
-        self.auth_type = AuthType::detect();
+        self.auth.refresh();
     }
 
     /// Gets the current input text.
     pub fn get_input_text(&self) -> String {
-        self.textarea.lines().join("\n")
+        self.input.get_text()
     }
 
     /// Clears the input textarea.
     pub fn clear_input(&mut self) {
-        self.textarea.select_all();
-        self.textarea.cut();
-        self.reset_history_navigation();
+        self.input.clear();
     }
 
     /// Sets the input textarea to the given text.
     pub fn set_input_text(&mut self, text: &str) {
-        self.textarea.select_all();
-        self.textarea.cut();
-        self.textarea.insert_str(text);
+        self.input.set_text(text);
     }
 
     /// Resets history navigation state.
     pub fn reset_history_navigation(&mut self) {
-        self.history_index = None;
-        self.input_draft = None;
+        self.input.reset_navigation();
     }
 }
 
