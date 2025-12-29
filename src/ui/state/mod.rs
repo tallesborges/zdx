@@ -27,7 +27,7 @@ pub use session::{SessionState, SessionUsage};
 pub use transcript::TranscriptState;
 // Re-export scroll types for tests only
 #[cfg(test)]
-pub use transcript::{ScrollMode, ScrollState};
+pub use transcript::{ScrollAccumulator, ScrollMode, ScrollState};
 
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::overlays::{
