@@ -72,7 +72,7 @@ fn handle_paste(state: &mut TuiState, text: &str) {
     if let OverlayState::Login(LoginState::AwaitingCode { ref mut input, .. }) = state.overlay {
         input.push_str(text);
     } else {
-        state.textarea.insert_str(text);
+        state.input.textarea.insert_str(text);
     }
 }
 
@@ -107,8 +107,9 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
     match key.code {
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
         KeyCode::Char('u') if ctrl && !shift && !alt => {
-            let (row, _) = state.textarea.cursor();
+            let (row, _) = state.input.textarea.cursor();
             let current_line = state
+                .input
                 .textarea
                 .lines()
                 .get(row)
@@ -116,13 +117,13 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
                 .unwrap_or("");
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
-                state.textarea.move_cursor(tui_textarea::CursorMove::Up);
-                state.textarea.move_cursor(tui_textarea::CursorMove::End);
-                state.textarea.delete_next_char(); // delete the newline
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::Up);
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::End);
+                state.input.textarea.delete_next_char(); // delete the newline
             } else {
                 // Clear current line
-                state.textarea.move_cursor(tui_textarea::CursorMove::Head);
-                state.textarea.delete_line_by_end();
+                state.input.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                state.input.textarea.delete_line_by_end();
             }
             vec![]
         }
@@ -130,7 +131,7 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
             if state.get_input_text().is_empty() {
                 open_command_palette(state, false);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
@@ -154,7 +155,7 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
         }
         KeyCode::Enter if !shift && !alt => submit_input(state),
         KeyCode::Char('j') if ctrl => {
-            state.textarea.insert_newline();
+            state.input.textarea.insert_newline();
             vec![]
         }
         KeyCode::Esc => {
@@ -183,19 +184,19 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
         }
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
-            state.textarea.move_cursor(tui_textarea::CursorMove::Top);
+            state.input.textarea.move_cursor(tui_textarea::CursorMove::Top);
             vec![]
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
-            state.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+            state.input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
             vec![]
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
             if should_navigate_history_up(state) {
                 navigate_history_up(state);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
@@ -203,13 +204,13 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
             if should_navigate_history_down(state) {
                 navigate_history_down(state);
             } else {
-                state.textarea.input(key);
+                state.input.textarea.input(key);
             }
             vec![]
         }
         _ => {
             state.reset_history_navigation();
-            state.textarea.input(key);
+            state.input.textarea.input(key);
             vec![]
         }
     }
@@ -229,7 +230,7 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
-    state.command_history.push(text.clone());
+    state.input.history.push(text.clone());
     state.reset_history_navigation();
 
     state.transcript.cells.push(HistoryCell::user(&text));
@@ -257,65 +258,19 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
 // ============================================================================
 
 fn should_navigate_history_up(state: &TuiState) -> bool {
-    if state.command_history.is_empty() {
-        return false;
-    }
-    if state.history_index.is_some() {
-        return true;
-    }
-    if state.get_input_text().is_empty() {
-        return true;
-    }
-    let (row, _col) = state.textarea.cursor();
-    row == 0
+    state.input.should_navigate_up()
 }
 
 fn should_navigate_history_down(state: &TuiState) -> bool {
-    if state.history_index.is_none() {
-        return false;
-    }
-    let (row, _col) = state.textarea.cursor();
-    let line_count = state.textarea.lines().len();
-    row >= line_count.saturating_sub(1)
+    state.input.should_navigate_down()
 }
 
 fn navigate_history_up(state: &mut TuiState) {
-    if state.command_history.is_empty() {
-        return;
-    }
-
-    if state.history_index.is_none() {
-        let current = state.get_input_text();
-        state.input_draft = Some(current);
-        state.history_index = Some(state.command_history.len() - 1);
-    } else if let Some(idx) = state.history_index
-        && idx > 0
-    {
-        state.history_index = Some(idx - 1);
-    }
-
-    if let Some(idx) = state.history_index
-        && let Some(entry) = state.command_history.get(idx).cloned()
-    {
-        state.set_input_text(&entry);
-    }
+    state.input.navigate_up();
 }
 
 fn navigate_history_down(state: &mut TuiState) {
-    let Some(idx) = state.history_index else {
-        return;
-    };
-
-    if idx + 1 < state.command_history.len() {
-        state.history_index = Some(idx + 1);
-        if let Some(entry) = state.command_history.get(idx + 1).cloned() {
-            state.set_input_text(&entry);
-        }
-    } else {
-        let draft = state.input_draft.take().unwrap_or_default();
-        state.history_index = None;
-        state.set_input_text(&draft);
-    }
+    state.input.navigate_down();
 }
 
 // ============================================================================
@@ -364,7 +319,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
 
     state.transcript.cells.clear();
     state.messages.clear();
-    state.command_history.clear();
+    state.input.history.clear();
     state.transcript.scroll.reset();
     state.usage = crate::ui::state::SessionUsage::new();
     state.transcript.wrap_cache.clear();
@@ -771,7 +726,7 @@ mod tests {
         state
             .messages
             .push(crate::providers::anthropic::ChatMessage::user("test"));
-        state.command_history.push("test".to_string());
+        state.input.history.push("test".to_string());
         state.usage.add(100, 50, 200, 25);
 
         // Trigger cache population by rendering (simulate)
@@ -784,7 +739,7 @@ mod tests {
         // Verify everything is cleared
         assert!(state.transcript.cells.is_empty() || state.transcript.cells.len() == 1); // May have "Conversation cleared." message
         assert!(state.messages.is_empty());
-        assert!(state.command_history.is_empty());
+        assert!(state.input.history.is_empty());
         assert!(state.transcript.wrap_cache.is_empty());
         assert!(state.transcript.scroll.is_following());
         assert_eq!(state.usage.input_tokens, 0);
