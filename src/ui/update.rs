@@ -79,10 +79,18 @@ fn handle_paste(state: &mut TuiState, text: &str) {
 fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
-            state.transcript.scroll_up(MOUSE_SCROLL_LINES);
+            // Accumulate negative delta (up = negative)
+            state
+                .transcript
+                .scroll_accumulator
+                .accumulate(-(MOUSE_SCROLL_LINES as i32));
         }
         MouseEventKind::ScrollDown => {
-            state.transcript.scroll_down(MOUSE_SCROLL_LINES);
+            // Accumulate positive delta (down = positive)
+            state
+                .transcript
+                .scroll_accumulator
+                .accumulate(MOUSE_SCROLL_LINES as i32);
         }
         _ => {}
     }
@@ -684,6 +692,24 @@ pub fn apply_pending_delta(state: &mut TuiState) {
     }
 }
 
+/// Applies any accumulated scroll delta from mouse events.
+///
+/// Called once per frame after all events are processed to coalesce
+/// rapid scroll events (especially from trackpads) into a single scroll.
+pub fn apply_scroll_delta(state: &mut TuiState) {
+    let delta = state.transcript.scroll_accumulator.take_delta();
+    if delta == 0 {
+        return;
+    }
+
+    let lines = delta.unsigned_abs() as usize;
+    if delta < 0 {
+        state.transcript.scroll_up(lines);
+    } else {
+        state.transcript.scroll_down(lines);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -734,6 +760,28 @@ mod tests {
         assert!(matches!(
             state.transcript.scroll.mode,
             ScrollMode::FollowLatest
+        ));
+    }
+
+    #[test]
+    fn test_apply_scroll_delta_coalesces_events() {
+        let config = crate::config::Config::default();
+        let mut state = TuiState::new(config, std::path::PathBuf::new(), None, None);
+        state.transcript.scroll.update_line_count(100);
+        state.transcript.viewport_height = 20;
+
+        // Simulate multiple scroll up events (trackpad-like)
+        state.transcript.scroll_accumulator.accumulate(-1);
+        state.transcript.scroll_accumulator.accumulate(-1);
+        state.transcript.scroll_accumulator.accumulate(-1);
+
+        // Apply should coalesce into single scroll of 3 lines
+        super::apply_scroll_delta(&mut state);
+
+        // Should be anchored at offset 77 (80 - 3)
+        assert!(matches!(
+            state.transcript.scroll.mode,
+            ScrollMode::Anchored { offset: 77 }
         ));
     }
 

@@ -126,6 +126,40 @@ impl ScrollState {
     }
 }
 
+/// Accumulator for mouse scroll deltas.
+///
+/// Coalesces rapid scroll events (especially from trackpads) into a single
+/// scroll operation per frame, improving smoothness and reducing jitter.
+///
+/// Convention: positive delta = scroll down, negative delta = scroll up.
+#[derive(Debug, Clone, Default)]
+pub struct ScrollAccumulator {
+    /// Accumulated scroll delta (positive = down, negative = up).
+    pending_delta: i32,
+}
+
+impl ScrollAccumulator {
+    /// Accumulates a scroll delta.
+    ///
+    /// Positive values scroll down, negative values scroll up.
+    pub fn accumulate(&mut self, delta: i32) {
+        self.pending_delta += delta;
+    }
+
+    /// Takes the accumulated delta, resetting it to zero.
+    ///
+    /// Returns the delta to apply (positive = down, negative = up).
+    pub fn take_delta(&mut self) -> i32 {
+        std::mem::take(&mut self.pending_delta)
+    }
+
+    /// Returns the current pending delta without consuming it.
+    #[cfg(test)]
+    pub fn peek_delta(&self) -> i32 {
+        self.pending_delta
+    }
+}
+
 /// Transcript display state.
 ///
 /// Encapsulates all state related to displaying the transcript: cells, scroll,
@@ -137,6 +171,9 @@ pub struct TranscriptState {
 
     /// Scroll state (mode, offset, cached line count).
     pub scroll: ScrollState,
+
+    /// Accumulator for mouse scroll deltas (coalesces events within a frame).
+    pub scroll_accumulator: ScrollAccumulator,
 
     /// Cache for wrapped line rendering.
     pub wrap_cache: crate::ui::transcript::WrapCache,
@@ -153,6 +190,7 @@ impl Default for TranscriptState {
         Self {
             cells: Vec::new(),
             scroll: ScrollState::default(),
+            scroll_accumulator: ScrollAccumulator::default(),
             wrap_cache: crate::ui::transcript::WrapCache::new(),
             viewport_height: 20,
             terminal_size: (80, 24),
@@ -200,5 +238,26 @@ impl TranscriptState {
     pub fn update_layout(&mut self, terminal_size: (u16, u16), viewport_height: usize) {
         self.terminal_size = terminal_size;
         self.viewport_height = viewport_height;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_scroll_accumulator_coalesces_and_resets() {
+        let mut acc = ScrollAccumulator::default();
+
+        // Accumulate mixed directions
+        acc.accumulate(5); // down
+        acc.accumulate(-3); // up
+        acc.accumulate(1); // down
+        assert_eq!(acc.peek_delta(), 3); // net: down 3
+
+        // Take consumes and resets
+        let delta = acc.take_delta();
+        assert_eq!(delta, 3);
+        assert_eq!(acc.take_delta(), 0); // Already taken
     }
 }

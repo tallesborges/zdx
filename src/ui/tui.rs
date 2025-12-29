@@ -217,6 +217,9 @@ impl TuiRuntime {
                 // Apply any pending deltas before render (coalescing)
                 update::apply_pending_delta(&mut self.state);
 
+                // Apply accumulated scroll delta from mouse events (coalescing)
+                update::apply_scroll_delta(&mut self.state);
+
                 // Update cached line count for scroll calculations
                 let line_count = view::calculate_line_count(&self.state, size.width as usize);
                 self.state.transcript.scroll.update_line_count(line_count);
