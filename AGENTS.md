@@ -94,6 +94,30 @@
 - `docs/plans/`: optional commit-sized plans (how)
 - `docs/NAVIGATION.md`: repo cheat sheet (where)
 
+## Delegating tasks (subagent pattern)
+
+When a task is complex or would pollute the current context, delegate to a fresh zdx instance:
+
+```bash
+# If zdx is in PATH:
+zdx --no-save exec -p "your task description"
+```
+
+This runs in an isolated process with its own context window. Use for:
+- Reading large files and summarizing
+- Complex multi-step analysis
+- Research tasks that generate lots of intermediate output
+- Any task where you only need the final result
+
+The `--no-save` flag prevents session file creation. Output is returned directly.
+
+**Reading previous sessions:**
+```bash
+zdx sessions show <session_id>
+```
+
+Use this to fetch context from a previous conversation when needed.
+
 ## ⚠️ IMPORTANT: Keep this file up to date
 
 **This is mandatory, not optional.** When you:
