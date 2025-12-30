@@ -19,6 +19,7 @@ It's not designed for public or general usage — it's focused on my own needs a
 - **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume any previous conversation
+- **Handoff** — AMP-style context-aware prompt generation to start fresh sessions
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
 
 ## Inspiration

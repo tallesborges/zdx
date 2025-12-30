@@ -2,6 +2,8 @@
 //!
 //! Manages the text area, command history, and history navigation.
 
+use tokio::sync::mpsc;
+
 /// User input state.
 ///
 /// Encapsulates the text area, command history, and navigation state.
@@ -20,6 +22,18 @@ pub struct InputState {
 
     /// Whether we're in handoff mode (next submit creates handoff).
     pub handoff_pending: bool,
+
+    /// Whether handoff generation is in progress.
+    pub handoff_generating: bool,
+
+    /// Receiver for async handoff generation result.
+    pub handoff_rx: Option<mpsc::Receiver<Result<String, String>>>,
+
+    /// Whether the generated handoff prompt is ready (next submit creates new session).
+    pub handoff_ready: bool,
+
+    /// The goal text for handoff generation (preserved for retry on failure).
+    pub handoff_goal: Option<String>,
 }
 
 impl Default for InputState {
@@ -49,6 +63,10 @@ impl InputState {
             history_index: None,
             draft: None,
             handoff_pending: false,
+            handoff_generating: false,
+            handoff_rx: None,
+            handoff_ready: false,
+            handoff_goal: None,
         }
     }
 
