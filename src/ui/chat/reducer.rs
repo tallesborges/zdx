@@ -290,7 +290,12 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
             vec![]
         }
         KeyCode::Esc => {
-            if state.agent_state.is_running() {
+            if state.input.handoff_pending {
+                // Cancel handoff mode
+                state.input.handoff_pending = false;
+                state.clear_input();
+                vec![]
+            } else if state.agent_state.is_running() {
                 vec![UiEffect::InterruptAgent]
             } else {
                 state.clear_input();
@@ -367,6 +372,13 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
+    // Check if we're in handoff mode
+    if state.input.handoff_pending {
+        state.input.handoff_pending = false;
+        state.clear_input();
+        return vec![UiEffect::StartHandoff { goal: text }];
+    }
+
     state.input.history.push(text.clone());
     state.reset_history_navigation();
 
@@ -436,6 +448,7 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
             open_thinking_picker(state);
             vec![]
         }
+        "handoff" => execute_handoff(state),
         "new" => execute_new(state),
         "quit" => execute_quit(state),
         _ => vec![],
@@ -445,6 +458,21 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
 // ============================================================================
 // Slash Commands
 // ============================================================================
+
+fn execute_handoff(state: &mut TuiState) -> Vec<UiEffect> {
+    // Check if we have an active session
+    if state.conversation.session.is_none() {
+        state
+            .transcript
+            .cells
+            .push(HistoryCell::system("Handoff requires an active session."));
+        return vec![];
+    }
+
+    // Set handoff mode - next submit will trigger handoff
+    state.input.handoff_pending = true;
+    vec![]
+}
 
 fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     if state.agent_state.is_running() {

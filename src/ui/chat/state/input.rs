@@ -17,6 +17,9 @@ pub struct InputState {
 
     /// Draft text saved when navigating history.
     pub draft: Option<String>,
+
+    /// Whether we're in handoff mode (next submit creates handoff).
+    pub handoff_pending: bool,
 }
 
 impl Default for InputState {
@@ -45,6 +48,7 @@ impl InputState {
             history: Vec::new(),
             history_index: None,
             draft: None,
+            handoff_pending: false,
         }
     }
 
