@@ -43,6 +43,11 @@ pub const COMMANDS: &[Command] = &[
         description: "Open config file in default editor",
     },
     Command {
+        name: "handoff",
+        aliases: &[],
+        description: "Start new session with context from current",
+    },
+    Command {
         name: "login",
         aliases: &[],
         description: "Login with Anthropic OAuth",
@@ -78,9 +83,13 @@ pub const COMMANDS: &[Command] = &[
 mod tests {
     use super::*;
 
+    fn find_command(name: &str) -> &'static Command {
+        COMMANDS.iter().find(|c| c.name == name).unwrap()
+    }
+
     #[test]
     fn test_command_matches_name() {
-        let cmd = &COMMANDS[4]; // new
+        let cmd = find_command("new");
         assert!(cmd.matches("new"));
         assert!(cmd.matches("ne"));
         assert!(cmd.matches("NEW")); // case-insensitive
@@ -89,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_command_matches_alias() {
-        let cmd = &COMMANDS[4]; // new (alias: clear)
+        let cmd = find_command("new");
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
@@ -97,22 +106,13 @@ mod tests {
 
     #[test]
     fn test_command_display_name() {
-        let config_cmd = &COMMANDS[0];
-        assert_eq!(config_cmd.display_name(), "/config (settings)");
-
-        let login_cmd = &COMMANDS[1];
-        assert_eq!(login_cmd.display_name(), "/login");
-
-        let logout_cmd = &COMMANDS[2];
-        assert_eq!(logout_cmd.display_name(), "/logout");
-
-        let model_cmd = &COMMANDS[3];
-        assert_eq!(model_cmd.display_name(), "/model");
-
-        let new_cmd = &COMMANDS[4];
-        assert_eq!(new_cmd.display_name(), "/new (clear)");
-
-        let quit = &COMMANDS[5];
-        assert_eq!(quit.display_name(), "/quit (q, exit)");
+        assert_eq!(find_command("config").display_name(), "/config (settings)");
+        assert_eq!(find_command("handoff").display_name(), "/handoff");
+        assert_eq!(find_command("login").display_name(), "/login");
+        assert_eq!(find_command("logout").display_name(), "/logout");
+        assert_eq!(find_command("model").display_name(), "/model");
+        assert_eq!(find_command("new").display_name(), "/new (clear)");
+        assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");
+        assert_eq!(find_command("thinking").display_name(), "/thinking");
     }
 }

@@ -17,10 +17,26 @@ use crate::ui::chat::state::{OverlayState, TuiState};
 // State
 // ============================================================================
 
+/// Mode of the command palette.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PaletteMode {
+    /// Normal mode: filtering and selecting commands.
+    CommandSelection,
+    /// Argument input mode: entering argument for a command.
+    ArgumentInput {
+        /// The command that needs an argument.
+        command: &'static str,
+        /// Prompt to show (e.g., "Goal:").
+        prompt: &'static str,
+    },
+}
+
 /// State for the slash command palette.
 #[derive(Debug, Clone)]
 pub struct CommandPaletteState {
-    /// Filter text (characters typed after `/`).
+    /// Current mode of the palette.
+    pub mode: PaletteMode,
+    /// Filter text (characters typed after `/`) or argument text.
     pub filter: String,
     /// Currently selected command index (into filtered list).
     pub selected: usize,
@@ -32,10 +48,16 @@ impl CommandPaletteState {
     /// Creates a new palette state with empty filter.
     pub fn new(insert_slash_on_escape: bool) -> Self {
         Self {
+            mode: PaletteMode::CommandSelection,
             filter: String::new(),
             selected: 0,
             insert_slash_on_escape,
         }
+    }
+
+    /// Returns true if in argument input mode.
+    pub fn is_argument_mode(&self) -> bool {
+        matches!(self.mode, PaletteMode::ArgumentInput { .. })
     }
 
     /// Returns commands matching the current filter.
@@ -87,6 +109,17 @@ pub fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
 pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
+    // Check if we're in argument mode
+    let is_argument_mode = state
+        .overlay
+        .as_command_palette()
+        .is_some_and(|p| p.is_argument_mode());
+
+    if is_argument_mode {
+        return handle_argument_mode_key(state, key, ctrl);
+    }
+
+    // Command selection mode
     match key.code {
         KeyCode::Esc => {
             let insert_slash = state
@@ -110,9 +143,22 @@ pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent)
         }
         KeyCode::Enter | KeyCode::Tab => {
             let cmd_name = get_selected_command_name(state);
-            close_command_palette(state, false);
             if let Some(name) = cmd_name {
-                vec![UiEffect::ExecuteCommand { name }]
+                // Check if command needs an argument
+                if name == "handoff" {
+                    // Switch to argument mode
+                    if let Some(palette) = state.overlay.as_command_palette_mut() {
+                        palette.mode = PaletteMode::ArgumentInput {
+                            command: "handoff",
+                            prompt: "Goal:",
+                        };
+                        palette.filter.clear();
+                    }
+                    vec![]
+                } else {
+                    close_command_palette(state, false);
+                    vec![UiEffect::ExecuteCommand { name }]
+                }
             } else {
                 vec![]
             }
@@ -128,6 +174,64 @@ pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent)
             if let Some(palette) = state.overlay.as_command_palette_mut() {
                 palette.filter.push(c);
                 palette.clamp_selection();
+            }
+            vec![]
+        }
+        _ => vec![],
+    }
+}
+
+/// Handles key events when in argument input mode.
+fn handle_argument_mode_key(
+    state: &mut TuiState,
+    key: crossterm::event::KeyEvent,
+    ctrl: bool,
+) -> Vec<UiEffect> {
+    match key.code {
+        KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+            close_command_palette(state, false);
+            vec![]
+        }
+        KeyCode::Enter => {
+            // Get the command and argument
+            let (command, argument) = if let Some(palette) = state.overlay.as_command_palette() {
+                if let PaletteMode::ArgumentInput { command, .. } = palette.mode {
+                    (Some(command), palette.filter.trim().to_string())
+                } else {
+                    (None, String::new())
+                }
+            } else {
+                (None, String::new())
+            };
+
+            close_command_palette(state, false);
+
+            // Execute command with argument
+            if let Some(cmd) = command {
+                match cmd {
+                    "handoff" => {
+                        if argument.is_empty() {
+                            // Show error - empty goal
+                            vec![]
+                        } else {
+                            vec![UiEffect::StartHandoff { goal: argument }]
+                        }
+                    }
+                    _ => vec![],
+                }
+            } else {
+                vec![]
+            }
+        }
+        KeyCode::Backspace => {
+            if let Some(palette) = state.overlay.as_command_palette_mut() {
+                palette.filter.pop();
+            }
+            vec![]
+        }
+        KeyCode::Char(c) if !ctrl => {
+            if let Some(palette) = state.overlay.as_command_palette_mut() {
+                palette.filter.push(c);
             }
             vec![]
         }
@@ -165,6 +269,104 @@ fn get_selected_command_name(state: &TuiState) -> Option<&'static str> {
 
 /// Renders the command palette as an overlay.
 pub fn render_command_palette(
+    frame: &mut Frame,
+    palette: &CommandPaletteState,
+    area: Rect,
+    input_top_y: u16,
+) {
+    // Dispatch to the appropriate render function based on mode
+    if palette.is_argument_mode() {
+        render_argument_input(frame, palette, area, input_top_y);
+    } else {
+        render_command_selection(frame, palette, area, input_top_y);
+    }
+}
+
+/// Renders the argument input mode (e.g., for /handoff goal).
+fn render_argument_input(
+    frame: &mut Frame,
+    palette: &CommandPaletteState,
+    area: Rect,
+    input_top_y: u16,
+) {
+    let (command, prompt) = if let PaletteMode::ArgumentInput { command, prompt } = palette.mode {
+        (command, prompt)
+    } else {
+        return;
+    };
+
+    // Calculate palette dimensions (smaller than command list)
+    let palette_width = 50.min(area.width.saturating_sub(4));
+    let palette_height = 5;
+
+    // Available vertical space (above input)
+    let available_height = input_top_y;
+
+    // Position: centered
+    let palette_x = (area.width.saturating_sub(palette_width)) / 2;
+    let palette_y = (available_height.saturating_sub(palette_height)) / 2;
+
+    let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
+
+    // Clear the area behind the palette
+    frame.render_widget(Clear, palette_area);
+
+    // Render outer border with command name as title
+    let title = format!(" /{} ", command);
+    let outer_block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(title)
+        .title_style(
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD),
+        );
+    frame.render_widget(outer_block, palette_area);
+
+    // Inner area
+    let inner_area = Rect::new(
+        palette_area.x + 1,
+        palette_area.y + 1,
+        palette_area.width.saturating_sub(2),
+        palette_area.height.saturating_sub(2),
+    );
+
+    // Prompt and input line
+    let max_input_len = inner_area.width.saturating_sub(prompt.len() as u16 + 3) as usize;
+    let input_display = if palette.filter.len() > max_input_len {
+        let truncated = &palette.filter[palette.filter.len() - max_input_len..];
+        format!("…{}", truncated)
+    } else {
+        palette.filter.clone()
+    };
+
+    let input_line = Line::from(vec![
+        Span::styled(prompt, Style::default().fg(Color::Cyan)),
+        Span::raw(" "),
+        Span::styled(&input_display, Style::default().fg(Color::White)),
+        Span::styled("█", Style::default().fg(Color::Yellow)),
+    ]);
+    let input_para = Paragraph::new(input_line);
+    let input_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
+    frame.render_widget(input_para, input_area);
+
+    // Keyboard hints
+    let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
+    let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
+    let hints_line = Line::from(vec![
+        Span::styled("Enter", Style::default().fg(Color::Yellow)),
+        Span::styled(" submit ", Style::default().fg(Color::DarkGray)),
+        Span::styled("•", Style::default().fg(Color::DarkGray)),
+        Span::styled(" Esc", Style::default().fg(Color::Yellow)),
+        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
+    ]);
+    let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
+    frame.render_widget(hints_para, hints_area);
+}
+
+/// Renders the command selection mode.
+fn render_command_selection(
     frame: &mut Frame,
     palette: &CommandPaletteState,
     area: Rect,
