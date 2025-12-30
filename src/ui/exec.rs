@@ -242,9 +242,9 @@ impl ExecRenderer {
                 // The caller handles the final result from run_turn.
             }
             AgentEvent::ThinkingDelta { text } => {
-                // In exec mode, stream thinking text with a prefix (dim)
+                // In exec mode, stream thinking text to stderr (no styling)
                 if !text.is_empty() {
-                    let _ = write!(self.stderr, "\x1b[2m{}\x1b[0m", text);
+                    let _ = write!(self.stderr, "{}", text);
                     let _ = self.stderr.flush();
                 }
             }
