@@ -424,63 +424,14 @@ impl TuiRuntime {
                         )));
                 }
             }
-            UiEffect::CreateNewSession => match session::Session::new() {
-                Ok(new_session) => {
-                    let new_path = new_session.path().display().to_string();
-                    self.state.conversation.session = Some(new_session);
-
-                    // Show session path
-                    self.state
-                        .transcript
-                        .cells
-                        .push(HistoryCell::system(format!("Session path: {}", new_path)));
-
-                    // Show loaded AGENTS.md files (same as on startup)
-                    let effective =
-                        match crate::core::context::build_effective_system_prompt_with_paths(
-                            &self.state.config,
-                            &self.state.agent_opts.root,
-                        ) {
-                            Ok(e) => e,
-                            Err(err) => {
-                                self.state
-                                    .transcript
-                                    .cells
-                                    .push(HistoryCell::system(format!(
-                                        "Warning: Failed to load context: {}",
-                                        err
-                                    )));
-                                return;
-                            }
-                        };
-
-                    if !effective.loaded_agents_paths.is_empty() {
-                        let paths_list: Vec<String> = effective
-                            .loaded_agents_paths
-                            .iter()
-                            .map(|p| format!("  - {}", p.display()))
-                            .collect();
-                        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-                        self.state
-                            .transcript
-                            .cells
-                            .push(HistoryCell::system(message));
-                    }
-                }
-                Err(e) => {
-                    self.state
-                        .transcript
-                        .cells
-                        .push(HistoryCell::system(format!(
-                            "Warning: Failed to create new session: {}",
-                            e
-                        )));
+            UiEffect::CreateNewSession => {
+                if self.create_session_and_show_context().is_err() {
                     self.state
                         .transcript
                         .cells
                         .push(HistoryCell::system("Conversation cleared."));
                 }
-            },
+            }
             UiEffect::ExecuteCommand { name } => {
                 let effects = reducer::execute_command(&mut self.state, name);
                 self.execute_effects(effects);
@@ -498,6 +449,68 @@ impl TuiRuntime {
         }
     }
 
+    /// Creates a new session and shows context info in transcript.
+    ///
+    /// Returns `Ok(())` if session was created successfully, `Err(())` if it failed.
+    /// On failure, an error message is already added to the transcript.
+    fn create_session_and_show_context(&mut self) -> Result<(), ()> {
+        let new_session = match session::Session::new() {
+            Ok(s) => s,
+            Err(e) => {
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system(format!(
+                        "Warning: Failed to create new session: {}",
+                        e
+                    )));
+                return Err(());
+            }
+        };
+
+        let new_path = new_session.path().display().to_string();
+        self.state.conversation.session = Some(new_session);
+
+        // Show session path
+        self.state
+            .transcript
+            .cells
+            .push(HistoryCell::system(format!("Session path: {}", new_path)));
+
+        // Show loaded AGENTS.md files
+        let effective = match crate::core::context::build_effective_system_prompt_with_paths(
+            &self.state.config,
+            &self.state.agent_opts.root,
+        ) {
+            Ok(e) => e,
+            Err(err) => {
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system(format!(
+                        "Warning: Failed to load context: {}",
+                        err
+                    )));
+                return Ok(()); // Session created, just context loading failed
+            }
+        };
+
+        if !effective.loaded_agents_paths.is_empty() {
+            let paths_list: Vec<String> = effective
+                .loaded_agents_paths
+                .iter()
+                .map(|p| format!("  - {}", p.display()))
+                .collect();
+            let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
+            self.state
+                .transcript
+                .cells
+                .push(HistoryCell::system(message));
+        }
+
+        Ok(())
+    }
+
     /// Executes a handoff submit: creates new session and sends prompt as first message.
     fn execute_handoff_submit(&mut self, prompt: &str) {
         use crate::core::session::SessionEvent;
@@ -510,60 +523,8 @@ impl TuiRuntime {
         self.state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
         self.state.transcript.wrap_cache.clear();
 
-        // 2. Create new session
-        match session::Session::new() {
-            Ok(new_session) => {
-                let new_path = new_session.path().display().to_string();
-                self.state.conversation.session = Some(new_session);
-
-                // Show session path
-                self.state
-                    .transcript
-                    .cells
-                    .push(HistoryCell::system(format!("Session path: {}", new_path)));
-
-                // Show loaded AGENTS.md files
-                let effective = match crate::core::context::build_effective_system_prompt_with_paths(
-                    &self.state.config,
-                    &self.state.agent_opts.root,
-                ) {
-                    Ok(e) => e,
-                    Err(err) => {
-                        self.state
-                            .transcript
-                            .cells
-                            .push(HistoryCell::system(format!(
-                                "Warning: Failed to load context: {}",
-                                err
-                            )));
-                        return;
-                    }
-                };
-
-                if !effective.loaded_agents_paths.is_empty() {
-                    let paths_list: Vec<String> = effective
-                        .loaded_agents_paths
-                        .iter()
-                        .map(|p| format!("  - {}", p.display()))
-                        .collect();
-                    let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-                    self.state
-                        .transcript
-                        .cells
-                        .push(HistoryCell::system(message));
-                }
-            }
-            Err(e) => {
-                self.state
-                    .transcript
-                    .cells
-                    .push(HistoryCell::system(format!(
-                        "Warning: Failed to create new session: {}",
-                        e
-                    )));
-                // Continue without session - user can still chat, just won't persist
-            }
-        }
+        // 2. Create new session (continue even if it fails - user can still chat)
+        let _ = self.create_session_and_show_context();
 
         // 3. Add user message to transcript and conversation
         self.state.input.history.push(prompt.to_string());
@@ -659,7 +620,11 @@ impl TuiRuntime {
             r#"Read session {session_id} using this command:
 zdx sessions show {session_id}
 
-Based on that session, generate a focused handoff prompt for the goal: "{goal}"
+Based on that session, generate a focused handoff prompt for the following goal:
+
+<goal>
+{goal}
+</goal>
 
 Include:
 - Relevant context and decisions made
