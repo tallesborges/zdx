@@ -5,7 +5,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use super::style::{Style, StyledLine, StyledSpan};
-use super::wrap::{WrapCache, render_prefixed_content, wrap_text};
+use super::wrap::{WrapCache, render_prefixed_content, wrap_text, wrap_chars};
 use crate::core::events::ToolOutput;
 
 /// Global counter for generating unique cell IDs.
@@ -553,12 +553,27 @@ impl HistoryCell {
                     // Show the last N lines (most recent output is usually most relevant)
                     let skip_count = all_lines.len().saturating_sub(max_preview_lines);
                     for line in all_lines.iter().skip(skip_count) {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: (*line).to_string(),
-                                style: Style::ToolOutput,
-                            }],
-                        });
+                        // Sanitize line: strip ANSI escape codes (\x1b) to prevent terminal corruption
+                        // when wrapping breaks a sequence, and to avoid counting hidden chars in width.
+                        // Ideally we'd parse/strip properly, but removing the escape char is a safe fallback
+                        // that leaves the rest as visible text (e.g. "[31m") rather than active codes.
+                        let safe_line = line.replace('\x1b', "");
+
+                        // Check if line needs wrapping
+                        let wrapped = if safe_line.width() > width {
+                            wrap_chars(&safe_line, width)
+                        } else {
+                            vec![safe_line]
+                        };
+
+                        for wrapped_line in wrapped {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: wrapped_line,
+                                    style: Style::ToolOutput,
+                                }],
+                            });
+                        }
                     }
                 }
 
@@ -1228,6 +1243,30 @@ mod tests {
                 "Line {} should be indented, not prefixed",
                 i
             );
+        }
+    }
+
+    #[test]
+    fn test_tool_output_wrapping_correctness() {
+        // Create a tool cell with a very long output line
+        let long_line = "a".repeat(100); // 100 chars
+        let mut cell = HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "echo long"}));
+
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "stdout": long_line,
+            "stderr": ""
+        })));
+
+        // Request display with narrow width (e.g., 20 chars)
+        let width = 20;
+        let lines = cell.display_lines(width, 0);
+
+        // Verify that no line exceeds the display width
+        for (i, line) in lines.iter().enumerate() {
+            let line_text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
+            let line_width = line_text.width();
+            
+            assert!(line_width <= width, "Line {} width {} exceeds limit {}", i, line_width, width);
         }
     }
 }

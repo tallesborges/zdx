@@ -187,7 +187,7 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
             // First word on line
             if word_width > width {
                 // Word is too long, force break by character
-                let mut broken = break_word_by_width(word, width);
+                let mut broken = wrap_chars(word, width);
                 if let Some(last) = broken.pop() {
                     // All but last go to completed lines
                     lines.extend(broken);
@@ -209,7 +209,7 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
             lines.push(std::mem::take(&mut current_line));
             if word_width > width {
                 // Word is too long, force break by character
-                let mut broken = break_word_by_width(word, width);
+                let mut broken = wrap_chars(word, width);
                 if let Some(last) = broken.pop() {
                     lines.extend(broken);
                     current_width = last.width();
@@ -234,18 +234,21 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
-/// Breaks a word into parts that fit within the given display width.
+/// Breaks a string into parts that fit within the given display width.
 ///
-/// Used when a single word is wider than the available width.
+/// Used for "hard wrapping" (e.g., code blocks, long words, tool output)
+/// where whitespace preservation and exact width are more important than
+/// word boundaries.
+///
 /// Breaks at character boundaries, respecting display width.
-fn break_word_by_width(word: &str, width: usize) -> Vec<String> {
+pub(crate) fn wrap_chars(text: &str, width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
 
     let mut parts = Vec::new();
     let mut current = String::new();
     let mut current_width: usize = 0;
 
-    for ch in word.chars() {
+    for ch in text.chars() {
         let ch_width = ch.width().unwrap_or(0);
 
         // Handle zero-width characters (always add to current)
@@ -347,9 +350,9 @@ mod tests {
     }
 
     #[test]
-    fn test_break_word_by_width_cjk() {
+    fn test_wrap_chars_cjk() {
         // Breaking a long CJK word
-        let parts = break_word_by_width("你好世界很长", 4);
+        let parts = wrap_chars("你好世界很长", 4);
         // Each part should be at most 4 columns (2 CJK chars)
         assert_eq!(parts.len(), 3);
         assert_eq!(parts[0], "你好");
@@ -358,8 +361,8 @@ mod tests {
     }
 
     #[test]
-    fn test_break_word_by_width_emoji() {
-        let parts = break_word_by_width("🎉🎊🎁🎄", 4);
+    fn test_wrap_chars_emoji() {
+        let parts = wrap_chars("🎉🎊🎁🎄", 4);
         // Each emoji is 2 columns, so 2 per line
         assert_eq!(parts.len(), 2);
         assert_eq!(parts[0], "🎉🎊");
