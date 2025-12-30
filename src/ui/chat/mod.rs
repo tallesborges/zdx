@@ -196,15 +196,18 @@ impl TuiRuntime {
             }
 
             // Collect events from various sources
-            let events = self.collect_events()?;
+            let mut events = self.collect_events()?;
 
-            // Update transcript layout before processing events
+            // Prepend Frame event with current terminal size
+            // This ensures layout/delta updates happen before other events
             let size = self.terminal.size()?;
-            let viewport_height =
-                view::calculate_transcript_height_with_state(&self.state, size.height);
-            self.state
-                .transcript
-                .update_layout((size.width, size.height), viewport_height);
+            events.insert(
+                0,
+                UiEvent::Frame {
+                    width: size.width,
+                    height: size.height,
+                },
+            );
 
             // Process each event through the reducer
             for event in events {
@@ -223,20 +226,6 @@ impl TuiRuntime {
 
             // Only render if something changed
             if dirty {
-                // Apply any pending deltas before render (coalescing)
-                reducer::apply_pending_delta(&mut self.state);
-
-                // Apply accumulated scroll delta from mouse events (coalescing)
-                reducer::apply_scroll_delta(&mut self.state);
-
-                // Update cell line info for lazy rendering and scroll calculations
-                let cell_line_counts =
-                    view::calculate_cell_line_counts(&self.state, size.width as usize);
-                self.state
-                    .transcript
-                    .scroll
-                    .update_cell_line_info(cell_line_counts);
-
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {
                     view::view(&self.state, frame);
@@ -431,10 +420,6 @@ impl TuiRuntime {
                         .cells
                         .push(HistoryCell::system("Conversation cleared."));
                 }
-            }
-            UiEffect::ExecuteCommand { name } => {
-                let effects = reducer::execute_command(&mut self.state, name);
-                self.execute_effects(effects);
             }
         }
     }

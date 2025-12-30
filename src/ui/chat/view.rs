@@ -40,7 +40,7 @@ pub const TRANSCRIPT_MARGIN: u16 = 1;
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
 /// Spinner speed divisor (render frames per spinner frame).
-const SPINNER_SPEED_DIVISOR: usize = 6;
+pub const SPINNER_SPEED_DIVISOR: usize = 6;
 
 /// Result of wrapping textarea content with Unicode-aware cursor tracking.
 struct WrappedTextarea {
