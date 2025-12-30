@@ -34,7 +34,7 @@ use crate::core::session::{self, Session};
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::state::{AgentState, TuiState};
+use crate::ui::chat::state::{AgentState, HandoffState, TuiState};
 use crate::ui::transcript::HistoryCell;
 
 /// Runs the interactive chat loop.
@@ -314,7 +314,7 @@ impl TuiRuntime {
 
     /// Collects handoff generation result if available.
     fn collect_handoff_result(&mut self, events: &mut Vec<UiEvent>) {
-        let Some(rx) = &mut self.state.input.handoff_rx else {
+        let HandoffState::Generating { rx, .. } = &mut self.state.input.handoff else {
             return;
         };
 
@@ -609,10 +609,13 @@ impl TuiRuntime {
 
     /// Spawns an async task to generate a handoff prompt using a subagent.
     fn spawn_handoff_generation(&mut self, session_id: &str, goal: &str) {
-        use std::process::{Command, Stdio};
+        use tokio::process::Command;
+        use tokio::sync::oneshot;
+
+        const HANDOFF_TIMEOUT_SECS: u64 = 120; // 2 minute timeout for subagent
 
         let session_id = session_id.to_string();
-        let goal = goal.to_string();
+        let goal_clone = goal.to_string();
         let root = self.state.agent_opts.root.clone();
 
         // Build the generation prompt
@@ -623,7 +626,7 @@ zdx sessions show {session_id}
 Based on that session, generate a focused handoff prompt for the following goal:
 
 <goal>
-{goal}
+{goal_clone}
 </goal>
 
 Include:
@@ -636,8 +639,14 @@ written as if the user is starting a fresh conversation with a new agent."#
         );
 
         let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
-        self.state.input.handoff_rx = Some(rx);
-        self.state.input.handoff_generating = true;
+        let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+
+        // Transition to Generating state with all necessary data
+        self.state.input.handoff = HandoffState::Generating {
+            goal: goal.to_string(),
+            rx,
+            cancel_tx,
+        };
 
         // Show status in transcript
         self.state
@@ -660,29 +669,59 @@ written as if the user is starting a fresh conversation with a new agent."#
                 }
             };
 
-            // Spawn the subagent process
-            let output = Command::new(exe)
+            // Spawn the subagent process (async)
+            let child = match Command::new(exe)
                 .args(["--no-save", "exec", "-p", &generation_prompt])
                 .current_dir(&root)
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .output();
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped())
+                .kill_on_drop(true) // Kill child if task is dropped/cancelled
+                .spawn()
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let _ = tx
+                        .send(Err(format!("Failed to spawn subagent: {}", e)))
+                        .await;
+                    return;
+                }
+            };
 
-            let result = match output {
-                Ok(out) => {
-                    if out.status.success() {
-                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
-                        if stdout.is_empty() {
-                            Err("Handoff generation returned empty output".to_string())
-                        } else {
-                            Ok(stdout)
+            // Wait for output with timeout and cancellation support
+            let result = tokio::select! {
+                // Cancellation signal (user pressed Esc)
+                _ = cancel_rx => {
+                    // kill_on_drop will handle cleanup when child is dropped
+                    Err("Handoff cancelled".to_string())
+                }
+                // Timeout
+                output_result = async {
+                    tokio::time::timeout(
+                        std::time::Duration::from_secs(HANDOFF_TIMEOUT_SECS),
+                        child.wait_with_output()
+                    ).await
+                } => {
+                    match output_result {
+                        Ok(Ok(output)) => {
+                            if output.status.success() {
+                                let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                                if stdout.is_empty() {
+                                    Err("Handoff generation returned empty output".to_string())
+                                } else {
+                                    Ok(stdout)
+                                }
+                            } else {
+                                let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                                Err(format!("Handoff generation failed: {}", stderr.trim()))
+                            }
                         }
-                    } else {
-                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                        Err(format!("Handoff generation failed: {}", stderr.trim()))
+                        Ok(Err(e)) => Err(format!("Failed to get subagent output: {}", e)),
+                        Err(_) => {
+                            // Timeout elapsed - child will be killed on drop
+                            Err(format!("Handoff generation timed out after {} seconds", HANDOFF_TIMEOUT_SECS))
+                        }
                     }
                 }
-                Err(e) => Err(format!("Failed to spawn subagent: {}", e)),
             };
 
             let _ = tx.send(result).await;

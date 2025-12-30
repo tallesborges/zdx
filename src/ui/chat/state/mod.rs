@@ -22,7 +22,7 @@ mod transcript;
 
 // Re-export types from submodules
 pub use auth::{AuthState, AuthStatus};
-pub use input::InputState;
+pub use input::{HandoffState, InputState};
 pub use session::{SessionState, SessionUsage};
 pub use transcript::TranscriptState;
 // Re-export VisibleRange for view.rs

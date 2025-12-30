@@ -2,7 +2,66 @@
 //!
 //! Manages the text area, command history, and history navigation.
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
+
+/// Handoff feature state machine.
+///
+/// Models the lifecycle of a handoff operation:
+/// - `Idle`: No handoff in progress
+/// - `Pending`: User is typing the goal in textarea
+/// - `Generating`: Async subagent is generating the handoff prompt
+/// - `Ready`: Generated prompt is in textarea, awaiting confirmation
+#[derive(Default)]
+pub enum HandoffState {
+    #[default]
+    Idle,
+
+    /// User is typing the handoff goal in the textarea.
+    Pending,
+
+    /// Handoff generation is in progress.
+    Generating {
+        /// The goal text (preserved for retry on failure).
+        goal: String,
+        /// Receiver for the generation result.
+        rx: mpsc::Receiver<Result<String, String>>,
+        /// Sender to cancel the background operation.
+        cancel_tx: oneshot::Sender<()>,
+    },
+
+    /// Generated prompt is in textarea, ready for user to review and submit.
+    Ready,
+}
+
+impl HandoffState {
+    /// Returns true if handoff is in any active state (not Idle).
+    pub fn is_active(&self) -> bool {
+        !matches!(self, HandoffState::Idle)
+    }
+
+    /// Returns true if currently generating.
+    pub fn is_generating(&self) -> bool {
+        matches!(self, HandoffState::Generating { .. })
+    }
+
+    /// Returns true if in pending state (awaiting goal input).
+    pub fn is_pending(&self) -> bool {
+        matches!(self, HandoffState::Pending)
+    }
+
+    /// Returns true if ready for confirmation.
+    pub fn is_ready(&self) -> bool {
+        matches!(self, HandoffState::Ready)
+    }
+
+    /// Cancels any in-progress generation and resets to Idle.
+    pub fn cancel(&mut self) {
+        if let HandoffState::Generating { cancel_tx, .. } = std::mem::take(self) {
+            let _ = cancel_tx.send(()); // Signal the spawned task to abort
+        }
+        *self = HandoffState::Idle;
+    }
+}
 
 /// User input state.
 ///
@@ -20,20 +79,8 @@ pub struct InputState {
     /// Draft text saved when navigating history.
     pub draft: Option<String>,
 
-    /// Whether we're in handoff mode (next submit creates handoff).
-    pub handoff_pending: bool,
-
-    /// Whether handoff generation is in progress.
-    pub handoff_generating: bool,
-
-    /// Receiver for async handoff generation result.
-    pub handoff_rx: Option<mpsc::Receiver<Result<String, String>>>,
-
-    /// Whether the generated handoff prompt is ready (next submit creates new session).
-    pub handoff_ready: bool,
-
-    /// The goal text for handoff generation (preserved for retry on failure).
-    pub handoff_goal: Option<String>,
+    /// Handoff feature state.
+    pub handoff: HandoffState,
 }
 
 impl Default for InputState {
@@ -62,11 +109,7 @@ impl InputState {
             history: Vec::new(),
             history_index: None,
             draft: None,
-            handoff_pending: false,
-            handoff_generating: false,
-            handoff_rx: None,
-            handoff_ready: false,
-            handoff_goal: None,
+            handoff: HandoffState::Idle,
         }
     }
 
