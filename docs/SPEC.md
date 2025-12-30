@@ -1,7 +1,7 @@
 # ZDX Specification
 
 **Product:** ZDX (TUI-first terminal assistant for developers)  
-**Status:** Source of truth for *vision + user-visible contracts*. ADRs explain "why"; plans explain "how".
+**Status:** Source of truth for *vision + user-visible contracts*.
 
 ---
 
@@ -15,7 +15,7 @@ The TUI is the product. A CLI mode exists to support automation and scripting.
 
 ## 2) Why
 
-**Learning by building.** This project exists to explore how agentic coding tools work by implementing one from scratch. It won't have the cleanest architecture — features ship fast, and design emerges from iteration.
+**Learning by building.** This project exists to explore how agentic coding tools work by implementing one from scratch.
 
 **Developer UX is the priority.** Every feature should reduce friction and help developers move faster. If it doesn't improve the daily workflow, it doesn't belong.
 
@@ -48,13 +48,6 @@ ZDX solves this with a boring, reliable core:
 - Script-friendly execution with clean stdout/stderr separation.
 - Same agent, different renderer.
 
-### Current focus (non-contract)
-
-- Transcript cells + width-agnostic rendering + resize-safe reflow
-- Smooth streaming (throttled redraw, no flicker)
-- Scroll model: follow-latest vs anchored
-- Selection + copy that matches what you see (incl. off-screen)
-
 ---
 
 ## 4) Non-goals
@@ -79,7 +72,7 @@ ZDX solves this with a boring, reliable core:
 
 ---
 
-## 6) Product surface (CLI)
+## 6) Product Surface (CLI)
 
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
@@ -87,14 +80,11 @@ ZDX solves this with a boring, reliable core:
 - `zdx sessions list|show <ID>|resume [ID]`
 - `zdx config init|path`
 
-**Planned (not shipped):**
-- `zdx chat` — explicit interactive entrypoint (alias of `zdx`)
-
-Exit codes (v0.1): `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.
+**Exit codes:** `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.
 
 ---
 
-## 7) Output channel contracts
+## 7) Output Contracts
 
 ### `zdx exec` (non-interactive, scriptable)
 
@@ -108,55 +98,9 @@ Exit codes (v0.1): `0` success, `1` runtime error, `2` CLI usage error, `130` in
 
 ---
 
-## 8) Architecture contract (agent + renderers)
+## 8) Sessions
 
-Agent emits an event stream consumed by a renderer (CLI or TUI). See ADR-0002 and ADR-0003.
-
-**Hard rule:** agent performs no terminal I/O (`println!`, styling, cursor moves). Renderers own stdout/stderr and raw mode.
-
-### Required agent event types (Shipped)
-
-- `AssistantDelta { text }`, `AssistantComplete { text }`
-- `ToolRequested { id, name, input }`, `ToolStarted { id, name }`, `ToolFinished { id, result }`
-- `Error { kind, message, details? }`
-- `Interrupted`
-
----
-
-## 9) Transcript model
-
-The transcript is the source of truth and is **width-agnostic**:
-
-```text
-Vec<HistoryCell>
-```
-
-Each cell is a logical unit: user block, assistant block (streaming/final), tool block, system/info banner.
-
-### Rendering contract
-
-- Each cell can render display lines for a given width: `display_lines(width) -> Vec<StyledLine>`.
-- Wrapping happens at display time for the current width.
-- Per draw: flatten rendered lines → apply scroll → render visible slice → apply selection overlay.
-
-### Scroll / selection / copy
-
-- Scrolling operates on flattened visual lines (not terminal scrollback).
-- Two scroll states: `FollowLatest` and `Anchored`.
-- Selection is defined over the flattened transcript (line/col), excluding any left gutter/prefix.
-- Copy reconstructs text using the same wrapping rules (including code block indentation and emoji/wide glyph widths).
-
-### Streaming
-
-- Store raw markdown (append-only) + a logical "commit cursor".
-- Render by parsing markdown → styling spans → wrapping at current width → revealing committed prefix.
-- Throttle redraw during streaming; avoid flicker and whole-transcript rewrap per frame.
-
----
-
-## 10) Sessions (persistence contract)
-
-Sessions are append-only **JSONL** event logs (ADR-0001).
+Sessions are append-only **JSONL** event logs.
 
 ### Storage
 
@@ -164,20 +108,20 @@ Sessions are append-only **JSONL** event logs (ADR-0001).
 - Sessions dir: `<base>/sessions/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 
-### Format (Shipped)
+### Format
 
 - First line is `meta` with `schema_version`.
 - Timestamps are RFC3339 UTC.
-- Minimum event set includes: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`.
+- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`.
 - Sessions remain readable even if interrupted mid-stream.
 
 ---
 
-## 11) Tools (deterministic contract)
+## 9) Tools
 
 Tools are intentionally few, stable, and machine-parseable.
 
-### Envelope (Shipped)
+### Envelope
 
 Success:
 ```json
@@ -189,7 +133,7 @@ Error:
 { "ok": false, "error": { "code": "...", "message": "..." } }
 ```
 
-### Semantics (Shipped)
+### Semantics
 
 - Tool results are deterministic and correspond to the correct `tool_use_id`.
 - Relative paths resolve against `--root` (default `.`).
@@ -197,35 +141,32 @@ Error:
 
 ---
 
-## 12) Providers (Shipped + planned)
+## 10) Providers
 
-**Shipped:** Anthropic Claude (streaming + tool loop).  
-API keys are env-only and never stored in config (`ANTHROPIC_API_KEY`).
-OAuth tokens (Anthropic account login) may be cached in `<base>/oauth.json`.
-Auth precedence: `oauth.json` > `ANTHROPIC_API_KEY`.
+**Shipped:** Anthropic Claude (streaming + tool loop).
 
-**Testability requirement (Shipped):** provider calls support a base URL override for offline fixture tests.
+- API keys are env-only: `ANTHROPIC_API_KEY` (never stored in config).
+- OAuth tokens may be cached in `<base>/oauth.json`.
+- Auth precedence: `oauth.json` > `ANTHROPIC_API_KEY`.
 
 ---
 
-## 13) Configuration (Shipped)
+## 11) Configuration
 
-- Location: `<base>/config.toml` (see §10 storage rules)
+- Location: `<base>/config.toml`
 - Format: TOML
 - Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `anthropic_base_url`
 
 ---
 
-## 14) Tests (minimum bar)
+## 12) Project Context (AGENTS.md)
 
-Tests protect contracts, not internals.
-
-- Tool loop sequencing (`tool_use` ↔ `tool_result`) and offline provider fixtures
-- Session JSONL read/write resilience (incl. interrupts)
-- Wrapping + resize reflow, scroll model, selection/copy fidelity, streaming invariants
+ZDX loads `AGENTS.md` hierarchically and appends the content to the system prompt (project-specific guidance). Unreadable files warn; empty files are skipped.
 
 ---
 
-## 15) Project context (AGENTS.md) (Shipped)
+## Related Documentation
 
-ZDX loads `AGENTS.md` hierarchically and appends the content to the system prompt (project-specific guidance). Unreadable files warn; empty files are skipped.
+- `docs/ARCHITECTURE.md` — TUI implementation patterns, code organization
+- `docs/adr/` — Architecture Decision Records (the "why" behind decisions)
+- `AGENTS.md` — Development guide and conventions
