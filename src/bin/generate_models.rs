@@ -56,9 +56,6 @@ struct ApiResponse {
 /// A provider entry from the API.
 #[derive(Debug, Deserialize)]
 struct ProviderEntry {
-    /// Provider ID (redundant with key, but included for completeness).
-    #[allow(dead_code)]
-    id: Option<String>,
     /// Models offered by this provider.
     models: Option<BTreeMap<String, ModelEntry>>,
 }
@@ -86,9 +83,6 @@ struct LimitEntry {
     /// Context window size in tokens.
     #[serde(default)]
     context: u64,
-    /// Maximum output tokens.
-    #[serde(default)]
-    output: u64,
 }
 
 /// A model entry from the API.
@@ -153,8 +147,6 @@ struct ModelOption {
     pricing: ModelPricing,
     /// Context window size in tokens.
     context_limit: u64,
-    /// Maximum output tokens.
-    output_limit: u64,
 }
 
 #[tokio::main]
@@ -265,7 +257,6 @@ async fn fetch_and_filter_models(url: &str, provider: &str) -> Result<Vec<ModelO
                 id: best.id.clone(),
                 pricing: best.cost.clone().into(),
                 context_limit: best.limit.context,
-                output_limit: best.limit.output,
             }
         })
         .collect();
@@ -306,20 +297,15 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
     // Model struct definition
     output.push_str("/// Definition of an available model.\n");
     output.push_str("#[derive(Debug, Clone)]\n");
-    output.push_str("#[allow(dead_code)] // Some fields reserved for future use\n");
     output.push_str("pub struct ModelOption {\n");
     output.push_str("    /// Model ID (sent to API)\n");
     output.push_str("    pub id: &'static str,\n");
     output.push_str("    /// Display name for the picker\n");
     output.push_str("    pub display_name: &'static str,\n");
-    output.push_str("    /// Model family (e.g., \"claude-sonnet\")\n");
-    output.push_str("    pub family: &'static str,\n");
     output.push_str("    /// Pricing information\n");
     output.push_str("    pub pricing: ModelPricing,\n");
     output.push_str("    /// Context window size in tokens\n");
     output.push_str("    pub context_limit: u64,\n");
-    output.push_str("    /// Maximum output tokens\n");
-    output.push_str("    pub output_limit: u64,\n");
     output.push_str("}\n");
     output.push('\n');
 
@@ -334,7 +320,6 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
             "        display_name: {:?},\n",
             model.display_name
         ));
-        output.push_str(&format!("        family: {:?},\n", model.family));
         output.push_str("        pricing: ModelPricing {\n");
         output.push_str(&format!(
             "            input: {},\n",
@@ -357,7 +342,6 @@ fn generate_rust_code(models: &[ModelOption]) -> String {
             "        context_limit: {},\n",
             model.context_limit
         ));
-        output.push_str(&format!("        output_limit: {},\n", model.output_limit));
         output.push_str("    },\n");
     }
 
@@ -424,7 +408,6 @@ mod tests {
                 display_name: "Claude Sonnet 4.5 (latest)".to_string(),
                 pricing: test_pricing(),
                 context_limit: 200000,
-                output_limit: 64000,
             },
             ModelOption {
                 family: "claude-haiku".to_string(),
@@ -432,7 +415,6 @@ mod tests {
                 display_name: "Claude Haiku 4.5 (latest)".to_string(),
                 pricing: test_pricing(),
                 context_limit: 200000,
-                output_limit: 64000,
             },
         ];
 
@@ -444,7 +426,6 @@ mod tests {
         assert!(output1.contains("Claude Sonnet 4.5 (latest)"));
         assert!(output1.contains("claude-sonnet"));
         assert!(output1.contains("context_limit: 200000"));
-        assert!(output1.contains("output_limit: 64000"));
     }
 
     #[test]
@@ -456,7 +437,6 @@ mod tests {
                 display_name: "Zeta Model".to_string(),
                 pricing: test_pricing(),
                 context_limit: 100000,
-                output_limit: 32000,
             },
             ModelOption {
                 family: "a-family".to_string(),
@@ -464,7 +444,6 @@ mod tests {
                 display_name: "Alpha Model".to_string(),
                 pricing: test_pricing(),
                 context_limit: 100000,
-                output_limit: 32000,
             },
         ];
 
@@ -488,7 +467,6 @@ mod tests {
                 cache_write: 18.75,
             },
             context_limit: 200000,
-            output_limit: 64000,
         }];
 
         let output = generate_rust_code(&models);

@@ -53,19 +53,9 @@ pub enum ToolResultContent {
     Blocks(Vec<ToolResultBlock>),
 }
 
-// Test-only helpers for ToolResultContent
+// Test-only helper for ToolResultContent
 #[cfg(test)]
 impl ToolResultContent {
-    /// Returns true if this content contains any image blocks.
-    pub fn has_image(&self) -> bool {
-        match self {
-            ToolResultContent::Text(_) => false,
-            ToolResultContent::Blocks(blocks) => blocks
-                .iter()
-                .any(|b| matches!(b, ToolResultBlock::Image { .. })),
-        }
-    }
-
     /// Returns the text content if this is Text variant, or the first text block's content.
     pub fn as_text(&self) -> Option<&str> {
         match self {
@@ -112,31 +102,6 @@ impl ToolResult {
             tool_use_id,
             content,
             is_error: !output.is_ok(),
-        }
-    }
-}
-
-// Test-only helper for ToolResult
-#[cfg(test)]
-impl ToolResult {
-    /// Creates a ToolResult with image content (test helper).
-    pub fn with_image(
-        tool_use_id: impl Into<String>,
-        text: impl Into<String>,
-        mime_type: impl Into<String>,
-        data: impl Into<String>,
-    ) -> Self {
-        let blocks = vec![
-            ToolResultBlock::Text { text: text.into() },
-            ToolResultBlock::Image {
-                mime_type: mime_type.into(),
-                data: data.into(),
-            },
-        ];
-        Self {
-            tool_use_id: tool_use_id.into(),
-            content: ToolResultContent::Blocks(blocks),
-            is_error: false,
         }
     }
 }

@@ -21,7 +21,7 @@ mod session;
 mod transcript;
 
 // Re-export types from submodules
-pub use auth::{AuthState, AuthType};
+pub use auth::{AuthState, AuthStatus};
 pub use input::InputState;
 pub use session::{SessionState, SessionUsage};
 pub use transcript::TranscriptState;
@@ -30,7 +30,7 @@ pub use transcript::TranscriptState;
 pub use transcript::{ScrollMode, ScrollState};
 
 // Re-export overlay types for backwards compatibility
-pub use crate::ui::overlays::{
+pub use crate::ui::chat::overlays::{
     CommandPaletteState, LoginState, ModelPickerState, ThinkingPickerState,
 };
 

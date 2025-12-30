@@ -9,8 +9,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use crate::ui::effects::UiEffect;
-use crate::ui::state::{OverlayState, TuiState};
+use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::state::{OverlayState, TuiState};
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================

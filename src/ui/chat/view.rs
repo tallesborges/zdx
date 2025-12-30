@@ -16,11 +16,11 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::models::ModelOption;
-use crate::ui::overlays::{
+use crate::ui::chat::overlays::{
     render_command_palette, render_login_overlay, render_model_picker, render_thinking_picker,
 };
-use crate::ui::selection::SelectionState;
-use crate::ui::state::{AgentState, AuthType, OverlayState, SessionUsage, TuiState};
+use crate::ui::chat::selection::SelectionState;
+use crate::ui::chat::state::{AgentState, AuthStatus, OverlayState, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
 /// Minimum height of the input area (lines, including borders).
@@ -169,9 +169,9 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     // Build top-left title: model name + auth type + thinking level
     let auth_indicator = match state.auth.auth_type {
-        AuthType::OAuth => " (oauth)",
-        AuthType::ApiKey => " (api-key)",
-        AuthType::None => "",
+        AuthStatus::OAuth => " (oauth)",
+        AuthStatus::ApiKey => " (api-key)",
+        AuthStatus::None => "",
     };
 
     // Build title spans: model + auth in normal style, thinking in dim style
@@ -491,7 +491,7 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
 
-    use crate::ui::selection::LineMapping;
+    use crate::ui::chat::selection::LineMapping;
 
     let mut lines = Vec::new();
 

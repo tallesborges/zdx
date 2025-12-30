@@ -9,6 +9,16 @@
 //! - `update()` (in update.rs): The reducer - all state mutations happen here
 //! - `view()` (in view.rs): Pure render, no mutations
 
+pub mod commands;
+pub mod effects;
+pub mod events;
+pub mod overlays;
+pub mod selection;
+pub mod state;
+pub mod terminal;
+pub mod update;
+pub mod view;
+
 use std::io::{IsTerminal, Stdout, Write, stderr};
 use std::path::PathBuf;
 
@@ -22,11 +32,10 @@ use crate::config::Config;
 use crate::core::interrupt;
 use crate::core::session::{self, Session};
 use crate::providers::anthropic::ChatMessage;
-use crate::ui::effects::UiEffect;
-use crate::ui::events::UiEvent;
-use crate::ui::state::{AgentState, TuiState};
+use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::events::UiEvent;
+use crate::ui::chat::state::{AgentState, TuiState};
 use crate::ui::transcript::HistoryCell;
-use crate::ui::{terminal, update, view};
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(
@@ -524,7 +533,7 @@ mod tests {
     // - Resize events don't break the UI
     //
     // Unit tests for slash commands and palette state have been moved to
-    // src/ui/commands.rs and src/ui/state.rs respectively.
+    // src/ui/chat/commands.rs and src/ui/chat/state/ respectively.
     //
-    // Unit tests for the reducer are in src/ui/update.rs.
+    // Unit tests for the reducer are in src/ui/chat/update.rs.
 }

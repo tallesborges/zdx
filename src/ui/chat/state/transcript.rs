@@ -3,7 +3,7 @@
 //! Manages scroll position, viewport dimensions, selection state, and
 //! rendering cache for the transcript area.
 
-use crate::ui::selection::{PositionMap, SelectionState};
+use crate::ui::chat::selection::{PositionMap, SelectionState};
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -258,13 +258,13 @@ impl TranscriptState {
 
     /// Starts a new selection at the given visual position.
     pub fn start_selection(&mut self, line: usize, column: usize) {
-        use crate::ui::selection::VisualPosition;
+        use crate::ui::chat::selection::VisualPosition;
         self.selection.start(VisualPosition::new(line, column));
     }
 
     /// Extends the selection to the given visual position.
     pub fn extend_selection(&mut self, line: usize, column: usize) {
-        use crate::ui::selection::VisualPosition;
+        use crate::ui::chat::selection::VisualPosition;
         self.selection.extend(VisualPosition::new(line, column));
     }
 
@@ -287,7 +287,7 @@ impl TranscriptState {
         if text.is_empty() {
             return Err("Selection is empty".to_string());
         }
-        crate::ui::selection::Clipboard::copy(&text).map_err(|e| e.to_string())?;
+        crate::ui::chat::selection::Clipboard::copy(&text).map_err(|e| e.to_string())?;
         self.selection.schedule_clear();
         Ok(())
     }
