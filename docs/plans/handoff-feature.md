@@ -29,38 +29,41 @@ Handoff allows users to start a new session with an AI-generated prompt that cap
 
 - **Goal**: Add `/handoff` command that accepts a goal argument
 - **Scope**:
-  - [ ] Add `handoff` command to `COMMANDS` 
-  - [ ] Command requires active session (error if none)
-  - [ ] Palette shows input field for goal after command selection
-  - [ ] On submit: trigger handoff generation effect
+  - [x] Add `handoff` command to `COMMANDS` 
+  - [x] Command requires active session (error if none)
+  - [x] Palette shows input field for goal after command selection
+  - [x] On submit: trigger handoff generation effect
 - **Demo**: Open palette → `/handoff` → type "implement caching" → see "Generating..."
+- **Status**: ✅ Implemented
 
 ## Slice 2: Subagent-based generation
 
 - **Goal**: Spawn subagent to generate handoff prompt
 - **Scope**:
-  - [ ] Get current session ID
-  - [ ] Spawn: `zdx --no-save exec -p "<generation prompt>"`
-  - [ ] Generation prompt instructs subagent to:
+  - [x] Get current session ID
+  - [x] Spawn: `zdx --no-save exec -p "<generation prompt>"`
+  - [x] Generation prompt instructs subagent to:
     - Read session via `zdx sessions show <id>`
     - Generate focused handoff prompt for the goal
     - Include relevant context, decisions, files
     - Output ONLY the prompt text
-  - [ ] Capture stdout as generated prompt
-  - [ ] Handle errors (timeout, empty output)
+  - [x] Capture stdout as generated prompt
+  - [x] Handle errors (timeout, empty output)
 - **Demo**: `/handoff implement caching` → waits → generated prompt captured
+- **Status**: ✅ Implemented
 
 ## Slice 3: Draft to input + new session
 
 - **Goal**: Show generated prompt in input, create new session on submit
 - **Scope**:
-  - [ ] Set input textarea content to generated prompt
-  - [ ] Show status: "Handoff ready. Edit and press Enter."
-  - [ ] On submit:
-    - [ ] Create new session (reuse `/new` logic)
-    - [ ] Send the prompt as first message
-  - [ ] On Esc: clear input, cancel handoff
+  - [x] Set input textarea content to generated prompt
+  - [x] Show status: "Handoff ready. Edit and press Enter."
+  - [x] On submit:
+    - [x] Create new session (reuse `/new` logic)
+    - [x] Send the prompt as first message
+  - [x] On Esc: clear input, cancel handoff
 - **Demo**: Generated prompt in input → edit → Enter → new session → agent responds
+- **Status**: ✅ Implemented
 
 ---
 

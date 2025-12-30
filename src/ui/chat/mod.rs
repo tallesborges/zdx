@@ -262,6 +262,9 @@ impl TuiRuntime {
         // Poll for login exchange result
         self.collect_login_result(&mut events);
 
+        // Poll for handoff generation result
+        self.collect_handoff_result(&mut events);
+
         // Poll terminal events with short timeout for responsive streaming
         // Batch ALL available events to avoid one-event-per-frame lag on fast scroll
         if event::poll(FRAME_DURATION)? {
@@ -305,6 +308,25 @@ impl TuiRuntime {
                 events.push(UiEvent::LoginResult(
                     Err("Exchange task failed".to_string()),
                 ));
+            }
+        }
+    }
+
+    /// Collects handoff generation result if available.
+    fn collect_handoff_result(&mut self, events: &mut Vec<UiEvent>) {
+        let Some(rx) = &mut self.state.input.handoff_rx else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                events.push(UiEvent::HandoffResult(result));
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                events.push(UiEvent::HandoffResult(Err(
+                    "Handoff generation task failed".to_string(),
+                )));
             }
         }
     }
@@ -355,21 +377,17 @@ impl TuiRuntime {
             }
             UiEffect::StartHandoff { goal } => {
                 // Check if we have an active session
-                if self.state.conversation.session.is_none() {
+                if let Some(ref session) = self.state.conversation.session {
+                    self.spawn_handoff_generation(&session.id.clone(), &goal);
+                } else {
                     self.state
                         .transcript
                         .cells
                         .push(HistoryCell::system("Handoff requires an active session."));
-                } else {
-                    // TODO: Slice 2 - spawn subagent to generate handoff prompt
-                    self.state
-                        .transcript
-                        .cells
-                        .push(HistoryCell::system(format!(
-                            "Handoff requested with goal: \"{}\"\n(Generation not yet implemented)",
-                            goal
-                        )));
                 }
+            }
+            UiEffect::HandoffSubmit { prompt } => {
+                self.execute_handoff_submit(&prompt);
             }
             UiEffect::SaveSession { event } => {
                 if let Some(ref mut s) = self.state.conversation.session
@@ -480,6 +498,98 @@ impl TuiRuntime {
         }
     }
 
+    /// Executes a handoff submit: creates new session and sends prompt as first message.
+    fn execute_handoff_submit(&mut self, prompt: &str) {
+        use crate::core::session::SessionEvent;
+
+        // 1. Clear state (like /new)
+        self.state.transcript.cells.clear();
+        self.state.conversation.messages.clear();
+        self.state.input.history.clear();
+        self.state.transcript.scroll.reset();
+        self.state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
+        self.state.transcript.wrap_cache.clear();
+
+        // 2. Create new session
+        match session::Session::new() {
+            Ok(new_session) => {
+                let new_path = new_session.path().display().to_string();
+                self.state.conversation.session = Some(new_session);
+
+                // Show session path
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system(format!("Session path: {}", new_path)));
+
+                // Show loaded AGENTS.md files
+                let effective = match crate::core::context::build_effective_system_prompt_with_paths(
+                    &self.state.config,
+                    &self.state.agent_opts.root,
+                ) {
+                    Ok(e) => e,
+                    Err(err) => {
+                        self.state
+                            .transcript
+                            .cells
+                            .push(HistoryCell::system(format!(
+                                "Warning: Failed to load context: {}",
+                                err
+                            )));
+                        return;
+                    }
+                };
+
+                if !effective.loaded_agents_paths.is_empty() {
+                    let paths_list: Vec<String> = effective
+                        .loaded_agents_paths
+                        .iter()
+                        .map(|p| format!("  - {}", p.display()))
+                        .collect();
+                    let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(message));
+                }
+            }
+            Err(e) => {
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system(format!(
+                        "Warning: Failed to create new session: {}",
+                        e
+                    )));
+                // Continue without session - user can still chat, just won't persist
+            }
+        }
+
+        // 3. Add user message to transcript and conversation
+        self.state.input.history.push(prompt.to_string());
+        self.state.transcript.cells.push(HistoryCell::user(prompt));
+        self.state
+            .conversation
+            .messages
+            .push(ChatMessage::user(prompt));
+
+        // 4. Save user message to session
+        if let Some(ref mut s) = self.state.conversation.session
+            && let Err(e) = s.append(&SessionEvent::user_message(prompt))
+        {
+            self.state
+                .transcript
+                .cells
+                .push(HistoryCell::system(format!(
+                    "Warning: Failed to save session: {}",
+                    e
+                )));
+        }
+
+        // 5. Start agent turn
+        self.spawn_agent_turn();
+    }
+
     fn spawn_agent_turn(&mut self) {
         let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
@@ -532,6 +642,84 @@ impl TuiRuntime {
                     .map_err(|e| format!("Failed to save: {}", e)),
                 Err(e) => Err(e.to_string()),
             };
+            let _ = tx.send(result).await;
+        });
+    }
+
+    /// Spawns an async task to generate a handoff prompt using a subagent.
+    fn spawn_handoff_generation(&mut self, session_id: &str, goal: &str) {
+        use std::process::{Command, Stdio};
+
+        let session_id = session_id.to_string();
+        let goal = goal.to_string();
+        let root = self.state.agent_opts.root.clone();
+
+        // Build the generation prompt
+        let generation_prompt = format!(
+            r#"Read session {session_id} using this command:
+zdx sessions show {session_id}
+
+Based on that session, generate a focused handoff prompt for the goal: "{goal}"
+
+Include:
+- Relevant context and decisions made
+- Key files or code discussed
+- The specific goal/direction
+
+Output ONLY the handoff prompt text, nothing else. The prompt should be
+written as if the user is starting a fresh conversation with a new agent."#
+        );
+
+        let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
+        self.state.input.handoff_rx = Some(rx);
+        self.state.input.handoff_generating = true;
+
+        // Show status in transcript
+        self.state
+            .transcript
+            .cells
+            .push(HistoryCell::system(format!(
+                "Generating handoff for goal: \"{}\"...",
+                goal
+            )));
+
+        tokio::spawn(async move {
+            // Get the current executable path
+            let exe = match std::env::current_exe() {
+                Ok(e) => e,
+                Err(e) => {
+                    let _ = tx
+                        .send(Err(format!("Failed to get executable: {}", e)))
+                        .await;
+                    return;
+                }
+            };
+
+            // Spawn the subagent process
+            let output = Command::new(exe)
+                .args(["--no-save", "exec", "-p", &generation_prompt])
+                .current_dir(&root)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output();
+
+            let result = match output {
+                Ok(out) => {
+                    if out.status.success() {
+                        let stdout = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                        if stdout.is_empty() {
+                            Err("Handoff generation returned empty output".to_string())
+                        } else {
+                            Ok(stdout)
+                        }
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                        Err(format!("Handoff generation failed: {}", stderr.trim()))
+                    }
+                }
+                Err(e) => Err(format!("Failed to spawn subagent: {}", e)),
+            };
+
             let _ = tx.send(result).await;
         });
     }

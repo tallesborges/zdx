@@ -41,6 +41,10 @@ pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
             handle_login_result(state, result);
             vec![]
         }
+        UiEvent::HandoffResult(result) => {
+            handle_handoff_result(state, result);
+            vec![]
+        }
     }
 }
 
@@ -290,9 +294,16 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
             vec![]
         }
         KeyCode::Esc => {
-            if state.input.handoff_pending {
+            if state.input.handoff_pending
+                || state.input.handoff_generating
+                || state.input.handoff_ready
+            {
                 // Cancel handoff mode
                 state.input.handoff_pending = false;
+                state.input.handoff_generating = false;
+                state.input.handoff_ready = false;
+                state.input.handoff_rx = None;
+                state.input.handoff_goal = None;
                 state.clear_input();
                 vec![]
             } else if state.agent_state.is_running() {
@@ -368,15 +379,43 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
     }
 
     let text = state.get_input_text();
-    if text.trim().is_empty() {
-        return vec![];
-    }
 
-    // Check if we're in handoff mode
+    // Check if we're submitting the handoff goal (to trigger generation)
+    // This check must come before the empty check to show proper error
     if state.input.handoff_pending {
+        if text.trim().is_empty() {
+            // Show error for empty goal (spec requirement)
+            state
+                .transcript
+                .cells
+                .push(HistoryCell::system("Handoff goal cannot be empty."));
+            return vec![];
+        }
         state.input.handoff_pending = false;
+        state.input.handoff_goal = Some(text.clone()); // Store for retry on failure
         state.clear_input();
         return vec![UiEffect::StartHandoff { goal: text }];
+    }
+
+    // Check if we're submitting the generated handoff prompt (to create new session)
+    if state.input.handoff_ready {
+        if text.trim().is_empty() {
+            // Edge case: user cleared the generated prompt
+            state
+                .transcript
+                .cells
+                .push(HistoryCell::system("Handoff prompt cannot be empty."));
+            return vec![];
+        }
+        state.input.handoff_ready = false;
+        state.input.handoff_goal = None; // Clear goal on successful submit
+        state.clear_input();
+        return vec![UiEffect::HandoffSubmit { prompt: text }];
+    }
+
+    // Normal message submission
+    if text.trim().is_empty() {
+        return vec![];
     }
 
     state.input.history.push(text.clone());
@@ -469,6 +508,14 @@ fn execute_handoff(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
+    // Clear any stale handoff state from previous attempts
+    // This includes canceling any in-flight generation
+    state.input.handoff_ready = false;
+    state.input.handoff_generating = false;
+    state.input.handoff_rx = None;
+    state.input.handoff_goal = None;
+    state.clear_input();
+
     // Set handoff mode - next submit will trigger handoff
     state.input.handoff_pending = true;
     vec![]
@@ -523,6 +570,51 @@ fn execute_logout(state: &mut TuiState) {
                 .transcript
                 .cells
                 .push(HistoryCell::system(format!("Logout failed: {}", e)));
+        }
+    }
+}
+
+// ============================================================================
+// Handoff Result Handler
+// ============================================================================
+
+/// Handles the handoff generation result.
+fn handle_handoff_result(state: &mut TuiState, result: Result<String, String>) {
+    // Clear generating state
+    state.input.handoff_generating = false;
+    state.input.handoff_rx = None;
+
+    match result {
+        Ok(generated_prompt) => {
+            // Set the generated prompt in the input textarea
+            state.input.set_text(&generated_prompt);
+
+            // Mark handoff as ready - next submit will create new session
+            state.input.handoff_ready = true;
+
+            // Clear the stored goal (no longer needed)
+            state.input.handoff_goal = None;
+
+            // Show success message
+            state.transcript.cells.push(HistoryCell::system(
+                "Handoff ready. Edit and press Enter to start new session, or Esc to cancel.",
+            ));
+        }
+        Err(error) => {
+            // Show error message
+            state.transcript.cells.push(HistoryCell::system(format!(
+                "Handoff generation failed: {}",
+                error
+            )));
+
+            // Restore goal for retry (spec requirement)
+            if let Some(goal) = state.input.handoff_goal.clone() {
+                state.input.set_text(&goal);
+                state.input.handoff_pending = true;
+                state.transcript.cells.push(HistoryCell::system(
+                    "Press Enter to retry, or Esc to cancel.",
+                ));
+            }
         }
     }
 }

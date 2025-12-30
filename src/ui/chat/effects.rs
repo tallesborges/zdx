@@ -50,4 +50,7 @@ pub enum UiEffect {
 
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
+
+    /// Submit handoff prompt: create new session and send prompt as first message.
+    HandoffSubmit { prompt: String },
 }

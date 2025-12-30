@@ -25,4 +25,7 @@ pub enum UiEvent {
 
     /// Async login token exchange completed.
     LoginResult(Result<(), String>),
+
+    /// Async handoff generation completed (Ok = generated prompt, Err = error message).
+    HandoffResult(Result<String, String>),
 }
