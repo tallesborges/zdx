@@ -14,6 +14,18 @@ use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::{OverlayState, TuiState};
 
 // ============================================================================
+// Constants
+// ============================================================================
+
+/// Maximum visible sessions in the picker (excluding borders and hints).
+const MAX_VISIBLE_SESSIONS: usize = 10;
+
+/// Visible height used for scroll offset calculations.
+/// This should match the list area height in render (inner_area.height - 2 for hints/separator).
+/// Using a reasonable default that works for typical terminal sizes.
+const VISIBLE_HEIGHT: usize = MAX_VISIBLE_SESSIONS - 2;
+
+// ============================================================================
 // State
 // ============================================================================
 
@@ -90,22 +102,25 @@ pub fn handle_session_picker_key(
 }
 
 fn session_picker_select_prev(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_session_picker_mut() {
-        if picker.selected > 0 {
-            picker.selected -= 1;
-            // Adjust offset to keep selection visible
-            if picker.selected < picker.offset {
-                picker.offset = picker.selected;
-            }
+    if let Some(picker) = state.overlay.as_session_picker_mut()
+        && picker.selected > 0
+    {
+        picker.selected -= 1;
+        // Adjust offset to keep selection visible: if selected < offset, scroll up
+        if picker.selected < picker.offset {
+            picker.offset = picker.selected;
         }
     }
 }
 
 fn session_picker_select_next(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_session_picker_mut() {
-        if picker.selected < picker.sessions.len().saturating_sub(1) {
-            picker.selected += 1;
-            // Offset adjustment will be refined in render based on visible height
+    if let Some(picker) = state.overlay.as_session_picker_mut()
+        && picker.selected < picker.sessions.len().saturating_sub(1)
+    {
+        picker.selected += 1;
+        // Adjust offset to keep selection visible: if selected >= offset + visible_height, scroll down
+        if picker.selected >= picker.offset + VISIBLE_HEIGHT {
+            picker.offset = picker.selected - VISIBLE_HEIGHT + 1;
         }
     }
 }
@@ -113,9 +128,6 @@ fn session_picker_select_next(state: &mut TuiState) {
 // ============================================================================
 // Render
 // ============================================================================
-
-/// Maximum visible sessions in the picker (excluding borders and hints).
-const MAX_VISIBLE_SESSIONS: usize = 10;
 
 /// Renders the session picker as an overlay.
 pub fn render_session_picker(
@@ -127,7 +139,7 @@ pub fn render_session_picker(
     // Calculate dimensions
     let session_count = picker.sessions.len();
     let visible_count = session_count.min(MAX_VISIBLE_SESSIONS);
-    
+
     // Width: enough for UUID (36) + timestamp (16) + padding
     let picker_width = 60.min(area.width.saturating_sub(4));
     // Height: visible sessions + border (2) + title area (1) + hints (2)
@@ -172,20 +184,8 @@ pub fn render_session_picker(
     }
 
     let list_height = inner_area.height.saturating_sub(2) as usize;
-    
-    // Calculate visible window with offset
-    let visible_start = picker.offset;
-    let visible_end = (visible_start + list_height).min(session_count);
-    
-    // Adjust offset if selected is outside visible window
-    let adjusted_offset = if picker.selected >= visible_end {
-        picker.selected.saturating_sub(list_height - 1)
-    } else if picker.selected < visible_start {
-        picker.selected
-    } else {
-        visible_start
-    };
 
+    // Use offset from state directly - navigation handlers keep it in sync with selection
     let list_area = Rect::new(
         inner_area.x,
         inner_area.y,
@@ -197,34 +197,25 @@ pub fn render_session_picker(
     let items: Vec<ListItem> = picker
         .sessions
         .iter()
-        .skip(adjusted_offset)
+        .skip(picker.offset)
         .take(list_height)
         .map(|session| {
             let timestamp = session
                 .modified
                 .and_then(session::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
-            
+
             // Truncate session ID for display (show first 8 chars)
             let short_id = if session.id.len() > 8 {
                 format!("{}…", &session.id[..8])
             } else {
                 session.id.clone()
             };
-            
+
             let line = Line::from(vec![
-                Span::styled(
-                    short_id,
-                    Style::default().fg(Color::Cyan),
-                ),
-                Span::styled(
-                    "  ",
-                    Style::default(),
-                ),
-                Span::styled(
-                    timestamp,
-                    Style::default().fg(Color::DarkGray),
-                ),
+                Span::styled(short_id, Style::default().fg(Color::Cyan)),
+                Span::styled("  ", Style::default()),
+                Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
         })
@@ -240,7 +231,7 @@ pub fn render_session_picker(
 
     // Adjust selected index for the visible window
     let mut list_state = ListState::default();
-    let visible_selected = picker.selected.saturating_sub(adjusted_offset);
+    let visible_selected = picker.selected.saturating_sub(picker.offset);
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
@@ -336,5 +327,59 @@ mod tests {
         assert_eq!(state.selected, 2);
 
         // Can't go past end (this is enforced by select_next, tested via TuiState)
+    }
+
+    #[test]
+    fn test_scroll_offset_down() {
+        // Test that offset is adjusted when selecting past visible window
+        let mut picker = SessionPickerState::new(
+            (0..15)
+                .map(|i| SessionSummary {
+                    id: format!("session-{}", i),
+                    modified: None,
+                })
+                .collect(),
+        );
+
+        assert_eq!(picker.selected, 0);
+        assert_eq!(picker.offset, 0);
+
+        // Simulate navigating down past visible window (VISIBLE_HEIGHT = 8)
+        for i in 1..=10 {
+            picker.selected = i;
+            if picker.selected >= picker.offset + VISIBLE_HEIGHT {
+                picker.offset = picker.selected - VISIBLE_HEIGHT + 1;
+            }
+        }
+
+        assert_eq!(picker.selected, 10);
+        // offset should be adjusted so selected is visible
+        assert_eq!(picker.offset, 3); // 10 - 8 + 1 = 3
+    }
+
+    #[test]
+    fn test_scroll_offset_up() {
+        // Test that offset is adjusted when selecting above visible window
+        let mut picker = SessionPickerState::new(
+            (0..15)
+                .map(|i| SessionSummary {
+                    id: format!("session-{}", i),
+                    modified: None,
+                })
+                .collect(),
+        );
+
+        // Start scrolled down
+        picker.selected = 10;
+        picker.offset = 5;
+
+        // Navigate up past visible window
+        picker.selected = 3;
+        if picker.selected < picker.offset {
+            picker.offset = picker.selected;
+        }
+
+        assert_eq!(picker.selected, 3);
+        assert_eq!(picker.offset, 3);
     }
 }
