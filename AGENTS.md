@@ -92,7 +92,6 @@
 - `docs/SPEC.md`: contracts (what/behavior)
 - `docs/adr/`: durable decisions (why)
 - `docs/plans/`: optional commit-sized plans (how)
-- `docs/NAVIGATION.md`: repo cheat sheet (where)
 
 ## Delegating tasks (subagent pattern)
 
