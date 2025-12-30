@@ -1,5 +1,5 @@
 Goals
-- Add Anthropic OAuth login to zdx with local token cache in `~/.zdx/oauth.json` and provider wiring.
+- Add Anthropic OAuth login to zdx with local token cache in `<base>/oauth.json` and provider wiring.
 - Ship a minimal CLI login flow first, then TUI `/login`, keeping core UI-agnostic and reducer-driven.
 - Update contracts in `docs/SPEC.md` to allow OAuth token caching while keeping API keys env-only.
 
@@ -22,14 +22,14 @@ MVP Slices
 
 1) OAuth core + CLI login/logout
 - [x] Add `zdx login --anthropic` and `zdx logout --anthropic`.
-- [x] Implement OAuth core: open auth URL, accept pasted token/code; store token in `~/.zdx/oauth.json` (0600 perms).
+- [x] Implement OAuth core: open auth URL, accept pasted token/code; store token in `<base>/oauth.json` (0600 perms).
 - [x] Document/decide whether we accept pasted OAuth token only or exchange code; keep it minimal and explicit.
 - ✅ Demo: login writes token cache; logout clears it.
 - Failure modes: invalid token/code, file permission errors, malformed JSON, network errors.
 - **DONE**: `src/core/oauth.rs` + login/logout commands in main.rs. Tests in `tests/login_logout.rs`.
 
 2) Provider wiring + first prompt
-- [x] Load OAuth token from `~/.zdx/oauth.json` and prefer it over `ANTHROPIC_API_KEY`.
+- [x] Load OAuth token from `<base>/oauth.json` and prefer it over `ANTHROPIC_API_KEY`.
 - [x] Detect OAuth token type and set Anthropic OAuth headers accordingly (`Authorization: Bearer` for OAuth vs `x-api-key` for API key).
 - [x] Include required `anthropic-beta: oauth-2025-04-20` header for OAuth requests.
 - [x] Auto-refresh expired OAuth tokens; fallback to API key if refresh fails.
@@ -50,11 +50,11 @@ Contracts (guardrails)
 - UI-agnostic core: OAuth logic + token storage live in core/config, not TUI.
 - Reducer pattern for UI: update(state, event) mutates state; render reads state only.
 - Tokens stored with 0600 perms; never logged; API keys remain env-only.
-- OAuth token precedence: `~/.zdx/oauth.json` > `ANTHROPIC_API_KEY`.
+- OAuth token precedence: `<base>/oauth.json` > `ANTHROPIC_API_KEY`.
 
 Key decisions
 - Auth flow minimalism: accept pasted OAuth token (or code exchange only if required/confirmed).
-- Token cache format/path: `~/.zdx/oauth.json` with provider map.
+- Token cache format/path: `<base>/oauth.json` with provider map.
 - Keybinding/focus for `/login` overlay avoids existing editor shortcuts.
 - Backpressure: login flow must not block streaming loop or event dispatch.
 

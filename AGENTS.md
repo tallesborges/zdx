@@ -4,7 +4,14 @@
 
 ## Where things are
 
-- `src/main.rs`: CLI entrypoint + `clap` args
+- `src/main.rs`: binary entrypoint (delegates to `src/app/`)
+- `src/app/`: CLI arguments + command dispatch
+  - `src/app/mod.rs`: clap structs + dispatch
+  - `src/app/commands/chat.rs`: chat command handler (includes piped stdin fallback)
+  - `src/app/commands/exec.rs`: exec command handler
+  - `src/app/commands/sessions.rs`: list/show/resume sessions
+  - `src/app/commands/config.rs`: config path/init handlers
+  - `src/app/commands/auth.rs`: login/logout flows
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for TUI model picker
 - `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
@@ -15,27 +22,47 @@
   - `src/core/interrupt.rs`: signal handling
   - `src/core/agent.rs`: agent loop + event channels
   - `src/core/session.rs`: session persistence
-- `src/ui/`: terminal UI (Elm-like architecture)
-  - `src/ui/tui.rs`: TuiRuntime - owns terminal, runs event loop, executes effects
-  - `src/ui/state.rs`: TuiState - all app state (no terminal)
-  - `src/ui/update.rs`: reducer - all state mutations happen here
-  - `src/ui/view.rs`: pure render functions (no mutations)
-  - `src/ui/effects.rs`: effect types returned by reducer for runtime to execute
-  - `src/ui/events.rs`: UI event types
-  - `src/ui/markdown.rs`: markdown parsing, styled text wrapping, and streaming collector for assistant responses
-  - `src/ui/overlays/`: self-contained overlay modules (state + update + render)
-    - `src/ui/overlays/palette.rs`: command palette overlay
-    - `src/ui/overlays/model_picker.rs`: model picker overlay
-    - `src/ui/overlays/thinking_picker.rs`: thinking level picker overlay
-    - `src/ui/overlays/login.rs`: OAuth login flow overlay
-  - `src/ui/commands.rs`: slash command definitions for command palette
-  - `src/ui/transcript.rs`: transcript view model (styles, wrapping, rendering)
-  - `src/ui/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
-  - `src/ui/stream.rs`: streamed stdout/stderr rendering + exec mode wrapper
-  - `src/ui/terminal.rs`: terminal setup, restore, panic hooks
+- `src/ui/`: terminal UI
+  - `src/ui/exec.rs`: streamed stdout/stderr rendering + exec mode wrapper
+  - `src/ui/chat/`: interactive TUI (Elm-like architecture)
+    - `src/ui/chat/mod.rs`: TuiRuntime - owns terminal, runs event loop, executes effects
+    - `src/ui/chat/state/mod.rs`: TuiState - all app state (no terminal)
+    - `src/ui/chat/state/auth.rs`: auth status + login flow state
+    - `src/ui/chat/state/input.rs`: input editor state
+    - `src/ui/chat/state/session.rs`: session + message history state
+    - `src/ui/chat/state/transcript.rs`: transcript view state (scroll, selection, cache)
+    - `src/ui/chat/update.rs`: reducer - all state mutations happen here
+    - `src/ui/chat/view.rs`: pure render functions (no mutations)
+    - `src/ui/chat/effects.rs`: effect types returned by reducer for runtime to execute
+    - `src/ui/chat/events.rs`: UI event types
+    - `src/ui/chat/commands.rs`: slash command definitions for command palette
+    - `src/ui/chat/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
+    - `src/ui/chat/terminal.rs`: terminal setup, restore, panic hooks
+    - `src/ui/chat/overlays/`: self-contained overlay modules (state + update + render)
+      - `src/ui/chat/overlays/palette.rs`: command palette overlay
+      - `src/ui/chat/overlays/model_picker.rs`: model picker overlay
+      - `src/ui/chat/overlays/thinking_picker.rs`: thinking level picker overlay
+      - `src/ui/chat/overlays/login.rs`: OAuth login flow overlay
+      - `src/ui/chat/overlays/mod.rs`: overlay exports
+  - `src/ui/markdown/`: markdown parsing and wrapping (shared)
+    - `src/ui/markdown/mod.rs`: module exports
+    - `src/ui/markdown/parse.rs`: markdown parsing + rendering
+    - `src/ui/markdown/wrap.rs`: styled span wrapping
+    - `src/ui/markdown/stream.rs`: streaming collector + commit logic
+  - `src/ui/transcript/`: transcript model (shared)
+    - `src/ui/transcript/mod.rs`: module exports
+    - `src/ui/transcript/cell.rs`: HistoryCell + rendering
+    - `src/ui/transcript/wrap.rs`: wrapping + wrap cache
+    - `src/ui/transcript/style.rs`: transcript style types
 - `src/tools/`: tool implementations + schemas (bash, edit, read, write)
 - `src/providers/`: provider clients
-  - `src/providers/anthropic.rs`: Anthropic API client
+  - `src/providers/anthropic/`: Anthropic API client
+    - `src/providers/anthropic/mod.rs`: public re-exports
+    - `src/providers/anthropic/auth.rs`: auth resolution + config
+    - `src/providers/anthropic/client.rs`: AnthropicClient + request wiring
+    - `src/providers/anthropic/sse.rs`: SSE parsing + stream events
+    - `src/providers/anthropic/types.rs`: API DTOs + chat message types
+    - `src/providers/anthropic/errors.rs`: provider error types
   - `src/providers/oauth.rs`: OAuth token storage + retrieval
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
@@ -65,6 +92,7 @@
 - `docs/SPEC.md`: contracts (what/behavior)
 - `docs/adr/`: durable decisions (why)
 - `docs/plans/`: optional commit-sized plans (how)
+- `docs/NAVIGATION.md`: repo cheat sheet (where)
 
 ## ⚠️ IMPORTANT: Keep this file up to date
 

@@ -9,14 +9,14 @@ use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEventKind};
 
 use crate::core::interrupt;
 use crate::core::session::SessionEvent;
-use crate::ui::effects::UiEffect;
-use crate::ui::events::UiEvent;
-use crate::ui::overlays::{
+use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::events::UiEvent;
+use crate::ui::chat::overlays::{
     LoginEvent, LoginState, handle_login_key, handle_login_result, handle_model_picker_key,
     handle_palette_key, handle_thinking_picker_key, open_command_palette, open_model_picker,
     open_thinking_picker,
 };
-use crate::ui::state::{AgentState, OverlayState, TuiState};
+use crate::ui::chat::state::{AgentState, OverlayState, TuiState};
 use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
@@ -77,7 +77,7 @@ fn handle_paste(state: &mut TuiState, text: &str) {
 }
 
 fn handle_mouse(state: &mut TuiState, mouse: crossterm::event::MouseEvent) {
-    use crate::ui::view::TRANSCRIPT_MARGIN;
+    use crate::ui::chat::view::TRANSCRIPT_MARGIN;
 
     match mouse.kind {
         MouseEventKind::ScrollUp => {
@@ -408,7 +408,7 @@ fn navigate_history_down(state: &mut TuiState) {
 ///
 /// Called by the runtime when processing `UiEffect::ExecuteCommand`.
 pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
-    use crate::ui::overlays::login::update_login;
+    use crate::ui::chat::overlays::login::update_login;
 
     match cmd_name {
         "config" => vec![UiEffect::OpenConfig],
@@ -448,7 +448,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
     state.conversation.messages.clear();
     state.input.history.clear();
     state.transcript.scroll.reset();
-    state.conversation.usage = crate::ui::state::SessionUsage::new();
+    state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
     state.transcript.wrap_cache.clear();
 
     if state.conversation.session.is_some() {
@@ -816,7 +816,7 @@ pub fn apply_scroll_delta(state: &mut TuiState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ui::state::ScrollMode;
+    use crate::ui::chat::state::ScrollMode;
 
     #[test]
     fn test_scroll_to_top() {

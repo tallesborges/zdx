@@ -1,8 +1,8 @@
 //! Streamed stdout/stderr rendering and exec wrapper.
 //!
 //! This module provides:
-//! - `CliRenderer` + `spawn_renderer_task` for agent events
-//! - `execute_prompt_streaming` for single-shot exec mode
+//! - `ExecRenderer` + `spawn_exec_renderer_task` for agent events
+//! - `run_exec` for single-shot exec mode
 
 use std::collections::HashMap;
 use std::io::{Stderr, Stdout, Write, stderr, stdout};
@@ -41,7 +41,7 @@ impl From<&ExecOptions> for AgentOptions {
 /// Returns the complete response text.
 ///
 /// This is a backward-compatible wrapper that uses the agent internally.
-pub async fn execute_prompt_streaming(
+pub async fn run_exec(
     prompt: &str,
     config: &Config,
     mut session: Option<Session>,
@@ -84,7 +84,7 @@ pub async fn execute_prompt_streaming(
     let (render_tx, render_rx) = crate::core::agent::create_event_channel();
 
     // Spawn renderer task
-    let renderer_handle = spawn_renderer_task(render_rx);
+    let renderer_handle = spawn_exec_renderer_task(render_rx);
 
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {
@@ -131,7 +131,7 @@ pub async fn execute_prompt_streaming(
 /// # Output contract
 /// - `AssistantDelta` and `AssistantComplete` → stdout
 /// - `ToolStarted`, `ToolFinished`, `Error`, etc. → stderr
-pub struct CliRenderer {
+pub struct ExecRenderer {
     stdout: Stdout,
     stderr: Stderr,
     /// Whether the final newline has been printed after assistant output.
@@ -142,13 +142,13 @@ pub struct CliRenderer {
     tool_start_times: HashMap<String, Instant>,
 }
 
-impl Default for CliRenderer {
+impl Default for ExecRenderer {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl CliRenderer {
+impl ExecRenderer {
     /// Creates a new CLI renderer.
     pub fn new() -> Self {
         Self {
@@ -301,11 +301,11 @@ impl CliRenderer {
 
 /// Spawns a renderer task that consumes events from a channel.
 ///
-/// The task owns the `CliRenderer` and processes events until the channel closes.
+/// The task owns the `ExecRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-pub fn spawn_renderer_task(mut rx: crate::core::agent::EventRx) -> JoinHandle<()> {
+pub fn spawn_exec_renderer_task(mut rx: crate::core::agent::AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut renderer = CliRenderer::new();
+        let mut renderer = ExecRenderer::new();
 
         while let Some(event) = rx.recv().await {
             renderer.handle_event((*event).clone());

@@ -160,7 +160,7 @@ impl TuiRuntime {
 - Overlays: command palette, model picker, login overlay
     - ✅ Demo: `/` opens palette, model picker opens, login flow works
     - Gaps: multiple overlay fields force "which overlay?" cascades; render clones
-- Transcript model extracted (`src/ui/transcript.rs`)
+- Transcript model extracted (`src/ui/transcript/`)
     - ✅ Demo: transcript displays user/assistant/tool/system cells correctly
     - Gaps: wrapping/viewport logic still lives in `TuiApp::render()`
 - Login reducer pattern exists (`LoginEvent` + `LoginState` + `update()`)

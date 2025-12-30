@@ -10,8 +10,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use crate::models::AVAILABLE_MODELS;
-use crate::ui::effects::UiEffect;
-use crate::ui::state::{OverlayState, TuiState};
+use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::state::{OverlayState, TuiState};
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================

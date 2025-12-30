@@ -38,7 +38,7 @@ pub fn trigger_ctrl_c() {
     if INTERRUPTED.swap(true, Ordering::SeqCst) {
         // Second interrupt - force exit.
         // Restore terminal first since process::exit() bypasses Drop handlers.
-        let _ = crate::ui::terminal::restore_terminal();
+        let _ = crate::ui::chat::terminal::restore_terminal();
         std::process::exit(130);
     }
     notify_waiters();

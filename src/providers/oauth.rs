@@ -1,6 +1,6 @@
 //! OAuth token storage and retrieval.
 //!
-//! Stores OAuth tokens in `~/.zdx/oauth.json` with restricted permissions (0600).
+//! Stores OAuth tokens in `<base>/oauth.json` with restricted permissions (0600).
 //! Tokens are never logged or displayed in full.
 
 use std::collections::HashMap;

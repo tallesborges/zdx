@@ -19,20 +19,15 @@ pub struct ModelPricing {
 
 /// Definition of an available model.
 #[derive(Debug, Clone)]
-#[allow(dead_code)] // Some fields reserved for future use
 pub struct ModelOption {
     /// Model ID (sent to API)
     pub id: &'static str,
     /// Display name for the picker
     pub display_name: &'static str,
-    /// Model family (e.g., "claude-sonnet")
-    pub family: &'static str,
     /// Pricing information
     pub pricing: ModelPricing,
     /// Context window size in tokens
     pub context_limit: u64,
-    /// Maximum output tokens
-    pub output_limit: u64,
 }
 
 /// Available models for the picker (one per family).
@@ -40,7 +35,6 @@ pub const AVAILABLE_MODELS: &[ModelOption] = &[
     ModelOption {
         id: "claude-haiku-4-5",
         display_name: "Claude Haiku 4.5 (latest)",
-        family: "claude-haiku",
         pricing: ModelPricing {
             input: 1.0,
             output: 5.0,
@@ -48,12 +42,10 @@ pub const AVAILABLE_MODELS: &[ModelOption] = &[
             cache_write: 1.25,
         },
         context_limit: 200000,
-        output_limit: 64000,
     },
     ModelOption {
         id: "claude-opus-4-5",
         display_name: "Claude Opus 4.5 (latest)",
-        family: "claude-opus",
         pricing: ModelPricing {
             input: 5.0,
             output: 25.0,
@@ -61,12 +53,10 @@ pub const AVAILABLE_MODELS: &[ModelOption] = &[
             cache_write: 6.25,
         },
         context_limit: 200000,
-        output_limit: 64000,
     },
     ModelOption {
         id: "claude-sonnet-4-5",
         display_name: "Claude Sonnet 4.5 (latest)",
-        family: "claude-sonnet",
         pricing: ModelPricing {
             input: 3.0,
             output: 15.0,
@@ -74,6 +64,5 @@ pub const AVAILABLE_MODELS: &[ModelOption] = &[
             cache_write: 3.75,
         },
         context_limit: 200000,
-        output_limit: 64000,
     },
 ];

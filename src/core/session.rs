@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
 
-use super::agent::EventRx;
+use super::agent::AgentEventRx;
 use crate::config::paths::sessions_dir;
 
 /// Current schema version for new sessions.
@@ -341,7 +341,6 @@ fn generate_session_id() -> String {
     uuid::Uuid::new_v4().to_string()
 }
 
-/// Information about a saved session.
 /// Spawns a session persistence task that consumes events from a channel.
 ///
 /// The task owns the `Session` and persists relevant events until the channel closes.
@@ -362,7 +361,7 @@ fn generate_session_id() -> String {
 ///
 /// persist_handle.await.unwrap(); // Wait for persistence to finish
 /// ```
-pub fn spawn_persist_task(mut session: Session, mut rx: EventRx) -> JoinHandle<()> {
+pub fn spawn_persist_task(mut session: Session, mut rx: AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             if let Some(session_event) = SessionEvent::from_agent(&event) {
@@ -375,16 +374,17 @@ pub fn spawn_persist_task(mut session: Session, mut rx: EventRx) -> JoinHandle<(
     })
 }
 
+/// Summary information about a saved session.
 #[derive(Debug, Clone)]
-pub struct SessionInfo {
+pub struct SessionSummary {
     pub id: String,
     pub modified: Option<SystemTime>,
 }
 
 /// Lists all saved sessions.
 ///
-/// Returns a vector of SessionInfo sorted by modification time (newest first).
-pub fn list_sessions() -> Result<Vec<SessionInfo>> {
+/// Returns a vector of SessionSummary sorted by modification time (newest first).
+pub fn list_sessions() -> Result<Vec<SessionSummary>> {
     let dir = sessions_dir();
 
     if !dir.exists() {
@@ -404,7 +404,7 @@ pub fn list_sessions() -> Result<Vec<SessionInfo>> {
             let id = stem.to_string_lossy().to_string();
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
 
-            sessions.push(SessionInfo { id, modified });
+            sessions.push(SessionSummary { id, modified });
         }
     }
 
@@ -619,14 +619,14 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
 
 /// Session options for CLI commands.
 #[derive(Debug, Clone, Default)]
-pub struct SessionOptions {
+pub struct SessionPersistenceOptions {
     /// Append to an existing session by ID.
     pub session_id: Option<String>,
     /// Do not save the session.
     pub no_save: bool,
 }
 
-impl SessionOptions {
+impl SessionPersistenceOptions {
     /// Resolves session options into an optional Session.
     ///
     /// Returns None if no_save is true.
@@ -774,8 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_options_no_save() {
-        let opts = SessionOptions {
+    fn test_session_persistence_options_no_save() {
+        let opts = SessionPersistenceOptions {
             no_save: true,
             ..Default::default()
         };
@@ -783,11 +783,11 @@ mod tests {
     }
 
     #[test]
-    fn test_session_options_with_id() {
+    fn test_session_persistence_options_with_id() {
         let _temp = setup_temp_zdx_home();
 
         let id = unique_session_id("existing");
-        let opts = SessionOptions {
+        let opts = SessionPersistenceOptions {
             session_id: Some(id.clone()),
             ..Default::default()
         };

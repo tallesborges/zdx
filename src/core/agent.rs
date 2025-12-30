@@ -32,10 +32,10 @@ pub struct AgentOptions {
 ///
 /// Used with `run_turn` for concurrent rendering and session persistence.
 /// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
-pub type EventTx = tokio::sync::mpsc::Sender<Arc<AgentEvent>>;
+pub type AgentEventTx = tokio::sync::mpsc::Sender<Arc<AgentEvent>>;
 
 /// Channel-based event receiver (async, bounded).
-pub type EventRx = tokio::sync::mpsc::Receiver<Arc<AgentEvent>>;
+pub type AgentEventRx = tokio::sync::mpsc::Receiver<Arc<AgentEvent>>;
 
 /// Default channel capacity for event streams.
 ///
@@ -43,7 +43,7 @@ pub type EventRx = tokio::sync::mpsc::Receiver<Arc<AgentEvent>>;
 pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Creates a bounded event channel with the default capacity.
-pub fn create_event_channel() -> (EventTx, EventRx) {
+pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
     tokio::sync::mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
 }
 
@@ -54,12 +54,12 @@ pub fn create_event_channel() -> (EventTx, EventRx) {
 /// delivered (ToolStarted, ToolFinished, Complete, Error, Interrupted).
 #[derive(Clone)]
 pub struct EventSink {
-    tx: EventTx,
+    tx: AgentEventTx,
 }
 
 impl EventSink {
     /// Creates a new EventSink wrapping the given channel sender.
-    pub fn new(tx: EventTx) -> Self {
+    pub fn new(tx: AgentEventTx) -> Self {
         Self { tx }
     }
 
@@ -97,7 +97,7 @@ impl EventSink {
 /// // Renderer receives from render_rx
 /// // Persister receives from persist_rx
 /// ```
-pub fn spawn_fanout_task(mut rx: EventRx, mut sinks: Vec<EventTx>) -> JoinHandle<()> {
+pub fn spawn_fanout_task(mut rx: AgentEventRx, mut sinks: Vec<AgentEventTx>) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             sinks.retain(|sink| {
@@ -183,7 +183,7 @@ pub async fn run_turn(
     config: &Config,
     options: &AgentOptions,
     system_prompt: Option<&str>,
-    sink: EventTx,
+    sink: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sink = EventSink::new(sink);
 

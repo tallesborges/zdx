@@ -9,9 +9,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use crate::ui::commands::SLASH_COMMANDS;
-use crate::ui::effects::UiEffect;
-use crate::ui::state::{OverlayState, TuiState};
+use crate::ui::chat::commands::SLASH_COMMANDS;
+use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::state::{OverlayState, TuiState};
 
 // ============================================================================
 // State
@@ -39,7 +39,7 @@ impl CommandPaletteState {
     }
 
     /// Returns commands matching the current filter.
-    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::commands::SlashCommand> {
+    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::chat::commands::SlashCommand> {
         if self.filter.is_empty() {
             SLASH_COMMANDS.iter().collect()
         } else {
