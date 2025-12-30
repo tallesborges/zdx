@@ -178,6 +178,12 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
 fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     use crate::config::ThinkingLevel;
 
+    // Check if in handoff mode
+    if state.input.handoff_pending {
+        render_handoff_input(state, frame, area);
+        return;
+    }
+
     // Build top-left title: model name + auth type + thinking level
     let auth_indicator = match state.auth.auth_type {
         AuthStatus::OAuth => " (oauth)",
@@ -400,6 +406,105 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     let status = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
     frame.render_widget(status, area);
+}
+
+/// Renders the input area in handoff mode with special styling.
+fn render_handoff_input(state: &TuiState, frame: &mut Frame, area: Rect) {
+    // Handoff mode title
+    let title = " handoff (enter goal for new session, Esc to cancel) ";
+    let title_style = Style::default().fg(Color::Yellow);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Yellow))
+        .title(Span::styled(title, title_style));
+
+    let inner_area = block.inner(area);
+
+    if inner_area.width == 0 || inner_area.height == 0 {
+        frame.render_widget(block, area);
+        return;
+    }
+
+    frame.render_widget(block, area);
+
+    // Render the textarea content (reuse existing logic but simplified)
+    let (cursor_line, cursor_col) = state.input.textarea.cursor();
+    let cursor_line = cursor_line.min(state.input.textarea.lines().len().saturating_sub(1));
+    let available_width = inner_area.width as usize;
+
+    // Wrap lines
+    let mut wrapped_lines: Vec<(String, bool)> = Vec::new();
+    let mut cursor_wrapped_line = 0;
+    let mut cursor_wrapped_col = cursor_col;
+
+    for (line_idx, line) in state.input.textarea.lines().iter().enumerate() {
+        if line.is_empty() {
+            let is_cursor_line = line_idx == cursor_line;
+            if is_cursor_line {
+                cursor_wrapped_line = wrapped_lines.len();
+                cursor_wrapped_col = 0;
+            }
+            wrapped_lines.push((String::new(), is_cursor_line));
+        } else {
+            let chars: Vec<char> = line.chars().collect();
+            let mut pos = 0;
+            let mut char_pos = 0;
+
+            while pos < chars.len() {
+                let end = (pos + available_width).min(chars.len());
+                let chunk: String = chars[pos..end].iter().collect();
+                let is_cursor_line = line_idx == cursor_line
+                    && cursor_col >= char_pos
+                    && cursor_col < char_pos + (end - pos);
+
+                if is_cursor_line {
+                    cursor_wrapped_line = wrapped_lines.len();
+                    cursor_wrapped_col = cursor_col - char_pos;
+                }
+
+                wrapped_lines.push((chunk, is_cursor_line));
+                char_pos += end - pos;
+                pos = end;
+            }
+
+            if line_idx == cursor_line && cursor_col >= char_pos {
+                cursor_wrapped_line = wrapped_lines.len().saturating_sub(1);
+                cursor_wrapped_col = cursor_col - char_pos
+                    + (chars.len() - (chars.len() / available_width) * available_width);
+            }
+        }
+    }
+
+    // Viewport scrolling
+    let visible_lines = inner_area.height as usize;
+    let scroll_offset = if cursor_wrapped_line >= visible_lines {
+        cursor_wrapped_line - visible_lines + 1
+    } else {
+        0
+    };
+
+    // Render lines
+    for (i, (line, _is_cursor)) in wrapped_lines
+        .iter()
+        .skip(scroll_offset)
+        .take(visible_lines)
+        .enumerate()
+    {
+        let y = inner_area.y + i as u16;
+        let line_span = Span::styled(line.clone(), Style::default().fg(Color::White));
+        frame.render_widget(
+            Paragraph::new(Line::from(line_span)),
+            Rect::new(inner_area.x, y, inner_area.width, 1),
+        );
+    }
+
+    // Show cursor
+    let cursor_y = inner_area.y + (cursor_wrapped_line - scroll_offset) as u16;
+    let cursor_x = inner_area.x + cursor_wrapped_col as u16;
+    if cursor_y < inner_area.y + inner_area.height && cursor_x < inner_area.x + inner_area.width {
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 /// Builds the AMP-style usage display spans.
