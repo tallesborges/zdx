@@ -5,7 +5,7 @@ use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
 
 use super::style::{Style, StyledLine, StyledSpan};
-use super::wrap::{WrapCache, render_prefixed_content, wrap_text, wrap_chars};
+use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
 use crate::core::events::ToolOutput;
 
 /// Global counter for generating unique cell IDs.
@@ -1250,7 +1250,8 @@ mod tests {
     fn test_tool_output_wrapping_correctness() {
         // Create a tool cell with a very long output line
         let long_line = "a".repeat(100); // 100 chars
-        let mut cell = HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "echo long"}));
+        let mut cell =
+            HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "echo long"}));
 
         cell.set_tool_result(ToolOutput::success(serde_json::json!({
             "stdout": long_line,
@@ -1265,8 +1266,14 @@ mod tests {
         for (i, line) in lines.iter().enumerate() {
             let line_text: String = line.spans.iter().map(|s| s.text.as_str()).collect();
             let line_width = line_text.width();
-            
-            assert!(line_width <= width, "Line {} width {} exceeds limit {}", i, line_width, width);
+
+            assert!(
+                line_width <= width,
+                "Line {} width {} exceeds limit {}",
+                i,
+                line_width,
+                width
+            );
         }
     }
 }

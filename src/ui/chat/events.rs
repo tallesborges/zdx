@@ -17,6 +17,12 @@ pub enum UiEvent {
     /// Timer tick (for animation, polling).
     Tick,
 
+    /// Frame event for per-frame state updates (layout, delta coalescing).
+    ///
+    /// Emitted once per frame before other events are processed.
+    /// Contains terminal dimensions for layout calculations.
+    Frame { width: u16, height: u16 },
+
     /// Terminal input event (key, mouse, paste, resize).
     Terminal(CrosstermEvent),
 

@@ -42,9 +42,6 @@ pub enum UiEffect {
     /// Create a new session (for /new command).
     CreateNewSession,
 
-    /// Execute a slash command by name (dispatched from palette).
-    ExecuteCommand { name: &'static str },
-
     /// Open config file in default system editor/app.
     OpenConfig,
 

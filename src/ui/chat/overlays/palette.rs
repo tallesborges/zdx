@@ -11,6 +11,7 @@ use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragra
 
 use crate::ui::chat::commands::COMMANDS;
 use crate::ui::chat::effects::UiEffect;
+use crate::ui::chat::reducer;
 use crate::ui::chat::state::{OverlayState, TuiState};
 
 // ============================================================================
@@ -83,7 +84,8 @@ pub fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
 
 /// Handles key events for the command palette.
 ///
-/// Returns effects to execute. If a command is selected, returns `ExecuteCommand` effect.
+/// Returns effects to execute. If a command is selected, executes it directly
+/// via the reducer and returns any resulting effects.
 pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
@@ -112,7 +114,8 @@ pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent)
             let cmd_name = get_selected_command_name(state);
             close_command_palette(state, false);
             if let Some(name) = cmd_name {
-                vec![UiEffect::ExecuteCommand { name }]
+                // Execute command directly in reducer, return its effects
+                reducer::execute_command(state, name)
             } else {
                 vec![]
             }

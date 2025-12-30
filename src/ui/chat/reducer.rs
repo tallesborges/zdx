@@ -17,6 +17,7 @@ use crate::ui::chat::overlays::{
     open_thinking_picker,
 };
 use crate::ui::chat::state::{AgentState, HandoffState, OverlayState, TuiState};
+use crate::ui::chat::view;
 use crate::ui::transcript::{HistoryCell, ToolState};
 
 /// Lines to scroll per mouse wheel tick.
@@ -35,6 +36,10 @@ pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
             state.transcript.check_selection_timeout();
             vec![]
         }
+        UiEvent::Frame { width, height } => {
+            handle_frame(state, width, height);
+            vec![]
+        }
         UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event),
         UiEvent::Agent(agent_event) => handle_agent_event(state, &agent_event),
         UiEvent::LoginResult(result) => {
@@ -46,6 +51,36 @@ pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
     }
+}
+
+// ============================================================================
+// Frame Handler (layout, delta coalescing, cell line info)
+// ============================================================================
+
+/// Handles per-frame state updates.
+///
+/// This consolidates all the "housekeeping" mutations that need to happen
+/// each frame: layout updates, delta coalescing, and cell line info for
+/// lazy rendering.
+fn handle_frame(state: &mut TuiState, width: u16, height: u16) {
+    // Update transcript layout with current terminal dimensions
+    let viewport_height = view::calculate_transcript_height_with_state(state, height);
+    state
+        .transcript
+        .update_layout((width, height), viewport_height);
+
+    // Apply any pending streaming text deltas (coalescing)
+    apply_pending_delta(state);
+
+    // Apply accumulated scroll delta from mouse events (coalescing)
+    apply_scroll_delta(state);
+
+    // Update cell line info for lazy rendering and scroll calculations
+    let cell_line_counts = view::calculate_cell_line_counts(state, width as usize);
+    state
+        .transcript
+        .scroll
+        .update_cell_line_info(cell_line_counts);
 }
 
 // ============================================================================
@@ -461,12 +496,13 @@ fn navigate_history_down(state: &mut TuiState) {
 }
 
 // ============================================================================
-// Command Execution (dispatched from palette via ExecuteCommand effect)
+// Command Execution (called from palette when a command is selected)
 // ============================================================================
 
 /// Executes a slash command by name.
 ///
-/// Called by the runtime when processing `UiEffect::ExecuteCommand`.
+/// Called directly by the palette handler when a command is selected.
+/// Returns effects for the runtime to execute.
 pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
     use crate::ui::chat::overlays::login::update_login;
 
