@@ -50,4 +50,7 @@ pub enum UiEffect {
 
     /// Submit handoff prompt: create new session and send prompt as first message.
     HandoffSubmit { prompt: String },
+
+    /// Open the session picker overlay (loads session list via I/O).
+    OpenSessionPicker,
 }

@@ -421,12 +421,52 @@ impl TuiRuntime {
                         .push(HistoryCell::system("Conversation cleared."));
                 }
             }
+            UiEffect::OpenSessionPicker => {
+                self.open_session_picker();
+            }
         }
     }
 
     // ========================================================================
     // Effect Implementations (async spawning, etc.)
     // ========================================================================
+
+    /// Opens the session picker overlay.
+    ///
+    /// Loads the session list (I/O) and opens the overlay if sessions exist.
+    /// Shows an error message if no sessions are found or loading fails.
+    fn open_session_picker(&mut self) {
+        use crate::ui::chat::overlays::SessionPickerState;
+        use crate::ui::chat::state::OverlayState;
+
+        // Don't open if another overlay is active
+        if !matches!(self.state.overlay, OverlayState::None) {
+            return;
+        }
+
+        // Load sessions (I/O happens here in the effect handler, not reducer)
+        match session::list_sessions() {
+            Ok(sessions) if sessions.is_empty() => {
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system("No sessions found."));
+            }
+            Ok(sessions) => {
+                self.state.overlay =
+                    OverlayState::SessionPicker(SessionPickerState::new(sessions));
+            }
+            Err(e) => {
+                self.state
+                    .transcript
+                    .cells
+                    .push(HistoryCell::system(format!(
+                        "Failed to load sessions: {}",
+                        e
+                    )));
+            }
+        }
+    }
 
     fn interrupt_agent(&mut self) {
         if self.state.agent_state.is_running() {

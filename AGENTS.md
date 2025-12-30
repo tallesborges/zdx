@@ -42,6 +42,7 @@
       - `src/ui/chat/overlays/palette.rs`: command palette overlay
       - `src/ui/chat/overlays/model_picker.rs`: model picker overlay
       - `src/ui/chat/overlays/thinking_picker.rs`: thinking level picker overlay
+      - `src/ui/chat/overlays/session_picker.rs`: session picker overlay
       - `src/ui/chat/overlays/login.rs`: OAuth login flow overlay
       - `src/ui/chat/overlays/mod.rs`: overlay exports
   - `src/ui/markdown/`: markdown parsing and wrapping (shared)
