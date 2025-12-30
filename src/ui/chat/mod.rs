@@ -353,6 +353,24 @@ impl TuiRuntime {
                         )));
                 }
             }
+            UiEffect::StartHandoff { goal } => {
+                // Check if we have an active session
+                if self.state.conversation.session.is_none() {
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system("Handoff requires an active session."));
+                } else {
+                    // TODO: Slice 2 - spawn subagent to generate handoff prompt
+                    self.state
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system(format!(
+                            "Handoff requested with goal: \"{}\"\n(Generation not yet implemented)",
+                            goal
+                        )));
+                }
+            }
             UiEffect::SaveSession { event } => {
                 if let Some(ref mut s) = self.state.conversation.session
                     && let Err(e) = s.append(&event)

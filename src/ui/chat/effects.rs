@@ -47,4 +47,7 @@ pub enum UiEffect {
 
     /// Open config file in default system editor/app.
     OpenConfig,
+
+    /// Start handoff generation with a goal.
+    StartHandoff { goal: String },
 }
