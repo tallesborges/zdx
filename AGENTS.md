@@ -31,11 +31,11 @@
     - `src/ui/chat/state/input.rs`: input editor state
     - `src/ui/chat/state/session.rs`: session + message history state
     - `src/ui/chat/state/transcript.rs`: transcript view state (scroll, selection, cache)
-    - `src/ui/chat/update.rs`: reducer - all state mutations happen here
+    - `src/ui/chat/reducer.rs`: reducer - all state mutations happen here
     - `src/ui/chat/view.rs`: pure render functions (no mutations)
     - `src/ui/chat/effects.rs`: effect types returned by reducer for runtime to execute
     - `src/ui/chat/events.rs`: UI event types
-    - `src/ui/chat/commands.rs`: slash command definitions for command palette
+    - `src/ui/chat/commands.rs`: command definitions for command palette
     - `src/ui/chat/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
     - `src/ui/chat/terminal.rs`: terminal setup, restore, panic hooks
     - `src/ui/chat/overlays/`: self-contained overlay modules (state + update + render)

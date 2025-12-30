@@ -1,10 +1,10 @@
-//! Slash command definitions.
+//! Command definitions for the command palette.
 //!
-//! This module defines the available slash commands for the TUI command palette.
+//! This module defines the available commands for the TUI command palette.
 
-/// Definition of a slash command.
+/// Definition of a command.
 #[derive(Debug, Clone)]
-pub struct SlashCommand {
+pub struct Command {
     /// Primary name (e.g., "clear") - without the leading slash.
     pub name: &'static str,
     /// Aliases (e.g., ["new"]) - without leading slashes.
@@ -13,7 +13,7 @@ pub struct SlashCommand {
     pub description: &'static str,
 }
 
-impl SlashCommand {
+impl Command {
     /// Returns true if this command matches the given filter (case-insensitive).
     /// Matches against name and all aliases.
     pub fn matches(&self, filter: &str) -> bool {
@@ -35,39 +35,39 @@ impl SlashCommand {
     }
 }
 
-/// Available slash commands.
-pub const SLASH_COMMANDS: &[SlashCommand] = &[
-    SlashCommand {
+/// Available commands.
+pub const COMMANDS: &[Command] = &[
+    Command {
         name: "config",
         aliases: &["settings"],
         description: "Open config file in default editor",
     },
-    SlashCommand {
+    Command {
         name: "login",
         aliases: &[],
         description: "Login with Anthropic OAuth",
     },
-    SlashCommand {
+    Command {
         name: "logout",
         aliases: &[],
         description: "Logout from Anthropic OAuth",
     },
-    SlashCommand {
+    Command {
         name: "model",
         aliases: &[],
         description: "Switch model",
     },
-    SlashCommand {
+    Command {
         name: "new",
         aliases: &["clear"],
         description: "Start a new conversation",
     },
-    SlashCommand {
+    Command {
         name: "quit",
         aliases: &["q", "exit"],
         description: "Exit ZDX",
     },
-    SlashCommand {
+    Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",
@@ -79,8 +79,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_slash_command_matches_name() {
-        let cmd = &SLASH_COMMANDS[4]; // new
+    fn test_command_matches_name() {
+        let cmd = &COMMANDS[4]; // new
         assert!(cmd.matches("new"));
         assert!(cmd.matches("ne"));
         assert!(cmd.matches("NEW")); // case-insensitive
@@ -88,31 +88,31 @@ mod tests {
     }
 
     #[test]
-    fn test_slash_command_matches_alias() {
-        let cmd = &SLASH_COMMANDS[4]; // new (alias: clear)
+    fn test_command_matches_alias() {
+        let cmd = &COMMANDS[4]; // new (alias: clear)
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
     }
 
     #[test]
-    fn test_slash_command_display_name() {
-        let config_cmd = &SLASH_COMMANDS[0];
+    fn test_command_display_name() {
+        let config_cmd = &COMMANDS[0];
         assert_eq!(config_cmd.display_name(), "/config (settings)");
 
-        let login_cmd = &SLASH_COMMANDS[1];
+        let login_cmd = &COMMANDS[1];
         assert_eq!(login_cmd.display_name(), "/login");
 
-        let logout_cmd = &SLASH_COMMANDS[2];
+        let logout_cmd = &COMMANDS[2];
         assert_eq!(logout_cmd.display_name(), "/logout");
 
-        let model_cmd = &SLASH_COMMANDS[3];
+        let model_cmd = &COMMANDS[3];
         assert_eq!(model_cmd.display_name(), "/model");
 
-        let new_cmd = &SLASH_COMMANDS[4];
+        let new_cmd = &COMMANDS[4];
         assert_eq!(new_cmd.display_name(), "/new (clear)");
 
-        let quit = &SLASH_COMMANDS[5];
+        let quit = &COMMANDS[5];
         assert_eq!(quit.display_name(), "/quit (q, exit)");
     }
 }
