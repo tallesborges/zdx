@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use crate::ui::chat::commands::SLASH_COMMANDS;
+use crate::ui::chat::commands::COMMANDS;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::{OverlayState, TuiState};
 
@@ -39,11 +39,11 @@ impl CommandPaletteState {
     }
 
     /// Returns commands matching the current filter.
-    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::chat::commands::SlashCommand> {
+    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::chat::commands::Command> {
         if self.filter.is_empty() {
-            SLASH_COMMANDS.iter().collect()
+            COMMANDS.iter().collect()
         } else {
-            SLASH_COMMANDS
+            COMMANDS
                 .iter()
                 .filter(|cmd| cmd.matches(&self.filter))
                 .collect()
@@ -327,7 +327,7 @@ mod tests {
     fn test_palette_state_filtered_commands_empty_filter() {
         let state = CommandPaletteState::new(true);
         let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), SLASH_COMMANDS.len());
+        assert_eq!(filtered.len(), COMMANDS.len());
     }
 
     #[test]
@@ -352,7 +352,7 @@ mod tests {
         let mut state = CommandPaletteState::new(true);
         state.selected = 10; // way out of bounds
         state.clamp_selection();
-        assert_eq!(state.selected, SLASH_COMMANDS.len() - 1);
+        assert_eq!(state.selected, COMMANDS.len() - 1);
     }
 
     #[test]

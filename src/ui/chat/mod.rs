@@ -6,17 +6,17 @@
 //! Architecture (post-Slice 3):
 //! - `TuiRuntime`: Owns terminal + state, runs event loop, executes effects
 //! - `TuiState` (in state.rs): All app state, no terminal
-//! - `update()` (in update.rs): The reducer - all state mutations happen here
+//! - `update()` (in reducer.rs): The reducer - all state mutations happen here
 //! - `view()` (in view.rs): Pure render, no mutations
 
 pub mod commands;
 pub mod effects;
 pub mod events;
 pub mod overlays;
+pub mod reducer;
 pub mod selection;
 pub mod state;
 pub mod terminal;
-pub mod update;
 pub mod view;
 
 use std::io::{IsTerminal, Stdout, Write, stderr};
@@ -214,7 +214,7 @@ impl TuiRuntime {
                     UiEvent::Tick => self.state.agent_state.is_running(),
                     _ => true,
                 };
-                let effects = update::update(&mut self.state, event);
+                let effects = reducer::update(&mut self.state, event);
                 if marks_dirty || !effects.is_empty() {
                     dirty = true;
                 }
@@ -224,10 +224,10 @@ impl TuiRuntime {
             // Only render if something changed
             if dirty {
                 // Apply any pending deltas before render (coalescing)
-                update::apply_pending_delta(&mut self.state);
+                reducer::apply_pending_delta(&mut self.state);
 
                 // Apply accumulated scroll delta from mouse events (coalescing)
-                update::apply_scroll_delta(&mut self.state);
+                reducer::apply_scroll_delta(&mut self.state);
 
                 // Update cached line count for scroll calculations
                 let line_count = view::calculate_line_count(&self.state, size.width as usize);
@@ -442,7 +442,7 @@ impl TuiRuntime {
                 }
             },
             UiEffect::ExecuteCommand { name } => {
-                let effects = update::execute_command(&mut self.state, name);
+                let effects = reducer::execute_command(&mut self.state, name);
                 self.execute_effects(effects);
             }
         }
@@ -535,5 +535,5 @@ mod tests {
     // Unit tests for slash commands and palette state have been moved to
     // src/ui/chat/commands.rs and src/ui/chat/state/ respectively.
     //
-    // Unit tests for the reducer are in src/ui/chat/update.rs.
+    // Unit tests for the reducer are in src/ui/chat/reducer.rs.
 }
