@@ -74,6 +74,10 @@ pub struct LineMapping {
 pub struct PositionMap {
     /// Mapping for each visual line.
     lines: RefCell<Vec<LineMapping>>,
+    /// Scroll offset when this map was built (for lazy rendering support).
+    /// When lazy rendering is used, lines[0] corresponds to global line scroll_offset.
+    /// When full rendering is used, this is 0 (lines[i] corresponds to global line i).
+    scroll_offset: RefCell<usize>,
 }
 
 impl PositionMap {
@@ -81,12 +85,20 @@ impl PositionMap {
     pub fn new() -> Self {
         Self {
             lines: RefCell::new(Vec::new()),
+            scroll_offset: RefCell::new(0),
         }
     }
 
     /// Clears the position map.
     pub fn clear(&self) {
         self.lines.borrow_mut().clear();
+        *self.scroll_offset.borrow_mut() = 0;
+    }
+
+    /// Sets the scroll offset for this position map.
+    /// Call this when using lazy rendering to indicate the global line offset.
+    pub fn set_scroll_offset(&self, offset: usize) {
+        *self.scroll_offset.borrow_mut() = offset;
     }
 
     /// Adds a line mapping.
@@ -106,7 +118,8 @@ impl PositionMap {
 
     /// Gets the text content for a range of visual lines.
     ///
-    /// Useful for extracting selected text.
+    /// The start and end positions use global line indices.
+    /// This method handles the scroll offset for lazy rendering.
     pub fn get_text_range(&self, start: VisualPosition, end: VisualPosition) -> String {
         let (start, end) = if start < end {
             (start, end)
@@ -115,30 +128,51 @@ impl PositionMap {
         };
 
         let lines = self.lines.borrow();
+        let scroll_offset = *self.scroll_offset.borrow();
+
         if lines.is_empty() {
             return String::new();
         }
 
-        let start_line = start.line.min(lines.len().saturating_sub(1));
-        let end_line = end.line.min(lines.len().saturating_sub(1));
+        // Convert global line indices to local indices
+        let start_line_global = start.line;
+        let end_line_global = end.line;
+
+        // Check if selection is within the rendered range
+        let map_start_global = scroll_offset;
+        let map_end_global = scroll_offset + lines.len();
+
+        if end_line_global < map_start_global || start_line_global >= map_end_global {
+            // Selection is completely outside rendered range
+            return String::new();
+        }
+
+        // Clamp selection to rendered range and convert to local indices
+        let start_line_local = start_line_global.saturating_sub(scroll_offset);
+        let end_line_local = end_line_global
+            .saturating_sub(scroll_offset)
+            .min(lines.len().saturating_sub(1));
 
         let mut result = String::new();
 
-        for line_idx in start_line..=end_line {
-            let Some(mapping) = lines.get(line_idx) else {
+        for local_idx in start_line_local..=end_line_local {
+            let Some(mapping) = lines.get(local_idx) else {
                 continue;
             };
 
             let graphemes: Vec<&str> = mapping.text.graphemes(true).collect();
             let line_len = graphemes.len();
 
-            let col_start = if line_idx == start_line {
+            // Calculate global line index for this local line
+            let global_idx = scroll_offset + local_idx;
+
+            let col_start = if global_idx == start.line {
                 start.column.min(line_len)
             } else {
                 0
             };
 
-            let col_end = if line_idx == end_line {
+            let col_end = if global_idx == end.line {
                 end.column.min(line_len)
             } else {
                 line_len
@@ -149,7 +183,7 @@ impl PositionMap {
             result.push_str(&selected);
 
             // Add newline between lines (not after the last line)
-            if line_idx < end_line {
+            if local_idx < end_line_local {
                 result.push('\n');
             }
         }

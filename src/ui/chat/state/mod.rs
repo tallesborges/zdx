@@ -25,6 +25,8 @@ pub use auth::{AuthState, AuthStatus};
 pub use input::InputState;
 pub use session::{SessionState, SessionUsage};
 pub use transcript::TranscriptState;
+// Re-export VisibleRange for view.rs
+pub use transcript::VisibleRange;
 // Re-export scroll types for tests only
 #[cfg(test)]
 pub use transcript::{ScrollMode, ScrollState};

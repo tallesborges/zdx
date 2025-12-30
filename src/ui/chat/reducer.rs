@@ -149,18 +149,28 @@ fn screen_to_transcript_pos(
         return None; // Click is in input or status area, not transcript
     }
 
-    // Get total line count from position map
-    let total_lines = state.transcript.position_map.len();
-    if total_lines == 0 {
+    // Get scroll offset and line counts
+    let scroll_offset = state.transcript.scroll.get_offset(viewport_height);
+    let position_map_len = state.transcript.position_map.len();
+    let cached_total = state.transcript.scroll.cached_line_count;
+
+    if position_map_len == 0 {
         return None; // No content to select
     }
 
-    // Calculate bottom-align padding (when content is shorter than viewport)
-    // This matches the padding logic in view.rs
-    let scroll_offset = state.transcript.scroll.get_offset(viewport_height);
-    let visible_content_lines = total_lines
-        .saturating_sub(scroll_offset)
-        .min(viewport_height);
+    // Detect if lazy rendering was used:
+    // In lazy mode, position_map.len() < cached_line_count
+    // In full mode, position_map.len() == cached_line_count (or close to it)
+    let is_lazy_mode = position_map_len < cached_total && cached_total > 0;
+
+    // Calculate visible content lines for bottom-align padding
+    let visible_content_lines = if is_lazy_mode {
+        position_map_len // Lazy mode: position_map contains exactly visible lines
+    } else {
+        cached_total
+            .saturating_sub(scroll_offset)
+            .min(viewport_height)
+    };
     let padding = viewport_height.saturating_sub(visible_content_lines);
 
     // Adjust screen_y for bottom-align padding
@@ -170,16 +180,17 @@ fn screen_to_transcript_pos(
     }
     let content_y = screen_y - padding;
 
-    // Convert to absolute transcript line index
+    // Convert to absolute transcript line index (for selection state)
     let absolute_line = scroll_offset + content_y;
 
-    // Bounds check
-    if absolute_line >= total_lines {
-        return None;
-    }
-
-    // Get the line mapping if available
-    let mapping = state.transcript.position_map.get(absolute_line)?;
+    // Get the line mapping - indexing differs based on rendering mode
+    let mapping = if is_lazy_mode {
+        // Lazy mode: position_map is indexed 0 to visible_count-1
+        state.transcript.position_map.get(content_y)?
+    } else {
+        // Full mode: position_map is indexed by global line number
+        state.transcript.position_map.get(absolute_line)?
+    };
 
     // Convert display column (x position) to grapheme index
     // We need to count graphemes until we've accumulated enough display width
