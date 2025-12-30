@@ -82,30 +82,41 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     let transcript_height = area.height.saturating_sub(input_height + STATUS_HEIGHT) as usize;
 
     // Pre-render transcript lines
-    let all_lines = render_transcript(state, transcript_width);
-    let total_lines = all_lines.len();
-
-    // Use ScrollState for offset calculation (uses cached line count)
-    let scroll_offset = {
-        let max_offset = total_lines.saturating_sub(transcript_height);
-        if state.transcript.scroll.is_following() {
-            total_lines.saturating_sub(transcript_height)
-        } else {
-            state
-                .transcript
-                .scroll
-                .get_offset(transcript_height)
-                .min(max_offset)
-        }
+    // is_lazy indicates whether lazy rendering was used (lines are already scrolled)
+    let (all_lines, is_lazy) = render_transcript(state, transcript_width);
+    let total_lines = if is_lazy {
+        // For lazy rendering, use cached total line count for scroll calculations
+        state.transcript.scroll.cached_line_count
+    } else {
+        all_lines.len()
     };
 
-    // Slice visible lines
-    let visible_end = (scroll_offset + transcript_height).min(total_lines);
-    let content_lines: Vec<Line<'static>> = all_lines
-        .into_iter()
-        .skip(scroll_offset)
-        .take(visible_end - scroll_offset)
-        .collect();
+    // Get visible lines - handling differs based on rendering mode
+    let content_lines: Vec<Line<'static>> = if is_lazy {
+        // Lazy rendering already returned only visible lines, no slicing needed
+        all_lines
+    } else {
+        // Full rendering: apply scroll offset to slice visible portion
+        let scroll_offset = {
+            let max_offset = total_lines.saturating_sub(transcript_height);
+            if state.transcript.scroll.is_following() {
+                total_lines.saturating_sub(transcript_height)
+            } else {
+                state
+                    .transcript
+                    .scroll
+                    .get_offset(transcript_height)
+                    .min(max_offset)
+            }
+        };
+
+        let visible_end = (scroll_offset + transcript_height).min(total_lines);
+        all_lines
+            .into_iter()
+            .skip(scroll_offset)
+            .take(visible_end - scroll_offset)
+            .collect()
+    };
 
     // Bottom-align: add padding at top when content doesn't fill the screen
     let visible_lines: Vec<Line<'static>> = if content_lines.len() < transcript_height {
@@ -488,7 +499,27 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 /// Renders the transcript into ratatui Lines.
 ///
 /// Also builds the position map for selection coordinate translation.
-fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
+///
+/// Returns (lines, is_lazy) where is_lazy indicates if lazy rendering was used.
+/// When lazy rendering is used, lines are already scrolled and ready to display.
+fn render_transcript(state: &TuiState, width: usize) -> (Vec<Line<'static>>, bool) {
+    // Try lazy rendering if we have cell line info
+    if let Some(visible) = state
+        .transcript
+        .scroll
+        .visible_range(state.transcript.viewport_height)
+    {
+        return (render_transcript_lazy(state, width, visible), true);
+    }
+
+    // Fall back to full rendering (first frame or after changes)
+    (render_transcript_full(state, width), false)
+}
+
+/// Full transcript rendering - iterates all cells.
+///
+/// Used on first frame or when cell_line_info needs to be rebuilt.
+fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
 
     use crate::ui::chat::selection::LineMapping;
@@ -532,6 +563,90 @@ fn render_transcript(state: &TuiState, width: usize) -> Vec<Line<'static>> {
             text: String::new(),
         });
         lines.push(Line::default());
+    }
+
+    lines
+}
+
+/// Lazy transcript rendering - only renders visible cells.
+///
+/// Uses the pre-calculated visible range to skip off-screen cells.
+/// Returns lines ready for display (already scrolled/sliced).
+/// Position map is built for visible lines with offset tracking for selection.
+fn render_transcript_lazy(
+    state: &TuiState,
+    width: usize,
+    visible: crate::ui::chat::state::VisibleRange,
+) -> Vec<Line<'static>> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    use crate::ui::chat::selection::LineMapping;
+
+    let mut lines = Vec::new();
+
+    // Clear position map and set scroll offset for lazy mode
+    state.transcript.position_map.clear();
+    state
+        .transcript
+        .position_map
+        .set_scroll_offset(visible.lines_before);
+
+    // Track global line index for selection highlighting
+    // This is the line index in the full transcript
+    let mut global_line_idx = visible.lines_before;
+
+    for (cell_idx, cell) in state.transcript.cells[visible.cell_range.clone()]
+        .iter()
+        .enumerate()
+    {
+        let styled_lines = cell.display_lines_cached(
+            width,
+            state.spinner_frame / SPINNER_SPEED_DIVISOR,
+            &state.transcript.wrap_cache,
+        );
+
+        // For first cell, skip lines that are above viewport
+        let skip_count = if cell_idx == 0 {
+            visible.first_cell_line_offset
+        } else {
+            0
+        };
+
+        for (line_in_cell, styled_line) in styled_lines.into_iter().enumerate() {
+            if line_in_cell < skip_count {
+                // Don't increment global_line_idx here - it's already set correctly
+                // to visible.lines_before which accounts for all skipped lines
+                continue;
+            }
+
+            // Build the line text for position mapping
+            let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
+            let grapheme_count = line_text.graphemes(true).count();
+
+            // Add to position map - stores text for selection extraction
+            state
+                .transcript
+                .position_map
+                .push(LineMapping { text: line_text });
+
+            // Convert with global line index for selection highlighting
+            let converted = convert_styled_line_with_selection(
+                styled_line,
+                &state.transcript.selection,
+                global_line_idx,
+                grapheme_count,
+            );
+            lines.push(converted);
+            global_line_idx += 1;
+        }
+
+        // Add blank line after each cell (matching full render behavior)
+        // This keeps line counts consistent between full and lazy render
+        state.transcript.position_map.push(LineMapping {
+            text: String::new(),
+        });
+        lines.push(Line::default());
+        global_line_idx += 1;
     }
 
     lines
@@ -678,17 +793,35 @@ fn convert_style(style: TranscriptStyle) -> Style {
     }
 }
 
-/// Returns the total line count from the transcript rendering.
-/// Called after view() to update cached_line_count in state.
-/// Takes the raw terminal width - margins are applied internally.
-pub fn calculate_line_count(state: &TuiState, terminal_width: usize) -> usize {
-    let effective_width = terminal_width.saturating_sub((TRANSCRIPT_MARGIN * 2) as usize);
-    render_transcript(state, effective_width).len()
-}
-
 /// Calculates the available height for the transcript given the terminal height and state.
 /// Encapsulates layout logic so callers don't need to know about input/status heights.
 pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height: u16) -> usize {
     let input_height = calculate_input_height(state, terminal_height);
     terminal_height.saturating_sub(input_height + STATUS_HEIGHT) as usize
+}
+
+/// Calculates cell line info and returns it for external application.
+///
+/// Returns a Vec of (CellId, line_count) tuples that can be used to
+/// update ScrollState::cell_line_info.
+pub fn calculate_cell_line_counts(
+    state: &TuiState,
+    terminal_width: usize,
+) -> Vec<(crate::ui::transcript::CellId, usize)> {
+    let effective_width = terminal_width.saturating_sub((TRANSCRIPT_MARGIN * 2) as usize);
+
+    state
+        .transcript
+        .cells
+        .iter()
+        .map(|cell| {
+            let lines = cell.display_lines_cached(
+                effective_width,
+                state.spinner_frame / SPINNER_SPEED_DIVISOR,
+                &state.transcript.wrap_cache,
+            );
+            // +1 for blank line between cells
+            (cell.id(), lines.len() + 1)
+        })
+        .collect()
 }

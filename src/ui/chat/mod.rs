@@ -229,9 +229,13 @@ impl TuiRuntime {
                 // Apply accumulated scroll delta from mouse events (coalescing)
                 reducer::apply_scroll_delta(&mut self.state);
 
-                // Update cached line count for scroll calculations
-                let line_count = view::calculate_line_count(&self.state, size.width as usize);
-                self.state.transcript.scroll.update_line_count(line_count);
+                // Update cell line info for lazy rendering and scroll calculations
+                let cell_line_counts =
+                    view::calculate_cell_line_counts(&self.state, size.width as usize);
+                self.state
+                    .transcript
+                    .scroll
+                    .update_cell_line_info(cell_line_counts);
 
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {

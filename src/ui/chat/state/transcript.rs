@@ -3,7 +3,10 @@
 //! Manages scroll position, viewport dimensions, selection state, and
 //! rendering cache for the transcript area.
 
+use std::ops::Range;
+
 use crate::ui::chat::selection::{PositionMap, SelectionState};
+use crate::ui::transcript::CellId;
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -12,6 +15,33 @@ pub enum ScrollMode {
     FollowLatest,
     /// User scrolled manually; offset is line index from top.
     Anchored { offset: usize },
+}
+
+/// Line count info for a single cell.
+///
+/// Used for O(log n) visibility calculations in lazy rendering.
+#[derive(Debug, Clone)]
+pub struct CellLineInfo {
+    /// Unique cell ID (stored for debugging and future extensibility).
+    #[allow(dead_code)]
+    pub cell_id: CellId,
+    /// Starting line index (cumulative offset from top).
+    pub start_line: usize,
+    /// Number of lines this cell produces (including trailing blank).
+    pub line_count: usize,
+}
+
+/// Result of visible range calculation.
+///
+/// Contains both the cell range and the line offset within the first cell.
+#[derive(Debug, Clone)]
+pub struct VisibleRange {
+    /// Range of cell indices that are visible.
+    pub cell_range: Range<usize>,
+    /// Line offset to skip within the first visible cell.
+    pub first_cell_line_offset: usize,
+    /// Total lines to skip before the visible range (for position map).
+    pub lines_before: usize,
 }
 
 /// Scroll state for the transcript pane.
@@ -24,6 +54,9 @@ pub struct ScrollState {
     pub mode: ScrollMode,
     /// Cached total line count from last render (for scroll calculations).
     pub cached_line_count: usize,
+    /// Line info per cell for O(log n) visibility calculations.
+    /// Updated when cells are added/modified or terminal width changes.
+    pub cell_line_info: Vec<CellLineInfo>,
 }
 
 impl Default for ScrollState {
@@ -31,6 +64,7 @@ impl Default for ScrollState {
         Self {
             mode: ScrollMode::FollowLatest,
             cached_line_count: 0,
+            cell_line_info: Vec::new(),
         }
     }
 }
@@ -117,6 +151,9 @@ impl ScrollState {
     /// Updates the cached line count.
     ///
     /// Call this after rendering to keep scroll calculations accurate.
+    /// Note: For production use, prefer update_cell_line_info() which
+    /// updates both cell info and cached_line_count.
+    #[cfg(test)]
     pub fn update_line_count(&mut self, line_count: usize) {
         self.cached_line_count = line_count;
     }
@@ -125,6 +162,72 @@ impl ScrollState {
     pub fn reset(&mut self) {
         self.mode = ScrollMode::FollowLatest;
         self.cached_line_count = 0;
+        self.cell_line_info.clear();
+    }
+
+    /// Calculates which cells are visible in the current viewport.
+    ///
+    /// Returns `None` if cell_line_info is empty or not yet populated.
+    /// Otherwise returns the range of cell indices to render and metadata
+    /// for proper positioning.
+    pub fn visible_range(&self, viewport_height: usize) -> Option<VisibleRange> {
+        if self.cell_line_info.is_empty() {
+            return None;
+        }
+
+        let scroll_offset = self.get_offset(viewport_height);
+        let viewport_end = scroll_offset + viewport_height;
+
+        // Binary search for first cell that overlaps with viewport
+        // A cell overlaps if: cell.start_line + cell.line_count > scroll_offset
+        let first_cell = self
+            .cell_line_info
+            .partition_point(|info| info.start_line + info.line_count <= scroll_offset);
+
+        if first_cell >= self.cell_line_info.len() {
+            // All cells are above viewport (shouldn't happen in practice)
+            return None;
+        }
+
+        // Binary search for last cell that overlaps with viewport
+        // A cell overlaps if: cell.start_line < viewport_end
+        let last_cell = self
+            .cell_line_info
+            .partition_point(|info| info.start_line < viewport_end);
+
+        // Calculate line offset within first visible cell
+        let first_cell_info = &self.cell_line_info[first_cell];
+        let first_cell_line_offset = scroll_offset.saturating_sub(first_cell_info.start_line);
+
+        Some(VisibleRange {
+            cell_range: first_cell..last_cell,
+            first_cell_line_offset,
+            lines_before: scroll_offset,
+        })
+    }
+
+    /// Updates cell line info from rendered cells.
+    ///
+    /// Call this after rendering to update visibility calculations.
+    /// The `line_counts` iterator should yield (cell_id, line_count) pairs
+    /// in cell order. Also updates cached_line_count.
+    pub fn update_cell_line_info<I>(&mut self, line_counts: I)
+    where
+        I: IntoIterator<Item = (CellId, usize)>,
+    {
+        self.cell_line_info.clear();
+        let mut cumulative_offset = 0;
+
+        for (cell_id, line_count) in line_counts {
+            self.cell_line_info.push(CellLineInfo {
+                cell_id,
+                start_line: cumulative_offset,
+                line_count,
+            });
+            cumulative_offset += line_count;
+        }
+
+        self.cached_line_count = cumulative_offset;
     }
 }
 
@@ -318,5 +421,135 @@ mod tests {
         let delta = acc.take_delta();
         assert_eq!(delta, 3);
         assert_eq!(acc.take_delta(), 0); // Already taken
+    }
+
+    // ========================================================================
+    // Lazy Rendering Tests
+    // ========================================================================
+
+    fn make_test_cell_id(n: u64) -> CellId {
+        CellId(n)
+    }
+
+    #[test]
+    fn test_visible_range_empty_cell_info() {
+        let scroll = ScrollState::new();
+        assert!(scroll.visible_range(20).is_none());
+    }
+
+    #[test]
+    fn test_visible_range_single_cell_fits() {
+        let mut scroll = ScrollState::new();
+        // Single cell with 10 lines
+        scroll.update_cell_line_info(vec![(make_test_cell_id(1), 10)]);
+
+        let visible = scroll.visible_range(20).expect("should have range");
+        assert_eq!(visible.cell_range, 0..1);
+        assert_eq!(visible.first_cell_line_offset, 0);
+        assert_eq!(visible.lines_before, 0);
+    }
+
+    #[test]
+    fn test_visible_range_multiple_cells_all_visible() {
+        let mut scroll = ScrollState::new();
+        // 3 cells with 5 lines each = 15 total, viewport 20
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 5),
+            (make_test_cell_id(2), 5),
+            (make_test_cell_id(3), 5),
+        ]);
+
+        let visible = scroll.visible_range(20).expect("should have range");
+        assert_eq!(visible.cell_range, 0..3);
+        assert_eq!(visible.first_cell_line_offset, 0);
+    }
+
+    #[test]
+    fn test_visible_range_scrolled_to_middle() {
+        let mut scroll = ScrollState::new();
+        // 5 cells with 10 lines each = 50 total
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 10), // lines 0-9
+            (make_test_cell_id(2), 10), // lines 10-19
+            (make_test_cell_id(3), 10), // lines 20-29
+            (make_test_cell_id(4), 10), // lines 30-39
+            (make_test_cell_id(5), 10), // lines 40-49
+        ]);
+
+        // Scroll to offset 15 with viewport 20
+        scroll.mode = ScrollMode::Anchored { offset: 15 };
+
+        let visible = scroll.visible_range(20).expect("should have range");
+        // Offset 15 is in cell 1 (lines 10-19), viewport ends at 35 which is in cell 3
+        assert_eq!(visible.cell_range, 1..4);
+        assert_eq!(visible.first_cell_line_offset, 5); // 15 - 10 = 5
+        assert_eq!(visible.lines_before, 15);
+    }
+
+    #[test]
+    fn test_visible_range_follow_mode() {
+        let mut scroll = ScrollState::new();
+        // 5 cells with 10 lines each = 50 total, viewport 20
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 10),
+            (make_test_cell_id(2), 10),
+            (make_test_cell_id(3), 10),
+            (make_test_cell_id(4), 10),
+            (make_test_cell_id(5), 10),
+        ]);
+
+        // Follow mode should show bottom (offset = 50 - 20 = 30)
+        let visible = scroll.visible_range(20).expect("should have range");
+        // Offset 30 is in cell 3 (lines 20-29), viewport ends at 50
+        assert_eq!(visible.cell_range, 3..5);
+        assert_eq!(visible.first_cell_line_offset, 0); // 30 - 30 = 0
+        assert_eq!(visible.lines_before, 30);
+    }
+
+    #[test]
+    fn test_visible_range_partial_first_cell() {
+        let mut scroll = ScrollState::new();
+        // 3 cells with 20 lines each = 60 total
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 20), // lines 0-19
+            (make_test_cell_id(2), 20), // lines 20-39
+            (make_test_cell_id(3), 20), // lines 40-59
+        ]);
+
+        // Scroll to offset 5 with viewport 10
+        scroll.mode = ScrollMode::Anchored { offset: 5 };
+
+        let visible = scroll.visible_range(10).expect("should have range");
+        // Offset 5 is in cell 0, viewport ends at 15 which is still in cell 0
+        assert_eq!(visible.cell_range, 0..1);
+        assert_eq!(visible.first_cell_line_offset, 5);
+    }
+
+    #[test]
+    fn test_update_cell_line_info_updates_cached_line_count() {
+        let mut scroll = ScrollState::new();
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 10),
+            (make_test_cell_id(2), 15),
+            (make_test_cell_id(3), 5),
+        ]);
+
+        assert_eq!(scroll.cached_line_count, 30);
+        assert_eq!(scroll.cell_line_info.len(), 3);
+        assert_eq!(scroll.cell_line_info[0].start_line, 0);
+        assert_eq!(scroll.cell_line_info[1].start_line, 10);
+        assert_eq!(scroll.cell_line_info[2].start_line, 25);
+    }
+
+    #[test]
+    fn test_reset_clears_cell_line_info() {
+        let mut scroll = ScrollState::new();
+        scroll.update_cell_line_info(vec![(make_test_cell_id(1), 10), (make_test_cell_id(2), 10)]);
+
+        scroll.reset();
+
+        assert!(scroll.cell_line_info.is_empty());
+        assert_eq!(scroll.cached_line_count, 0);
+        assert!(scroll.is_following());
     }
 }
