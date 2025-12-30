@@ -42,6 +42,108 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 /// Spinner speed divisor (render frames per spinner frame).
 const SPINNER_SPEED_DIVISOR: usize = 6;
 
+/// Result of wrapping textarea content with Unicode-aware cursor tracking.
+struct WrappedTextarea {
+    /// Wrapped lines ready to render.
+    lines: Vec<Line<'static>>,
+    /// Visual row where cursor is (0-indexed, after wrapping).
+    cursor_row: usize,
+    /// Visual column where cursor is (display width units).
+    cursor_col: usize,
+}
+
+/// Wraps textarea content respecting Unicode display width.
+///
+/// Handles multi-width characters (CJK, emoji) correctly by using
+/// display width instead of character count for line breaking.
+fn wrap_textarea(textarea: &tui_textarea::TextArea, available_width: usize) -> WrappedTextarea {
+    let (cursor_line, cursor_col) = textarea.cursor();
+    let cursor_line = cursor_line.min(textarea.lines().len().saturating_sub(1));
+
+    let mut wrapped_lines: Vec<Line> = Vec::new();
+    let mut visual_row = 0usize;
+    let mut cursor_visual_row = 0usize;
+    let mut cursor_visual_col = 0usize;
+
+    for (line_idx, logical_line) in textarea.lines().iter().enumerate() {
+        let is_cursor_line = line_idx == cursor_line;
+        let line_visual_start = visual_row;
+
+        if logical_line.is_empty() {
+            // Empty line still takes one visual row
+            wrapped_lines.push(Line::from(""));
+            if is_cursor_line {
+                cursor_visual_row = visual_row;
+                cursor_visual_col = 0;
+            }
+            visual_row += 1;
+            continue;
+        }
+
+        // Wrap the line at exact character width boundaries
+        let mut current_width = 0usize;
+        let mut line_start_byte = 0usize;
+
+        for (byte_idx, ch) in logical_line.char_indices() {
+            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+
+            if current_width + ch_width > available_width && current_width > 0 {
+                // Wrap here - emit the current segment
+                wrapped_lines.push(Line::from(Span::raw(
+                    logical_line[line_start_byte..byte_idx].to_string(),
+                )));
+                line_start_byte = byte_idx;
+                current_width = ch_width;
+            } else {
+                current_width += ch_width;
+            }
+        }
+
+        // Emit remaining text
+        wrapped_lines.push(Line::from(Span::raw(
+            logical_line[line_start_byte..].to_string(),
+        )));
+
+        // Calculate cursor position if on this line
+        if is_cursor_line {
+            // Calculate display width up to cursor position
+            let mut width_to_cursor = 0usize;
+            for ch in logical_line.chars().take(cursor_col) {
+                width_to_cursor += UnicodeWidthChar::width(ch).unwrap_or(0);
+            }
+
+            // Find which wrapped row and column
+            let row_offset = if available_width > 0 {
+                width_to_cursor / available_width
+            } else {
+                0
+            };
+            let col_offset = if available_width > 0 {
+                width_to_cursor % available_width
+            } else {
+                0
+            };
+            cursor_visual_row = line_visual_start + row_offset;
+            cursor_visual_col = col_offset;
+        }
+
+        // Count how many visual rows this logical line took
+        let line_width = UnicodeWidthStr::width(logical_line.as_str());
+        let wrapped_count = if available_width == 0 {
+            1
+        } else {
+            line_width.div_ceil(available_width).max(1)
+        };
+        visual_row = line_visual_start + wrapped_count;
+    }
+
+    WrappedTextarea {
+        lines: wrapped_lines,
+        cursor_row: cursor_visual_row,
+        cursor_col: cursor_visual_col,
+    }
+}
+
 /// Calculates the dynamic input height based on content and terminal size.
 ///
 /// - Minimum: INPUT_HEIGHT_MIN (5 lines with borders)
@@ -250,82 +352,11 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         return;
     }
 
-    let (cursor_line, cursor_col) = state.input.textarea.cursor();
-    let cursor_line = cursor_line.min(state.input.textarea.lines().len().saturating_sub(1));
-
-    // Manually wrap lines at exact character widths (not word boundaries)
-    // This ensures cursor calculation matches the actual rendering
-    let mut wrapped_lines: Vec<Line> = Vec::new();
-    let mut visual_row = 0usize;
-    let mut cursor_visual_row = 0usize;
-    let mut cursor_visual_col = 0usize;
-
-    for (line_idx, logical_line) in state.input.textarea.lines().iter().enumerate() {
-        let is_cursor_line = line_idx == cursor_line;
-        let line_visual_start = visual_row;
-
-        if logical_line.is_empty() {
-            // Empty line still takes one visual row
-            wrapped_lines.push(Line::from(""));
-            if is_cursor_line {
-                cursor_visual_row = visual_row;
-                cursor_visual_col = 0;
-            }
-            visual_row += 1;
-            continue;
-        }
-
-        // Wrap the line at exact character width boundaries
-        let mut current_width = 0usize;
-        let mut line_start_byte = 0usize;
-
-        for (byte_idx, ch) in logical_line.char_indices() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-
-            if current_width + ch_width > available_width && current_width > 0 {
-                // Wrap here - emit the current segment
-                wrapped_lines.push(Line::from(Span::raw(
-                    logical_line[line_start_byte..byte_idx].to_string(),
-                )));
-                line_start_byte = byte_idx;
-                current_width = ch_width;
-            } else {
-                current_width += ch_width;
-            }
-        }
-
-        // Emit remaining text
-        wrapped_lines.push(Line::from(Span::raw(
-            logical_line[line_start_byte..].to_string(),
-        )));
-
-        // Calculate cursor position if on this line
-        if is_cursor_line {
-            // Calculate display width up to cursor position
-            let mut width_to_cursor = 0usize;
-            for ch in logical_line.chars().take(cursor_col) {
-                width_to_cursor += UnicodeWidthChar::width(ch).unwrap_or(0);
-            }
-
-            // Find which wrapped row and column
-            let row_offset = width_to_cursor / available_width;
-            let col_offset = width_to_cursor % available_width;
-            cursor_visual_row = line_visual_start + row_offset;
-            cursor_visual_col = col_offset;
-        }
-
-        // Count how many visual rows this logical line took
-        let line_width = UnicodeWidthStr::width(logical_line.as_str());
-        let wrapped_count = if available_width == 0 {
-            1
-        } else {
-            line_width.div_ceil(available_width).max(1)
-        };
-        visual_row = line_visual_start + wrapped_count;
-    }
+    // Wrap textarea content with Unicode-aware width calculation
+    let wrapped = wrap_textarea(&state.input.textarea, available_width);
 
     // Calculate vertical scroll offset to keep cursor visible
-    let total_visual_rows = wrapped_lines.len();
+    let total_visual_rows = wrapped.lines.len();
     let viewport_height = inner_area.height as usize;
 
     let scroll_offset = if total_visual_rows <= viewport_height {
@@ -336,20 +367,20 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
         // Keep cursor in the middle third of the viewport when possible
         let ideal_cursor_position = viewport_height / 2;
 
-        if cursor_visual_row < ideal_cursor_position {
+        if wrapped.cursor_row < ideal_cursor_position {
             // Near top, show from beginning
             0
-        } else if cursor_visual_row >= total_visual_rows.saturating_sub(ideal_cursor_position) {
+        } else if wrapped.cursor_row >= total_visual_rows.saturating_sub(ideal_cursor_position) {
             // Near bottom, show the last viewport_height lines
             total_visual_rows.saturating_sub(viewport_height)
         } else {
             // In middle, center the cursor
-            cursor_visual_row.saturating_sub(ideal_cursor_position)
+            wrapped.cursor_row.saturating_sub(ideal_cursor_position)
         }
     };
 
     // Slice visible lines based on scroll offset
-    let visible_lines: Vec<Line> = wrapped_lines
+    let visible_lines: Vec<Line> = wrapped.lines
         .into_iter()
         .skip(scroll_offset)
         .take(viewport_height)
@@ -359,8 +390,8 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(input_paragraph, area);
 
     // Adjust cursor position by scroll offset
-    let cursor_x = inner_area.x + cursor_visual_col as u16;
-    let cursor_y = inner_area.y + (cursor_visual_row.saturating_sub(scroll_offset) as u16);
+    let cursor_x = inner_area.x + wrapped.cursor_col as u16;
+    let cursor_y = inner_area.y + (wrapped.cursor_row.saturating_sub(scroll_offset) as u16);
 
     if cursor_x < inner_area.x + inner_area.width && cursor_y < inner_area.y + inner_area.height {
         frame.set_cursor_position((cursor_x, cursor_y));
@@ -442,80 +473,43 @@ fn render_handoff_input(state: &TuiState, frame: &mut Frame, area: Rect) {
 
     frame.render_widget(block, area);
 
-    // Render the textarea content (reuse existing logic but simplified)
-    let (cursor_line, cursor_col) = state.input.textarea.cursor();
-    let cursor_line = cursor_line.min(state.input.textarea.lines().len().saturating_sub(1));
+    // Use shared wrapping helper for Unicode-aware width calculation
     let available_width = inner_area.width as usize;
-
-    // Wrap lines
-    let mut wrapped_lines: Vec<(String, bool)> = Vec::new();
-    let mut cursor_wrapped_line = 0;
-    let mut cursor_wrapped_col = cursor_col;
-
-    for (line_idx, line) in state.input.textarea.lines().iter().enumerate() {
-        if line.is_empty() {
-            let is_cursor_line = line_idx == cursor_line;
-            if is_cursor_line {
-                cursor_wrapped_line = wrapped_lines.len();
-                cursor_wrapped_col = 0;
-            }
-            wrapped_lines.push((String::new(), is_cursor_line));
-        } else {
-            let chars: Vec<char> = line.chars().collect();
-            let mut pos = 0;
-            let mut char_pos = 0;
-
-            while pos < chars.len() {
-                let end = (pos + available_width).min(chars.len());
-                let chunk: String = chars[pos..end].iter().collect();
-                let is_cursor_line = line_idx == cursor_line
-                    && cursor_col >= char_pos
-                    && cursor_col < char_pos + (end - pos);
-
-                if is_cursor_line {
-                    cursor_wrapped_line = wrapped_lines.len();
-                    cursor_wrapped_col = cursor_col - char_pos;
-                }
-
-                wrapped_lines.push((chunk, is_cursor_line));
-                char_pos += end - pos;
-                pos = end;
-            }
-
-            if line_idx == cursor_line && cursor_col >= char_pos {
-                cursor_wrapped_line = wrapped_lines.len().saturating_sub(1);
-                cursor_wrapped_col = cursor_col - char_pos
-                    + (chars.len() - (chars.len() / available_width) * available_width);
-            }
-        }
-    }
+    let wrapped = wrap_textarea(&state.input.textarea, available_width);
 
     // Viewport scrolling
     let visible_lines = inner_area.height as usize;
-    let scroll_offset = if cursor_wrapped_line >= visible_lines {
-        cursor_wrapped_line - visible_lines + 1
+    let scroll_offset = if wrapped.cursor_row >= visible_lines {
+        wrapped.cursor_row - visible_lines + 1
     } else {
         0
     };
 
     // Render lines
-    for (i, (line, _is_cursor)) in wrapped_lines
+    for (i, line) in wrapped
+        .lines
         .iter()
         .skip(scroll_offset)
         .take(visible_lines)
         .enumerate()
     {
         let y = inner_area.y + i as u16;
-        let line_span = Span::styled(line.clone(), Style::default().fg(Color::White));
+        // Clone spans and apply white foreground
+        let styled_line = Line::from(
+            line.spans
+                .iter()
+                .map(|s| Span::styled(s.content.clone(), Style::default().fg(Color::White)))
+                .collect::<Vec<_>>(),
+        );
         frame.render_widget(
-            Paragraph::new(Line::from(line_span)),
+            Paragraph::new(styled_line),
             Rect::new(inner_area.x, y, inner_area.width, 1),
         );
     }
 
     // Show cursor
-    let cursor_y = inner_area.y + (cursor_wrapped_line - scroll_offset) as u16;
-    let cursor_x = inner_area.x + cursor_wrapped_col as u16;
+    let cursor_y = inner_area.y + (wrapped.cursor_row.saturating_sub(scroll_offset)) as u16;
+    let cursor_x = inner_area.x + wrapped.cursor_col as u16;
     if cursor_y < inner_area.y + inner_area.height && cursor_x < inner_area.x + inner_area.width {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
