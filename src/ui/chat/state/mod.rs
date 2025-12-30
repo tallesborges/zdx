@@ -33,7 +33,7 @@ pub use transcript::{ScrollMode, ScrollState};
 
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::chat::overlays::{
-    CommandPaletteState, LoginState, ModelPickerState, ThinkingPickerState,
+    CommandPaletteState, LoginState, ModelPickerState, SessionPickerState, ThinkingPickerState,
 };
 
 // ============================================================================
@@ -54,6 +54,8 @@ pub enum OverlayState {
     ModelPicker(ModelPickerState),
     /// Thinking level picker is open.
     ThinkingPicker(ThinkingPickerState),
+    /// Session picker is open.
+    SessionPicker(SessionPickerState),
     /// Login flow is active.
     Login(LoginState),
 }
@@ -118,6 +120,22 @@ impl OverlayState {
     pub fn as_login(&self) -> Option<&LoginState> {
         match self {
             OverlayState::Login(l) => Some(l),
+            _ => None,
+        }
+    }
+
+    /// Returns the session picker state if active.
+    pub fn as_session_picker(&self) -> Option<&SessionPickerState> {
+        match self {
+            OverlayState::SessionPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the session picker state mutably if active.
+    pub fn as_session_picker_mut(&mut self) -> Option<&mut SessionPickerState> {
+        match self {
+            OverlayState::SessionPicker(p) => Some(p),
             _ => None,
         }
     }

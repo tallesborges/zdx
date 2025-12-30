@@ -73,6 +73,11 @@ pub const COMMANDS: &[Command] = &[
         description: "Exit ZDX",
     },
     Command {
+        name: "sessions",
+        aliases: &["history"],
+        description: "Browse and switch sessions",
+    },
+    Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",

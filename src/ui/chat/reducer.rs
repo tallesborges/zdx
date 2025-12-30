@@ -13,8 +13,8 @@ use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
 use crate::ui::chat::overlays::{
     LoginEvent, LoginState, handle_login_key, handle_login_result, handle_model_picker_key,
-    handle_palette_key, handle_thinking_picker_key, open_command_palette, open_model_picker,
-    open_thinking_picker,
+    handle_palette_key, handle_session_picker_key, handle_thinking_picker_key, open_command_palette,
+    open_model_picker, open_thinking_picker,
 };
 use crate::ui::chat::state::{AgentState, HandoffState, OverlayState, TuiState};
 use crate::ui::chat::view;
@@ -255,6 +255,7 @@ fn handle_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEf
         OverlayState::CommandPalette(_) => handle_palette_key(state, key),
         OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
         OverlayState::ThinkingPicker(_) => handle_thinking_picker_key(state, key),
+        OverlayState::SessionPicker(_) => handle_session_picker_key(state, key),
         OverlayState::None => handle_main_key(state, key),
     }
 }
@@ -517,6 +518,7 @@ pub fn execute_command(state: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
             open_model_picker(state);
             vec![]
         }
+        "sessions" => vec![UiEffect::OpenSessionPicker],
         "thinking" => {
             open_thinking_picker(state);
             vec![]
