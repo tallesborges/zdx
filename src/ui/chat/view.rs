@@ -280,8 +280,8 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
 fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     use crate::config::ThinkingLevel;
 
-    // Check if in handoff mode (pending input, generating, or ready for review)
-    if state.input.handoff_pending || state.input.handoff_generating || state.input.handoff_ready {
+    // Check if in handoff mode (any active handoff state)
+    if state.input.handoff.is_active() {
         render_handoff_input(state, frame, area);
         return;
     }
@@ -380,7 +380,8 @@ fn render_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     };
 
     // Slice visible lines based on scroll offset
-    let visible_lines: Vec<Line> = wrapped.lines
+    let visible_lines: Vec<Line> = wrapped
+        .lines
         .into_iter()
         .skip(scroll_offset)
         .take(viewport_height)
@@ -442,16 +443,16 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
 /// Renders the input area in handoff mode with special styling.
 fn render_handoff_input(state: &TuiState, frame: &mut Frame, area: Rect) {
     // Handoff mode title - varies based on state
-    let (title, border_color) = if state.input.handoff_generating {
+    let (title, border_color) = if state.input.handoff.is_generating() {
         (" handoff (generating prompt...) ", Color::Cyan)
-    } else if state.input.handoff_ready {
+    } else if state.input.handoff.is_ready() {
         // Generated prompt is ready for review
         (
             " handoff (review and Enter to start, Esc to cancel) ",
             Color::Green,
         )
     } else {
-        // Waiting for goal input (handoff_pending)
+        // Waiting for goal input (Pending)
         (
             " handoff (enter goal for new session, Esc to cancel) ",
             Color::Yellow,
