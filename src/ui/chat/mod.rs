@@ -427,6 +427,9 @@ impl TuiRuntime {
             UiEffect::LoadSession { session_id } => {
                 self.load_session(&session_id);
             }
+            UiEffect::PreviewSession { session_id } => {
+                self.preview_session(&session_id);
+            }
         }
     }
 
@@ -438,6 +441,7 @@ impl TuiRuntime {
     ///
     /// Loads the session list (I/O) and opens the overlay if sessions exist.
     /// Shows an error message if no sessions are found or loading fails.
+    /// Also triggers a preview of the first session.
     fn open_session_picker(&mut self) {
         use crate::ui::chat::overlays::SessionPickerState;
         use crate::ui::chat::state::OverlayState;
@@ -456,7 +460,19 @@ impl TuiRuntime {
                     .push(HistoryCell::system("No sessions found."));
             }
             Ok(sessions) => {
-                self.state.overlay = OverlayState::SessionPicker(SessionPickerState::new(sessions));
+                // Snapshot current transcript cells for restore on Esc
+                let original_cells = self.state.transcript.cells.clone();
+
+                // Get the first session ID for initial preview
+                let first_session_id = sessions.first().map(|s| s.id.clone());
+
+                self.state.overlay =
+                    OverlayState::SessionPicker(SessionPickerState::new(sessions, original_cells));
+
+                // Trigger initial preview for the first session
+                if let Some(session_id) = first_session_id {
+                    self.preview_session(&session_id);
+                }
             }
             Err(e) => {
                 self.state
@@ -548,6 +564,39 @@ impl TuiRuntime {
                 "Switched to session {}",
                 short_id
             )));
+    }
+
+    /// Previews a session (shows transcript without full switch).
+    ///
+    /// Used during session picker navigation to show a live preview.
+    /// Only updates transcript cells and display state, not conversation
+    /// messages or session handle. The original cells are stored in the
+    /// picker state for restore on Esc.
+    fn preview_session(&mut self, session_id: &str) {
+        // Only preview if session picker is open
+        if !matches!(
+            self.state.overlay,
+            crate::ui::chat::state::OverlayState::SessionPicker(_)
+        ) {
+            return;
+        }
+
+        // Load session events (I/O)
+        let events = match session::load_session(session_id) {
+            Ok(events) => events,
+            Err(_) => {
+                // Silently fail for preview - errors shown on actual load
+                return;
+            }
+        };
+
+        // Build transcript cells from events
+        let transcript_cells = build_transcript_from_events(&events);
+
+        // Update only the transcript display (not conversation state)
+        self.state.transcript.cells = transcript_cells;
+        self.state.transcript.scroll.reset();
+        self.state.transcript.wrap_cache.clear();
     }
 
     fn interrupt_agent(&mut self) {
