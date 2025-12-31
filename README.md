@@ -1,25 +1,36 @@
 # ZDX
 
-An agentic TUI powered by Claude for interactive coding assistance.
+A fast, beautiful agentic coding assistant.
 
 ![zdx demo](docs/assets/demo.gif)
 
-## Why this exists
+## What it is
 
-This is a **personal learning project**, built for fun and curiosity. The goal is to explore how agentic coding tools work by building one from scratch.
+- **4 tools only:** `bash`, `read` (files + images), `edit`, `write` — everything else can be handled through bash
+- **Handoff** — AMP-style context-aware prompt generation to start fresh sessions ([learn more](https://ampcode.com/news/handoff))
+- **No MCP support** — if you need it, check out [mcporter](https://github.com/steipete/mcporter)
 
-It's not designed for public or general usage — it's focused on my own needs and what I think makes a good coding assistant. If you find it useful, great! But expect opinionated choices and features that match my workflow rather than broad compatibility.
+Good enough to build itself — I use zdx to develop zdx.
+
+## Why it exists
+
+Built because I needed something:
+- **Productive** — shortcuts, command palette, everything at my fingertips
+- **Fast and lightweight** — can spawn multiple instances when needed
+- **Pleasant to use** — beautiful and elegant, for all-day use
+
+Also a way to learn TUI development, contribute to open source, and build an AI product using AI.
 
 ## Features
 
-- **Tools:** bash, read (files + images), edit, write
-- **Streaming markdown** with syntax highlighting and table support
+- **Anthropic provider** with API key or OAuth authentication
+- **Interactive TUI** with streaming markdown, syntax highlighting, and table support
+- **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display
 - **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
 - **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
-- **Session persistence** — resume any previous conversation
-- **Handoff** — AMP-style context-aware prompt generation to start fresh sessions
+- **Session persistence** — resume or switch between previous conversations
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
 
 ## Inspiration
