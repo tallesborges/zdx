@@ -33,7 +33,8 @@ pub use transcript::{ScrollMode, ScrollState};
 
 // Re-export overlay types for backwards compatibility
 pub use crate::ui::chat::overlays::{
-    CommandPaletteState, LoginState, ModelPickerState, SessionPickerState, ThinkingPickerState,
+    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, SessionPickerState,
+    ThinkingPickerState,
 };
 
 // ============================================================================
@@ -58,6 +59,8 @@ pub enum OverlayState {
     SessionPicker(SessionPickerState),
     /// Login flow is active.
     Login(LoginState),
+    /// File picker is open (triggered by `@`).
+    FilePicker(FilePickerState),
 }
 
 impl OverlayState {
@@ -136,6 +139,22 @@ impl OverlayState {
     pub fn as_session_picker_mut(&mut self) -> Option<&mut SessionPickerState> {
         match self {
             OverlayState::SessionPicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the file picker state if active.
+    pub fn as_file_picker(&self) -> Option<&FilePickerState> {
+        match self {
+            OverlayState::FilePicker(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// Returns the file picker state mutably if active.
+    pub fn as_file_picker_mut(&mut self) -> Option<&mut FilePickerState> {
+        match self {
+            OverlayState::FilePicker(p) => Some(p),
             _ => None,
         }
     }
@@ -570,6 +589,7 @@ mod tests {
             OverlayState::ThinkingPicker(ThinkingPickerState::new(ThinkingLevel::Off)).is_active()
         );
         assert!(OverlayState::Login(LoginState::Exchanging).is_active());
+        assert!(OverlayState::FilePicker(FilePickerState::new(0)).is_active());
     }
 
     #[test]

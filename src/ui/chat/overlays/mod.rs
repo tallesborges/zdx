@@ -2,12 +2,17 @@
 //!
 //! Each overlay is self-contained: state, update handlers, and render function.
 
+pub mod file_picker;
 pub mod login;
 pub mod model_picker;
 pub mod palette;
 pub mod session_picker;
 pub mod thinking_picker;
 
+pub use file_picker::{
+    FilePickerState, close_file_picker, handle_file_picker_key, open_file_picker,
+    render_file_picker,
+};
 pub use login::{
     LoginEvent, LoginState, handle_login_key, handle_login_result, render_login_overlay,
 };

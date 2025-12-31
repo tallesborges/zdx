@@ -12,9 +12,10 @@ use crate::core::session::SessionEvent;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
 use crate::ui::chat::overlays::{
-    LoginEvent, LoginState, handle_login_key, handle_login_result, handle_model_picker_key,
-    handle_palette_key, handle_session_picker_key, handle_thinking_picker_key,
-    open_command_palette, open_model_picker, open_thinking_picker,
+    LoginEvent, LoginState, handle_file_picker_key, handle_login_key, handle_login_result,
+    handle_model_picker_key, handle_palette_key, handle_session_picker_key,
+    handle_thinking_picker_key, open_command_palette, open_file_picker, open_model_picker,
+    open_thinking_picker,
 };
 use crate::ui::chat::state::{AgentState, HandoffState, OverlayState, TuiState};
 use crate::ui::chat::view;
@@ -256,6 +257,7 @@ fn handle_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEf
         OverlayState::ModelPicker(_) => handle_model_picker_key(state, key),
         OverlayState::ThinkingPicker(_) => handle_thinking_picker_key(state, key),
         OverlayState::SessionPicker(_) => handle_session_picker_key(state, key),
+        OverlayState::FilePicker(_) => handle_file_picker_key(state, key),
         OverlayState::None => handle_main_key(state, key),
     }
 }
@@ -393,6 +395,31 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
         _ => {
             state.reset_history_navigation();
             state.input.textarea.input(key);
+
+            // Detect `@` trigger for file picker
+            if key.code == KeyCode::Char('@') && !key.modifiers.contains(KeyModifiers::CONTROL) {
+                // Find the position of the `@` we just typed
+                // It's the cursor position minus 1 (since cursor is now after the `@`)
+                let text = state.get_input_text();
+                let cursor_pos = {
+                    let (row, col) = state.input.textarea.cursor();
+                    let lines: Vec<&str> = text.lines().collect();
+                    let mut pos = 0;
+                    for (i, line) in lines.iter().enumerate() {
+                        if i < row {
+                            pos += line.len() + 1; // +1 for newline
+                        } else {
+                            pos += col;
+                            break;
+                        }
+                    }
+                    pos
+                };
+                // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
+                let trigger_pos = cursor_pos.saturating_sub(1);
+                open_file_picker(state, trigger_pos);
+            }
+
             vec![]
         }
     }
