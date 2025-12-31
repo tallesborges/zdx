@@ -9,8 +9,13 @@ zdx is a terminal-based AI coding assistant built in Rust. The codebase is organ
 ```
 src/
 ├── main.rs              # Binary entrypoint
-├── app/                 # CLI parsing + command dispatch
 ├── config.rs            # Configuration loading
+├── default_config.toml  # Default configuration template
+├── models.rs            # Model registry for TUI picker
+├── models_generated.rs  # Generated model data
+├── app/                 # CLI parsing + command dispatch
+├── bin/
+│   └── generate_models.rs  # Binary to generate model data from API
 ├── core/                # UI-agnostic domain logic
 │   ├── agent.rs         # Agent loop + event channels
 │   ├── context.rs       # Project context (AGENTS.md)
@@ -18,9 +23,14 @@ src/
 │   ├── interrupt.rs     # Signal handling
 │   └── session.rs       # Session persistence
 ├── providers/           # API clients (Anthropic, OAuth)
+│   ├── mod.rs           # Provider module exports
+│   ├── oauth.rs         # OAuth token storage
+│   └── anthropic/       # Anthropic API client
 ├── tools/               # Tool implementations (bash, edit, read, write)
 └── ui/                  # Terminal UI
     ├── exec.rs          # Non-interactive exec mode
+    ├── markdown/        # Markdown parsing and wrapping
+    ├── transcript/      # Transcript model (cells, wrapping)
     └── chat/            # Interactive TUI (Elm architecture)
 ```
 
@@ -204,6 +214,7 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         OverlayState::CommandPalette(p) => render_command_palette(frame, p, area, input_y),
         OverlayState::ModelPicker(p) => render_model_picker(frame, p, area, input_y),
         OverlayState::ThinkingPicker(p) => render_thinking_picker(frame, p, area, input_y),
+        OverlayState::SessionPicker(p) => render_session_picker(frame, p, area, input_y),
         OverlayState::Login(l) => render_login_overlay(frame, l, area),
         OverlayState::None => {}
     }
@@ -317,6 +328,7 @@ pub enum OverlayState {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
     ThinkingPicker(ThinkingPickerState),
+    SessionPicker(SessionPickerState),
     Login(LoginState),
 }
 ```
@@ -500,7 +512,11 @@ All state changes go through `update()`. Debugging is straightforward:
 
 | File | Purpose |
 |------|---------|
-| `mod.rs` | `TuiRuntime`, event loop, effect execution |
+| `mod.rs` | Entry points, module declarations |
+| `runtime/mod.rs` | `TuiRuntime`, event loop, effect dispatch |
+| `runtime/handlers.rs` | Effect handlers (session ops, agent spawn, auth) |
+| `runtime/handoff.rs` | Handoff generation handlers (subagent spawning) |
+| `transcript_build.rs` | Pure helper to build transcript cells from session events |
 | `state/mod.rs` | `TuiState` and sub-state types |
 | `state/auth.rs` | `AuthState`, `AuthStatus` |
 | `state/input.rs` | `InputState`, textarea, history navigation |
@@ -517,6 +533,7 @@ All state changes go through `update()`. Debugging is straightforward:
 | `overlays/palette.rs` | Command palette overlay |
 | `overlays/model_picker.rs` | Model picker overlay |
 | `overlays/thinking_picker.rs` | Thinking level picker overlay |
+| `overlays/session_picker.rs` | Session picker overlay |
 | `overlays/login.rs` | OAuth login flow overlay |
 
 ## Related Documentation
