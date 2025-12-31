@@ -43,131 +43,79 @@
 ### Command palette commands
 - What exists: Command registration in `commands.rs`, palette dispatch
 - ✅ Demo: Type `/model` to see model picker command
-- Gaps: Need to add "Sessions" command
+- ✅ Gaps: None (sessions command added)
 
 ---
 
-## MVP Slices (ship-shaped, demoable)
+## MVP Slices (ship-shaped, demoable) ✅ COMPLETE
 
-### Slice 1: Session picker state + render (with effect-driven loading)
+### Slice 1: Session picker state + render (with effect-driven loading) ✅
 
 **Goal**: Show a scrollable list of sessions in an overlay, loaded via effect handler
 
 **Scope checklist**:
-- [ ] Add `SessionPickerState` struct in new `src/ui/chat/overlays/session_picker.rs`:
-  ```rust
-  pub struct SessionPickerState {
-      pub sessions: Vec<SessionSummary>,
-      pub selected: usize,
-      pub offset: usize,  // scroll offset for long lists
-  }
-  ```
-- [ ] Add `SessionPicker(SessionPickerState)` variant to `OverlayState` enum
-- [ ] Add `as_session_picker()` and `as_session_picker_mut()` helpers to `OverlayState`
-- [ ] Add `UiEffect::OpenSessionPicker` variant
-- [ ] Implement effect handler in `TuiRuntime::execute_effect`:
-  - Call `list_sessions()` (I/O happens here, not in reducer)
-  - If empty, add system message "No sessions found" and don't open overlay
-  - If error, add system message with error and don't open overlay
-  - Otherwise, create `SessionPickerState` and set overlay
-- [ ] Add `render_session_picker()` that displays sessions (ID truncated + timestamp)
-  - Handle scroll offset for visible window
-  - Show "No sessions" if list is empty (shouldn't happen due to effect handler)
-- [ ] Add `close_session_picker()` function
-- [ ] Wire up Esc key to close in `handle_session_picker_key()`
-- [ ] Export from `overlays/mod.rs`
-- [ ] Add render call in `view.rs` overlay match
+- [x] Add `SessionPickerState` struct in new `src/ui/chat/overlays/session_picker.rs`
+- [x] Add `SessionPicker(SessionPickerState)` variant to `OverlayState` enum
+- [x] Add `as_session_picker()` and `as_session_picker_mut()` helpers to `OverlayState`
+- [x] Add `UiEffect::OpenSessionPicker` variant
+- [x] Implement effect handler in `TuiRuntime::execute_effect` (`open_session_picker()` method)
+- [x] Add `render_session_picker()` that displays sessions (ID truncated + timestamp)
+- [x] Add `close_session_picker()` function
+- [x] Wire up Esc key to close in `handle_session_picker_key()`
+- [x] Export from `overlays/mod.rs`
+- [x] Add render call in `view.rs` overlay match
 
-**✅ Demo**: Trigger `UiEffect::OpenSessionPicker` from reducer, see list appear, press Esc to close
-
-**Risks / failure modes**:
-- `list_sessions()` is blocking I/O — acceptable since it's fast (dir read)
-- Effect handler pattern is more complex but keeps reducer pure
+**✅ Demo**: VERIFIED - Session picker opens, shows sessions, closes with Esc
 
 ---
 
-### Slice 2: Navigation (↑/↓ with scroll)
+### Slice 2: Navigation (↑/↓ with scroll) ✅
 
 **Goal**: User can move selection up/down with automatic scroll offset management
 
 **Scope checklist**:
-- [ ] Implement Up/Down key handling in `handle_session_picker_key()`
-- [ ] Bounds clamping (don't go negative, don't exceed `sessions.len() - 1`)
-- [ ] Scroll offset management:
-  - If selected goes above visible window, decrease offset
-  - If selected goes below visible window, increase offset
-- [ ] Render highlight style on selected item (match model_picker pattern)
-- [ ] Add keyboard hints at bottom (↑↓ navigate • Enter select • Esc cancel)
+- [x] Implement Up/Down key handling in `handle_session_picker_key()` (also j/k vim keys)
+- [x] Bounds clamping (don't go negative, don't exceed `sessions.len() - 1`)
+- [x] Scroll offset management (via `session_picker_select_prev/next` helpers)
+- [x] Render highlight style on selected item (match model_picker pattern)
+- [x] Add keyboard hints at bottom (↑↓ navigate • Enter select • Esc cancel)
 
-**✅ Demo**: Open picker with 10+ sessions, press ↓ repeatedly, see list scroll, selection stays visible
-
-**Risks / failure modes**:
-- Need to calculate visible height from render area — pass through or hardcode reasonable default
+**✅ Demo**: VERIFIED - Navigation works with scroll offset management
 
 ---
 
-### Slice 3: Selection (Enter to switch with full state reset)
+### Slice 3: Selection (Enter to switch with full state reset) ✅
 
 **Goal**: User can select a session and the conversation switches to it with full fidelity
 
 **Scope checklist**:
-- [ ] Add `build_transcript_from_events()` helper to `TuiState` or `TranscriptState`:
-  ```rust
-  fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
-  ```
-  - Map `SessionEvent::Message` → `HistoryCell::User` or `HistoryCell::Assistant`
-  - Map `SessionEvent::ToolUse` + `SessionEvent::ToolResult` → `HistoryCell::Tool`
-  - Map `SessionEvent::Thinking` → `HistoryCell::Thinking`
-  - Skip `SessionEvent::Meta`, `SessionEvent::Interrupted`
-- [ ] Add `UiEffect::LoadSession { session_id: String }` variant
-- [ ] On Enter key in `handle_session_picker_key()`:
-  - If agent is running, show system message "Stop the current task first" and return (no switch)
-  - Otherwise emit `LoadSession` effect with selected session ID
-- [ ] Implement effect handler in `TuiRuntime::execute_effect`:
-  - Load events via `session::load_session(id)`
-  - Build transcript via `build_transcript_from_events()`
-  - Build messages via `session::events_to_messages()` (for API context)
-  - Build input history from user messages
-  - Reset state facets:
-    - `conversation.session` = new session
-    - `conversation.messages` = loaded messages
-    - `conversation.usage` = reset to new
-    - `transcript.cells` = loaded transcript
-    - `transcript.scroll.reset()` (or set to FollowLatest)
-    - `transcript.wrap_cache.clear()`
-    - `input.history` = loaded command history
-  - Add system message "Switched to session {id}"
-  - Close overlay
-- [ ] Handle load errors gracefully (system message, don't crash)
+- [x] Add `build_transcript_from_events()` helper (in `mod.rs` module-level function)
+  - Maps `SessionEvent::Message` → `HistoryCell::User` or `HistoryCell::Assistant`
+  - Maps `SessionEvent::ToolUse` + `SessionEvent::ToolResult` → `HistoryCell::Tool`
+  - Maps `SessionEvent::Thinking` → `HistoryCell::Thinking`
+  - Skips `SessionEvent::Meta`, `SessionEvent::Interrupted`
+- [x] Add `UiEffect::LoadSession { session_id: String }` variant
+- [x] On Enter key: block if agent is running, otherwise emit `LoadSession` effect
+- [x] Implement effect handler (`load_session()` method in `TuiRuntime`)
+  - Loads events, builds transcript, builds messages, builds input history
+  - Resets all state facets with loaded data
+  - Shows confirmation message
+- [x] Handle load errors gracefully (system message, don't crash)
 
-**✅ Demo**: Open picker, select different session, see transcript change with tools/thinking preserved
-
-**Risks / failure modes**:
-- Tool events need pairing (ToolUse + ToolResult) — handle incomplete pairs gracefully
-- Large sessions may have slight load delay — acceptable for MVP
+**✅ Demo**: VERIFIED - Session switching works with full transcript fidelity
 
 ---
 
-### Slice 4: Command palette integration
+### Slice 4: Command palette integration ✅
 
 **Goal**: User can open session picker from command palette
 
 **Scope checklist**:
-- [ ] Add "Sessions" command to `COMMANDS` in `commands.rs`:
-  ```rust
-  Command {
-      name: "sessions",
-      aliases: &["history"],
-      description: "Browse and switch sessions",
-  }
-  ```
-- [ ] Handle "sessions" in `execute_command()` — return `vec![UiEffect::OpenSessionPicker]`
-- [ ] (Optional) Add direct keyboard shortcut if a good one is available
+- [x] Add "Sessions" command to `COMMANDS` in `commands.rs` (with "history" alias)
+- [x] Handle "sessions" in `execute_command()` → returns `vec![UiEffect::OpenSessionPicker]`
+- [ ] (Optional) Add direct keyboard shortcut — deferred to polish phase
 
-**✅ Demo**: Type `/ses`, see "Sessions" command, select it, picker opens
-
-**Risks / failure modes**:
-- Shortcut conflicts — skip shortcut for MVP, add in polish
+**✅ Demo**: VERIFIED - `/sessions` or `/history` opens picker
 
 ---
 
@@ -188,15 +136,22 @@
 4. **Block switch during agent run**: Don't interrupt automatically, require user to stop first
 5. **Use SessionEvent for transcript**: Not ChatMessage, to preserve tool/thinking fidelity
 
-## Testing
+## Testing ✅ COMPLETE
 
 - Manual smoke demos per slice (as described in ✅ Demo sections)
-- Unit tests:
-  - `SessionPickerState::new()` with empty list
-  - Navigation bounds clamping
-  - `build_transcript_from_events()` preserves all cell types
+- Unit tests implemented:
+  - [x] `SessionPickerState::new()` with empty list (`test_session_picker_state_new_empty`)
+  - [x] `SessionPickerState::new()` with sessions (`test_session_picker_state_new_with_sessions`)
+  - [x] Navigation bounds clamping (`test_navigation_bounds`)
+  - [x] Scroll offset down (`test_scroll_offset_down`)
+  - [x] Scroll offset up (`test_scroll_offset_up`)
+  - [x] `build_transcript_from_events()` empty (`test_build_transcript_from_events_empty`)
+  - [x] `build_transcript_from_events()` with messages (`test_build_transcript_from_events_messages`)
+  - [x] `build_transcript_from_events()` with tool use (`test_build_transcript_from_events_tool_use`)
+  - [x] `build_transcript_from_events()` with thinking (`test_build_transcript_from_events_thinking`)
+  - [x] `build_transcript_from_events()` mixed events (`test_build_transcript_from_events_mixed`)
 - Integration test (optional):
-  - Create session, switch away, switch back, verify content
+  - [ ] Create session, switch away, switch back, verify content — deferred
 
 ---
 
@@ -237,19 +192,20 @@
 
 ---
 
-## File Changes Summary
+## File Changes Summary ✅ COMPLETE
 
-| File | Changes |
-|------|---------|
-| `src/ui/chat/overlays/session_picker.rs` | **New file** - state, handlers, render |
-| `src/ui/chat/overlays/mod.rs` | Add module + re-exports |
-| `src/ui/chat/state/mod.rs` | Add `SessionPicker` variant + accessors to `OverlayState` |
-| `src/ui/chat/effects.rs` | Add `OpenSessionPicker`, `LoadSession` variants |
-| `src/ui/chat/mod.rs` | Implement effect handlers |
-| `src/ui/chat/reducer.rs` | Wire up key handling dispatch |
-| `src/ui/chat/view.rs` | Add render call for session picker |
-| `src/ui/chat/commands.rs` | Add "sessions" command |
-| `src/ui/chat/state/transcript.rs` | Add `build_transcript_from_events()` helper |
+| File | Changes | Status |
+|------|---------|--------|
+| `src/ui/chat/overlays/session_picker.rs` | **New file** - state, handlers, render | ✅ Done |
+| `src/ui/chat/overlays/mod.rs` | Add module + re-exports | ✅ Done |
+| `src/ui/chat/state/mod.rs` | Add `SessionPicker` variant + accessors to `OverlayState` | ✅ Done |
+| `src/ui/chat/effects.rs` | Add `OpenSessionPicker`, `LoadSession` variants | ✅ Done |
+| `src/ui/chat/mod.rs` | Implement effect handlers + `build_transcript_from_events()` | ✅ Done |
+| `src/ui/chat/reducer.rs` | Wire up key handling dispatch | ✅ Done |
+| `src/ui/chat/view.rs` | Add render call for session picker | ✅ Done |
+| `src/ui/chat/commands.rs` | Add "sessions" command | ✅ Done |
+
+**Note**: `build_transcript_from_events()` was placed in `mod.rs` rather than `transcript.rs` as originally planned, which is fine since it needs access to session types and is only used by the effect handler.
 
 ---
 
