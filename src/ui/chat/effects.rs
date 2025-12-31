@@ -56,4 +56,8 @@ pub enum UiEffect {
 
     /// Load a session by ID (switch to that session).
     LoadSession { session_id: String },
+
+    /// Preview a session (show transcript without full switch).
+    /// Used during session picker navigation.
+    PreviewSession { session_id: String },
 }

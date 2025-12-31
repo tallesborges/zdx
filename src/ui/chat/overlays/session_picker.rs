@@ -38,17 +38,24 @@ pub struct SessionPickerState {
     pub selected: usize,
     /// Scroll offset for long lists.
     pub offset: usize,
+    /// Snapshot of original transcript cells for restore on Esc.
+    pub original_cells: Vec<crate::ui::transcript::HistoryCell>,
 }
 
 impl SessionPickerState {
     /// Creates a new session picker state with the given sessions.
     ///
     /// Selects the first session (most recent) by default.
-    pub fn new(sessions: Vec<SessionSummary>) -> Self {
+    /// Takes a snapshot of the current transcript cells for restore on Esc.
+    pub fn new(
+        sessions: Vec<SessionSummary>,
+        original_cells: Vec<crate::ui::transcript::HistoryCell>,
+    ) -> Self {
         Self {
             sessions,
             selected: 0,
             offset: 0,
+            original_cells,
         }
     }
 
@@ -76,21 +83,27 @@ pub fn handle_session_picker_key(
 
     match key.code {
         KeyCode::Esc => {
+            // Restore original transcript cells before closing
+            if let Some(picker) = state.overlay.as_session_picker() {
+                state.transcript.cells = picker.original_cells.clone();
+                state.transcript.scroll.reset();
+                state.transcript.wrap_cache.clear();
+            }
             close_session_picker(state);
             vec![]
         }
         KeyCode::Char('c') if ctrl => {
+            // Restore original transcript cells before closing
+            if let Some(picker) = state.overlay.as_session_picker() {
+                state.transcript.cells = picker.original_cells.clone();
+                state.transcript.scroll.reset();
+                state.transcript.wrap_cache.clear();
+            }
             close_session_picker(state);
             vec![]
         }
-        KeyCode::Up | KeyCode::Char('k') => {
-            session_picker_select_prev(state);
-            vec![]
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            session_picker_select_next(state);
-            vec![]
-        }
+        KeyCode::Up | KeyCode::Char('k') => session_picker_select_prev(state),
+        KeyCode::Down | KeyCode::Char('j') => session_picker_select_next(state),
         KeyCode::Enter => {
             // Block session switch while agent is running (keep overlay open)
             if state.agent_state.is_running() {
@@ -120,7 +133,7 @@ pub fn handle_session_picker_key(
     }
 }
 
-fn session_picker_select_prev(state: &mut TuiState) {
+fn session_picker_select_prev(state: &mut TuiState) -> Vec<UiEffect> {
     if let Some(picker) = state.overlay.as_session_picker_mut()
         && picker.selected > 0
     {
@@ -130,9 +143,20 @@ fn session_picker_select_prev(state: &mut TuiState) {
             picker.offset = picker.selected;
         }
     }
+
+    // Emit preview effect for newly selected session
+    if let Some(picker) = state.overlay.as_session_picker()
+        && let Some(session) = picker.selected_session()
+    {
+        vec![UiEffect::PreviewSession {
+            session_id: session.id.clone(),
+        }]
+    } else {
+        vec![]
+    }
 }
 
-fn session_picker_select_next(state: &mut TuiState) {
+fn session_picker_select_next(state: &mut TuiState) -> Vec<UiEffect> {
     if let Some(picker) = state.overlay.as_session_picker_mut()
         && picker.selected < picker.sessions.len().saturating_sub(1)
     {
@@ -141,6 +165,17 @@ fn session_picker_select_next(state: &mut TuiState) {
         if picker.selected >= picker.offset + VISIBLE_HEIGHT {
             picker.offset = picker.selected - VISIBLE_HEIGHT + 1;
         }
+    }
+
+    // Emit preview effect for newly selected session
+    if let Some(picker) = state.overlay.as_session_picker()
+        && let Some(session) = picker.selected_session()
+    {
+        vec![UiEffect::PreviewSession {
+            session_id: session.id.clone(),
+        }]
+    } else {
+        vec![]
     }
 }
 
@@ -291,10 +326,11 @@ mod tests {
 
     #[test]
     fn test_session_picker_state_new_empty() {
-        let state = SessionPickerState::new(vec![]);
+        let state = SessionPickerState::new(vec![], vec![]);
         assert_eq!(state.selected, 0);
         assert_eq!(state.offset, 0);
         assert!(state.sessions.is_empty());
+        assert!(state.original_cells.is_empty());
         assert!(state.selected_session().is_none());
     }
 
@@ -310,10 +346,24 @@ mod tests {
                 modified: None,
             },
         ];
-        let state = SessionPickerState::new(sessions);
+        let state = SessionPickerState::new(sessions, vec![]);
         assert_eq!(state.selected, 0);
         assert_eq!(state.sessions.len(), 2);
         assert_eq!(state.selected_session().unwrap().id, "session-1");
+    }
+
+    #[test]
+    fn test_session_picker_stores_original_cells() {
+        let sessions = vec![SessionSummary {
+            id: "s1".to_string(),
+            modified: None,
+        }];
+        let original_cells = vec![
+            crate::ui::transcript::HistoryCell::user("test message"),
+            crate::ui::transcript::HistoryCell::assistant("response"),
+        ];
+        let state = SessionPickerState::new(sessions, original_cells.clone());
+        assert_eq!(state.original_cells.len(), 2);
     }
 
     #[test]
@@ -332,7 +382,7 @@ mod tests {
                 modified: None,
             },
         ];
-        let mut state = SessionPickerState::new(sessions);
+        let mut state = SessionPickerState::new(sessions, vec![]);
 
         // At start, can't go up
         assert_eq!(state.selected, 0);
@@ -358,6 +408,7 @@ mod tests {
                     modified: None,
                 })
                 .collect(),
+            vec![],
         );
 
         assert_eq!(picker.selected, 0);
@@ -386,6 +437,7 @@ mod tests {
                     modified: None,
                 })
                 .collect(),
+            vec![],
         );
 
         // Start scrolled down

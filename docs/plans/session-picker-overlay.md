@@ -157,10 +157,22 @@
 
 ## Polish Phases (after MVP)
 
-### Phase 1: Preview on navigate
-- Replace current transcript content while navigating (temporary)
-- Store original session state to restore on Esc
-- ✅ Check-in: Navigate sessions, see preview, Esc restores original
+### Phase 1: Preview on navigate ✅
+
+**Goal**: Show live preview of session transcript when navigating the picker
+
+**Scope checklist**:
+- [x] Add `original_cells` field to `SessionPickerState` for restore on Esc
+- [x] Update `SessionPickerState::new()` to take and store original cells snapshot
+- [x] Add `UiEffect::PreviewSession { session_id }` effect
+- [x] Update `open_session_picker()` to pass cells snapshot and trigger initial preview
+- [x] Update navigation handlers to emit `PreviewSession` effect on selection change
+- [x] Implement `preview_session()` effect handler (loads events, updates transcript display only)
+- [x] Update Esc handler to restore original cells from snapshot
+- [x] Update Ctrl+C handler to restore original cells from snapshot
+- [x] Add test for original cells storage
+
+**✅ Demo**: Navigate sessions with ↑/↓, see preview update, Esc restores original
 
 ### Phase 2: Visual improvements
 - Show first message preview in picker (truncated)
