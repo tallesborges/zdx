@@ -100,7 +100,7 @@ ZDX solves this with a boring, reliable core:
 
 ## 8) Sessions
 
-Sessions are append-only **JSONL** event logs.
+Sessions are append-only **JSONL** event logs (conversation events are never modified or deleted).
 
 ### Storage
 
@@ -110,10 +110,14 @@ Sessions are append-only **JSONL** event logs.
 
 ### Format
 
-- First line is `meta` with `schema_version`.
+- First line is `meta` with `schema_version` and optional `title`.
 - Timestamps are RFC3339 UTC.
-- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`.
+- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `thinking`.
 - Sessions remain readable even if interrupted mid-stream.
+
+### Metadata Updates
+
+The `meta` line (first line only) may be rewritten atomically to update session metadata (e.g., `title`). This uses write-to-temp-then-rename for safety. Conversation events after the meta line are never modified.
 
 ---
 
