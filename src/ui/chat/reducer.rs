@@ -13,8 +13,8 @@ use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
 use crate::ui::chat::overlays::{
     LoginEvent, LoginState, handle_login_key, handle_login_result, handle_model_picker_key,
-    handle_palette_key, handle_session_picker_key, handle_thinking_picker_key, open_command_palette,
-    open_model_picker, open_thinking_picker,
+    handle_palette_key, handle_session_picker_key, handle_thinking_picker_key,
+    open_command_palette, open_model_picker, open_thinking_picker,
 };
 use crate::ui::chat::state::{AgentState, HandoffState, OverlayState, TuiState};
 use crate::ui::chat::view;
