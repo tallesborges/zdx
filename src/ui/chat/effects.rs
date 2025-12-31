@@ -53,4 +53,7 @@ pub enum UiEffect {
 
     /// Open the session picker overlay (loads session list via I/O).
     OpenSessionPicker,
+
+    /// Load a session by ID (switch to that session).
+    LoadSession { session_id: String },
 }

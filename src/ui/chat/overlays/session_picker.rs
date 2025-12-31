@@ -92,10 +92,29 @@ pub fn handle_session_picker_key(
             vec![]
         }
         KeyCode::Enter => {
-            // Selection will be implemented in Slice 3
-            // For now, just close the picker
-            close_session_picker(state);
-            vec![]
+            // Block session switch while agent is running (keep overlay open)
+            if state.agent_state.is_running() {
+                state
+                    .transcript
+                    .cells
+                    .push(crate::ui::transcript::HistoryCell::system(
+                        "Stop the current task first.",
+                    ));
+                return vec![];
+            }
+
+            // Get the selected session ID before closing
+            if let Some(picker) = state.overlay.as_session_picker()
+                && let Some(session) = picker.selected_session()
+            {
+                let session_id = session.id.clone();
+                close_session_picker(state);
+                vec![UiEffect::LoadSession { session_id }]
+            } else {
+                // No session selected (empty list), just close
+                close_session_picker(state);
+                vec![]
+            }
         }
         _ => vec![],
     }
