@@ -450,39 +450,40 @@ pub fn events_to_messages(
     let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
     let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
 
-    /// Flushes pending assistant content (thinking + tool_use) into messages.
+    /// Flushes pending assistant content (thinking + tool_use) and tool results into messages.
     fn flush_pending_assistant(
         messages: &mut Vec<ChatMessage>,
         pending_thinking: &mut Vec<(String, Option<String>)>,
         pending_tool_uses: &mut Vec<(String, String, Value)>,
         pending_tool_results: &mut Vec<crate::tools::ToolResult>,
     ) {
-        if pending_thinking.is_empty() && pending_tool_uses.is_empty() {
-            return;
+        // First, flush any pending thinking/tool_use as an assistant message
+        if !pending_thinking.is_empty() || !pending_tool_uses.is_empty() {
+            let mut blocks: Vec<ChatContentBlock> = Vec::new();
+
+            // Add thinking blocks first
+            for (content, signature) in std::mem::take(pending_thinking) {
+                blocks.push(ChatContentBlock::Thinking {
+                    thinking: content,
+                    // Use empty string if signature is missing (aborted thinking)
+                    // The API serialization will convert this to a text block
+                    signature: signature.unwrap_or_default(),
+                });
+            }
+
+            // Add tool_use blocks
+            for (id, name, input) in std::mem::take(pending_tool_uses) {
+                blocks.push(ChatContentBlock::ToolUse { id, name, input });
+            }
+
+            if !blocks.is_empty() {
+                messages.push(ChatMessage::assistant_blocks(blocks));
+            }
         }
 
-        let mut blocks: Vec<ChatContentBlock> = Vec::new();
-
-        // Add thinking blocks first
-        for (content, signature) in std::mem::take(pending_thinking) {
-            blocks.push(ChatContentBlock::Thinking {
-                thinking: content,
-                // Use empty string if signature is missing (aborted thinking)
-                // The API serialization will convert this to a text block
-                signature: signature.unwrap_or_default(),
-            });
-        }
-
-        // Add tool_use blocks
-        for (id, name, input) in std::mem::take(pending_tool_uses) {
-            blocks.push(ChatContentBlock::ToolUse { id, name, input });
-        }
-
-        if !blocks.is_empty() {
-            messages.push(ChatMessage::assistant_blocks(blocks));
-        }
-
-        // Add tool results as a separate user message
+        // Then, flush any pending tool results as a user message
+        // (This is separate because tool_results may need to be flushed
+        // even when thinking/tool_use have already been flushed)
         if !pending_tool_results.is_empty() {
             messages.push(ChatMessage::tool_results(std::mem::take(
                 pending_tool_results,
@@ -496,20 +497,56 @@ pub fn events_to_messages(
                 // Skip meta events
             }
             SessionEvent::Message { role, text, .. } => {
-                // Flush any pending assistant content before adding a new message
-                flush_pending_assistant(
-                    &mut messages,
-                    &mut pending_thinking,
-                    &mut pending_tool_uses,
-                    &mut pending_tool_results,
-                );
+                // For assistant messages with pending thinking (but no pending tool uses),
+                // combine them into one message. The API requires thinking blocks and
+                // subsequent content in the same turn.
+                //
+                // If there are pending tool uses, the thinking belongs with those,
+                // so we flush normally (thinking + tool_use go together).
+                if role == "assistant"
+                    && !pending_thinking.is_empty()
+                    && pending_tool_uses.is_empty()
+                {
+                    // First, flush any pending tool results as a user message
+                    // (This happens when tool_result was processed before this thinking block)
+                    if !pending_tool_results.is_empty() {
+                        messages.push(ChatMessage::tool_results(std::mem::take(
+                            &mut pending_tool_results,
+                        )));
+                    }
 
-                // If this is an assistant message and we have it as a text message,
-                // convert it to blocks format to allow appending thinking
-                messages.push(ChatMessage {
-                    role,
-                    content: MessageContent::Text(text),
-                });
+                    let mut blocks: Vec<ChatContentBlock> = Vec::new();
+
+                    // Add thinking blocks first
+                    for (content, signature) in std::mem::take(&mut pending_thinking) {
+                        blocks.push(ChatContentBlock::Thinking {
+                            thinking: content,
+                            // Use empty string if signature is missing (aborted thinking)
+                            // The API serialization will convert this to a text block
+                            signature: signature.unwrap_or_default(),
+                        });
+                    }
+
+                    // Add the text block
+                    if !text.is_empty() {
+                        blocks.push(ChatContentBlock::Text(text));
+                    }
+
+                    messages.push(ChatMessage::assistant_blocks(blocks));
+                } else {
+                    // Flush any pending assistant content before adding a new message
+                    flush_pending_assistant(
+                        &mut messages,
+                        &mut pending_thinking,
+                        &mut pending_tool_uses,
+                        &mut pending_tool_results,
+                    );
+
+                    messages.push(ChatMessage {
+                        role,
+                        content: MessageContent::Text(text),
+                    });
+                }
             }
             SessionEvent::Thinking {
                 content, signature, ..
@@ -527,6 +564,16 @@ pub fn events_to_messages(
                 ok,
                 ..
             } => {
+                // Flush pending assistant content (thinking + tool_use) before adding results.
+                // This ensures the tool_use assistant message is closed, so any subsequent
+                // thinking blocks belong to the next assistant turn, not the tool_use turn.
+                flush_pending_assistant(
+                    &mut messages,
+                    &mut pending_thinking,
+                    &mut pending_tool_uses,
+                    &mut pending_tool_results,
+                );
+
                 pending_tool_results.push(crate::tools::ToolResult {
                     tool_use_id,
                     content: crate::tools::ToolResultContent::Text(
@@ -892,6 +939,128 @@ mod tests {
             assert!(matches!(&blocks[1], ChatContentBlock::ToolUse { .. }));
         } else {
             panic!("Expected Blocks content");
+        }
+    }
+
+    #[test]
+    fn test_events_to_messages_thinking_then_text() {
+        // Test case for the bug: thinking followed directly by assistant text (no tool use)
+        // This should produce a SINGLE assistant message with [thinking, text] blocks,
+        // NOT two separate messages. The API rejects modifications to thinking blocks
+        // in the latest assistant message, so they must be in the same message.
+        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+
+        let events = vec![
+            SessionEvent::user_message("explain this"),
+            SessionEvent::thinking("Let me analyze...".to_string(), Some("sig456".to_string())),
+            SessionEvent::assistant_message("Here's my explanation."),
+        ];
+
+        let messages = events_to_messages(events);
+
+        // user + assistant(thinking + text) = 2 messages (NOT 3!)
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+
+        // Second message should be assistant with BOTH thinking AND text blocks
+        assert_eq!(messages[1].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[1].content {
+            assert_eq!(blocks.len(), 2, "Should have 2 blocks: thinking + text");
+            assert!(
+                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
+                    if thinking == "Let me analyze..." && signature == "sig456"
+                ),
+                "First block should be thinking"
+            );
+            assert!(
+                matches!(&blocks[1], ChatContentBlock::Text(text) if text == "Here's my explanation."),
+                "Second block should be text"
+            );
+        } else {
+            panic!("Expected Blocks content, got {:?}", messages[1].content);
+        }
+    }
+
+    #[test]
+    fn test_events_to_messages_tool_use_then_thinking() {
+        // Regression test for the bug: when a tool call is followed by another thinking block,
+        // the second thinking must belong to the FINAL assistant message, not the tool_use message.
+        //
+        // Sequence: user → thinking1 → tool_use → tool_result → thinking2 → assistant_text
+        //
+        // Expected messages:
+        // 1. User: "question"
+        // 2. Assistant: [Thinking1, ToolUse]
+        // 3. User: [ToolResult]
+        // 4. Assistant: [Thinking2, Text]
+        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+
+        let events = vec![
+            SessionEvent::user_message("run a command"),
+            SessionEvent::thinking("Let me run this...".to_string(), Some("sig1".to_string())),
+            SessionEvent::tool_use("t1", "bash", json!({"command": "echo hello"})),
+            SessionEvent::tool_result("t1", json!({"stdout": "hello\n"}), true),
+            SessionEvent::thinking(
+                "Now let me explain...".to_string(),
+                Some("sig2".to_string()),
+            ),
+            SessionEvent::assistant_message("The command output was 'hello'."),
+        ];
+
+        let messages = events_to_messages(events);
+
+        // user + assistant(thinking1 + tool_use) + user(tool_result) + assistant(thinking2 + text) = 4
+        assert_eq!(messages.len(), 4, "Should have 4 messages");
+
+        // Message 0: User
+        assert_eq!(messages[0].role, "user");
+
+        // Message 1: Assistant with thinking1 + tool_use
+        assert_eq!(messages[1].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[1].content {
+            assert_eq!(blocks.len(), 2, "First assistant should have 2 blocks");
+            assert!(
+                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
+                    if thinking == "Let me run this..." && signature == "sig1"
+                ),
+                "First block should be thinking1"
+            );
+            assert!(
+                matches!(&blocks[1], ChatContentBlock::ToolUse { name, .. } if name == "bash"),
+                "Second block should be tool_use"
+            );
+        } else {
+            panic!("Expected Blocks content for message 1");
+        }
+
+        // Message 2: User with tool_result
+        assert_eq!(messages[2].role, "user");
+
+        // Message 3: Assistant with thinking2 + text (THE KEY ASSERTION)
+        assert_eq!(messages[3].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[3].content {
+            assert_eq!(
+                blocks.len(),
+                2,
+                "Final assistant should have 2 blocks: thinking2 + text"
+            );
+            assert!(
+                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
+                    if thinking == "Now let me explain..." && signature == "sig2"
+                ),
+                "First block should be thinking2 (not attached to tool_use message!)"
+            );
+            assert!(
+                matches!(&blocks[1], ChatContentBlock::Text(text)
+                    if text == "The command output was 'hello'."
+                ),
+                "Second block should be text"
+            );
+        } else {
+            panic!(
+                "Expected Blocks content for message 3, got {:?}",
+                messages[3].content
+            );
         }
     }
 
