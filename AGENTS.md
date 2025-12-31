@@ -105,6 +105,7 @@
 ## Docs
 
 - `docs/SPEC.md`: contracts (what/behavior)
+- `docs/ARCHITECTURE.md`: system architecture and design
 - `docs/adr/`: durable decisions (why)
 - `docs/plans/`: optional commit-sized plans (how)
 
@@ -141,3 +142,4 @@ Use this to fetch context from a previous conversation when needed.
 - **Delete a file** → Remove it from "Where things are"
 - **Change build/run/test workflows** → Update "Build / run"
 - **Add new conventions** → Document here or in scoped `AGENTS.md` files
+- **Change system architecture** → Update `docs/ARCHITECTURE.md` (module relationships, data flow, component boundaries, or design patterns)
