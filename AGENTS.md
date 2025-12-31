@@ -5,8 +5,10 @@
 ## Where things are
 
 - `src/main.rs`: binary entrypoint (delegates to `src/app/`)
+- `src/default_config.toml`: default configuration template
 - `src/app/`: CLI arguments + command dispatch
   - `src/app/mod.rs`: clap structs + dispatch
+  - `src/app/commands/mod.rs`: command module exports
   - `src/app/commands/chat.rs`: chat command handler (includes piped stdin fallback)
   - `src/app/commands/exec.rs`: exec command handler
   - `src/app/commands/sessions.rs`: list/show/resume sessions
@@ -17,12 +19,14 @@
 - `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
 - `src/bin/generate_models.rs`: binary to generate model data from API
 - `src/core/`: UI-agnostic domain + runtime
+  - `src/core/mod.rs`: core module exports
   - `src/core/events.rs`: agent event types for streaming
   - `src/core/context.rs`: project context loading (AGENTS.md files)
   - `src/core/interrupt.rs`: signal handling
   - `src/core/agent.rs`: agent loop + event channels
   - `src/core/session.rs`: session persistence
 - `src/ui/`: terminal UI
+  - `src/ui/mod.rs`: UI module exports
   - `src/ui/exec.rs`: streamed stdout/stderr rendering + exec mode wrapper
   - `src/ui/chat/`: interactive TUI (Elm-like architecture)
     - `src/ui/chat/mod.rs`: entry points (run_interactive_chat) + module declarations
@@ -59,8 +63,14 @@
     - `src/ui/transcript/cell.rs`: HistoryCell + rendering
     - `src/ui/transcript/wrap.rs`: wrapping + wrap cache
     - `src/ui/transcript/style.rs`: transcript style types
-- `src/tools/`: tool implementations + schemas (bash, edit, read, write)
+- `src/tools/`: tool implementations + schemas
+  - `src/tools/mod.rs`: tool module exports + tool registry
+  - `src/tools/bash.rs`: bash/shell command tool
+  - `src/tools/edit.rs`: file edit tool
+  - `src/tools/read.rs`: file read tool
+  - `src/tools/write.rs`: file write tool
 - `src/providers/`: provider clients
+  - `src/providers/mod.rs`: provider module exports
   - `src/providers/anthropic/`: Anthropic API client
     - `src/providers/anthropic/mod.rs`: public re-exports
     - `src/providers/anthropic/auth.rs`: auth resolution + config
