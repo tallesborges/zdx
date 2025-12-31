@@ -17,8 +17,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::models::ModelOption;
 use crate::ui::chat::overlays::{
-    render_command_palette, render_login_overlay, render_model_picker, render_session_picker,
-    render_thinking_picker,
+    render_command_palette, render_file_picker, render_login_overlay, render_model_picker,
+    render_session_picker, render_thinking_picker,
 };
 use crate::ui::chat::selection::SelectionState;
 use crate::ui::chat::state::{AgentState, AuthStatus, OverlayState, SessionUsage, TuiState};
@@ -272,6 +272,9 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
         }
         OverlayState::SessionPicker(picker) => {
             render_session_picker(frame, picker, area, chunks[1].y);
+        }
+        OverlayState::FilePicker(picker) => {
+            render_file_picker(frame, picker, area, chunks[1].y);
         }
         OverlayState::Login(login_state) => {
             render_login_overlay(frame, login_state, area);
