@@ -25,7 +25,11 @@
 - `src/ui/`: terminal UI
   - `src/ui/exec.rs`: streamed stdout/stderr rendering + exec mode wrapper
   - `src/ui/chat/`: interactive TUI (Elm-like architecture)
-    - `src/ui/chat/mod.rs`: TuiRuntime - owns terminal, runs event loop, executes effects
+    - `src/ui/chat/mod.rs`: entry points (run_interactive_chat) + module declarations
+    - `src/ui/chat/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
+    - `src/ui/chat/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
+    - `src/ui/chat/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
+    - `src/ui/chat/transcript_build.rs`: pure helper to build transcript cells from session events
     - `src/ui/chat/state/mod.rs`: TuiState - all app state (no terminal)
     - `src/ui/chat/state/auth.rs`: auth status + login flow state
     - `src/ui/chat/state/input.rs`: input editor state

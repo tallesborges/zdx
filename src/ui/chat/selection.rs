@@ -240,6 +240,11 @@ impl SelectionState {
         self.clear_at = Some(Instant::now() + SELECTION_CLEAR_DELAY);
     }
 
+    /// Returns true if a clear is scheduled (copy visual feedback pending).
+    pub fn has_pending_clear(&self) -> bool {
+        self.clear_at.is_some()
+    }
+
     /// Checks if the selection should be cleared and clears it if so.
     ///
     /// Returns true if the selection was cleared.
