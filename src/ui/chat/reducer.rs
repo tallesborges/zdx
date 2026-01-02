@@ -429,6 +429,13 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
             return vec![];
         }
         state.clear_input();
+
+        // Show status in transcript (state mutation happens in reducer)
+        state.transcript.cells.push(HistoryCell::system(format!(
+            "Generating handoff for goal: \"{}\"...",
+            text
+        )));
+
         return vec![UiEffect::StartHandoff { goal: text }];
     }
 
@@ -444,6 +451,16 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
         }
         state.input.handoff = HandoffState::Idle;
         state.clear_input();
+
+        // Clear state (like /new) then add user message
+        state.reset_conversation();
+        state.input.history.push(text.clone());
+        state.transcript.cells.push(HistoryCell::user(&text));
+        state
+            .conversation
+            .messages
+            .push(crate::providers::anthropic::ChatMessage::user(&text));
+
         return vec![UiEffect::HandoffSubmit { prompt: text }];
     }
 
@@ -562,12 +579,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
-    state.transcript.cells.clear();
-    state.conversation.messages.clear();
-    state.input.history.clear();
-    state.transcript.scroll.reset();
-    state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
-    state.transcript.wrap_cache.clear();
+    state.reset_conversation();
 
     if state.conversation.session.is_some() {
         vec![UiEffect::CreateNewSession]

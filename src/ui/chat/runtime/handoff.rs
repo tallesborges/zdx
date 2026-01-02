@@ -4,13 +4,9 @@
 
 use tokio::sync::mpsc;
 
-use super::handlers::{
-    create_session_and_show_context, push_system, push_warning, spawn_agent_turn,
-};
+use super::handlers::{create_session_and_show_context, push_warning, spawn_agent_turn};
 use crate::core::session::SessionEvent;
-use crate::providers::anthropic::ChatMessage;
-use crate::ui::chat::state::{HandoffState, SessionUsage, TuiState};
-use crate::ui::transcript::HistoryCell;
+use crate::ui::chat::state::{HandoffState, TuiState};
 
 /// Timeout for handoff generation subagent (2 minutes).
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
@@ -37,36 +33,30 @@ written as if the user is starting a fresh conversation with a new agent."#
     )
 }
 
-/// Executes a handoff submit: creates new session and sends prompt as first message.
+/// Executes a handoff submit: creates new session and starts agent turn.
+///
+/// This is a pure I/O effect handler - state mutations (clearing state, adding
+/// user message to transcript/conversation) happen in the reducer before this
+/// effect is executed.
 pub fn execute_handoff_submit(state: &mut TuiState, prompt: &str) {
-    // 1. Clear state (like /new)
-    state.transcript.cells.clear();
-    state.conversation.messages.clear();
-    state.input.history.clear();
-    state.transcript.scroll.reset();
-    state.conversation.usage = SessionUsage::new();
-    state.transcript.wrap_cache.clear();
-
-    // 2. Create new session (continue even if it fails - user can still chat)
+    // 1. Create new session (continue even if it fails - user can still chat)
     let _ = create_session_and_show_context(state);
 
-    // 3. Add user message to transcript and conversation
-    state.input.history.push(prompt.to_string());
-    state.transcript.cells.push(HistoryCell::user(prompt));
-    state.conversation.messages.push(ChatMessage::user(prompt));
-
-    // 4. Save user message to session
+    // 2. Save user message to session (session now exists from step 1)
     if let Some(ref mut s) = state.conversation.session
         && let Err(e) = s.append(&SessionEvent::user_message(prompt))
     {
         push_warning(state, "Warning: Failed to save session", e);
     }
 
-    // 5. Start agent turn
+    // 3. Start agent turn
     spawn_agent_turn(state);
 }
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
+///
+/// This is a pure I/O effect handler - state mutations (like showing status in
+/// transcript) happen in the reducer before this effect is executed.
 pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &str) {
     use tokio::process::Command;
     use tokio::sync::oneshot;
@@ -77,18 +67,12 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
     let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
 
-    // Transition to Generating state with all necessary data
+    // Transition to Generating state with channel receivers for async polling
     state.input.handoff = HandoffState::Generating {
         goal: goal.to_string(),
         rx,
         cancel_tx,
     };
-
-    // Show status in transcript
-    push_system(
-        state,
-        format!("Generating handoff for goal: \"{}\"...", goal),
-    );
 
     tokio::spawn(async move {
         // Get the current executable path
@@ -103,8 +87,9 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         };
 
         // Spawn the subagent process (async)
+        // Args order matches spec: ["exec", "-p", &generation_prompt, "--no-save"]
         let child = match Command::new(exe)
-            .args(["--no-save", "exec", "-p", &generation_prompt])
+            .args(["exec", "-p", &generation_prompt, "--no-save"])
             .current_dir(&root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

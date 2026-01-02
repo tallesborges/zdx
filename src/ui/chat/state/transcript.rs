@@ -318,6 +318,15 @@ impl TranscriptState {
         Self::default()
     }
 
+    /// Resets transcript to empty state (for /new, handoff submit).
+    ///
+    /// Clears cells, scroll, and wrap cache. Keeps viewport/terminal size.
+    pub fn reset(&mut self) {
+        self.cells.clear();
+        self.scroll.reset();
+        self.wrap_cache.clear();
+    }
+
     /// Scrolls up by the given number of lines.
     pub fn scroll_up(&mut self, lines: usize) {
         self.scroll.scroll_up(lines, self.viewport_height);
