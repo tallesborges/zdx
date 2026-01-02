@@ -452,15 +452,8 @@ fn submit_input(state: &mut TuiState) -> Vec<UiEffect> {
         state.input.handoff = HandoffState::Idle;
         state.clear_input();
 
-        // Clear state (like /new) - state mutations happen in reducer
-        state.transcript.cells.clear();
-        state.conversation.messages.clear();
-        state.input.history.clear();
-        state.transcript.scroll.reset();
-        state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
-        state.transcript.wrap_cache.clear();
-
-        // Add user message to transcript and conversation
+        // Clear state (like /new) then add user message
+        state.reset_conversation();
         state.input.history.push(text.clone());
         state.transcript.cells.push(HistoryCell::user(&text));
         state
@@ -586,12 +579,7 @@ fn execute_new(state: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
-    state.transcript.cells.clear();
-    state.conversation.messages.clear();
-    state.input.history.clear();
-    state.transcript.scroll.reset();
-    state.conversation.usage = crate::ui::chat::state::SessionUsage::new();
-    state.transcript.wrap_cache.clear();
+    state.reset_conversation();
 
     if state.conversation.session.is_some() {
         vec![UiEffect::CreateNewSession]

@@ -370,6 +370,17 @@ impl TuiState {
     pub fn reset_history_navigation(&mut self) {
         self.input.reset_navigation();
     }
+
+    /// Resets conversation state for a new session.
+    ///
+    /// Clears transcript, messages, usage, and input history.
+    /// Does NOT clear the session handle - a new session should be
+    /// created via effect after calling this.
+    pub fn reset_conversation(&mut self) {
+        self.transcript.reset();
+        self.conversation.reset();
+        self.input.clear_history();
+    }
 }
 
 #[cfg(test)]
