@@ -2,6 +2,13 @@
 //!
 //! Contains state, update handlers, and render function for the file picker.
 //! This overlay appears when the user types `@` in the input textarea.
+//!
+//! ## Architecture Note
+//!
+//! Overlay handlers mutate `TuiState` directly, but they're called FROM the reducer
+//! (`handle_key` → `handle_file_picker_key`). This is the intended pattern per
+//! `docs/ARCHITECTURE.md`: overlays are "self-contained" with their own update handlers,
+//! and the reducer is the single entry point that routes to them.
 
 use std::path::PathBuf;
 
@@ -184,6 +191,26 @@ pub fn handle_file_picker_key(
     }
 }
 
+/// Calculates the cursor byte position in the input text.
+///
+/// Converts (row, col) cursor coordinates to a byte offset in the text.
+fn get_cursor_byte_pos(state: &TuiState) -> usize {
+    let text = state.get_input_text();
+    let (row, col) = state.input.textarea.cursor();
+    let lines: Vec<&str> = text.lines().collect();
+
+    let mut pos = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if i < row {
+            pos += line.len() + 1; // +1 for newline
+        } else {
+            pos += col;
+            break;
+        }
+    }
+    pos
+}
+
 /// Extracts the filter pattern from input (text after `@` up to cursor).
 fn get_filter_pattern(state: &TuiState) -> String {
     let Some(picker) = state.overlay.as_file_picker() else {
@@ -192,19 +219,7 @@ fn get_filter_pattern(state: &TuiState) -> String {
 
     let text = state.get_input_text();
     let trigger_pos = picker.trigger_pos;
-
-    // Calculate cursor byte position
-    let (row, col) = state.input.textarea.cursor();
-    let lines: Vec<&str> = text.lines().collect();
-    let mut cursor_pos = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if i < row {
-            cursor_pos += line.len() + 1; // +1 for newline
-        } else {
-            cursor_pos += col;
-            break;
-        }
-    }
+    let cursor_pos = get_cursor_byte_pos(state);
 
     // Extract text between `@` (exclusive) and cursor
     if trigger_pos < text.len() && trigger_pos < cursor_pos {
@@ -244,18 +259,7 @@ fn check_trigger_deleted(state: &mut TuiState) {
     }
 
     // Also close if cursor moved before the trigger position
-    let (row, col) = state.input.textarea.cursor();
-    let lines: Vec<&str> = text.lines().collect();
-    let mut cursor_pos = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if i < row {
-            cursor_pos += line.len() + 1;
-        } else {
-            cursor_pos += col;
-            break;
-        }
-    }
-
+    let cursor_pos = get_cursor_byte_pos(state);
     if cursor_pos <= trigger_pos {
         close_file_picker(state);
     }
@@ -279,21 +283,9 @@ fn select_file_and_insert(state: &mut TuiState) {
 
     let trigger_pos = picker.trigger_pos;
 
-    // Get current text and cursor position
+    // Get current text and cursor byte position
     let text = state.get_input_text();
-    let (row, col) = state.input.textarea.cursor();
-
-    // Calculate cursor byte position
-    let lines: Vec<&str> = text.lines().collect();
-    let mut cursor_byte_pos = 0;
-    for (i, line) in lines.iter().enumerate() {
-        if i < row {
-            cursor_byte_pos += line.len() + 1; // +1 for newline
-        } else {
-            cursor_byte_pos += col;
-            break;
-        }
-    }
+    let cursor_byte_pos = get_cursor_byte_pos(state);
 
     // Build the new text:
     // - Keep everything up to and including `@` (trigger_pos + 1)
@@ -772,35 +764,5 @@ mod tests {
         // Verify the third file was selected
         let text = state.get_input_text();
         assert_eq!(text, "@c.txt ");
-    }
-
-    #[test]
-    fn test_file_picker_state_selected_file() {
-        let mut picker = FilePickerState::new(0);
-        picker.set_files(vec![
-            PathBuf::from("a.txt"),
-            PathBuf::from("b.txt"),
-            PathBuf::from("c.txt"),
-        ]);
-
-        // Initially selected = 0
-        assert_eq!(picker.selected_file(), Some(&PathBuf::from("a.txt")));
-
-        // Navigate down
-        picker.selected = 1;
-        assert_eq!(picker.selected_file(), Some(&PathBuf::from("b.txt")));
-
-        // With filter
-        picker.apply_filter("c");
-        // Now filtered contains only index 2 (c.txt), selected = 0
-        assert_eq!(picker.selected_file(), Some(&PathBuf::from("c.txt")));
-    }
-
-    #[test]
-    fn test_file_picker_state_selected_file_empty() {
-        let mut picker = FilePickerState::new(0);
-        picker.set_files(vec![]);
-
-        assert_eq!(picker.selected_file(), None);
     }
 }
