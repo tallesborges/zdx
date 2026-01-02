@@ -43,6 +43,20 @@ impl SessionState {
             usage: SessionUsage::new(),
         }
     }
+
+    /// Resets conversation state, clearing messages and usage.
+    ///
+    /// Does NOT clear the session handle - use `reset_all()` for that.
+    pub fn reset(&mut self) {
+        self.messages.clear();
+        self.usage = SessionUsage::new();
+    }
+
+    /// Resets all state including session handle.
+    pub fn reset_all(&mut self) {
+        self.session = None;
+        self.reset();
+    }
 }
 
 /// Token usage for the current session.

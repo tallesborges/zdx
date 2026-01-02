@@ -138,6 +138,12 @@ impl InputState {
         self.draft = None;
     }
 
+    /// Clears command history (for /new, handoff submit).
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+        self.reset_navigation();
+    }
+
     /// Returns true if up arrow should navigate history (not move cursor).
     pub fn should_navigate_up(&self) -> bool {
         if self.history.is_empty() {
