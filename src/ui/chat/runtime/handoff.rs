@@ -117,9 +117,9 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         };
 
         // Spawn the subagent process (async)
-        // Args order: exec -m <model> -t <thinking> -p <prompt> --no-save
+        // Args order: --no-save exec -m <model> -t <thinking> -p <prompt>
         let child = match Command::new(exe)
-            .args(["exec", "-m", HANDOFF_MODEL, "-t", HANDOFF_THINKING, "-p", &generation_prompt, "--no-save"])
+            .args(["--no-save", "exec", "-m", HANDOFF_MODEL, "-t", HANDOFF_THINKING, "-p", &generation_prompt])
             .current_dir(&root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
