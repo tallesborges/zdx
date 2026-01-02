@@ -58,6 +58,14 @@ enum Commands {
         /// The prompt to send to the agent
         #[arg(short, long)]
         prompt: String,
+
+        /// Override the model from config
+        #[arg(short, long)]
+        model: Option<String>,
+
+        /// Override the thinking level (off, minimal, low, medium, high)
+        #[arg(short, long)]
+        thinking: Option<String>,
     },
 
     /// Manage saved sessions
@@ -144,9 +152,9 @@ async fn dispatch(cli: Cli) -> Result<()> {
     };
 
     match command {
-        Commands::Exec { prompt } => {
+        Commands::Exec { prompt, model, thinking } => {
             let session_opts: SessionPersistenceOptions = (&cli.session_args).into();
-            commands::exec::run(&cli.root, &session_opts, &prompt, &config).await
+            commands::exec::run(&cli.root, &session_opts, &prompt, &config, model.as_deref(), thinking.as_deref()).await
         }
 
         Commands::Sessions { command } => match command {

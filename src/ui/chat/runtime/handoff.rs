@@ -5,19 +5,26 @@
 use tokio::sync::mpsc;
 
 use super::handlers::{create_session_and_show_context, push_warning, spawn_agent_turn};
-use crate::core::session::SessionEvent;
+use crate::core::session::{self, SessionEvent};
 use crate::ui::chat::state::{HandoffState, TuiState};
+
+/// Model to use for handoff generation (fast, cheap).
+const HANDOFF_MODEL: &str = "claude-haiku-4-5";
+
+/// Thinking level for handoff generation (minimal reasoning).
+const HANDOFF_THINKING: &str = "minimal";
 
 /// Timeout for handoff generation subagent (2 minutes).
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
 /// Builds the prompt for handoff generation.
-fn build_handoff_prompt(session_id: &str, goal: &str) -> String {
+fn build_handoff_prompt(session_content: &str, goal: &str) -> String {
     format!(
-        r#"Read session {session_id} using this command:
-zdx sessions show {session_id}
+        r#"Based on the following session transcript, generate a focused handoff prompt for the given goal.
 
-Based on that session, generate a focused handoff prompt for the following goal:
+<session>
+{session_content}
+</session>
 
 <goal>
 {goal}
@@ -61,7 +68,30 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
     use tokio::process::Command;
     use tokio::sync::oneshot;
 
-    let generation_prompt = build_handoff_prompt(session_id, goal);
+    // Load session content upfront to avoid tool call in subagent
+    let session_content = match session::load_session(session_id) {
+        Ok(events) if !events.is_empty() => session::format_transcript(&events),
+        Ok(_) => {
+            state.input.handoff = HandoffState::Idle;
+            state.transcript.cells.push(
+                crate::ui::transcript::HistoryCell::system(
+                    format!("Handoff failed: Session '{}' is empty", session_id),
+                ),
+            );
+            return;
+        }
+        Err(e) => {
+            state.input.handoff = HandoffState::Idle;
+            state.transcript.cells.push(
+                crate::ui::transcript::HistoryCell::system(
+                    format!("Handoff failed: Could not load session: {}", e),
+                ),
+            );
+            return;
+        }
+    };
+
+    let generation_prompt = build_handoff_prompt(&session_content, goal);
     let root = state.agent_opts.root.clone();
 
     let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
@@ -87,9 +117,9 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         };
 
         // Spawn the subagent process (async)
-        // Args order matches spec: ["exec", "-p", &generation_prompt, "--no-save"]
+        // Args order: exec -m <model> -t <thinking> -p <prompt> --no-save
         let child = match Command::new(exe)
-            .args(["exec", "-p", &generation_prompt, "--no-save"])
+            .args(["exec", "-m", HANDOFF_MODEL, "-t", HANDOFF_THINKING, "-p", &generation_prompt, "--no-save"])
             .current_dir(&root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

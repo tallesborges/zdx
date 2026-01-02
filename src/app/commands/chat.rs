@@ -22,7 +22,7 @@ pub async fn run(
         if prompt.is_empty() {
             anyhow::bail!("No input provided via pipe");
         }
-        return exec::run(root, session_opts, prompt, config).await;
+        return exec::run(root, session_opts, prompt, config, None, None).await;
     }
 
     let session = session_opts.resolve().context("resolve session")?;
