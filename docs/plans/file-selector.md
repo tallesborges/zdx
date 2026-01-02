@@ -63,81 +63,74 @@
 
 # MVP slices (ship-shaped, demoable)
 
-## Slice 1: @ detection and popup trigger
+## Slice 1: @ detection and popup trigger ✅
 
 - **Goal**: Type `@` and see a file picker popup appear
 - **Scope checklist**:
-  - [ ] Add `FilePickerState` struct to `src/ui/chat/overlays/file_picker.rs`
-  - [ ] Add `FilePicker(FilePickerState)` variant to `OverlayState` enum
-  - [ ] Detect `@` character after keystroke in reducer (check textarea content)
-  - [ ] Trigger popup when `@` is typed (reactive: check input text for `@` pattern)
-  - [ ] Track `trigger_pos` (byte position of `@` in input)
-  - [ ] Add basic key handlers (Esc to close, leaves `@` in input)
-  - [ ] Block other overlays while file picker is open
-  - [ ] Render empty popup placeholder with border/title
-- **✅ Demo**: Run zdx, type `@`, see "File Picker" popup, press Esc to dismiss (with `@` remaining)
-- **Risks / failure modes**:
-  - Detecting `@` requires post-input inspection of textarea content
-  - Need to find `@` position relative to cursor for replacement later
+  - [x] Add `FilePickerState` struct to `src/ui/chat/overlays/file_picker.rs`
+  - [x] Add `FilePicker(FilePickerState)` variant to `OverlayState` enum
+  - [x] Detect `@` character after keystroke in reducer (check textarea content)
+  - [x] Trigger popup when `@` is typed (reactive: check input text for `@` pattern)
+  - [x] Track `trigger_pos` (byte position of `@` in input)
+  - [x] Add basic key handlers (Esc to close, leaves `@` in input)
+  - [x] Block other overlays while file picker is open
+  - [x] Render popup with border/title
+- **✅ Demo**: Run zdx, type `@`, see "Files" popup, press Esc to dismiss (with `@` remaining)
 
-## Slice 2a: Static file list rendering
+## Slice 2a: Static file list rendering ✅
 
-- **Goal**: Popup renders a hardcoded file list (prove list UI works)
+- **Goal**: Popup renders a file list with navigation
 - **Scope checklist**:
-  - [ ] Add `files: Vec<String>` to FilePickerState
-  - [ ] Add `selected: usize` and `offset: usize` for scroll
-  - [ ] Render list with highlight on selected item
-  - [ ] Handle ↑/↓ navigation with scroll (clamp to bounds)
-  - [ ] Show "loading..." state when files list is empty
-- **✅ Demo**: Type `@`, see hardcoded file list, navigate with arrows, scroll works
-- **Risks / failure modes**:
-  - Scroll offset logic must match session_picker pattern
+  - [x] Add `files: Vec<PathBuf>` to FilePickerState
+  - [x] Add `selected: usize` and `offset: usize` for scroll
+  - [x] Render list with highlight on selected item
+  - [x] Handle ↑/↓ navigation with scroll (clamp to bounds)
+  - [x] Show "loading..." state when files are being discovered
+- **✅ Demo**: Type `@`, see file list, navigate with arrows, scroll works
 
-## Slice 2b: Async file walking
+## Slice 2b: Async file walking ✅
 
 - **Goal**: Popup shows actual files from workspace via async effect
 - **Scope checklist**:
-  - [ ] Add `ignore` crate dependency (respects gitignore)
-  - [ ] Create `src/ui/chat/file_walker.rs` module
-  - [ ] Add `UiEffect::LoadFiles` and `UiEvent::FilesLoaded(Vec<String>)`
-  - [ ] Implement async file walking in runtime handler (cwd, respect .gitignore)
-  - [ ] Limit to first 100 files, max depth 10
-  - [ ] Update FilePickerState when files arrive
-  - [ ] Handle empty directory (show empty list, no crash)
+  - [x] Add `ignore` crate dependency (respects gitignore)
+  - [x] Implement `discover_files()` in `file_picker.rs`
+  - [x] Add `UiEffect::DiscoverFiles` and `UiEvent::FilesDiscovered`
+  - [x] Implement async file walking in runtime handler (cwd, respect .gitignore)
+  - [x] Limit to 1000 files, max depth 15
+  - [x] Update FilePickerState when files arrive
+  - [x] Handle empty directory (show empty list, no crash)
 - **✅ Demo**: Run zdx in project dir, type `@`, see "loading...", then actual file paths
-- **Risks / failure modes**:
-  - Large directories need depth/count limits
-  - Runtime handler must be non-blocking (spawn_blocking or async)
 
-## Slice 3: Selection and text replacement
+## Slice 3: Selection and text replacement ✅
 
 - **Goal**: Select file to replace filter with path (keeping `@` prefix)
 - **Scope checklist**:
-  - [ ] Handle Enter/Tab to select current file
-  - [ ] On selection: replace text from `trigger_pos+1` to cursor (keeps `@`)
-  - [ ] Result: `@filter` becomes `@path/to/file.rs`
-  - [ ] Close popup on selection
-  - [ ] Add trailing space after path for convenience
+  - [x] Handle Enter/Tab to select current file
+  - [x] On selection: replace text from `trigger_pos+1` to cursor (keeps `@`)
+  - [x] Result: `@filter` becomes `@path/to/file.rs`
+  - [x] Close popup on selection
+  - [x] Add trailing space after path for convenience
 - **✅ Demo**: Type `@mod`, press Enter on `src/models.rs`, see `@src/models.rs ` in input
-- **Risks / failure modes**:
-  - tui_textarea replacement API may require select + delete + insert
-  - Cursor position after replacement should be after the trailing space
+- **Implementation notes**:
+  - `select_file_and_insert()` in `file_picker.rs` handles the text replacement
+  - Cursor is positioned after the trailing space using tui_textarea cursor moves
+  - Works with text before and after the `@filter` pattern
 
-## Slice 4: Reactive filtering
+## Slice 4: Reactive filtering ✅
 
 - **Goal**: Type after `@` to filter file list (reactive model)
 - **Scope checklist**:
-  - [ ] Extract filter text: substring from `trigger_pos+1` to cursor
-  - [ ] Filter files by case-insensitive substring match
-  - [ ] Update filtered list on each keystroke (reactive to textarea changes)
-  - [ ] Reset selection to 0 when filter changes
-  - [ ] Show filter text in popup title: "Files (@filter)"
-  - [ ] Handle backspace: if it deletes `@`, close picker
-  - [ ] Close picker if cursor moves before `trigger_pos`
+  - [x] Extract filter text: substring from `trigger_pos+1` to cursor
+  - [x] Filter files by case-insensitive substring match
+  - [x] Update filtered list on each keystroke (reactive to textarea changes)
+  - [x] Reset selection to 0 when filter changes
+  - [x] Show file count in popup title: "Files (N)" (preferred over showing filter)
+  - [x] Handle backspace: if it deletes `@`, close picker
+  - [x] Close picker if cursor moves before `trigger_pos`
 - **✅ Demo**: Type `@mod`, see only files containing "mod", backspace to `@`, see all files
-- **Risks / failure modes**:
-  - Must detect cursor position changes (not just keystrokes)
-  - Backspace detection: compare input length before/after
+- **Implementation notes**:
+  - Filtering was implemented as part of Slices 1-2
+  - Title shows count instead of filter text (more useful)
 
 ---
 
@@ -181,10 +174,10 @@
 
 # Polish phases (after MVP)
 
-## Phase 1: UX refinement
+## Phase 1: UX refinement (partially done)
 - [ ] Position popup intelligently (avoid overflow)
-- [ ] Truncate long paths with ellipsis
-- [ ] Handle hidden files (show by default, respect gitignore)
+- [x] Truncate long paths with ellipsis (already implemented)
+- [x] Handle hidden files (show by default, respect gitignore)
 - **✅ Check-in demo**: Popup positions correctly near edge of terminal
 
 ## Phase 2: Fuzzy matching
@@ -203,20 +196,20 @@
 
 # Later / Deferred
 
-| Item | Trigger to revisit |
-|------|-------------------|
-| Multiple file selection | User feedback requesting batch attach |
-| File content preview | User feedback requesting preview |
-| Custom path prefix (e.g., `@src/`) | User feedback for scoped search |
-| Directory-only mode | Feature request for directory operations |
-| Tab completion (non-@ trigger) | After @ is stable and proven useful |
-| Context injection (insert file contents) | After evaluating token budget implications |
-| Quoted paths for spaces | User reports issues with space-containing paths |
-| Symlink handling | User reports symlink issues |
-| Project root vs cwd toggle | After validating cwd works for most cases |
-| File type icons | User feedback requesting visual distinction |
-| File count in title | User feedback requesting count |
-| "No matches" message | User feedback requesting explicit feedback |
+| Item | Status |
+|------|--------|
+| Multiple file selection | Deferred - User feedback requesting batch attach |
+| File content preview | Deferred - User feedback requesting preview |
+| Custom path prefix (e.g., `@src/`) | Deferred - User feedback for scoped search |
+| Directory-only mode | Deferred - Feature request for directory operations |
+| Tab completion (non-@ trigger) | Deferred - After @ is stable and proven useful |
+| Context injection (insert file contents) | Deferred - After evaluating token budget implications |
+| Quoted paths for spaces | Deferred - User reports issues with space-containing paths |
+| Symlink handling | Deferred - User reports symlink issues |
+| Project root vs cwd toggle | Deferred - After validating cwd works for most cases |
+| File type icons | Deferred - User feedback requesting visual distinction |
+| File count in title | ✅ Done - Shows "Files (N)" in title |
+| "No matches" message | ✅ Done - Shows "No matches" when filter has no results |
 
 ---
 

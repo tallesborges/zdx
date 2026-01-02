@@ -146,6 +146,11 @@ pub fn handle_file_picker_key(
             close_file_picker(state);
             vec![]
         }
+        KeyCode::Enter | KeyCode::Tab => {
+            // Select current file and insert into input
+            select_file_and_insert(state);
+            vec![]
+        }
         KeyCode::Up => {
             file_picker_select_prev(state);
             vec![]
@@ -256,6 +261,118 @@ fn check_trigger_deleted(state: &mut TuiState) {
     }
 }
 
+/// Selects the current file and inserts it into the input textarea.
+///
+/// Replaces `@<filter>` with `@<selected-file-path> ` (with trailing space).
+/// Closes the picker and positions cursor after the inserted path.
+fn select_file_and_insert(state: &mut TuiState) {
+    // Get selected file path before closing picker
+    let Some(picker) = state.overlay.as_file_picker() else {
+        return;
+    };
+
+    let Some(selected_path) = picker.selected_file().cloned() else {
+        // No file selected (empty list), just close
+        close_file_picker(state);
+        return;
+    };
+
+    let trigger_pos = picker.trigger_pos;
+
+    // Get current text and cursor position
+    let text = state.get_input_text();
+    let (row, col) = state.input.textarea.cursor();
+
+    // Calculate cursor byte position
+    let lines: Vec<&str> = text.lines().collect();
+    let mut cursor_byte_pos = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if i < row {
+            cursor_byte_pos += line.len() + 1; // +1 for newline
+        } else {
+            cursor_byte_pos += col;
+            break;
+        }
+    }
+
+    // Build the new text:
+    // - Keep everything up to and including `@` (trigger_pos + 1)
+    // - Insert file path + trailing space
+    // - Keep everything after cursor
+    let path_str = selected_path.to_string_lossy();
+    let before_at = &text[..=trigger_pos]; // includes the `@`
+    let after_cursor = if cursor_byte_pos < text.len() {
+        &text[cursor_byte_pos..]
+    } else {
+        ""
+    };
+
+    let new_text = format!("{}{} {}", before_at, path_str, after_cursor);
+
+    // Calculate new cursor position (after path + space)
+    // New cursor = trigger_pos + 1 (@) + path_len + 1 (space)
+    let new_cursor_byte_pos = trigger_pos + 1 + path_str.len() + 1;
+
+    // Set the new text
+    state.input.textarea.select_all();
+    state.input.textarea.cut();
+    state.input.textarea.insert_str(&new_text);
+
+    // Position cursor at the correct location
+    // Convert byte position back to (row, col)
+    let new_lines: Vec<&str> = new_text.lines().collect();
+    let mut remaining = new_cursor_byte_pos;
+    let mut target_row = 0;
+    let mut target_col = 0;
+
+    for (i, line) in new_lines.iter().enumerate() {
+        if remaining <= line.len() {
+            target_row = i;
+            target_col = remaining;
+            break;
+        }
+        remaining -= line.len() + 1; // +1 for newline
+        target_row = i + 1;
+        target_col = 0;
+    }
+
+    // Handle case where cursor is at the very end
+    if target_row >= new_lines.len() {
+        target_row = new_lines.len().saturating_sub(1);
+        target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
+    }
+
+    // Move cursor to target position
+    // First move to start, then to the target row/col
+    state
+        .input
+        .textarea
+        .move_cursor(tui_textarea::CursorMove::Top);
+    state
+        .input
+        .textarea
+        .move_cursor(tui_textarea::CursorMove::Head);
+
+    // Move down to target row
+    for _ in 0..target_row {
+        state
+            .input
+            .textarea
+            .move_cursor(tui_textarea::CursorMove::Down);
+    }
+
+    // Move to target column
+    for _ in 0..target_col {
+        state
+            .input
+            .textarea
+            .move_cursor(tui_textarea::CursorMove::Forward);
+    }
+
+    // Close the picker
+    close_file_picker(state);
+}
+
 fn file_picker_select_prev(state: &mut TuiState) {
     if let Some(picker) = state.overlay.as_file_picker_mut()
         && picker.selected > 0
@@ -287,16 +404,14 @@ fn file_picker_select_next(state: &mut TuiState) {
 /// Discovers project files, respecting .gitignore.
 ///
 /// Returns relative paths sorted alphabetically.
+/// Hidden files (starting with `.`) are excluded.
 pub fn discover_files(root: &std::path::Path) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 
     let mut files = Vec::new();
 
     let walker = WalkBuilder::new(root)
-        .hidden(false) // Show hidden files
-        .git_ignore(true) // Respect .gitignore
-        .git_global(true) // Respect global gitignore
-        .git_exclude(true) // Respect .git/info/exclude
+        .standard_filters(true)
         .max_depth(Some(MAX_DEPTH))
         .build();
 
@@ -483,14 +598,209 @@ pub fn render_file_picker(
     let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
     let hints_line = Line::from(vec![
         Span::styled("↑↓", Style::default().fg(Color::Blue)),
-        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" type", Style::default().fg(Color::Blue)),
-        Span::styled(" filter ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Esc", Style::default().fg(Color::Blue)),
+        Span::styled(" nav ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Enter", Style::default().fg(Color::Blue)),
+        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
+        Span::styled("Esc", Style::default().fg(Color::Blue)),
         Span::styled(" close", Style::default().fg(Color::DarkGray)),
     ]);
     let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
     frame.render_widget(hints_para, hints_area);
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
+
+    use super::*;
+    use crate::config::Config;
+
+    fn make_key_event(code: KeyCode) -> KeyEvent {
+        KeyEvent {
+            code,
+            modifiers: KeyModifiers::NONE,
+            kind: KeyEventKind::Press,
+            state: KeyEventState::NONE,
+        }
+    }
+
+    fn create_test_state() -> TuiState {
+        let config = Config::default();
+        TuiState::new(config, std::path::PathBuf::new(), None, None)
+    }
+
+    #[test]
+    fn test_file_picker_select_file_simple() {
+        let mut state = create_test_state();
+
+        // Type "@" in input
+        state.input.textarea.insert_str("@");
+
+        // Open file picker at position 0 (where @ is)
+        open_file_picker(&mut state, 0);
+
+        // Set some files
+        if let Some(picker) = state.overlay.as_file_picker_mut() {
+            picker.set_files(vec![
+                PathBuf::from("src/main.rs"),
+                PathBuf::from("src/lib.rs"),
+            ]);
+        }
+
+        // Press Enter to select
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Enter));
+
+        // Verify picker is closed
+        assert!(matches!(state.overlay, OverlayState::None));
+
+        // Verify input contains the selected file
+        let text = state.get_input_text();
+        assert_eq!(text, "@src/main.rs ");
+    }
+
+    #[test]
+    fn test_file_picker_select_file_with_filter() {
+        let mut state = create_test_state();
+
+        // Type "@lib" in input (@ at position 0, cursor at position 4)
+        state.input.textarea.insert_str("@lib");
+
+        // Open file picker at position 0 (where @ is)
+        open_file_picker(&mut state, 0);
+
+        // Set some files
+        if let Some(picker) = state.overlay.as_file_picker_mut() {
+            picker.set_files(vec![
+                PathBuf::from("src/main.rs"),
+                PathBuf::from("src/lib.rs"),
+            ]);
+            // Apply filter for "lib"
+            picker.apply_filter("lib");
+        }
+
+        // Press Enter to select
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Enter));
+
+        // Verify input contains the selected file (filter "lib" replaced with path)
+        let text = state.get_input_text();
+        assert_eq!(text, "@src/lib.rs ");
+    }
+
+    #[test]
+    fn test_file_picker_select_with_text_before_and_after() {
+        let mut state = create_test_state();
+
+        // Type "Hello @filter world" in input (@ at position 6)
+        state.input.textarea.insert_str("Hello @filter world");
+        // Move cursor back to after "filter" (position 13)
+        for _ in 0..6 {
+            // Move back 6 characters (" world")
+            state
+                .input
+                .textarea
+                .move_cursor(tui_textarea::CursorMove::Back);
+        }
+
+        // Open file picker at position 6 (where @ is)
+        open_file_picker(&mut state, 6);
+
+        // Set some files
+        if let Some(picker) = state.overlay.as_file_picker_mut() {
+            picker.set_files(vec![PathBuf::from("src/main.rs")]);
+        }
+
+        // Press Tab to select (same as Enter)
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Tab));
+
+        // Verify input contains the selected file with surrounding text preserved
+        let text = state.get_input_text();
+        assert_eq!(text, "Hello @src/main.rs  world");
+    }
+
+    #[test]
+    fn test_file_picker_select_empty_list_closes() {
+        let mut state = create_test_state();
+
+        // Type "@" in input
+        state.input.textarea.insert_str("@");
+
+        // Open file picker
+        open_file_picker(&mut state, 0);
+
+        // Set empty file list
+        if let Some(picker) = state.overlay.as_file_picker_mut() {
+            picker.set_files(vec![]);
+        }
+
+        // Press Enter (should just close, no crash)
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Enter));
+
+        // Verify picker is closed
+        assert!(matches!(state.overlay, OverlayState::None));
+
+        // Input should still have just "@"
+        let text = state.get_input_text();
+        assert_eq!(text, "@");
+    }
+
+    #[test]
+    fn test_file_picker_navigate_then_select() {
+        let mut state = create_test_state();
+
+        // Type "@" in input
+        state.input.textarea.insert_str("@");
+
+        // Open file picker
+        open_file_picker(&mut state, 0);
+
+        // Set files
+        if let Some(picker) = state.overlay.as_file_picker_mut() {
+            picker.set_files(vec![
+                PathBuf::from("a.txt"),
+                PathBuf::from("b.txt"),
+                PathBuf::from("c.txt"),
+            ]);
+        }
+
+        // Navigate down twice to select "c.txt"
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Down));
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Down));
+
+        // Press Enter to select
+        handle_file_picker_key(&mut state, make_key_event(KeyCode::Enter));
+
+        // Verify the third file was selected
+        let text = state.get_input_text();
+        assert_eq!(text, "@c.txt ");
+    }
+
+    #[test]
+    fn test_file_picker_state_selected_file() {
+        let mut picker = FilePickerState::new(0);
+        picker.set_files(vec![
+            PathBuf::from("a.txt"),
+            PathBuf::from("b.txt"),
+            PathBuf::from("c.txt"),
+        ]);
+
+        // Initially selected = 0
+        assert_eq!(picker.selected_file(), Some(&PathBuf::from("a.txt")));
+
+        // Navigate down
+        picker.selected = 1;
+        assert_eq!(picker.selected_file(), Some(&PathBuf::from("b.txt")));
+
+        // With filter
+        picker.apply_filter("c");
+        // Now filtered contains only index 2 (c.txt), selected = 0
+        assert_eq!(picker.selected_file(), Some(&PathBuf::from("c.txt")));
+    }
+
+    #[test]
+    fn test_file_picker_state_selected_file_empty() {
+        let mut picker = FilePickerState::new(0);
+        picker.set_files(vec![]);
+
+        assert_eq!(picker.selected_file(), None);
+    }
 }
