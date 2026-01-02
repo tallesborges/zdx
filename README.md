@@ -28,6 +28,7 @@ Also a way to learn TUI development, contribute to open source, and build an AI 
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display
 - **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
+- **File picker** — type `@` to browse and insert project files (respects .gitignore)
 - **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume or switch between previous conversations
