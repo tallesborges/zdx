@@ -33,6 +33,7 @@ comfy-table = "7"
 toml_edit = "0.22"
 url = "2.5"
 uuid = { version = "1.19.0", features = ["v4"] }
+ignore = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2.1.1"

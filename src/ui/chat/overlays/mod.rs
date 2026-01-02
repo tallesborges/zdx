@@ -10,7 +10,7 @@ pub mod session_picker;
 pub mod thinking_picker;
 
 pub use file_picker::{
-    FilePickerState, close_file_picker, handle_file_picker_key, open_file_picker,
+    FilePickerState, close_file_picker, discover_files, handle_file_picker_key, open_file_picker,
     render_file_picker,
 };
 pub use login::{

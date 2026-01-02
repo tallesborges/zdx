@@ -60,4 +60,7 @@ pub enum UiEffect {
     /// Preview a session (show transcript without full switch).
     /// Used during session picker navigation.
     PreviewSession { session_id: String },
+
+    /// Discover project files for the file picker.
+    DiscoverFiles,
 }

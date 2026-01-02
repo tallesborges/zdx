@@ -279,3 +279,28 @@ pub fn spawn_token_exchange(state: &mut TuiState, code: &str, verifier: &str) {
         let _ = tx.send(result).await;
     });
 }
+
+// ============================================================================
+// File Picker Handlers
+// ============================================================================
+
+/// Spawns async file discovery and returns the receiver.
+///
+/// The runtime owns the receiver (not state) for cleaner Elm-like separation.
+pub fn spawn_file_discovery(root: &std::path::Path) -> mpsc::Receiver<Vec<std::path::PathBuf>> {
+    use crate::ui::chat::overlays::discover_files;
+
+    let root = root.to_path_buf();
+
+    let (tx, rx) = mpsc::channel::<Vec<std::path::PathBuf>>(1);
+
+    // Use spawn_blocking since file walking is CPU/IO bound
+    tokio::spawn(async move {
+        let files = tokio::task::spawn_blocking(move || discover_files(&root))
+            .await
+            .unwrap_or_default();
+        let _ = tx.send(files).await;
+    });
+
+    rx
+}

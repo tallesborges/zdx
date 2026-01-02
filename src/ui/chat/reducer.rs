@@ -51,6 +51,10 @@ pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
             handle_handoff_result(state, result);
             vec![]
         }
+        UiEvent::FilesDiscovered(files) => {
+            handle_files_discovered(state, files);
+            vec![]
+        }
     }
 }
 
@@ -417,7 +421,7 @@ fn handle_main_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec
                 };
                 // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
                 let trigger_pos = cursor_pos.saturating_sub(1);
-                open_file_picker(state, trigger_pos);
+                return open_file_picker(state, trigger_pos);
             }
 
             vec![]
@@ -697,6 +701,17 @@ fn execute_quit(state: &mut TuiState) -> Vec<UiEffect> {
         vec![UiEffect::InterruptAgent, UiEffect::Quit]
     } else {
         vec![UiEffect::Quit]
+    }
+}
+
+// ============================================================================
+// File Picker Handler
+// ============================================================================
+
+/// Handles the file discovery result.
+fn handle_files_discovered(state: &mut TuiState, files: Vec<std::path::PathBuf>) {
+    if let Some(picker) = state.overlay.as_file_picker_mut() {
+        picker.set_files(files);
     }
 }
 
