@@ -34,4 +34,7 @@ pub enum UiEvent {
 
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
     HandoffResult(Result<String, String>),
+
+    /// File discovery completed for file picker.
+    FilesDiscovered(Vec<std::path::PathBuf>),
 }

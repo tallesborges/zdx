@@ -46,6 +46,8 @@ pub struct TuiRuntime {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Application state (separate from terminal for borrow-checker friendly rendering).
     pub state: TuiState,
+    /// Receiver for async file discovery (owned by runtime, not state).
+    file_discovery_rx: Option<mpsc::Receiver<Vec<PathBuf>>>,
 }
 
 impl TuiRuntime {
@@ -79,7 +81,11 @@ impl TuiRuntime {
         // Create state
         let state = TuiState::with_history(config, root, system_prompt, session, history);
 
-        Ok(Self { terminal, state })
+        Ok(Self {
+            terminal,
+            state,
+            file_discovery_rx: None,
+        })
     }
 
     /// Runs the main event loop.
@@ -177,16 +183,20 @@ impl TuiRuntime {
         // Poll for handoff generation result
         self.collect_handoff_result(&mut events);
 
+        // Poll for file discovery result
+        self.collect_file_discovery_result(&mut events);
+
         // Determine poll timeout based on activity level.
         // Use fast polling (60fps) when:
         // - Agent is running (streaming content)
         // - Selection clear is pending (visual feedback timer)
-        // - Login or handoff async operations are in progress
+        // - Login, handoff, or file discovery async operations are in progress
         // Otherwise use slow polling to save CPU.
         let needs_fast_poll = self.state.agent_state.is_running()
             || self.state.transcript.selection.has_pending_clear()
             || self.state.auth.login_rx.is_some()
-            || self.state.input.handoff.is_generating();
+            || self.state.input.handoff.is_generating()
+            || self.file_discovery_rx.is_some();
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
@@ -256,6 +266,27 @@ impl TuiRuntime {
                 events.push(UiEvent::HandoffResult(Err(
                     "Handoff generation task failed".to_string(),
                 )));
+            }
+        }
+    }
+
+    /// Collects file discovery result if available.
+    fn collect_file_discovery_result(&mut self, events: &mut Vec<UiEvent>) {
+        let Some(rx) = &mut self.file_discovery_rx else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(files) => {
+                events.push(UiEvent::FilesDiscovered(files));
+                // Clear the receiver after getting results
+                self.file_discovery_rx = None;
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                // Task failed, close the file picker gracefully
+                events.push(UiEvent::FilesDiscovered(Vec::new()));
+                self.file_discovery_rx = None;
             }
         }
     }
@@ -352,6 +383,12 @@ impl TuiRuntime {
             }
             UiEffect::HandoffSubmit { prompt } => {
                 handoff::execute_handoff_submit(&mut self.state, &prompt);
+            }
+
+            // File picker effects
+            UiEffect::DiscoverFiles => {
+                let root = self.state.agent_opts.root.clone();
+                self.file_discovery_rx = Some(handlers::spawn_file_discovery(&root));
             }
         }
     }
