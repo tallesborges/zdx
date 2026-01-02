@@ -195,6 +195,19 @@ fn chrono_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
 }
 
+/// Truncates a string to at most `max_bytes`, ensuring we don't split a UTF-8 character.
+fn truncate_str(s: &str, max_bytes: usize) -> &str {
+    if s.len() <= max_bytes {
+        return s;
+    }
+    // Find the last char boundary at or before max_bytes
+    let mut end = max_bytes;
+    while end > 0 && !s.is_char_boundary(end) {
+        end -= 1;
+    }
+    &s[..end]
+}
+
 /// Manages a session file.
 #[derive(Debug, Clone)]
 pub struct Session {
@@ -628,7 +641,7 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
                 output.push_str("### Thinking\n");
                 // Truncate long thinking content for display
                 if content.len() > 500 {
-                    output.push_str(&content[..500]);
+                    output.push_str(truncate_str(content, 500));
                     output.push_str("...");
                 } else {
                     output.push_str(content);
@@ -650,7 +663,7 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
                 // Truncate long outputs for display
                 let out_str = serde_json::to_string_pretty(out).unwrap_or_default();
                 if out_str.len() > 500 {
-                    output.push_str(&format!("```json\n{}...\n```\n\n", &out_str[..500]));
+                    output.push_str(&format!("```json\n{}...\n```\n\n", truncate_str(&out_str, 500)));
                 } else {
                     output.push_str(&format!("```json\n{}\n```\n\n", out_str));
                 }
