@@ -49,6 +49,9 @@ fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
         "low" => Ok(ThinkingLevel::Low),
         "medium" => Ok(ThinkingLevel::Medium),
         "high" => Ok(ThinkingLevel::High),
-        _ => anyhow::bail!("Invalid thinking level '{}'. Valid options: off, minimal, low, medium, high", s),
+        _ => anyhow::bail!(
+            "Invalid thinking level '{}'. Valid options: off, minimal, low, medium, high",
+            s
+        ),
     }
 }

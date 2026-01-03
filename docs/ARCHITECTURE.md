@@ -63,14 +63,14 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 │                      ▼                                           │
 │         ┌────────────────────────────┐                           │
 │         │     reducer::update()      │                           │
-│         │  &mut TuiState × UiEvent   │                           │
+│         │  &mut AppState × UiEvent   │                           │
 │         │      → Vec<UiEffect>       │                           │
 │         └─────────────┬──────────────┘                           │
 │                       │                                          │
 │             ┌─────────┴─────────┐                                │
 │             ▼                   ▼                                │
 │        ┌─────────┐        ┌──────────┐                           │
-│        │TuiState │        │UiEffect[]│                           │
+│        │AppState │        │UiEffect[]│                           │
 │        │(mutated)│        │          │                           │
 │        └────┬────┘        └────┬─────┘                           │
 │             │                  │                                 │
@@ -87,9 +87,15 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 
 **File:** `src/ui/chat/state/mod.rs`
 
-All application state lives in `TuiState`. It's a plain data structure with no I/O:
+Application state is split: `TuiState` (non-overlay) + `OverlayState` (overlay), combined in `AppState`.
+These are plain data structures with no I/O:
 
 ```rust
+pub struct AppState {
+    pub tui: TuiState,
+    pub overlay: OverlayState,
+}
+
 pub struct TuiState {
     pub should_quit: bool,
     pub input: InputState,           // User input textarea, history
@@ -100,7 +106,6 @@ pub struct TuiState {
     pub agent_opts: AgentOptions,    // Root path, etc.
     pub system_prompt: Option<String>, // System prompt for agent
     pub agent_state: AgentState,     // Idle | Waiting | Streaming
-    pub overlay: OverlayState,       // Command palette, pickers, login
     pub spinner_frame: usize,        // Animation counter
     pub git_branch: Option<String>,  // Cached at startup
     pub display_path: String,        // Cached at startup
@@ -144,39 +149,39 @@ This unification simplifies the reducer—it only needs to handle one event type
 The reducer is the **single source of truth** for state transitions:
 
 ```rust
-pub fn update(state: &mut TuiState, event: UiEvent) -> Vec<UiEffect> {
+pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
     match event {
         UiEvent::Tick => {
-            state.spinner_frame = state.spinner_frame.wrapping_add(1);
-            state.transcript.check_selection_timeout();
+            app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
+            app.tui.transcript.check_selection_timeout();
             vec![]
         }
         UiEvent::Frame { width, height } => {
-            handle_frame(state, width, height);
+            handle_frame(&mut app.tui, width, height);
             vec![]
         }
-        UiEvent::Terminal(term_event) => handle_terminal_event(state, term_event),
-        UiEvent::Agent(agent_event) => handle_agent_event(state, &agent_event),
+        UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
+        UiEvent::Agent(agent_event) => handle_agent_event(&mut app.tui, &agent_event),
         UiEvent::LoginResult(result) => { /* ... */ }
         UiEvent::HandoffResult(result) => { /* ... */ }
     }
 }
 
 /// Handles per-frame state updates (layout, delta coalescing, cell info).
-fn handle_frame(state: &mut TuiState, width: u16, height: u16) {
+fn handle_frame(tui: &mut TuiState, width: u16, height: u16) {
     // Update transcript layout
-    let viewport_height = view::calculate_transcript_height_with_state(state, height);
-    state.transcript.update_layout((width, height), viewport_height);
+    let viewport_height = view::calculate_transcript_height_with_state(tui, height);
+    tui.transcript.update_layout((width, height), viewport_height);
 
     // Apply coalesced streaming text deltas
-    apply_pending_delta(state);
+    apply_pending_delta(tui);
 
     // Apply coalesced scroll events
-    apply_scroll_delta(state);
+    apply_scroll_delta(tui);
 
     // Update cell line info for lazy rendering
-    let counts = view::calculate_cell_line_counts(state, width as usize);
-    state.transcript.scroll.update_cell_line_info(counts);
+    let counts = view::calculate_cell_line_counts(tui, width as usize);
+    tui.transcript.scroll.update_cell_line_info(counts);
 }
 ```
 
@@ -193,7 +198,9 @@ Key properties:
 Pure rendering functions that draw the UI:
 
 ```rust
-pub fn view(state: &TuiState, frame: &mut Frame) {
+pub fn view(app: &AppState, frame: &mut Frame) {
+    let state = &app.tui;
+
     // Layout calculation
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -210,19 +217,12 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     render_status_line(state, frame, chunks[2]);
 
     // Render overlay (on top)
-    match &state.overlay {
-        OverlayState::CommandPalette(p) => render_command_palette(frame, p, area, input_y),
-        OverlayState::ModelPicker(p) => render_model_picker(frame, p, area, input_y),
-        OverlayState::ThinkingPicker(p) => render_thinking_picker(frame, p, area, input_y),
-        OverlayState::SessionPicker(p) => render_session_picker(frame, p, area, input_y),
-        OverlayState::Login(l) => render_login_overlay(frame, l, area),
-        OverlayState::None => {}
-    }
+    app.overlay.render(frame, area, chunks[1].y);
 }
 ```
 
 Key properties:
-- Takes `&TuiState` (immutable borrow)
+- Takes `&AppState` (immutable borrow)
 - Draws to a ratatui `Frame`
 - **Does not mutate logical state** (no message history, scroll position, etc.)
 - **Does update render caches** via interior mutability (`RefCell`):
@@ -329,11 +329,264 @@ pub enum OverlayState {
     ModelPicker(ModelPickerState),
     ThinkingPicker(ThinkingPickerState),
     SessionPicker(SessionPickerState),
+    FilePicker(FilePickerState),
     Login(LoginState),
 }
 ```
 
+Overlay state is stored alongside non-overlay state in `AppState`:
+
+```rust
+pub struct AppState {
+    pub tui: TuiState,
+    pub overlay: OverlayState,
+}
+```
+
 This eliminates cascading `if overlay_a.is_some() / if overlay_b.is_some()` checks.
+
+## Overlay Contract
+
+Overlays are modal UI components that temporarily take over keyboard input. Each overlay is **self-contained**: it owns its state, update handlers, and render function.
+
+### Architecture Principle
+
+> Overlay handlers mutate `TuiState` directly via `Overlay::handle_key()`, but they're called **FROM** the reducer (`OverlayState::handle_key`). The reducer remains the single entry point for state mutations and applies the returned `OverlayAction`.
+
+This is the intended pattern: overlays are self-contained modules, but the reducer orchestrates when they're called.
+
+### Required Components
+
+Every overlay module **must** provide:
+
+| Component | Signature | Purpose |
+|-----------|-----------|---------|
+| **State** | `pub struct XxxState { ... }` | All overlay-specific state |
+| **Overlay impl** | `impl Overlay for XxxState { fn render(...); fn handle_key(...) -> Option<OverlayAction> }` | Trait-enforced render + key handling |
+| **Open** | `pub fn open_xxx(overlay: &mut OverlayState, /* params */) -> Vec<UiEffect>` | Initialize and show overlay (return effects if needed) |
+
+### State Contract
+
+```rust
+#[derive(Debug, Clone)]
+pub struct XxxState {
+    // Selection index for list-based overlays
+    pub selected: usize,
+    // Scroll offset for long lists
+    pub offset: usize,
+    // Overlay-specific fields...
+}
+
+impl XxxState {
+    /// Creates a new state with sensible defaults.
+    pub fn new(/* initialization params */) -> Self { ... }
+    
+    /// Helper methods for state queries (keep state encapsulated).
+    pub fn selected_item(&self) -> Option<&Item> { ... }
+}
+```
+
+### Open Function Contract
+
+```rust
+/// Opens the overlay if no other overlay is active.
+/// Returns effects for async operations (e.g., file discovery).
+pub fn open_xxx(overlay: &mut OverlayState, /* params */) -> Vec<UiEffect> {
+    // Guard: only open if no overlay is active
+    if !matches!(overlay, OverlayState::None) {
+        return vec![];
+    }
+    
+    // Initialize state
+    *overlay = OverlayState::Xxx(XxxState::new(/* params */));
+    
+    // Return any async effects needed (e.g., DiscoverFiles)
+    vec![/* effects */]
+}
+```
+
+### Key Handler Contract
+
+```rust
+impl Overlay for XxxState {
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            // Standard overlay keys (Esc and Ctrl+C close)
+            KeyCode::Esc | KeyCode::Char('c') if ctrl => Some(OverlayAction::close()),
+            // Navigation (Up/Down for lists)
+            KeyCode::Up => { /* select_prev */ None }  // Continue, no effects
+            KeyCode::Down => { /* select_next */ None }
+            // Selection (Enter/Tab)
+            KeyCode::Enter => { /* execute */ Some(OverlayAction::close_with(effects)) }
+            // Filtering (for overlays with search)
+            KeyCode::Char(c) if !ctrl => { /* add to filter */ None }
+            KeyCode::Backspace => { /* remove from filter */ None }
+            _ => None,  // Continue with overlay open
+        }
+    }
+}
+```
+
+The return type is `Option<OverlayAction>`:
+- `None` = continue with overlay open, no effects
+- `Some(Close(effects))` = close overlay and execute effects
+- `Some(Transition { new_state, effects })` = transition to new overlay state
+- `Some(Effects(effects))` = continue with overlay open, but execute effects (rare)
+
+### Render Function Contract
+
+```rust
+/// Renders the overlay centered above the input area.
+/// Takes immutable reference to overlay state (not full TuiState).
+pub fn render_xxx(
+    frame: &mut Frame,
+    state: &XxxState,       // Immutable borrow of overlay state only
+    area: Rect,             // Full terminal area
+    input_top_y: u16,       // Y position of input (for vertical centering)
+) {
+    // 1. Calculate dimensions (width, height)
+    let picker_width = /* ... */;
+    let picker_height = /* ... */;
+    
+    // 2. Center horizontally, position above input
+    let picker_x = (area.width.saturating_sub(picker_width)) / 2;
+    let picker_y = (input_top_y.saturating_sub(picker_height)) / 2;
+    let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
+    
+    // 3. Clear background (required for overlays)
+    frame.render_widget(Clear, picker_area);
+    
+    // 4. Render border with title
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(/* accent color */))
+        .title(" Title ");
+    frame.render_widget(block, picker_area);
+    
+    // 5. Render content (list, form, etc.)
+    // 6. Render hints at bottom
+}
+```
+
+### Effect Pattern
+
+Overlays can return `UiEffect`s for operations that require I/O:
+
+```rust
+// Open returns effects for async initialization
+pub fn open_file_picker(overlay: &mut OverlayState, trigger_pos: usize) -> Vec<UiEffect> {
+    *overlay = OverlayState::FilePicker(FilePickerState::new(trigger_pos));
+    vec![UiEffect::DiscoverFiles]  // Async file discovery
+}
+
+// Selection returns effects for persistence or other I/O
+fn execute_model_selection(tui: &mut TuiState) -> Vec<UiEffect> {
+    // ... update state ...
+    vec![UiEffect::PersistModel { model: model_id }]
+}
+```
+
+### Reducer Integration
+
+The reducer routes key events to the active overlay handler:
+
+```rust
+// In reducer.rs
+fn handle_key(app: &mut AppState, key: KeyEvent) -> Vec<UiEffect> {
+    // Try to dispatch to the active overlay
+    match app.overlay.handle_key(&mut app.tui, key) {
+        None => handle_main_key(app, key), // No overlay active
+        Some(None) => vec![],              // Overlay handled it, continue
+        Some(Some(action)) => process_overlay_action(app, action), // Overlay action
+    }
+}
+
+/// Processes an OverlayAction returned by an overlay's handle_key.
+fn process_overlay_action(app: &mut AppState, action: OverlayAction) -> Vec<UiEffect> {
+    match action {
+        OverlayAction::Close(effects) => {
+            app.overlay = OverlayState::None;
+            effects
+        }
+        OverlayAction::Transition { new_state, effects } => {
+            app.overlay = new_state;
+            effects
+        }
+        OverlayAction::Effects(effects) => effects,
+    }
+}
+```
+
+### View Integration
+
+The view uses `OverlayState::render()` which delegates to each overlay's `Overlay` trait implementation:
+
+```rust
+// In view.rs
+pub fn view(app: &AppState, frame: &mut Frame) {
+    // ... render transcript, input, status ...
+    
+    // Render overlay using trait method (delegates to appropriate impl)
+    app.overlay.render(frame, area, chunks[1].y);
+}
+```
+
+This trait-based approach:
+- Eliminates explicit match statements in the view
+- Enforces that new overlays implement rendering at compile time
+- Provides uniform rendering interface across all overlays
+
+
+### Special Cases
+
+#### Login Overlay (State Machine with Async Transitions)
+
+The login overlay has multiple states and async transitions:
+
+```rust
+pub enum LoginState {
+    AwaitingCode { url, verifier, input, error },
+    Exchanging,
+}
+```
+
+The flow is handled via `OverlayAction::Transition`:
+
+1. **Opening**: `/login` command returns `UiEffect::OpenLogin`
+2. **Runtime**: Calls `open_login()` which opens overlay and returns `OpenBrowser` effect
+3. **Input**: User pastes auth code, `handle_key()` returns `Transition { new_state: Exchanging, effects: [SpawnTokenExchange] }`
+4. **Async result**: `UiEvent::LoginResult` arrives, `handle_login_result()` closes overlay or returns to `AwaitingCode` with error
+
+This pattern uses `OverlayAction::Transition` for state machine transitions within the overlay.
+
+#### Overlays with Async Data Loading
+
+For overlays that load data asynchronously (file picker, session picker):
+
+1. **Open** returns an effect to trigger async loading
+2. **State** includes a `loading: bool` field
+3. **Handler** processes result events (e.g., `UiEvent::FilesDiscovered`)
+4. **Render** shows loading state until data arrives
+
+### Checklist for New Overlays
+
+When adding a new overlay:
+
+- [ ] Create `src/ui/chat/overlays/xxx.rs`
+- [ ] Define `XxxState` struct with `new()` constructor
+- [ ] **Implement `Overlay` trait** for `XxxState` (compile-time enforced)
+  - `render(&self, frame, area, input_y)` - render the overlay
+  - `handle_key(&mut self, tui, key) -> Option<OverlayAction>` - key handling
+- [ ] Implement `open_xxx()` function returning `Vec<UiEffect>` (for async effects)
+- [ ] Add `XxxState` to `OverlayState` enum in `overlays/mod.rs`
+- [ ] **Add variant to `OverlayState::render()` match** in `overlays/mod.rs`
+- [ ] **Add variant to `OverlayState::handle_key()` match** in `overlays/mod.rs`
+- [ ] Export from `overlays/mod.rs`
+- [ ] Add any new effects to `effects.rs`
+- [ ] Add effect handler in `runtime/mod.rs` if needed
+- [ ] Update this documentation
 
 ### Agent State Machine
 
@@ -430,7 +683,7 @@ Cache is invalidated on:
 
 ### Render-Time Caches (Interior Mutability)
 
-The view takes `&TuiState` but still needs to update caches for performance. This is done via `RefCell`:
+The view takes `&AppState`, but render helpers still read from `&TuiState` and update caches for performance. This is done via `RefCell`:
 
 ```rust
 // In TranscriptState
@@ -517,7 +770,7 @@ All state changes go through `update()`. Debugging is straightforward:
 | `runtime/handlers.rs` | Effect handlers (session ops, agent spawn, auth) |
 | `runtime/handoff.rs` | Handoff generation handlers (subagent spawning) |
 | `transcript_build.rs` | Pure helper to build transcript cells from session events |
-| `state/mod.rs` | `TuiState` and sub-state types |
+| `state/mod.rs` | `AppState`, `TuiState`, and sub-state types |
 | `state/auth.rs` | `AuthState`, `AuthStatus` |
 | `state/input.rs` | `InputState`, textarea, history navigation |
 | `state/session.rs` | `SessionState`, messages, usage tracking |
@@ -529,11 +782,13 @@ All state changes go through `update()`. Debugging is straightforward:
 | `commands.rs` | Slash command definitions |
 | `selection.rs` | Text selection, clipboard, position mapping |
 | `terminal.rs` | Terminal setup, restore, panic hooks |
-| `overlays/mod.rs` | Overlay exports and shared utilities |
+| `overlays/mod.rs` | Overlay exports, `OverlayState` enum, dispatch methods |
+| `overlays/traits.rs` | `Overlay` trait and `OverlayAction` types |
 | `overlays/palette.rs` | Command palette overlay |
 | `overlays/model_picker.rs` | Model picker overlay |
 | `overlays/thinking_picker.rs` | Thinking level picker overlay |
 | `overlays/session_picker.rs` | Session picker overlay |
+| `overlays/file_picker.rs` | File picker overlay (triggered by `@`) |
 | `overlays/login.rs` | OAuth login flow overlay |
 
 ## Related Documentation

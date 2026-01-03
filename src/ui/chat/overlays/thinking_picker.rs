@@ -2,16 +2,17 @@
 //!
 //! Contains state, update handlers, and render function for the thinking level picker.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
+use super::{Overlay, OverlayAction, OverlayState};
 use crate::config::ThinkingLevel;
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::state::{OverlayState, TuiState};
+use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================
@@ -37,91 +38,68 @@ impl ThinkingPickerState {
 }
 
 // ============================================================================
+// Overlay Trait Implementation
+// ============================================================================
+
+impl Overlay for ThinkingPickerState {
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        render_thinking_picker(frame, self, area, input_y)
+    }
+
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                Some(OverlayAction::close())
+            }
+            KeyCode::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                None
+            }
+            KeyCode::Down => {
+                if self.selected < ThinkingLevel::all().len() - 1 {
+                    self.selected += 1;
+                }
+                None
+            }
+            KeyCode::Enter => {
+                let levels = ThinkingLevel::all();
+                let Some(&level) = levels.get(self.selected) else {
+                    return Some(OverlayAction::close());
+                };
+
+                // Update state
+                tui.config.thinking_level = level;
+
+                // Show confirmation message
+                let message = if level == ThinkingLevel::Off {
+                    "Thinking disabled".to_string()
+                } else {
+                    format!("Thinking level set to {}", level.display_name())
+                };
+                tui.transcript.cells.push(HistoryCell::system(message));
+
+                Some(OverlayAction::close_with(vec![UiEffect::PersistThinking {
+                    level,
+                }]))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // Update Handlers
 // ============================================================================
 
 /// Opens the thinking level picker overlay.
-pub fn open_thinking_picker(state: &mut TuiState) {
-    if matches!(state.overlay, OverlayState::None) {
-        state.overlay =
-            OverlayState::ThinkingPicker(ThinkingPickerState::new(state.config.thinking_level));
+pub fn open_thinking_picker(overlay: &mut OverlayState, current: ThinkingLevel) {
+    if matches!(overlay, OverlayState::None) {
+        *overlay = OverlayState::ThinkingPicker(ThinkingPickerState::new(current));
     }
-}
-
-/// Closes the thinking level picker overlay.
-pub fn close_thinking_picker(state: &mut TuiState) {
-    state.overlay = OverlayState::None;
-}
-
-/// Handles key events for the thinking level picker.
-pub fn handle_thinking_picker_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
-) -> Vec<UiEffect> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    match key.code {
-        KeyCode::Esc => {
-            close_thinking_picker(state);
-            vec![]
-        }
-        KeyCode::Char('c') if ctrl => {
-            close_thinking_picker(state);
-            vec![]
-        }
-        KeyCode::Up => {
-            thinking_picker_select_prev(state);
-            vec![]
-        }
-        KeyCode::Down => {
-            thinking_picker_select_next(state);
-            vec![]
-        }
-        KeyCode::Enter => execute_thinking_selection(state),
-        _ => vec![],
-    }
-}
-
-fn thinking_picker_select_prev(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_thinking_picker_mut()
-        && picker.selected > 0
-    {
-        picker.selected -= 1;
-    }
-}
-
-fn thinking_picker_select_next(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_thinking_picker_mut()
-        && picker.selected < ThinkingLevel::all().len() - 1
-    {
-        picker.selected += 1;
-    }
-}
-
-fn execute_thinking_selection(state: &mut TuiState) -> Vec<UiEffect> {
-    let Some(picker) = state.overlay.as_thinking_picker() else {
-        return vec![];
-    };
-
-    let levels = ThinkingLevel::all();
-    let Some(&level) = levels.get(picker.selected) else {
-        close_thinking_picker(state);
-        return vec![];
-    };
-
-    // Update state
-    state.config.thinking_level = level;
-    close_thinking_picker(state);
-
-    // Show confirmation message
-    let message = if level == ThinkingLevel::Off {
-        "Thinking disabled".to_string()
-    } else {
-        format!("Thinking level set to {}", level.display_name())
-    };
-    state.transcript.cells.push(HistoryCell::system(message));
-
-    vec![UiEffect::PersistThinking { level }]
 }
 
 // ============================================================================

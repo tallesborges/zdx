@@ -2,16 +2,17 @@
 //!
 //! Contains state, update handlers, and render function for the model picker.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
+use super::{Overlay, OverlayAction, OverlayState};
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::state::{OverlayState, TuiState};
+use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================
@@ -37,88 +38,64 @@ impl ModelPickerState {
 }
 
 // ============================================================================
+// Overlay Trait Implementation
+// ============================================================================
+
+impl Overlay for ModelPickerState {
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        render_model_picker(frame, self, area, input_y)
+    }
+
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                Some(OverlayAction::close())
+            }
+            KeyCode::Up => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                }
+                None
+            }
+            KeyCode::Down => {
+                if self.selected < AVAILABLE_MODELS.len() - 1 {
+                    self.selected += 1;
+                }
+                None
+            }
+            KeyCode::Enter => {
+                let Some(model) = AVAILABLE_MODELS.get(self.selected) else {
+                    return Some(OverlayAction::close());
+                };
+
+                let model_id = model.id.to_string();
+                let display_name = model.display_name;
+
+                tui.config.model = model_id.clone();
+                tui.transcript
+                    .cells
+                    .push(HistoryCell::system(format!("Switched to {}", display_name)));
+
+                Some(OverlayAction::close_with(vec![UiEffect::PersistModel {
+                    model: model_id,
+                }]))
+            }
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // Update Handlers
 // ============================================================================
 
 /// Opens the model picker overlay.
-pub fn open_model_picker(state: &mut TuiState) {
-    if matches!(state.overlay, OverlayState::None) {
-        state.overlay = OverlayState::ModelPicker(ModelPickerState::new(&state.config.model));
+pub fn open_model_picker(overlay: &mut OverlayState, current_model: &str) {
+    if matches!(overlay, OverlayState::None) {
+        *overlay = OverlayState::ModelPicker(ModelPickerState::new(current_model));
     }
-}
-
-/// Closes the model picker overlay.
-pub fn close_model_picker(state: &mut TuiState) {
-    state.overlay = OverlayState::None;
-}
-
-/// Handles key events for the model picker.
-pub fn handle_model_picker_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
-) -> Vec<UiEffect> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    match key.code {
-        KeyCode::Esc => {
-            close_model_picker(state);
-            vec![]
-        }
-        KeyCode::Char('c') if ctrl => {
-            close_model_picker(state);
-            vec![]
-        }
-        KeyCode::Up => {
-            model_picker_select_prev(state);
-            vec![]
-        }
-        KeyCode::Down => {
-            model_picker_select_next(state);
-            vec![]
-        }
-        KeyCode::Enter => execute_model_selection(state),
-        _ => vec![],
-    }
-}
-
-fn model_picker_select_prev(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_model_picker_mut()
-        && picker.selected > 0
-    {
-        picker.selected -= 1;
-    }
-}
-
-fn model_picker_select_next(state: &mut TuiState) {
-    if let Some(picker) = state.overlay.as_model_picker_mut()
-        && picker.selected < AVAILABLE_MODELS.len() - 1
-    {
-        picker.selected += 1;
-    }
-}
-
-fn execute_model_selection(state: &mut TuiState) -> Vec<UiEffect> {
-    let Some(picker) = state.overlay.as_model_picker() else {
-        return vec![];
-    };
-
-    let Some(model) = AVAILABLE_MODELS.get(picker.selected) else {
-        close_model_picker(state);
-        return vec![];
-    };
-
-    let model_id = model.id.to_string();
-    let display_name = model.display_name;
-
-    state.config.model = model_id.clone();
-    close_model_picker(state);
-
-    state
-        .transcript
-        .cells
-        .push(HistoryCell::system(format!("Switched to {}", display_name)));
-
-    vec![UiEffect::PersistModel { model: model_id }]
 }
 
 // ============================================================================

@@ -63,4 +63,13 @@ pub enum UiEffect {
 
     /// Discover project files for the file picker.
     DiscoverFiles,
+
+    /// Open the model picker overlay.
+    OpenModelPicker,
+
+    /// Open the thinking level picker overlay.
+    OpenThinkingPicker,
+
+    /// Open the login overlay and start OAuth flow.
+    OpenLogin,
 }

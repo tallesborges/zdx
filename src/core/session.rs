@@ -663,7 +663,10 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
                 // Truncate long outputs for display
                 let out_str = serde_json::to_string_pretty(out).unwrap_or_default();
                 if out_str.len() > 500 {
-                    output.push_str(&format!("```json\n{}...\n```\n\n", truncate_str(&out_str, 500)));
+                    output.push_str(&format!(
+                        "```json\n{}...\n```\n\n",
+                        truncate_str(&out_str, 500)
+                    ));
                 } else {
                     output.push_str(&format!("```json\n{}\n```\n\n", out_str));
                 }
