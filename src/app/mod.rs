@@ -110,6 +110,15 @@ enum SessionCommands {
         #[arg(value_name = "SESSION_ID")]
         id: Option<String>,
     },
+    /// Rename a session
+    Rename {
+        /// The ID of the session to rename
+        #[arg(value_name = "SESSION_ID")]
+        id: String,
+        /// New title for the session
+        #[arg(value_name = "TITLE")]
+        title: String,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -173,6 +182,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             SessionCommands::List => commands::sessions::list(),
             SessionCommands::Show { id } => commands::sessions::show(&id),
             SessionCommands::Resume { id } => commands::sessions::resume(id, &config).await,
+            SessionCommands::Rename { id, title } => commands::sessions::rename(&id, &title),
         },
 
         Commands::Config { command } => match command {

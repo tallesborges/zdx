@@ -99,6 +99,7 @@ mod tests {
         let events = vec![
             SessionEvent::Meta {
                 schema_version: 1,
+                title: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             SessionEvent::Message {
@@ -202,6 +203,7 @@ mod tests {
         let events = vec![
             SessionEvent::Meta {
                 schema_version: 1,
+                title: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             SessionEvent::Message {

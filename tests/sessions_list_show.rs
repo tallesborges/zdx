@@ -4,6 +4,7 @@ use std::fs;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
+use serde_json::json;
 use tempfile::TempDir;
 
 /// Creates a fake session file with the given events.
@@ -13,6 +14,43 @@ fn create_session_file(temp_dir: &TempDir, session_id: &str, events: &[(String, 
 
     let session_path = sessions_dir.join(format!("{}.jsonl", session_id));
     let mut content = String::new();
+
+    for (role, text, ts) in events {
+        let event = serde_json::json!({
+            "type": "message",
+            "role": role,
+            "text": text,
+            "ts": ts
+        });
+        content.push_str(&serde_json::to_string(&event).unwrap());
+        content.push('\n');
+    }
+
+    fs::write(&session_path, content).unwrap();
+}
+
+fn create_session_with_meta(
+    temp_dir: &TempDir,
+    session_id: &str,
+    title: Option<&str>,
+    events: &[(String, String, String)],
+) {
+    let sessions_dir = temp_dir.path().join("sessions");
+    fs::create_dir_all(&sessions_dir).unwrap();
+
+    let session_path = sessions_dir.join(format!("{}.jsonl", session_id));
+    let mut content = String::new();
+
+    let mut meta = json!({
+        "type": "meta",
+        "schema_version": 1,
+        "ts": "2024-01-01T00:00:00Z"
+    });
+    if let Some(t) = title {
+        meta["title"] = json!(t);
+    }
+    content.push_str(&serde_json::to_string(&meta).unwrap());
+    content.push('\n');
 
     for (role, text, ts) in events {
         let event = serde_json::json!({
@@ -223,4 +261,74 @@ fn test_sessions_list_shows_multiple_sorted() {
         second_pos < first_pos,
         "Sessions should be sorted by modification time (newest first)"
     );
+}
+
+#[test]
+fn test_sessions_list_shows_title_from_meta() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_session_with_meta(&temp_dir, "titled-session", Some("My Session Title"), &[]);
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["sessions", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("My Session Title"));
+    assert!(output_str.contains("titled-session"));
+}
+
+#[test]
+fn test_sessions_rename_updates_title() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_session_with_meta(
+        &temp_dir,
+        "rename-session",
+        Some("Old Title"),
+        &[(
+            "user".to_string(),
+            "hello".to_string(),
+            "123:000Z".to_string(),
+        )],
+    );
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["sessions", "rename", "rename-session", "New Title"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("New Title"));
+
+    // Ensure list reflects new title
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["sessions", "list"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("New Title"));
+
+    // Verify meta line was updated on disk
+    let session_path = temp_dir
+        .path()
+        .join("sessions")
+        .join("rename-session.jsonl");
+    let first_line = fs::read_to_string(session_path)
+        .unwrap()
+        .lines()
+        .next()
+        .unwrap()
+        .to_string();
+    let meta: serde_json::Value = serde_json::from_str(&first_line).unwrap();
+    assert_eq!(meta["title"], json!("New Title"));
 }

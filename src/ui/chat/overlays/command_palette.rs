@@ -136,6 +136,17 @@ fn execute_command(tui: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
             }
             vec![]
         }
+        "rename" => {
+            if tui.conversation.session.is_none() {
+                tui.transcript
+                    .cells
+                    .push(HistoryCell::system("No active session to rename."));
+                vec![]
+            } else {
+                tui.input.set_text("/rename ");
+                vec![]
+            }
+        }
         "model" => vec![UiEffect::OpenModelPicker],
         "sessions" => vec![UiEffect::OpenSessionPicker],
         "thinking" => vec![UiEffect::OpenThinkingPicker],

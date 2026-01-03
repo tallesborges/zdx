@@ -1,17 +1,17 @@
 //! Overlay modules for the TUI.
 
+pub mod command_palette;
 pub mod file_picker;
 pub mod login;
 pub mod model_picker;
-pub mod command_palette;
 pub mod session_picker;
 pub mod thinking_picker;
 
+pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
 pub use login::{LoginState, handle_login_result};
 pub use model_picker::ModelPickerState;
-pub use command_palette::CommandPaletteState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;

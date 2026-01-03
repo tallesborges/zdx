@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEventKind};
 
 use crate::core::interrupt;
-use crate::core::session::{SessionEvent, SessionSummary};
+use crate::core::session::{SessionEvent, SessionSummary, short_session_id};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::{SessionUiEvent, UiEvent};
 use crate::ui::chat::overlays::{Overlay, OverlayAction, SessionPickerState, handle_login_result};
@@ -102,6 +102,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     .transcript
                     .cells
                     .push(HistoryCell::system("Conversation cleared."));
+                vec![]
+            }
+            SessionUiEvent::Renamed { session_id, title } => {
+                handle_session_renamed(&mut app.tui, &session_id, title);
+                vec![]
+            }
+            SessionUiEvent::RenameFailed { error } => {
+                app.tui.transcript.cells.push(HistoryCell::system(&error));
                 vec![]
             }
         },
@@ -512,6 +520,33 @@ fn submit_input(app: &mut AppState) -> Vec<UiEffect> {
 
     let text = tui.get_input_text();
 
+    // Slash command: /rename <title>
+    let trimmed = text.trim();
+    if let Some(rest) = trimmed.strip_prefix("/rename") {
+        let title = rest.trim();
+        if title.is_empty() {
+            tui.transcript
+                .cells
+                .push(HistoryCell::system("Usage: /rename <title>"));
+            tui.clear_input();
+            return vec![];
+        }
+        if let Some(session) = &tui.conversation.session {
+            let session_id = session.id.clone();
+            tui.clear_input();
+            return vec![UiEffect::RenameSession {
+                session_id,
+                title: Some(title.to_string()),
+            }];
+        } else {
+            tui.transcript
+                .cells
+                .push(HistoryCell::system("No active session to rename."));
+            tui.clear_input();
+            return vec![];
+        }
+    }
+
     // Check if we're submitting the handoff goal (to trigger generation)
     // This check must come before the empty check to show proper error
     if tui.input.handoff.is_pending() {
@@ -753,6 +788,16 @@ fn handle_session_created(
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
         tui.transcript.cells.push(HistoryCell::system(message));
     }
+}
+
+/// Handles session rename success.
+fn handle_session_renamed(tui: &mut TuiState, session_id: &str, title: Option<String>) {
+    let short_id = short_session_id(session_id);
+    let display_title = title.unwrap_or_else(|| short_id.clone());
+    tui.transcript.cells.push(HistoryCell::system(format!(
+        "Session {} renamed to \"{}\".",
+        short_id, display_title
+    )));
 }
 
 // ============================================================================
