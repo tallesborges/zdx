@@ -147,37 +147,71 @@ pub fn spawn_session_preview(session_id: String) -> mpsc::Receiver<UiEvent> {
 }
 
 /// Spawns async new session creation and returns the receiver.
-pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_create(
+    config: crate::config::Config,
+    root: PathBuf,
+) -> mpsc::Receiver<UiEvent> {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
-        let event = tokio::task::spawn_blocking(move || {
-            let session = match session::Session::new() {
-                Ok(s) => s,
-                Err(e) => {
-                    return UiEvent::Session(SessionUiEvent::CreateFailed {
-                        error: format!("Failed to create session: {}", e),
-                    });
-                }
-            };
+        let event =
+            tokio::task::spawn_blocking(move || {
+                let session = match session::Session::new() {
+                    Ok(s) => s,
+                    Err(e) => {
+                        return UiEvent::Session(SessionUiEvent::CreateFailed {
+                            error: format!("Failed to create session: {}", e),
+                        });
+                    }
+                };
 
-            // Load AGENTS.md paths
-            let context_paths = match crate::core::context::build_effective_system_prompt_with_paths(
-                &config,
-                &root,
-            ) {
-                Ok(effective) => effective.loaded_agents_paths,
-                Err(_) => Vec::new(), // Context loading failed, but session was created
-            };
+                // Load AGENTS.md paths
+                let context_paths =
+                    match crate::core::context::build_effective_system_prompt_with_paths(
+                        &config, &root,
+                    ) {
+                        Ok(effective) => effective.loaded_agents_paths,
+                        Err(_) => Vec::new(), // Context loading failed, but session was created
+                    };
 
-            UiEvent::Session(SessionUiEvent::Created {
-                session,
-                context_paths,
+                UiEvent::Session(SessionUiEvent::Created {
+                    session,
+                    context_paths,
+                })
             })
+            .await
+            .unwrap_or_else(|e| {
+                UiEvent::Session(SessionUiEvent::CreateFailed {
+                    error: format!("Task failed: {}", e),
+                })
+            });
+
+        let _ = tx.send(event).await;
+    });
+
+    rx
+}
+
+/// Spawns async session rename and returns the receiver.
+pub fn spawn_session_rename(session_id: String, title: Option<String>) -> mpsc::Receiver<UiEvent> {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
+
+    tokio::spawn(async move {
+        let id = session_id.clone();
+        let event = tokio::task::spawn_blocking(move || {
+            match session::set_session_title(&id, title.clone()) {
+                Ok(new_title) => UiEvent::Session(SessionUiEvent::Renamed {
+                    session_id: id,
+                    title: new_title,
+                }),
+                Err(e) => UiEvent::Session(SessionUiEvent::RenameFailed {
+                    error: format!("Failed to rename session: {}", e),
+                }),
+            }
         })
         .await
         .unwrap_or_else(|e| {
-            UiEvent::Session(SessionUiEvent::CreateFailed {
+            UiEvent::Session(SessionUiEvent::RenameFailed {
                 error: format!("Task failed: {}", e),
             })
         });

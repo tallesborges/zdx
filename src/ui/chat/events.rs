@@ -51,6 +51,15 @@ pub enum SessionUiEvent {
 
     /// New session creation failed.
     CreateFailed { error: String },
+
+    /// Session rename succeeded.
+    Renamed {
+        session_id: String,
+        title: Option<String>,
+    },
+
+    /// Session rename failed.
+    RenameFailed { error: String },
 }
 
 /// Unified event enum for the TUI.

@@ -55,19 +55,16 @@ pub fn execute_handoff_submit(state: &mut TuiState, prompt: &str) {
         Ok(new_session) => {
             let session_path = new_session.path().display().to_string();
             state.conversation.session = Some(new_session);
-            state
-                .transcript
-                .cells
-                .push(HistoryCell::system(format!("Session path: {}", session_path)));
+            state.transcript.cells.push(HistoryCell::system(format!(
+                "Session path: {}",
+                session_path
+            )));
         }
         Err(e) => {
-            state
-                .transcript
-                .cells
-                .push(HistoryCell::system(format!(
-                    "Warning: Failed to create session: {}",
-                    e
-                )));
+            state.transcript.cells.push(HistoryCell::system(format!(
+                "Warning: Failed to create session: {}",
+                e
+            )));
             // Continue without session - user can still chat
         }
     }
@@ -97,24 +94,18 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         Ok(events) if !events.is_empty() => session::format_transcript(&events),
         Ok(_) => {
             state.input.handoff = HandoffState::Idle;
-            state
-                .transcript
-                .cells
-                .push(HistoryCell::system(format!(
-                    "Handoff failed: Session '{}' is empty",
-                    session_id
-                )));
+            state.transcript.cells.push(HistoryCell::system(format!(
+                "Handoff failed: Session '{}' is empty",
+                session_id
+            )));
             return;
         }
         Err(e) => {
             state.input.handoff = HandoffState::Idle;
-            state
-                .transcript
-                .cells
-                .push(HistoryCell::system(format!(
-                    "Handoff failed: Could not load session: {}",
-                    e
-                )));
+            state.transcript.cells.push(HistoryCell::system(format!(
+                "Handoff failed: Could not load session: {}",
+                e
+            )));
             return;
         }
     };

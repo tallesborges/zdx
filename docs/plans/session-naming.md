@@ -1,4 +1,4 @@
-# Session Naming Implementation Plan
+# Session Naming Implementation Plan _(MVP shipped)_
 
 ## Inputs
 
@@ -68,11 +68,11 @@
 
 - **Goal**: Store and read title from session files; display in `zdx sessions list`
 - **Scope checklist**:
-  - [ ] Add `title: Option<String>` to `SessionEvent::Meta`
-  - [ ] Add `title: Option<String>` to `SessionSummary`
-  - [ ] Update `list_sessions()` to extract title from meta event
-  - [ ] Update `zdx sessions list` output: `<title|id-prefix>  <uuid>  <timestamp>`
-  - [ ] Backward compat: sessions without title show UUID prefix
+  - [x] Add `title: Option<String>` to `SessionEvent::Meta`
+  - [x] Add `title: Option<String>` to `SessionSummary`
+  - [x] Update `list_sessions()` to extract title from meta event
+  - [x] Update `zdx sessions list` output: `<title|id-prefix>  <uuid>  <timestamp>`
+  - [x] Backward compat: sessions without title show UUID prefix
 - **✅ Demo**:
   1. Manually edit a session file, add `"title":"test session"` to meta line
   2. Run `zdx sessions list` → see "test session" in output
@@ -84,9 +84,9 @@
 
 - **Goal**: Session picker shows title instead of truncated UUID
 - **Scope checklist**:
-  - [ ] Pass `SessionSummary.title` to picker state
-  - [ ] Update `render_session_picker` to show `title.unwrap_or(short_id)`
-  - [ ] Keep timestamp display
+- [x] Pass `SessionSummary.title` to picker state
+- [x] Update `render_session_picker` to show `title.unwrap_or(short_id)`
+- [x] Keep timestamp display
 - **✅ Demo**:
   1. Have a session with title (from Slice 1 manual edit)
   2. Open TUI → Ctrl+O → see title in list
@@ -98,11 +98,11 @@
 
 - **Goal**: `/rename <new title>` in TUI updates session title
 - **Scope checklist**:
-  - [ ] Add `/rename` slash command
-  - [ ] Implement `Session::set_title()` in `src/core/session.rs` (rewrite meta line atomically)
-  - [ ] TUI triggers rename via `UiEffect::RenameSession` → runtime handler calls core
-  - [ ] Show confirmation in transcript
-  - [ ] Update header or status to reflect new title
+- [x] Add `/rename` slash command
+- [x] Implement `Session::set_title()` in `src/core/session.rs` (rewrite meta line atomically)
+- [x] TUI triggers rename via `UiEffect::RenameSession` → runtime handler calls core
+- [x] Show confirmation in transcript
+- [ ] Update header or status to reflect new title (still pending)
 - **✅ Demo**:
   1. Open TUI with existing session
   2. Type `/rename my new title` → see confirmation
@@ -115,9 +115,9 @@
 
 - **Goal**: `zdx sessions rename <id> "new title"` for scripting
 - **Scope checklist**:
-  - [ ] Add `Rename { id, title }` variant to `SessionCommands`
-  - [ ] Implement `commands::sessions::rename(id, title)` — calls `Session::set_title()` from core
-  - [ ] Reuses title update logic from `src/core/session.rs`
+- [x] Add `Rename { id, title }` variant to `SessionCommands`
+- [x] Implement `commands::sessions::rename(id, title)` — calls `Session::set_title()` from core
+- [x] Reuses title update logic from `src/core/session.rs`
 - **✅ Demo**:
   1. `zdx sessions list` → note a session ID
   2. `zdx sessions rename <id> "renamed session"`

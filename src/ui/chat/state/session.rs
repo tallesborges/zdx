@@ -80,6 +80,9 @@ pub struct SessionOpsState {
 
     /// Receiver for async session creation.
     pub create_rx: Option<mpsc::Receiver<UiEvent>>,
+
+    /// Receiver for async session rename.
+    pub rename_rx: Option<mpsc::Receiver<UiEvent>>,
 }
 
 impl SessionOpsState {
@@ -94,6 +97,7 @@ impl SessionOpsState {
             || self.load_rx.is_some()
             || self.preview_rx.is_some()
             || self.create_rx.is_some()
+            || self.rename_rx.is_some()
     }
 }
 

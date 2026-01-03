@@ -33,6 +33,12 @@ pub enum UiEffect {
     /// Append an event to the session log.
     SaveSession { event: SessionEvent },
 
+    /// Rename the current session.
+    RenameSession {
+        session_id: String,
+        title: Option<String>,
+    },
+
     /// Persist the model preference to config.
     PersistModel { model: String },
 
