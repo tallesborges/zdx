@@ -35,8 +35,6 @@ pub mod thinking_picker;
 mod traits;
 
 // Re-export the Overlay trait and OverlayAction
-pub use traits::{Overlay, OverlayAction};
-
 // Re-export state types (open is now via the trait)
 pub use file_picker::{FilePickerState, discover_files};
 pub use login::{LoginState, handle_login_result};
@@ -44,6 +42,7 @@ pub use model_picker::ModelPickerState;
 pub use palette::CommandPaletteState;
 pub use session_picker::SessionPickerState;
 pub use thinking_picker::ThinkingPickerState;
+pub use traits::{Overlay, OverlayAction};
 
 use crate::ui::chat::effects::UiEffect;
 

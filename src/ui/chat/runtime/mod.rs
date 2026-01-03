@@ -26,7 +26,9 @@ use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::overlays::{LoginState, ModelPickerState, ThinkingPickerState};
+use crate::ui::chat::overlays::{
+    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, ThinkingPickerState,
+};
 use crate::ui::chat::state::{AgentState, AppState, HandoffState};
 use crate::ui::chat::{reducer, terminal, view};
 use crate::ui::transcript::HistoryCell;
@@ -400,13 +402,26 @@ impl TuiRuntime {
             }
 
             // Overlay effects
+            UiEffect::OpenCommandPalette { command_mode } => {
+                self.state
+                    .overlay
+                    .try_open::<CommandPaletteState>(command_mode);
+            }
+            UiEffect::OpenFilePicker { trigger_pos } => {
+                let effects = self.state.overlay.try_open::<FilePickerState>(trigger_pos);
+                self.execute_effects(effects);
+            }
             UiEffect::OpenModelPicker => {
                 let current_model = self.state.tui.config.model.clone();
-                self.state.overlay.try_open::<ModelPickerState>(current_model);
+                self.state
+                    .overlay
+                    .try_open::<ModelPickerState>(current_model);
             }
             UiEffect::OpenThinkingPicker => {
                 let current_thinking = self.state.tui.config.thinking_level;
-                self.state.overlay.try_open::<ThinkingPickerState>(current_thinking);
+                self.state
+                    .overlay
+                    .try_open::<ThinkingPickerState>(current_thinking);
             }
             UiEffect::OpenLogin => {
                 let effects = self.state.overlay.try_open::<LoginState>(());

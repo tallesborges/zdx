@@ -11,10 +11,7 @@ use crate::core::interrupt;
 use crate::core::session::SessionEvent;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::overlays::{
-    CommandPaletteState, FilePickerState, OverlayAction, OverlayState, ThinkingPickerState,
-    handle_login_result,
-};
+use crate::ui::chat::overlays::{OverlayAction, OverlayState, handle_login_result};
 use crate::ui::chat::state::{AgentState, AppState, HandoffState, TuiState};
 use crate::ui::chat::view;
 use crate::ui::transcript::{HistoryCell, ToolState};
@@ -310,19 +307,21 @@ fn handle_main_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<U
         }
         KeyCode::Char('/') if !ctrl && !shift && !alt => {
             if tui.get_input_text().is_empty() {
-                app.overlay.try_open::<CommandPaletteState>(false);
+                vec![UiEffect::OpenCommandPalette {
+                    command_mode: false,
+                }]
             } else {
                 tui.input.textarea.input(key);
+                vec![]
             }
-            vec![]
         }
         KeyCode::Char('p') if ctrl && !shift && !alt => {
-            app.overlay.try_open::<CommandPaletteState>(false);
-            vec![]
+            vec![UiEffect::OpenCommandPalette {
+                command_mode: false,
+            }]
         }
         KeyCode::Char('t') if ctrl && !shift && !alt => {
-            app.overlay.try_open::<ThinkingPickerState>(tui.config.thinking_level);
-            vec![]
+            vec![UiEffect::OpenThinkingPicker]
         }
         KeyCode::Char('c') if ctrl => {
             // Ctrl+C: interrupt agent, clear input, or quit
@@ -424,7 +423,7 @@ fn handle_main_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<U
                 };
                 // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
                 let trigger_pos = cursor_pos.saturating_sub(1);
-                return app.overlay.try_open::<FilePickerState>(trigger_pos);
+                return vec![UiEffect::OpenFilePicker { trigger_pos }];
             }
 
             vec![]
