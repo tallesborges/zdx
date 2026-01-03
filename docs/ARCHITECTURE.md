@@ -362,8 +362,8 @@ Every overlay module **must** provide:
 | Component | Signature | Purpose |
 |-----------|-----------|---------|
 | **State** | `pub struct XxxState { ... }` | All overlay-specific state |
-| **Overlay impl** | `impl Overlay for XxxState { fn render(...); fn handle_key(...) -> Option<OverlayAction> }` | Trait-enforced render + key handling |
-| **Open** | `pub fn open_xxx(overlay: &mut OverlayState, /* params */) -> Vec<UiEffect>` | Initialize and show overlay (return effects if needed) |
+| **Overlay impl** | `impl Overlay for XxxState { type Config; fn open(...); fn render(...); fn handle_key(...) }` | Trait-enforced open/render/key handling |
+| **From impl** | `impl From<XxxState> for OverlayState` | Type-safe conversion for `try_open` |
 
 ### State Contract
 
@@ -386,23 +386,48 @@ impl XxxState {
 }
 ```
 
-### Open Function Contract
+### Overlay Trait Contract
 
 ```rust
-/// Opens the overlay if no other overlay is active.
-/// Returns effects for async operations (e.g., file discovery).
-pub fn open_xxx(overlay: &mut OverlayState, /* params */) -> Vec<UiEffect> {
-    // Guard: only open if no overlay is active
-    if !matches!(overlay, OverlayState::None) {
-        return vec![];
+impl Overlay for XxxState {
+    type Config = /* config type, use () if none needed */;
+
+    fn open(config: Self::Config) -> (Self, Vec<UiEffect>) {
+        // Create state and return any async effects
+        (Self::new(config), vec![/* effects */])
     }
-    
-    // Initialize state
-    *overlay = OverlayState::Xxx(XxxState::new(/* params */));
-    
-    // Return any async effects needed (e.g., DiscoverFiles)
-    vec![/* effects */]
+
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        render_xxx(frame, self, area, input_y)
+    }
+
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        // Handle keys, return None to continue or Some(action) to close/transition
+    }
 }
+
+impl From<XxxState> for OverlayState {
+    fn from(state: XxxState) -> Self {
+        OverlayState::Xxx(state)
+    }
+}
+```
+
+### Opening Overlays
+
+Use `OverlayState::try_open::<T>(config)`:
+
+```rust
+// Open with simple config
+overlay.try_open::<FilePickerState>(trigger_pos);
+overlay.try_open::<LoginState>(());
+overlay.try_open::<ModelPickerState>(current_model.clone());
+
+// Open with struct config
+overlay.try_open::<SessionPickerState>(SessionPickerConfig {
+    sessions,
+    original_cells,
+});
 ```
 
 ### Key Handler Contract
@@ -472,19 +497,26 @@ pub fn render_xxx(
 
 ### Effect Pattern
 
-Overlays can return `UiEffect`s for operations that require I/O:
+Overlays return `UiEffect`s via the `open()` method or `OverlayAction`:
 
 ```rust
 // Open returns effects for async initialization
-pub fn open_file_picker(overlay: &mut OverlayState, trigger_pos: usize) -> Vec<UiEffect> {
-    *overlay = OverlayState::FilePicker(FilePickerState::new(trigger_pos));
-    vec![UiEffect::DiscoverFiles]  // Async file discovery
+impl Overlay for FilePickerState {
+    type Config = usize;
+
+    fn open(trigger_pos: Self::Config) -> (Self, Vec<UiEffect>) {
+        (Self::new(trigger_pos), vec![UiEffect::DiscoverFiles])
+    }
 }
 
-// Selection returns effects for persistence or other I/O
-fn execute_model_selection(tui: &mut TuiState) -> Vec<UiEffect> {
-    // ... update state ...
-    vec![UiEffect::PersistModel { model: model_id }]
+// Selection returns effects via OverlayAction
+fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    match key.code {
+        KeyCode::Enter => Some(OverlayAction::close_with(vec![
+            UiEffect::PersistModel { model: model_id }
+        ])),
+        _ => None,
+    }
 }
 ```
 
@@ -555,7 +587,7 @@ pub enum LoginState {
 The flow is handled via `OverlayAction::Transition`:
 
 1. **Opening**: `/login` command returns `UiEffect::OpenLogin`
-2. **Runtime**: Calls `open_login()` which opens overlay and returns `OpenBrowser` effect
+2. **Runtime**: Calls `overlay.try_open::<LoginState>(())` which returns `OpenBrowser` effect
 3. **Input**: User pastes auth code, `handle_key()` returns `Transition { new_state: Exchanging, effects: [SpawnTokenExchange] }`
 4. **Async result**: `UiEvent::LoginResult` arrives, `handle_login_result()` closes overlay or returns to `AwaitingCode` with error
 
@@ -565,7 +597,7 @@ This pattern uses `OverlayAction::Transition` for state machine transitions with
 
 For overlays that load data asynchronously (file picker, session picker):
 
-1. **Open** returns an effect to trigger async loading
+1. **`open()`** returns effects to trigger async loading (e.g., `DiscoverFiles`)
 2. **State** includes a `loading: bool` field
 3. **Handler** processes result events (e.g., `UiEvent::FilesDiscovered`)
 4. **Render** shows loading state until data arrives
@@ -576,14 +608,16 @@ When adding a new overlay:
 
 - [ ] Create `src/ui/chat/overlays/xxx.rs`
 - [ ] Define `XxxState` struct with `new()` constructor
-- [ ] **Implement `Overlay` trait** for `XxxState` (compile-time enforced)
-  - `render(&self, frame, area, input_y)` - render the overlay
-  - `handle_key(&mut self, tui, key) -> Option<OverlayAction>` - key handling
-- [ ] Implement `open_xxx()` function returning `Vec<UiEffect>` (for async effects)
+- [ ] **Implement `Overlay` trait** for `XxxState`:
+  - `type Config` - configuration parameters (use `()` if none)
+  - `fn open(config) -> (Self, Vec<UiEffect>)` - create state and return effects
+  - `fn render(&self, frame, area, input_y)` - render the overlay
+  - `fn handle_key(&mut self, tui, key) -> Option<OverlayAction>` - key handling
+- [ ] **Implement `From<XxxState> for OverlayState`** - for `try_open` conversion
 - [ ] Add `XxxState` to `OverlayState` enum in `overlays/mod.rs`
 - [ ] **Add variant to `OverlayState::render()` match** in `overlays/mod.rs`
 - [ ] **Add variant to `OverlayState::handle_key()` match** in `overlays/mod.rs`
-- [ ] Export from `overlays/mod.rs`
+- [ ] Export state type from `overlays/mod.rs`
 - [ ] Add any new effects to `effects.rs`
 - [ ] Add effect handler in `runtime/mod.rs` if needed
 - [ ] Update this documentation
