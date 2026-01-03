@@ -579,6 +579,11 @@ pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthro
 
 /// Updates a session's title by ID.
 pub fn set_session_title(id: &str, title: Option<String>) -> Result<Option<String>> {
+    let path = sessions_dir().join(format!("{}.jsonl", id));
+    if !path.exists() {
+        bail!("Session '{}' not found", id);
+    }
+
     let mut session = Session::with_id(id.to_string())?;
     session.set_title(title)
 }
