@@ -313,31 +313,19 @@ fn screen_to_transcript_pos(
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     // Try to dispatch to the active overlay
-    match app.overlay.as_mut() {
-        None => handle_main_key(app, key), // No overlay active
-        Some(overlay) => match overlay.handle_key(&mut app.tui, key) {
-            None => vec![],                                      // Overlay handled it, continue
-            Some(action) => process_overlay_action(app, action), // Overlay action
-        },
+    if let Some(overlay) = app.overlay.as_mut() {
+        return match overlay.handle_key(&mut app.tui, key) {
+            None => vec![], // Overlay handled it, continue
+            Some(OverlayAction::Close(effects)) => {
+                app.overlay = None;
+                effects
+            }
+            Some(OverlayAction::Effects(effects)) => effects,
+        };
     }
-}
 
-/// Processes an OverlayAction returned by an overlay's handle_key.
-fn process_overlay_action(app: &mut AppState, action: OverlayAction) -> Vec<UiEffect> {
-    match action {
-        OverlayAction::Close(effects) => {
-            app.overlay = None;
-            effects
-        }
-        OverlayAction::Transition {
-            new_overlay,
-            effects,
-        } => {
-            app.overlay = Some(new_overlay);
-            effects
-        }
-        OverlayAction::Effects(effects) => effects,
-    }
+    // No overlay active - handle main input
+    handle_main_key(app, key)
 }
 
 fn handle_main_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {

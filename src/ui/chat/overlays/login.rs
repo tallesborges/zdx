@@ -52,18 +52,20 @@ impl LoginState {
                 KeyCode::Enter => {
                     let code = input.trim().to_string();
                     if code.is_empty() {
-                        None
-                    } else {
-                        let verifier = match self {
-                            LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
-                            _ => return None,
-                        };
-
-                        Some(OverlayAction::Transition {
-                            new_overlay: Overlay::Login(LoginState::Exchanging),
-                            effects: vec![UiEffect::SpawnTokenExchange { code, verifier }],
-                        })
+                        return None;
                     }
+
+                    let verifier = match self {
+                        LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
+                        _ => return None,
+                    };
+
+                    *self = LoginState::Exchanging;
+
+                    Some(OverlayAction::Effects(vec![UiEffect::SpawnTokenExchange {
+                        code,
+                        verifier,
+                    }]))
                 }
                 KeyCode::Backspace => {
                     input.pop();

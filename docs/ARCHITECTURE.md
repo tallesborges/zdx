@@ -320,304 +320,90 @@ It does **no state logic**—that's entirely in the reducer.
 
 ### Overlay State (Mutual Exclusion)
 
-Only one overlay can be active at a time:
+Only one overlay can be active at a time. The active overlay lives alongside the main TUI state:
 
 ```rust
-pub enum OverlayState {
-    None,
+// src/ui/chat/overlays/mod.rs
+pub enum Overlay {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
     ThinkingPicker(ThinkingPickerState),
     SessionPicker(SessionPickerState),
-    FilePicker(FilePickerState),
     Login(LoginState),
+    FilePicker(FilePickerState),
 }
-```
 
-Overlay state is stored alongside non-overlay state in `AppState`:
-
-```rust
+// src/ui/chat/state/mod.rs
 pub struct AppState {
     pub tui: TuiState,
-    pub overlay: OverlayState,
+    pub overlay: Option<Overlay>,
 }
 ```
 
-This eliminates cascading `if overlay_a.is_some() / if overlay_b.is_some()` checks.
+The `Option` wrapper keeps the reducer logic simple: either an overlay owns input, or the main key handler does.
 
 ## Overlay Contract
 
-Overlays are modal UI components that temporarily take over keyboard input. Each overlay is **self-contained**: it owns its state, update handlers, and render function.
+Overlays are modal UI components that temporarily take over keyboard input. Each overlay is **self-contained**: it owns its state, key handler, and render function. Overlays mutate their own state (and the shared `TuiState`) directly; global changes still go through effects and reducer-driven events.
 
-### Architecture Principle
+### Lifecycle
 
-> Overlay handlers mutate `TuiState` directly via `Overlay::handle_key()`, but they're called **FROM** the reducer (`OverlayState::handle_key`). The reducer remains the single entry point for state mutations and applies the returned `OverlayAction`.
+1. **Open**: A reducer returns `UiEffect::OpenXxx` (e.g., command palette, model picker). The runtime executes the effect by creating the overlay state and setting `AppState.overlay = Some(Overlay::Xxx(state))`. Some overlays return additional effects from `open()` (e.g., file discovery, OAuth browser open).
+2. **Handle input**: While an overlay is active, key events are routed to it first. The overlay mutates `self` and `TuiState` directly, then optionally returns an `OverlayAction`:
+   - `Close(Vec<UiEffect>)` closes the overlay and schedules effects
+   - `Effects(Vec<UiEffect>)` keeps the overlay open but triggers effects
+3. **Async results**: Background tasks feed `UiEvent`s back into the reducer (e.g., `UiEvent::LoginResult`, `UiEvent::FilesDiscovered`, session events). Reducer helpers update overlay state based on those events (e.g., `handle_login_result`, `handle_files_discovered`).
 
-This is the intended pattern: overlays are self-contained modules, but the reducer orchestrates when they're called.
-
-### Required Components
-
-Every overlay module **must** provide:
-
-| Component | Signature | Purpose |
-|-----------|-----------|---------|
-| **State** | `pub struct XxxState { ... }` | All overlay-specific state |
-| **Overlay impl** | `impl Overlay for XxxState { type Config; fn open(...); fn render(...); fn handle_key(...) }` | Trait-enforced open/render/key handling |
-| **From impl** | `impl From<XxxState> for OverlayState` | Type-safe conversion for `try_open` |
-
-### State Contract
+### Key Handler Integration
 
 ```rust
-#[derive(Debug, Clone)]
-pub struct XxxState {
-    // Selection index for list-based overlays
-    pub selected: usize,
-    // Scroll offset for long lists
-    pub offset: usize,
-    // Overlay-specific fields...
-}
+// src/ui/chat/reducer.rs
+fn handle_key(app: &mut AppState, key: KeyEvent) -> Vec<UiEffect> {
+    if let Some(overlay) = app.overlay.as_mut() {
+        return match overlay.handle_key(&mut app.tui, key) {
+            None => vec![], // Overlay handled it
+            Some(OverlayAction::Close(effects)) => {
+                app.overlay = None;
+                effects
+            }
+            Some(OverlayAction::Effects(effects)) => effects,
+        };
+    }
 
-impl XxxState {
-    /// Creates a new state with sensible defaults.
-    pub fn new(/* initialization params */) -> Self { ... }
-    
-    /// Helper methods for state queries (keep state encapsulated).
-    pub fn selected_item(&self) -> Option<&Item> { ... }
+    handle_main_key(app, key)
 }
 ```
 
-### Overlay Trait Contract
-
-```rust
-impl Overlay for XxxState {
-    type Config = /* config type, use () if none needed */;
-
-    fn open(config: Self::Config) -> (Self, Vec<UiEffect>) {
-        // Create state and return any async effects
-        (Self::new(config), vec![/* effects */])
-    }
-
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_xxx(frame, self, area, input_y)
-    }
-
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
-        // Handle keys, return None to continue or Some(action) to close/transition
-    }
-}
-
-impl From<XxxState> for OverlayState {
-    fn from(state: XxxState) -> Self {
-        OverlayState::Xxx(state)
-    }
-}
-```
-
-### Opening Overlays
-
-Use `OverlayState::try_open::<T>(config)`:
-
-```rust
-// Open with simple config
-overlay.try_open::<FilePickerState>(trigger_pos);
-overlay.try_open::<LoginState>(());
-overlay.try_open::<ModelPickerState>(current_model.clone());
-
-// Open with struct config
-overlay.try_open::<SessionPickerState>(SessionPickerConfig {
-    sessions,
-    original_cells,
-});
-```
-
-### Key Handler Contract
-
-```rust
-impl Overlay for XxxState {
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
-        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-        match key.code {
-            // Standard overlay keys (Esc and Ctrl+C close)
-            KeyCode::Esc | KeyCode::Char('c') if ctrl => Some(OverlayAction::close()),
-            // Navigation (Up/Down for lists)
-            KeyCode::Up => { /* select_prev */ None }  // Continue, no effects
-            KeyCode::Down => { /* select_next */ None }
-            // Selection (Enter/Tab)
-            KeyCode::Enter => { /* execute */ Some(OverlayAction::close_with(effects)) }
-            // Filtering (for overlays with search)
-            KeyCode::Char(c) if !ctrl => { /* add to filter */ None }
-            KeyCode::Backspace => { /* remove from filter */ None }
-            _ => None,  // Continue with overlay open
-        }
-    }
-}
-```
-
-The return type is `Option<OverlayAction>`:
-- `None` = continue with overlay open, no effects
-- `Some(Close(effects))` = close overlay and execute effects
-- `Some(Transition { new_state, effects })` = transition to new overlay state
-- `Some(Effects(effects))` = continue with overlay open, but execute effects (rare)
-
-### Render Function Contract
-
-```rust
-/// Renders the overlay centered above the input area.
-/// Takes immutable reference to overlay state (not full TuiState).
-pub fn render_xxx(
-    frame: &mut Frame,
-    state: &XxxState,       // Immutable borrow of overlay state only
-    area: Rect,             // Full terminal area
-    input_top_y: u16,       // Y position of input (for vertical centering)
-) {
-    // 1. Calculate dimensions (width, height)
-    let picker_width = /* ... */;
-    let picker_height = /* ... */;
-    
-    // 2. Center horizontally, position above input
-    let picker_x = (area.width.saturating_sub(picker_width)) / 2;
-    let picker_y = (input_top_y.saturating_sub(picker_height)) / 2;
-    let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
-    
-    // 3. Clear background (required for overlays)
-    frame.render_widget(Clear, picker_area);
-    
-    // 4. Render border with title
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(/* accent color */))
-        .title(" Title ");
-    frame.render_widget(block, picker_area);
-    
-    // 5. Render content (list, form, etc.)
-    // 6. Render hints at bottom
-}
-```
+There is no separate mutation enum: overlays update their own state in place and only return actions when the reducer needs to close the overlay or dispatch effects.
 
 ### Effect Pattern
 
-Overlays return `UiEffect`s via the `open()` method or `OverlayAction`:
+- **Open-time effects**: `open()` returns `Vec<UiEffect>` for async setup (e.g., `FilePickerState::open` returns `DiscoverFiles`).
+- **Inline effects**: `handle_key` can return `OverlayAction::Effects` to launch async work while staying open. For state machines, mutate `self` first, then return effects (e.g., login moves to `Exchanging` before spawning the token exchange).
+- **Close-time effects**: `OverlayAction::Close` can return effects that should run after the overlay is dismissed (e.g., load a session, persist a model choice).
 
-```rust
-// Open returns effects for async initialization
-impl Overlay for FilePickerState {
-    type Config = usize;
+### Async Workflows
 
-    fn open(trigger_pos: Self::Config) -> (Self, Vec<UiEffect>) {
-        (Self::new(trigger_pos), vec![UiEffect::DiscoverFiles])
-    }
-}
+- **Login**: `LoginState::open` spawns `OpenBrowser`. When the user submits a code, the overlay sets `self` to `Exchanging` and returns `SpawnTokenExchange`. The runtime polls `auth.login_rx` and emits `UiEvent::LoginResult`, which `handle_login_result` uses to close or reset the overlay.
+- **File picker**: `FilePickerState::open` triggers `DiscoverFiles`. The runtime owns the discovery receiver and emits `UiEvent::FilesDiscovered`; the reducer injects results into the active picker via `handle_files_discovered`.
+- **Session picker**: `OpenSessionPicker` spawns session list loading. `SessionUiEvent::ListLoaded` opens the overlay with preloaded sessions and kicks off preview effects.
 
-// Selection returns effects via OverlayAction
-fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
-    match key.code {
-        KeyCode::Enter => Some(OverlayAction::close_with(vec![
-            UiEffect::PersistModel { model: model_id }
-        ])),
-        _ => None,
-    }
-}
-```
+### Adding a New Overlay
 
-### Reducer Integration
-
-The reducer routes key events to the active overlay handler:
-
-```rust
-// In reducer.rs
-fn handle_key(app: &mut AppState, key: KeyEvent) -> Vec<UiEffect> {
-    // Try to dispatch to the active overlay
-    match app.overlay.handle_key(&mut app.tui, key) {
-        None => handle_main_key(app, key), // No overlay active
-        Some(None) => vec![],              // Overlay handled it, continue
-        Some(Some(action)) => process_overlay_action(app, action), // Overlay action
-    }
-}
-
-/// Processes an OverlayAction returned by an overlay's handle_key.
-fn process_overlay_action(app: &mut AppState, action: OverlayAction) -> Vec<UiEffect> {
-    match action {
-        OverlayAction::Close(effects) => {
-            app.overlay = OverlayState::None;
-            effects
-        }
-        OverlayAction::Transition { new_state, effects } => {
-            app.overlay = new_state;
-            effects
-        }
-        OverlayAction::Effects(effects) => effects,
-    }
-}
-```
-
-### View Integration
-
-The view uses `OverlayState::render()` which delegates to each overlay's `Overlay` trait implementation:
-
-```rust
-// In view.rs
-pub fn view(app: &AppState, frame: &mut Frame) {
-    // ... render transcript, input, status ...
-    
-    // Render overlay using trait method (delegates to appropriate impl)
-    app.overlay.render(frame, area, chunks[1].y);
-}
-```
-
-This trait-based approach:
-- Eliminates explicit match statements in the view
-- Enforces that new overlays implement rendering at compile time
-- Provides uniform rendering interface across all overlays
-
-
-### Special Cases
-
-#### Login Overlay (State Machine with Async Transitions)
-
-The login overlay has multiple states and async transitions:
-
-```rust
-pub enum LoginState {
-    AwaitingCode { url, verifier, input, error },
-    Exchanging,
-}
-```
-
-The flow is handled via `OverlayAction::Transition`:
-
-1. **Opening**: `/login` command returns `UiEffect::OpenLogin`
-2. **Runtime**: Calls `overlay.try_open::<LoginState>(())` which returns `OpenBrowser` effect
-3. **Input**: User pastes auth code, `handle_key()` returns `Transition { new_state: Exchanging, effects: [SpawnTokenExchange] }`
-4. **Async result**: `UiEvent::LoginResult` arrives, `handle_login_result()` closes overlay or returns to `AwaitingCode` with error
-
-This pattern uses `OverlayAction::Transition` for state machine transitions within the overlay.
-
-#### Overlays with Async Data Loading
-
-For overlays that load data asynchronously (file picker, session picker):
-
-1. **`open()`** returns effects to trigger async loading (e.g., `DiscoverFiles`)
-2. **State** includes a `loading: bool` field
-3. **Handler** processes result events (e.g., `UiEvent::FilesDiscovered`)
-4. **Render** shows loading state until data arrives
+- Create `src/ui/chat/overlays/xxx.rs` with state, `open()`, `render()`, and `handle_key()` functions.
+- Add the variant to `Overlay` in `src/ui/chat/overlays/mod.rs` and export the state type.
+- Update `Overlay::render`/`handle_key` matches with the new variant.
+- Add any new `UiEffect` variants and runtime handlers if async work is needed.
+- Keep state transitions local to the overlay; use `UiEffect`/`UiEvent` for global side effects.
 
 ### Checklist for New Overlays
 
 When adding a new overlay:
 
 - [ ] Create `src/ui/chat/overlays/xxx.rs`
-- [ ] Define `XxxState` struct with `new()` constructor
-- [ ] **Implement `Overlay` trait** for `XxxState`:
-  - `type Config` - configuration parameters (use `()` if none)
-  - `fn open(config) -> (Self, Vec<UiEffect>)` - create state and return effects
-  - `fn render(&self, frame, area, input_y)` - render the overlay
-  - `fn handle_key(&mut self, tui, key) -> Option<OverlayAction>` - key handling
-- [ ] **Implement `From<XxxState> for OverlayState`** - for `try_open` conversion
-- [ ] Add `XxxState` to `OverlayState` enum in `overlays/mod.rs`
-- [ ] **Add variant to `OverlayState::render()` match** in `overlays/mod.rs`
-- [ ] **Add variant to `OverlayState::handle_key()` match** in `overlays/mod.rs`
-- [ ] Export state type from `overlays/mod.rs`
+- [ ] Define `XxxState` with `open()`, `render()`, and `handle_key()` helpers
+- [ ] Add `Overlay::Xxx` variant in `overlays/mod.rs` and export the state type
+- [ ] Wire `Overlay::render`/`Overlay::handle_key` matches for the new variant
 - [ ] Add any new effects to `effects.rs`
 - [ ] Add effect handler in `runtime/mod.rs` if needed
 - [ ] Update this documentation
