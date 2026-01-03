@@ -18,7 +18,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 
@@ -120,6 +120,12 @@ impl FilePickerState {
 // ============================================================================
 
 impl Overlay for FilePickerState {
+    type Config = usize; // trigger_pos
+
+    fn open(trigger_pos: Self::Config) -> (Self, Vec<UiEffect>) {
+        (Self::new(trigger_pos), vec![UiEffect::DiscoverFiles])
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_file_picker(frame, self, area, input_y)
     }
@@ -334,21 +340,6 @@ impl FilePickerState {
                 .textarea
                 .move_cursor(tui_textarea::CursorMove::Forward);
         }
-    }
-}
-
-// ============================================================================
-// Update Handlers
-// ============================================================================
-
-/// Opens the file picker overlay at the given trigger position.
-pub fn open_file_picker(overlay: &mut OverlayState, trigger_pos: usize) -> Vec<UiEffect> {
-    if matches!(overlay, OverlayState::None) {
-        *overlay = OverlayState::FilePicker(FilePickerState::new(trigger_pos));
-        // Return effect to discover files asynchronously
-        vec![UiEffect::DiscoverFiles]
-    } else {
-        vec![]
     }
 }
 
@@ -569,6 +560,7 @@ mod tests {
 
     use super::*;
     use crate::config::Config;
+    use crate::ui::chat::overlays::OverlayState;
 
     fn make_key_event(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -593,7 +585,7 @@ mod tests {
         tui.input.textarea.insert_str("@");
 
         // Open file picker at position 0 (where @ is)
-        open_file_picker(&mut overlay, 0);
+        overlay.try_open::<FilePickerState>(0);
 
         // Set some files
         if let OverlayState::FilePicker(ref mut picker) = overlay {
@@ -621,7 +613,7 @@ mod tests {
         tui.input.textarea.insert_str("@lib");
 
         // Open file picker at position 0 (where @ is)
-        open_file_picker(&mut overlay, 0);
+        overlay.try_open::<FilePickerState>(0);
 
         // Set some files
         if let OverlayState::FilePicker(ref mut picker) = overlay {
@@ -658,7 +650,7 @@ mod tests {
         }
 
         // Open file picker at position 6 (where @ is)
-        open_file_picker(&mut overlay, 6);
+        overlay.try_open::<FilePickerState>(6);
 
         // Set some files
         if let OverlayState::FilePicker(ref mut picker) = overlay {
@@ -683,7 +675,7 @@ mod tests {
         tui.input.textarea.insert_str("@");
 
         // Open file picker
-        open_file_picker(&mut overlay, 0);
+        overlay.try_open::<FilePickerState>(0);
 
         // Set empty file list
         if let OverlayState::FilePicker(ref mut picker) = overlay {
@@ -708,7 +700,7 @@ mod tests {
         tui.input.textarea.insert_str("@");
 
         // Open file picker
-        open_file_picker(&mut overlay, 0);
+        overlay.try_open::<FilePickerState>(0);
 
         // Set files
         if let OverlayState::FilePicker(ref mut picker) = overlay {

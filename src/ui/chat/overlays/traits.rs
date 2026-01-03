@@ -5,16 +5,25 @@
 //!
 //! ## Architecture
 //!
-//! Each overlay type consists of:
-//! - **State struct** implementing the `Overlay` trait (e.g., `FilePickerState`)
-//! - **Open function** - standalone, varying signatures (e.g., `open_file_picker()`)
-//! - **Key handler** - implemented via `Overlay::handle_key()` method
-//! - **Render** - implemented via the `Overlay::render()` method
+//! Each overlay type implements the `Overlay` trait which provides:
+//! - **`type Config`** - Configuration parameters needed to open the overlay
+//! - **`open(config)`** - Creates the overlay state and returns initial effects
+//! - **`render()`** - Renders the overlay to the terminal
+//! - **`handle_key()`** - Handles keyboard input, returns `Option<OverlayAction>`
 //!
 //! Closing is handled via `OverlayAction::Close` returned from `handle_key()`.
 //!
-//! Key handling and rendering are routed through `OverlayState` methods that
-//! delegate to the appropriate overlay-specific implementation.
+//! ## Opening Overlays
+//!
+//! Use `OverlayState::try_open::<T>(config)` to open an overlay:
+//!
+//! ```rust,ignore
+//! // Opens file picker if no overlay is active
+//! let effects = overlay.try_open::<FilePickerState>(trigger_pos);
+//!
+//! // Opens login overlay
+//! let effects = overlay.try_open::<LoginState>(());
+//! ```
 //!
 //! ## Split State Architecture
 //!
@@ -28,16 +37,16 @@
 //! ## Why a Trait?
 //!
 //! The trait provides:
-//! 1. **Compile-time enforcement** - new overlay types must implement `render()` and `handle_key()`
-//! 2. **Documentation** - the trait serves as executable documentation of the contract
+//! 1. **Compile-time enforcement** - new overlay types must implement all required methods
+//! 2. **Uniform opening** - `try_open::<T>(config)` works for all overlays
 //! 3. **Type safety** - ensures consistent signatures across overlays
 //!
 //! ## Why Not `Box<dyn Overlay>`?
 //!
 //! We keep the `OverlayState` enum rather than using `Box<dyn Overlay>` because:
-//! - Overlays need variant-specific open/close logic with different parameters
 //! - Pattern matching on the enum is ergonomic for accessor methods
 //! - No runtime cost from dynamic dispatch
+//! - The `From` impls provide type-safe conversion
 
 use crossterm::event::KeyEvent;
 use ratatui::Frame;
@@ -62,7 +71,7 @@ pub enum OverlayAction {
     /// Used for state machine transitions (e.g., login flow).
     Transition {
         /// The new overlay state to transition to.
-        new_state: super::OverlayStateInner,
+        new_state: super::OverlayState,
         /// Effects to execute after transition.
         effects: Vec<UiEffect>,
     },
@@ -86,24 +95,29 @@ impl OverlayAction {
 
 /// Trait for overlay state structs.
 ///
-/// Each overlay state type must implement this trait to provide rendering
-/// and key handling. The split state architecture allows clean access to
-/// both `&mut self` (the overlay) and `&mut TuiState` without borrow conflicts.
+/// Each overlay state type must implement this trait to provide opening,
+/// rendering, and key handling. The split state architecture allows clean
+/// access to both `&mut self` (the overlay) and `&mut TuiState` without
+/// borrow conflicts.
 ///
 /// ## Contract
 ///
 /// Implementors must:
 /// - Be `Debug` and `Clone` for state management
-/// - Provide a `render()` method with the standard signature
-/// - Provide a `handle_key()` method that returns `Option<OverlayAction>`
-///
-/// Additionally, each overlay module should provide (not enforced by trait):
-/// - `open_xxx()` function to initialize and show the overlay
+/// - Define a `Config` type for opening parameters
+/// - Implement `From<Self> for OverlayState` for type-safe conversion
+/// - Provide `open()`, `render()`, and `handle_key()` methods
 ///
 /// ## Example
 ///
 /// ```rust,ignore
 /// impl Overlay for FilePickerState {
+///     type Config = usize; // trigger_pos
+///
+///     fn open(trigger_pos: Self::Config) -> (Self, Vec<UiEffect>) {
+///         (Self::new(trigger_pos), vec![UiEffect::DiscoverFiles])
+///     }
+///
 ///     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
 ///         render_file_picker(frame, self, area, input_y)
 ///     }
@@ -111,18 +125,29 @@ impl OverlayAction {
 ///     fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
 ///         match key.code {
 ///             KeyCode::Esc => Some(OverlayAction::close()),
-///             KeyCode::Enter => {
-///                 // Use tui to access/modify non-overlay state
-///                 let text = tui.get_input_text();
-///                 // ... handle selection ...
-///                 Some(OverlayAction::close())
-///             }
-///             _ => None, // Continue with overlay open
+///             KeyCode::Enter => Some(OverlayAction::close()),
+///             _ => None,
 ///         }
 ///     }
 /// }
+///
+/// impl From<FilePickerState> for OverlayState {
+///     fn from(state: FilePickerState) -> Self {
+///         OverlayState::FilePicker(state)
+///     }
+/// }
 /// ```
-pub trait Overlay: std::fmt::Debug + Clone {
+pub trait Overlay: std::fmt::Debug + Clone + Into<super::OverlayState> {
+    /// Configuration type for opening this overlay.
+    ///
+    /// Use `()` if no configuration is needed.
+    type Config;
+
+    /// Opens the overlay with the given configuration.
+    ///
+    /// Returns the initial state and any effects to execute (e.g., async loading).
+    fn open(config: Self::Config) -> (Self, Vec<UiEffect>);
+
     /// Render this overlay to the frame.
     ///
     /// Overlays are rendered on top of the main UI, typically centered

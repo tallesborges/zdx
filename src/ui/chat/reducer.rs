@@ -12,8 +12,8 @@ use crate::core::session::SessionEvent;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
 use crate::ui::chat::overlays::{
-    OverlayAction, OverlayState, handle_login_result, open_command_palette, open_file_picker,
-    open_thinking_picker,
+    CommandPaletteState, FilePickerState, OverlayAction, OverlayState, ThinkingPickerState,
+    handle_login_result,
 };
 use crate::ui::chat::state::{AgentState, AppState, HandoffState, TuiState};
 use crate::ui::chat::view;
@@ -310,18 +310,18 @@ fn handle_main_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<U
         }
         KeyCode::Char('/') if !ctrl && !shift && !alt => {
             if tui.get_input_text().is_empty() {
-                open_command_palette(&mut app.overlay, false);
+                app.overlay.try_open::<CommandPaletteState>(false);
             } else {
                 tui.input.textarea.input(key);
             }
             vec![]
         }
         KeyCode::Char('p') if ctrl && !shift && !alt => {
-            open_command_palette(&mut app.overlay, false);
+            app.overlay.try_open::<CommandPaletteState>(false);
             vec![]
         }
         KeyCode::Char('t') if ctrl && !shift && !alt => {
-            open_thinking_picker(&mut app.overlay, tui.config.thinking_level);
+            app.overlay.try_open::<ThinkingPickerState>(tui.config.thinking_level);
             vec![]
         }
         KeyCode::Char('c') if ctrl => {
@@ -424,7 +424,7 @@ fn handle_main_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<U
                 };
                 // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
                 let trigger_pos = cursor_pos.saturating_sub(1);
-                return open_file_picker(&mut app.overlay, trigger_pos);
+                return app.overlay.try_open::<FilePickerState>(trigger_pos);
             }
 
             vec![]

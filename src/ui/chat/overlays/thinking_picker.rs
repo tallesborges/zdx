@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::config::ThinkingLevel;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
@@ -42,6 +42,12 @@ impl ThinkingPickerState {
 // ============================================================================
 
 impl Overlay for ThinkingPickerState {
+    type Config = ThinkingLevel;
+
+    fn open(current: Self::Config) -> (Self, Vec<UiEffect>) {
+        (Self::new(current), vec![])
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_thinking_picker(frame, self, area, input_y)
     }
@@ -88,17 +94,6 @@ impl Overlay for ThinkingPickerState {
             }
             _ => None,
         }
-    }
-}
-
-// ============================================================================
-// Update Handlers
-// ============================================================================
-
-/// Opens the thinking level picker overlay.
-pub fn open_thinking_picker(overlay: &mut OverlayState, current: ThinkingLevel) {
-    if matches!(overlay, OverlayState::None) {
-        *overlay = OverlayState::ThinkingPicker(ThinkingPickerState::new(current));
     }
 }
 

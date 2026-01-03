@@ -62,8 +62,12 @@ pub fn open_session_picker(tui: &mut TuiState, overlay: &mut OverlayState) {
             // Get a snapshot of current transcript for restore on cancel
             let original_cells = tui.transcript.cells.clone();
 
-            // Use overlay's open function for state mutation
-            let effects = overlays::open_session_picker(overlay, sessions, original_cells);
+            // Use overlay's try_open for state mutation
+            let config = overlays::session_picker::SessionPickerConfig {
+                sessions,
+                original_cells,
+            };
+            let effects = overlay.try_open::<overlays::SessionPickerState>(config);
 
             // Execute preview effect immediately (within same I/O context)
             for effect in effects {

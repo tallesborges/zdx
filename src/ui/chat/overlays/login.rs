@@ -49,6 +49,22 @@ pub enum LoginState {
 // ============================================================================
 
 impl Overlay for LoginState {
+    type Config = ();
+
+    fn open(_: Self::Config) -> (Self, Vec<UiEffect>) {
+        use crate::providers::oauth::anthropic;
+
+        let pkce = anthropic::generate_pkce();
+        let url = anthropic::build_auth_url(&pkce);
+        let state = LoginState::AwaitingCode {
+            url: url.clone(),
+            pkce_verifier: pkce.verifier,
+            input: String::new(),
+            error: None,
+        };
+        (state, vec![UiEffect::OpenBrowser { url }])
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
         // Login overlay centers in full area, doesn't use input_y
         render_login_overlay(frame, self, area)
@@ -136,27 +152,6 @@ pub fn handle_login_result(
             });
         }
     }
-}
-
-/// Opens the login overlay with a fresh PKCE challenge.
-///
-/// Returns effects to execute (opens browser for OAuth flow).
-pub fn open_login(overlay: &mut OverlayState) -> Vec<UiEffect> {
-    use crate::providers::oauth::anthropic;
-
-    if !matches!(overlay, OverlayState::None) {
-        return vec![];
-    }
-
-    let pkce = anthropic::generate_pkce();
-    let url = anthropic::build_auth_url(&pkce);
-    *overlay = OverlayState::Login(LoginState::AwaitingCode {
-        url: url.clone(),
-        pkce_verifier: pkce.verifier,
-        input: String::new(),
-        error: None,
-    });
-    vec![UiEffect::OpenBrowser { url }]
 }
 
 // ============================================================================

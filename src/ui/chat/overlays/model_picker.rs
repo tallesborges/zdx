@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
@@ -42,6 +42,12 @@ impl ModelPickerState {
 // ============================================================================
 
 impl Overlay for ModelPickerState {
+    type Config = String; // current_model
+
+    fn open(current_model: Self::Config) -> (Self, Vec<UiEffect>) {
+        (Self::new(&current_model), vec![])
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_model_picker(frame, self, area, input_y)
     }
@@ -84,17 +90,6 @@ impl Overlay for ModelPickerState {
             }
             _ => None,
         }
-    }
-}
-
-// ============================================================================
-// Update Handlers
-// ============================================================================
-
-/// Opens the model picker overlay.
-pub fn open_model_picker(overlay: &mut OverlayState, current_model: &str) {
-    if matches!(overlay, OverlayState::None) {
-        *overlay = OverlayState::ModelPicker(ModelPickerState::new(current_model));
     }
 }
 
