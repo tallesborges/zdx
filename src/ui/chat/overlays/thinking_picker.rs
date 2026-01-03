@@ -1,7 +1,3 @@
-//! Thinking level picker overlay.
-//!
-//! Contains state, update handlers, and render function for the thinking level picker.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -9,50 +5,31 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction};
+use super::OverlayAction;
 use crate::config::ThinkingLevel;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the thinking level picker overlay.
 #[derive(Debug, Clone)]
 pub struct ThinkingPickerState {
-    /// Currently selected index.
     pub selected: usize,
 }
 
 impl ThinkingPickerState {
-    /// Creates a new picker state, selecting the current thinking level if found.
-    pub fn new(current: ThinkingLevel) -> Self {
+    pub fn open(current: ThinkingLevel) -> (Self, Vec<UiEffect>) {
         let selected = ThinkingLevel::all()
             .iter()
             .position(|l| *l == current)
             .unwrap_or(0);
-        Self { selected }
-    }
-}
-
-// ============================================================================
-// Overlay Trait Implementation
-// ============================================================================
-
-impl Overlay for ThinkingPickerState {
-    type Config = ThinkingLevel;
-
-    fn open(current: Self::Config) -> (Self, Vec<UiEffect>) {
-        (Self::new(current), vec![])
+        (Self { selected }, vec![])
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_thinking_picker(frame, self, area, input_y)
     }
 
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -77,10 +54,8 @@ impl Overlay for ThinkingPickerState {
                     return Some(OverlayAction::close());
                 };
 
-                // Update state
                 tui.config.thinking_level = level;
 
-                // Show confirmation message
                 let message = if level == ThinkingLevel::Off {
                     "Thinking disabled".to_string()
                 } else {
@@ -97,11 +72,6 @@ impl Overlay for ThinkingPickerState {
     }
 }
 
-// ============================================================================
-// Render
-// ============================================================================
-
-/// Renders the thinking level picker as an overlay.
 pub fn render_thinking_picker(
     frame: &mut Frame,
     picker: &ThinkingPickerState,
@@ -110,8 +80,6 @@ pub fn render_thinking_picker(
 ) {
     let levels = ThinkingLevel::all();
 
-    // Calculate picker dimensions
-    // Width: enough for level name + description
     let picker_width = 45.min(area.width.saturating_sub(4));
     let picker_height = (levels.len() as u16 + 5).min(area.height / 2);
 
@@ -148,7 +116,7 @@ pub fn render_thinking_picker(
     let items: Vec<ListItem> = levels
         .iter()
         .map(|level| {
-            let name_width = 10; // Fixed width for level name column
+            let name_width = 10;
             let name = format!("{:<width$}", level.display_name(), width = name_width);
 
             let line = Line::from(vec![
@@ -176,7 +144,6 @@ pub fn render_thinking_picker(
     list_state.select(Some(picker.selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    // Separator line
     let separator = "─".repeat(inner_area.width as usize);
     let sep_y = inner_area.y + list_height;
     if sep_y < inner_area.y + inner_area.height {
@@ -190,7 +157,6 @@ pub fn render_thinking_picker(
         );
     }
 
-    // Keyboard hints
     let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
     let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
     let hints_line = Line::from(vec![

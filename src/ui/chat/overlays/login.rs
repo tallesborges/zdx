@@ -1,14 +1,3 @@
-//! Login overlay.
-//!
-//! Contains state, update handlers, and render function for the OAuth login flow.
-//!
-//! ## Flow
-//!
-//! 1. User runs `/login` command → `UiEffect::OpenLogin`
-//! 2. Runtime calls `open_login()` → opens overlay, returns `OpenBrowser` effect
-//! 3. User pastes auth code → `handle_key()` spawns token exchange
-//! 4. Async result arrives → `handle_login_result()` closes overlay or shows error
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -16,42 +5,24 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the login overlay.
 #[derive(Debug, Clone)]
 pub enum LoginState {
-    /// Showing auth URL, waiting for user to paste code.
     AwaitingCode {
-        /// The auth URL to display.
         url: String,
-        /// PKCE verifier for code exchange.
         pkce_verifier: String,
-        /// User's input (the auth code).
         input: String,
-        /// Error message from previous attempt (if any).
         error: Option<String>,
     },
-    /// Exchanging code for tokens (async operation in progress).
-    /// The code and verifier are passed to the effect, not stored here.
     Exchanging,
 }
 
-// ============================================================================
-// Overlay Trait Implementation
-// ============================================================================
-
-impl Overlay for LoginState {
-    type Config = ();
-
-    fn open(_: Self::Config) -> (Self, Vec<UiEffect>) {
+impl LoginState {
+    pub fn open() -> (Self, Vec<UiEffect>) {
         use crate::providers::oauth::anthropic;
 
         let pkce = anthropic::generate_pkce();
@@ -65,12 +36,11 @@ impl Overlay for LoginState {
         (state, vec![UiEffect::OpenBrowser { url }])
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
-        // Login overlay centers in full area, doesn't use input_y
+    pub fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
         render_login_overlay(frame, self, area)
     }
 
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
@@ -84,15 +54,13 @@ impl Overlay for LoginState {
                     if code.is_empty() {
                         None
                     } else {
-                        // Get the verifier before transitioning
                         let verifier = match self {
                             LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
                             _ => return None,
                         };
 
-                        // Transition to Exchanging state
                         Some(OverlayAction::Transition {
-                            new_state: OverlayState::Login(LoginState::Exchanging),
+                            new_overlay: Overlay::Login(LoginState::Exchanging),
                             effects: vec![UiEffect::SpawnTokenExchange { code, verifier }],
                         })
                     }
@@ -119,14 +87,9 @@ impl Overlay for LoginState {
     }
 }
 
-// ============================================================================
-// Async Result Handler
-// ============================================================================
-
-/// Handles the result of an async token exchange.
 pub fn handle_login_result(
     tui: &mut TuiState,
-    overlay: &mut OverlayState,
+    overlay: &mut Option<Overlay>,
     result: Result<(), String>,
 ) {
     use crate::providers::oauth::anthropic;
@@ -134,31 +97,25 @@ pub fn handle_login_result(
     tui.auth.login_rx = None;
     match result {
         Ok(()) => {
-            *overlay = OverlayState::None;
+            *overlay = None;
             tui.refresh_auth_type();
             tui.transcript
                 .cells
                 .push(HistoryCell::system("Logged in with Anthropic OAuth."));
         }
         Err(msg) => {
-            // Generate new PKCE for retry
             let pkce = anthropic::generate_pkce();
             let url = anthropic::build_auth_url(&pkce);
-            *overlay = OverlayState::Login(LoginState::AwaitingCode {
+            *overlay = Some(Overlay::Login(LoginState::AwaitingCode {
                 url,
                 pkce_verifier: pkce.verifier,
                 input: String::new(),
                 error: Some(msg),
-            });
+            }));
         }
     }
 }
 
-// ============================================================================
-// Render
-// ============================================================================
-
-/// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
     let popup_width = 60.min(area.width.saturating_sub(4));
     let popup_height = 9.min(area.height.saturating_sub(4));
@@ -192,7 +149,6 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
         } => {
             let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
 
-            // Show different message based on whether this is initial or retry
             let status_message = if error.is_some() {
                 "Visit URL to retry authentication:"
             } else {
@@ -255,7 +211,6 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     frame.render_widget(para, inner);
 }
 
-/// Truncates a string in the middle with "..." if too long.
 fn truncate_middle(s: &str, max_len: usize) -> String {
     if s.len() <= max_len || max_len < 10 {
         return s.to_string();

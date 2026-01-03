@@ -11,7 +11,7 @@ use crate::core::interrupt;
 use crate::core::session::SessionEvent;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::overlays::{OverlayAction, OverlayState, handle_login_result};
+use crate::ui::chat::overlays::{Overlay, OverlayAction, handle_login_result};
 use crate::ui::chat::state::{AgentState, AppState, HandoffState, TuiState};
 use crate::ui::chat::view;
 use crate::ui::transcript::{HistoryCell, ToolState};
@@ -106,10 +106,10 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_paste(app: &mut AppState, text: &str) {
-    if let OverlayState::Login(crate::ui::chat::overlays::LoginState::AwaitingCode {
+    if let Some(Overlay::Login(crate::ui::chat::overlays::LoginState::AwaitingCode {
         ref mut input,
         ..
-    }) = app.overlay
+    })) = app.overlay
     {
         input.push_str(text);
     } else {
@@ -250,10 +250,12 @@ fn screen_to_transcript_pos(
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
     // Try to dispatch to the active overlay
-    match app.overlay.handle_key(&mut app.tui, key) {
+    match app.overlay.as_mut() {
         None => handle_main_key(app, key), // No overlay active
-        Some(None) => vec![],              // Overlay handled it, continue
-        Some(Some(action)) => process_overlay_action(app, action), // Overlay action
+        Some(overlay) => match overlay.handle_key(&mut app.tui, key) {
+            None => vec![],                                      // Overlay handled it, continue
+            Some(action) => process_overlay_action(app, action), // Overlay action
+        },
     }
 }
 
@@ -261,11 +263,14 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 fn process_overlay_action(app: &mut AppState, action: OverlayAction) -> Vec<UiEffect> {
     match action {
         OverlayAction::Close(effects) => {
-            app.overlay = OverlayState::None;
+            app.overlay = None;
             effects
         }
-        OverlayAction::Transition { new_state, effects } => {
-            app.overlay = new_state;
+        OverlayAction::Transition {
+            new_overlay,
+            effects,
+        } => {
+            app.overlay = Some(new_overlay);
             effects
         }
         OverlayAction::Effects(effects) => effects,
@@ -596,8 +601,8 @@ fn handle_handoff_result(tui: &mut TuiState, result: Result<String, String>) {
 // ============================================================================
 
 /// Handles the file discovery result.
-fn handle_files_discovered(overlay: &mut OverlayState, files: Vec<std::path::PathBuf>) {
-    if let Some(picker) = overlay.as_file_picker_mut() {
+fn handle_files_discovered(overlay: &mut Option<Overlay>, files: Vec<std::path::PathBuf>) {
+    if let Some(picker) = overlay.as_mut().and_then(|o| o.as_file_picker_mut()) {
         picker.set_files(files);
     }
 }

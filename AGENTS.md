@@ -46,10 +46,9 @@
     - `src/ui/chat/commands.rs`: command definitions for command palette
     - `src/ui/chat/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
     - `src/ui/chat/terminal.rs`: terminal setup, restore, panic hooks
-    - `src/ui/chat/overlays/`: self-contained overlay modules (state + update + render via `Overlay` trait)
-      - `src/ui/chat/overlays/mod.rs`: overlay exports + `Overlay` trait re-export
-      - `src/ui/chat/overlays/traits.rs`: `Overlay` trait definition (compile-time render contract)
-      - `src/ui/chat/overlays/palette.rs`: command palette overlay
+    - `src/ui/chat/overlays/`: self-contained overlay modules
+      - `src/ui/chat/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
+      - `src/ui/chat/overlays/command_palette.rs`: command palette overlay
       - `src/ui/chat/overlays/model_picker.rs`: model picker overlay
       - `src/ui/chat/overlays/thinking_picker.rs`: thinking level picker overlay
       - `src/ui/chat/overlays/session_picker.rs`: session picker overlay

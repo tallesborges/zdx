@@ -403,29 +403,38 @@ impl TuiRuntime {
 
             // Overlay effects
             UiEffect::OpenCommandPalette { command_mode } => {
-                self.state
-                    .overlay
-                    .try_open::<CommandPaletteState>(command_mode);
+                if self.state.overlay.is_none() {
+                    let (state, _) = CommandPaletteState::open(command_mode);
+                    self.state.overlay = Some(state.into());
+                }
             }
             UiEffect::OpenFilePicker { trigger_pos } => {
-                let effects = self.state.overlay.try_open::<FilePickerState>(trigger_pos);
-                self.execute_effects(effects);
+                if self.state.overlay.is_none() {
+                    let (state, effects) = FilePickerState::open(trigger_pos);
+                    self.state.overlay = Some(state.into());
+                    self.execute_effects(effects);
+                }
             }
             UiEffect::OpenModelPicker => {
-                let current_model = self.state.tui.config.model.clone();
-                self.state
-                    .overlay
-                    .try_open::<ModelPickerState>(current_model);
+                if self.state.overlay.is_none() {
+                    let current_model = self.state.tui.config.model.clone();
+                    let (state, _) = ModelPickerState::open(&current_model);
+                    self.state.overlay = Some(state.into());
+                }
             }
             UiEffect::OpenThinkingPicker => {
-                let current_thinking = self.state.tui.config.thinking_level;
-                self.state
-                    .overlay
-                    .try_open::<ThinkingPickerState>(current_thinking);
+                if self.state.overlay.is_none() {
+                    let current_thinking = self.state.tui.config.thinking_level;
+                    let (state, _) = ThinkingPickerState::open(current_thinking);
+                    self.state.overlay = Some(state.into());
+                }
             }
             UiEffect::OpenLogin => {
-                let effects = self.state.overlay.try_open::<LoginState>(());
-                self.execute_effects(effects);
+                if self.state.overlay.is_none() {
+                    let (state, effects) = LoginState::open();
+                    self.state.overlay = Some(state.into());
+                    self.execute_effects(effects);
+                }
             }
         }
     }

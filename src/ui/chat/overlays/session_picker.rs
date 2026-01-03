@@ -1,7 +1,3 @@
-//! Session picker overlay.
-//!
-//! Contains state, update handlers, and render function for the session picker.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -9,86 +5,34 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction};
+use super::OverlayAction;
 use crate::core::session::{self, SessionSummary};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
-// ============================================================================
-// Constants
-// ============================================================================
-
-/// Maximum visible sessions in the picker (excluding borders and hints).
 const MAX_VISIBLE_SESSIONS: usize = 10;
-
-/// Visible height used for scroll offset calculations.
-/// This should match the list area height in render (inner_area.height - 2 for hints/separator).
-/// Using a reasonable default that works for typical terminal sizes.
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_SESSIONS - 2;
 
-// ============================================================================
-// Config
-// ============================================================================
-
-/// Configuration for opening the session picker.
-pub struct SessionPickerConfig {
-    /// List of available sessions.
+#[derive(Debug, Clone)]
+pub struct SessionPickerState {
     pub sessions: Vec<SessionSummary>,
-    /// Snapshot of original transcript cells for restore on Esc.
+    pub selected: usize,
+    pub offset: usize,
     pub original_cells: Vec<HistoryCell>,
 }
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the session picker overlay.
-#[derive(Debug, Clone)]
-pub struct SessionPickerState {
-    /// List of available sessions.
-    pub sessions: Vec<SessionSummary>,
-    /// Currently selected index.
-    pub selected: usize,
-    /// Scroll offset for long lists.
-    pub offset: usize,
-    /// Snapshot of original transcript cells for restore on Esc.
-    pub original_cells: Vec<crate::ui::transcript::HistoryCell>,
-}
-
 impl SessionPickerState {
-    /// Creates a new session picker state with the given sessions.
-    ///
-    /// Selects the first session (most recent) by default.
-    /// Takes a snapshot of the current transcript cells for restore on Esc.
-    pub fn new(
+    pub fn open(
         sessions: Vec<SessionSummary>,
-        original_cells: Vec<crate::ui::transcript::HistoryCell>,
-    ) -> Self {
-        Self {
+        original_cells: Vec<HistoryCell>,
+    ) -> (Self, Vec<UiEffect>) {
+        let state = Self {
             sessions,
             selected: 0,
             offset: 0,
             original_cells,
-        }
-    }
-
-    /// Returns the currently selected session, if any.
-    pub fn selected_session(&self) -> Option<&SessionSummary> {
-        self.sessions.get(self.selected)
-    }
-}
-
-// ============================================================================
-// Overlay Trait Implementation
-// ============================================================================
-
-impl Overlay for SessionPickerState {
-    type Config = SessionPickerConfig;
-
-    fn open(config: Self::Config) -> (Self, Vec<UiEffect>) {
-        let state = Self::new(config.sessions, config.original_cells);
-        // Preview the first session if available
+        };
         let effects = state
             .selected_session()
             .map(|session| {
@@ -100,16 +44,15 @@ impl Overlay for SessionPickerState {
         (state, effects)
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_session_picker(frame, self, area, input_y)
     }
 
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                // Restore original transcript cells before closing
                 tui.transcript.cells = self.original_cells.clone();
                 tui.transcript.scroll.reset();
                 tui.transcript.wrap_cache.clear();
@@ -118,12 +61,10 @@ impl Overlay for SessionPickerState {
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;
-                    // Adjust offset to keep selection visible: if selected < offset, scroll up
                     if self.selected < self.offset {
                         self.offset = self.selected;
                     }
                 }
-                // Emit preview effect for newly selected session
                 self.selected_session().map(|session| {
                     OverlayAction::Effects(vec![UiEffect::PreviewSession {
                         session_id: session.id.clone(),
@@ -133,12 +74,10 @@ impl Overlay for SessionPickerState {
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.selected < self.sessions.len().saturating_sub(1) {
                     self.selected += 1;
-                    // Adjust offset to keep selection visible: if selected >= offset + visible_height, scroll down
                     if self.selected >= self.offset + VISIBLE_HEIGHT {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                // Emit preview effect for newly selected session
                 self.selected_session().map(|session| {
                     OverlayAction::Effects(vec![UiEffect::PreviewSession {
                         session_id: session.id.clone(),
@@ -146,7 +85,6 @@ impl Overlay for SessionPickerState {
                 })
             }
             KeyCode::Enter => {
-                // Block session switch while agent is running (keep overlay open)
                 if tui.agent_state.is_running() {
                     tui.transcript
                         .cells
@@ -154,40 +92,33 @@ impl Overlay for SessionPickerState {
                     return None;
                 }
 
-                // Get the selected session ID
                 if let Some(session) = self.selected_session() {
                     Some(OverlayAction::close_with(vec![UiEffect::LoadSession {
                         session_id: session.id.clone(),
                     }]))
                 } else {
-                    // No session selected (empty list), just close
                     Some(OverlayAction::close())
                 }
             }
             _ => None,
         }
     }
+
+    pub fn selected_session(&self) -> Option<&SessionSummary> {
+        self.sessions.get(self.selected)
+    }
 }
 
-// ============================================================================
-// ============================================================================
-// Render
-// ============================================================================
-
-/// Renders the session picker as an overlay.
 pub fn render_session_picker(
     frame: &mut Frame,
     picker: &SessionPickerState,
     area: Rect,
     input_top_y: u16,
 ) {
-    // Calculate dimensions
     let session_count = picker.sessions.len();
     let visible_count = session_count.min(MAX_VISIBLE_SESSIONS);
 
-    // Width: enough for UUID (36) + timestamp (16) + padding
     let picker_width = 60.min(area.width.saturating_sub(4));
-    // Height: visible sessions + border (2) + title area (1) + hints (2)
     let picker_height = (visible_count as u16 + 5).min(area.height / 2);
 
     let available_height = input_top_y;
@@ -199,7 +130,6 @@ pub fn render_session_picker(
 
     frame.render_widget(Clear, picker_area);
 
-    // Title with session count
     let title = format!(" Sessions ({}) ", session_count);
     let outer_block = Block::default()
         .borders(Borders::ALL)
@@ -219,7 +149,6 @@ pub fn render_session_picker(
         picker_area.height.saturating_sub(2),
     );
 
-    // Handle empty state
     if picker.sessions.is_empty() {
         let empty_msg = Paragraph::new("No sessions found")
             .style(Style::default().fg(Color::DarkGray))
@@ -230,7 +159,6 @@ pub fn render_session_picker(
 
     let list_height = inner_area.height.saturating_sub(2) as usize;
 
-    // Use offset from state directly - navigation handlers keep it in sync with selection
     let list_area = Rect::new(
         inner_area.x,
         inner_area.y,
@@ -238,7 +166,6 @@ pub fn render_session_picker(
         list_height as u16,
     );
 
-    // Build list items for visible sessions
     let items: Vec<ListItem> = picker
         .sessions
         .iter()
@@ -250,7 +177,6 @@ pub fn render_session_picker(
                 .and_then(session::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
 
-            // Truncate session ID for display (show first 8 chars)
             let short_id = if session.id.len() > 8 {
                 format!("{}…", &session.id[..8])
             } else {
@@ -274,13 +200,11 @@ pub fn render_session_picker(
         )
         .highlight_symbol("▶ ");
 
-    // Adjust selected index for the visible window
     let mut list_state = ListState::default();
     let visible_selected = picker.selected.saturating_sub(picker.offset);
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    // Separator line
     let separator = "─".repeat(inner_area.width as usize);
     let sep_y = inner_area.y + list_height as u16;
     if sep_y < inner_area.y + inner_area.height {
@@ -294,7 +218,6 @@ pub fn render_session_picker(
         );
     }
 
-    // Keyboard hints
     let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
     let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
     let hints_line = Line::from(vec![
@@ -317,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_session_picker_state_new_empty() {
-        let state = SessionPickerState::new(vec![], vec![]);
+        let (state, _) = SessionPickerState::open(vec![], vec![]);
         assert_eq!(state.selected, 0);
         assert_eq!(state.offset, 0);
         assert!(state.sessions.is_empty());
@@ -337,7 +260,7 @@ mod tests {
                 modified: None,
             },
         ];
-        let state = SessionPickerState::new(sessions, vec![]);
+        let (state, _) = SessionPickerState::open(sessions, vec![]);
         assert_eq!(state.selected, 0);
         assert_eq!(state.sessions.len(), 2);
         assert_eq!(state.selected_session().unwrap().id, "session-1");
@@ -350,10 +273,10 @@ mod tests {
             modified: None,
         }];
         let original_cells = vec![
-            crate::ui::transcript::HistoryCell::user("test message"),
-            crate::ui::transcript::HistoryCell::assistant("response"),
+            HistoryCell::user("test message"),
+            HistoryCell::assistant("response"),
         ];
-        let state = SessionPickerState::new(sessions, original_cells.clone());
+        let (state, _) = SessionPickerState::open(sessions, original_cells.clone());
         assert_eq!(state.original_cells.len(), 2);
     }
 
@@ -373,26 +296,20 @@ mod tests {
                 modified: None,
             },
         ];
-        let mut state = SessionPickerState::new(sessions, vec![]);
+        let (mut state, _) = SessionPickerState::open(sessions, vec![]);
 
-        // At start, can't go up
         assert_eq!(state.selected, 0);
 
-        // Go down
         state.selected = 1;
         assert_eq!(state.selected, 1);
 
-        // Go to end
         state.selected = 2;
         assert_eq!(state.selected, 2);
-
-        // Can't go past end (this is enforced by select_next, tested via TuiState)
     }
 
     #[test]
     fn test_scroll_offset_down() {
-        // Test that offset is adjusted when selecting past visible window
-        let mut picker = SessionPickerState::new(
+        let (mut picker, _) = SessionPickerState::open(
             (0..15)
                 .map(|i| SessionSummary {
                     id: format!("session-{}", i),
@@ -405,7 +322,6 @@ mod tests {
         assert_eq!(picker.selected, 0);
         assert_eq!(picker.offset, 0);
 
-        // Simulate navigating down past visible window (VISIBLE_HEIGHT = 8)
         for i in 1..=10 {
             picker.selected = i;
             if picker.selected >= picker.offset + VISIBLE_HEIGHT {
@@ -414,14 +330,12 @@ mod tests {
         }
 
         assert_eq!(picker.selected, 10);
-        // offset should be adjusted so selected is visible
-        assert_eq!(picker.offset, 3); // 10 - 8 + 1 = 3
+        assert_eq!(picker.offset, 3);
     }
 
     #[test]
     fn test_scroll_offset_up() {
-        // Test that offset is adjusted when selecting above visible window
-        let mut picker = SessionPickerState::new(
+        let (mut picker, _) = SessionPickerState::open(
             (0..15)
                 .map(|i| SessionSummary {
                     id: format!("session-{}", i),
@@ -431,11 +345,9 @@ mod tests {
             vec![],
         );
 
-        // Start scrolled down
         picker.selected = 10;
         picker.offset = 5;
 
-        // Navigate up past visible window
         picker.selected = 3;
         if picker.selected < picker.offset {
             picker.offset = picker.selected;

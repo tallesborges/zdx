@@ -6,9 +6,9 @@
 //!
 //! ## Split State Architecture
 //!
-//! State is split between `TuiState` (non-overlay) and `OverlayState` (overlay):
+//! State is split between `TuiState` (non-overlay) and `Option<Overlay>`:
 //! - `TuiState` contains all non-overlay UI state
-//! - `OverlayState` is an enum of overlay variants (in `overlays/mod.rs`)
+//! - `Option<Overlay>` holds the active overlay if any
 //! - `AppState` combines both for runtime use
 //!
 //! This allows overlay handlers to get `&mut self` and `&mut TuiState` simultaneously.
@@ -21,7 +21,7 @@ use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
-use crate::ui::chat::overlays::OverlayState;
+use crate::ui::chat::overlays::Overlay;
 use crate::ui::transcript::HistoryCell;
 
 // Module declarations
@@ -47,25 +47,11 @@ pub use transcript::{ScrollMode, ScrollState};
 
 /// Combined application state for the TUI.
 ///
-/// This struct combines `TuiState` (non-overlay state) with `OverlayState`
-/// (overlay state) to enable the split state architecture where overlay
-/// handlers can get clean access to both without borrow conflicts.
-///
-/// ## Usage
-///
-/// ```rust,ignore
-/// let mut app = AppState::new(config, root, system_prompt, session);
-///
-/// // Overlay handlers get clean access:
-/// if let Some(action) = app.overlay.handle_key(&mut app.tui, key) {
-///     // Process action...
-/// }
-/// ```
+/// Combines `TuiState` with `Option<Overlay>` to enable the split state
+/// architecture where overlay handlers can access both without borrow conflicts.
 pub struct AppState {
-    /// Non-overlay TUI state.
     pub tui: TuiState,
-    /// Overlay state (command palette, model picker, etc.).
-    pub overlay: OverlayState,
+    pub overlay: Option<Overlay>,
 }
 
 impl AppState {
@@ -92,7 +78,7 @@ impl AppState {
     ) -> Self {
         Self {
             tui: TuiState::with_history(config, root, system_prompt, session, history),
-            overlay: OverlayState::None,
+            overlay: None,
         }
     }
 }
@@ -166,7 +152,7 @@ impl AgentState {
 /// TUI application state (non-overlay).
 ///
 /// This contains all state except for overlays. Overlays are stored separately
-/// in `OverlayState` and combined via `AppState` to enable the split state
+/// in `Option<Overlay>` and combined via `AppState` to enable the split state
 /// architecture where overlay handlers can access both without borrow conflicts.
 pub struct TuiState {
     /// Flag indicating the app should quit.
@@ -343,8 +329,9 @@ impl TuiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::config::ThinkingLevel;
     use crate::ui::chat::overlays::{
-        CommandPaletteState, FilePickerState, LoginState, ModelPickerState, OverlayState,
+        CommandPaletteState, FilePickerState, LoginState, ModelPickerState, Overlay,
         ThinkingPickerState,
     };
 
@@ -518,42 +505,55 @@ mod tests {
     }
 
     // ========================================================================
-    // OverlayState Tests
+    // Overlay Tests
     // ========================================================================
 
     #[test]
-    fn test_overlay_state_is_active() {
-        use crate::config::ThinkingLevel;
-        assert!(!OverlayState::None.is_active());
-        assert!(OverlayState::CommandPalette(CommandPaletteState::new(true)).is_active());
-        assert!(OverlayState::ModelPicker(ModelPickerState::new("test")).is_active());
-        assert!(
-            OverlayState::ThinkingPicker(ThinkingPickerState::new(ThinkingLevel::Off)).is_active()
-        );
-        assert!(OverlayState::Login(LoginState::Exchanging).is_active());
-        assert!(OverlayState::FilePicker(FilePickerState::new(0)).is_active());
+    fn test_overlay_is_some() {
+        let none: Option<Overlay> = None;
+        assert!(none.is_none());
+
+        let (palette, _) = CommandPaletteState::open(true);
+        let overlay: Option<Overlay> = Some(palette.into());
+        assert!(overlay.is_some());
+
+        let (picker, _) = ModelPickerState::open("test");
+        let overlay: Option<Overlay> = Some(picker.into());
+        assert!(overlay.is_some());
+
+        let (thinking, _) = ThinkingPickerState::open(ThinkingLevel::Off);
+        let overlay: Option<Overlay> = Some(thinking.into());
+        assert!(overlay.is_some());
+
+        let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging));
+        assert!(overlay.is_some());
+
+        let (file_picker, _) = FilePickerState::open(0);
+        let overlay: Option<Overlay> = Some(file_picker.into());
+        assert!(overlay.is_some());
     }
 
     #[test]
-    fn test_overlay_state_accessors() {
-        use crate::config::ThinkingLevel;
-        let palette = OverlayState::CommandPalette(CommandPaletteState::new(true));
-        assert!(palette.as_command_palette().is_some());
-        assert!(palette.as_model_picker().is_none());
-        assert!(palette.as_thinking_picker().is_none());
-        assert!(palette.as_login().is_none());
+    fn test_overlay_accessors() {
+        let (palette, _) = CommandPaletteState::open(true);
+        let overlay = Overlay::from(palette);
+        assert!(overlay.as_command_palette().is_some());
+        assert!(overlay.as_model_picker().is_none());
+        assert!(overlay.as_thinking_picker().is_none());
+        assert!(overlay.as_login().is_none());
 
-        let picker = OverlayState::ModelPicker(ModelPickerState::new("test"));
-        assert!(picker.as_command_palette().is_none());
-        assert!(picker.as_model_picker().is_some());
+        let (picker, _) = ModelPickerState::open("test");
+        let overlay = Overlay::from(picker);
+        assert!(overlay.as_command_palette().is_none());
+        assert!(overlay.as_model_picker().is_some());
 
-        let thinking_picker =
-            OverlayState::ThinkingPicker(ThinkingPickerState::new(ThinkingLevel::Medium));
-        assert!(thinking_picker.as_thinking_picker().is_some());
-        assert!(thinking_picker.as_model_picker().is_none());
+        let (thinking_picker, _) = ThinkingPickerState::open(ThinkingLevel::Medium);
+        let overlay = Overlay::from(thinking_picker);
+        assert!(overlay.as_thinking_picker().is_some());
+        assert!(overlay.as_model_picker().is_none());
 
-        let login = OverlayState::Login(LoginState::Exchanging);
-        assert!(login.as_login().is_some());
+        let overlay = Overlay::Login(LoginState::Exchanging);
+        assert!(overlay.as_login().is_some());
     }
 
     // ========================================================================
