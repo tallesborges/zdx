@@ -26,6 +26,7 @@ use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::{SessionUiEvent, UiEvent};
+use crate::ui::chat::overlays::Overlay;
 use crate::ui::chat::overlays::{
     CommandPaletteState, FilePickerState, LoginState, ModelPickerState, ThinkingPickerState,
 };
@@ -510,38 +511,44 @@ impl TuiRuntime {
             // Overlay effects
             UiEffect::OpenCommandPalette { command_mode } => {
                 if self.state.overlay.is_none() {
-                    let (state, _) = CommandPaletteState::open(command_mode);
-                    self.state.overlay = Some(state.into());
+                    let (state, effects) = CommandPaletteState::open(command_mode);
+                    self.set_overlay(state, effects);
                 }
             }
             UiEffect::OpenFilePicker { trigger_pos } => {
                 if self.state.overlay.is_none() {
                     let (state, effects) = FilePickerState::open(trigger_pos);
-                    self.state.overlay = Some(state.into());
-                    self.execute_effects(effects);
+                    self.set_overlay(state, effects);
                 }
             }
             UiEffect::OpenModelPicker => {
                 if self.state.overlay.is_none() {
-                    let current_model = self.state.tui.config.model.clone();
-                    let (state, _) = ModelPickerState::open(&current_model);
-                    self.state.overlay = Some(state.into());
+                    let (state, effects) = ModelPickerState::open(&self.state.tui.config.model);
+                    self.set_overlay(state, effects);
                 }
             }
             UiEffect::OpenThinkingPicker => {
                 if self.state.overlay.is_none() {
-                    let current_thinking = self.state.tui.config.thinking_level;
-                    let (state, _) = ThinkingPickerState::open(current_thinking);
-                    self.state.overlay = Some(state.into());
+                    let (state, effects) =
+                        ThinkingPickerState::open(self.state.tui.config.thinking_level);
+                    self.set_overlay(state, effects);
                 }
             }
             UiEffect::OpenLogin => {
                 if self.state.overlay.is_none() {
                     let (state, effects) = LoginState::open();
-                    self.state.overlay = Some(state.into());
-                    self.execute_effects(effects);
+                    self.set_overlay(state, effects);
                 }
             }
+        }
+    }
+}
+
+impl TuiRuntime {
+    fn set_overlay(&mut self, overlay: impl Into<Overlay>, effects: Vec<UiEffect>) {
+        self.state.overlay = Some(overlay.into());
+        if !effects.is_empty() {
+            self.execute_effects(effects);
         }
     }
 }

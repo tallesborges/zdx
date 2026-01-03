@@ -28,15 +28,10 @@ use crate::ui::chat::state::TuiState;
 ///
 /// - `None` = continue with overlay open, no effects
 /// - `Some(Close(effects))` = close overlay, execute effects
-/// - `Some(Transition { ... })` = transition to new overlay state
 /// - `Some(Effects(effects))` = stay open but run effects
 #[derive(Debug)]
 pub enum OverlayAction {
     Close(Vec<UiEffect>),
-    Transition {
-        new_overlay: Overlay,
-        effects: Vec<UiEffect>,
-    },
     Effects(Vec<UiEffect>),
 }
 
