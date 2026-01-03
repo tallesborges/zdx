@@ -1,7 +1,3 @@
-//! Model picker overlay.
-//!
-//! Contains state, update handlers, and render function for the model picker.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -9,50 +5,31 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction};
+use super::OverlayAction;
 use crate::models::AVAILABLE_MODELS;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the model picker overlay.
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
-    /// Currently selected index.
     pub selected: usize,
 }
 
 impl ModelPickerState {
-    /// Creates a new picker state, selecting the current model if found.
-    pub fn new(current_model: &str) -> Self {
+    pub fn open(current_model: &str) -> (Self, Vec<UiEffect>) {
         let selected = AVAILABLE_MODELS
             .iter()
             .position(|m| m.id == current_model)
             .unwrap_or(0);
-        Self { selected }
-    }
-}
-
-// ============================================================================
-// Overlay Trait Implementation
-// ============================================================================
-
-impl Overlay for ModelPickerState {
-    type Config = String; // current_model
-
-    fn open(current_model: Self::Config) -> (Self, Vec<UiEffect>) {
-        (Self::new(&current_model), vec![])
+        (Self { selected }, vec![])
     }
 
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_model_picker(frame, self, area, input_y)
     }
 
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -93,11 +70,6 @@ impl Overlay for ModelPickerState {
     }
 }
 
-// ============================================================================
-// Render
-// ============================================================================
-
-/// Renders the model picker as an overlay.
 pub fn render_model_picker(
     frame: &mut Frame,
     picker: &ModelPickerState,
@@ -162,7 +134,6 @@ pub fn render_model_picker(
     list_state.select(Some(picker.selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    // Separator line
     let separator = "─".repeat(inner_area.width as usize);
     let sep_y = inner_area.y + list_height;
     if sep_y < inner_area.y + inner_area.height {
@@ -176,7 +147,6 @@ pub fn render_model_picker(
         );
     }
 
-    // Keyboard hints
     let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
     let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
     let hints_line = Line::from(vec![

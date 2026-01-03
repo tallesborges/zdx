@@ -1,7 +1,3 @@
-//! Command palette overlay.
-//!
-//! Contains state, update handlers, and render function for the command palette.
-
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -9,81 +5,36 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction};
+use super::OverlayAction;
 use crate::ui::chat::commands::COMMANDS;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 
-// ============================================================================
-// State
-// ============================================================================
-
-/// State for the slash command palette.
 #[derive(Debug, Clone)]
 pub struct CommandPaletteState {
-    /// Filter text (characters typed after `/`).
     pub filter: String,
-    /// Currently selected command index (into filtered list).
     pub selected: usize,
     /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
     pub insert_slash_on_escape: bool,
 }
 
 impl CommandPaletteState {
-    /// Creates a new palette state with empty filter.
-    pub fn new(insert_slash_on_escape: bool) -> Self {
-        Self {
-            filter: String::new(),
-            selected: 0,
-            insert_slash_on_escape,
-        }
+    pub fn open(insert_slash_on_escape: bool) -> (Self, Vec<UiEffect>) {
+        (
+            Self {
+                filter: String::new(),
+                selected: 0,
+                insert_slash_on_escape,
+            },
+            vec![],
+        )
     }
 
-    /// Returns commands matching the current filter.
-    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::chat::commands::Command> {
-        if self.filter.is_empty() {
-            COMMANDS.iter().collect()
-        } else {
-            COMMANDS
-                .iter()
-                .filter(|cmd| cmd.matches(&self.filter))
-                .collect()
-        }
-    }
-
-    /// Clamps the selected index to valid range for current filter.
-    pub fn clamp_selection(&mut self) {
-        let count = self.filtered_commands().len();
-        if count == 0 {
-            self.selected = 0;
-        } else {
-            self.selected = self.selected.min(count - 1);
-        }
-    }
-
-    /// Returns the currently selected command name, if any.
-    fn get_selected_command_name(&self) -> Option<&'static str> {
-        let filtered = self.filtered_commands();
-        filtered.get(self.selected).map(|cmd| cmd.name)
-    }
-}
-
-// ============================================================================
-// Overlay Trait Implementation
-// ============================================================================
-
-impl Overlay for CommandPaletteState {
-    type Config = bool; // insert_slash_on_escape
-
-    fn open(insert_slash_on_escape: Self::Config) -> (Self, Vec<UiEffect>) {
-        (Self::new(insert_slash_on_escape), vec![])
-    }
-
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_command_palette(frame, self, area, input_y)
     }
 
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -110,7 +61,6 @@ impl Overlay for CommandPaletteState {
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(cmd_name) = self.get_selected_command_name() {
-                    // Execute command and return its effects
                     let effects = execute_command(tui, cmd_name);
                     Some(OverlayAction::close_with(effects))
                 } else {
@@ -130,15 +80,33 @@ impl Overlay for CommandPaletteState {
             _ => None,
         }
     }
+
+    pub fn filtered_commands(&self) -> Vec<&'static crate::ui::chat::commands::Command> {
+        if self.filter.is_empty() {
+            COMMANDS.iter().collect()
+        } else {
+            COMMANDS
+                .iter()
+                .filter(|cmd| cmd.matches(&self.filter))
+                .collect()
+        }
+    }
+
+    pub fn clamp_selection(&mut self) {
+        let count = self.filtered_commands().len();
+        if count == 0 {
+            self.selected = 0;
+        } else {
+            self.selected = self.selected.min(count - 1);
+        }
+    }
+
+    fn get_selected_command_name(&self) -> Option<&'static str> {
+        let filtered = self.filtered_commands();
+        filtered.get(self.selected).map(|cmd| cmd.name)
+    }
 }
 
-// ============================================================================
-// Command Execution
-// ============================================================================
-
-/// Executes a slash command by name.
-///
-/// Returns effects for the runtime to execute.
 fn execute_command(tui: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
     use crate::ui::transcript::HistoryCell;
 
@@ -182,7 +150,6 @@ fn execute_handoff(tui: &mut TuiState) -> Vec<UiEffect> {
     use crate::ui::chat::state::HandoffState;
     use crate::ui::transcript::HistoryCell;
 
-    // Check if we have an active session
     if tui.conversation.session.is_none() {
         tui.transcript
             .cells
@@ -190,11 +157,8 @@ fn execute_handoff(tui: &mut TuiState) -> Vec<UiEffect> {
         return vec![];
     }
 
-    // Clear any stale handoff state from previous attempts
     tui.input.handoff.cancel();
     tui.clear_input();
-
-    // Set handoff mode - next submit will trigger handoff
     tui.input.handoff = HandoffState::Pending;
     vec![]
 }
@@ -229,11 +193,6 @@ fn execute_quit(tui: &mut TuiState) -> Vec<UiEffect> {
     }
 }
 
-// ============================================================================
-// Render
-// ============================================================================
-
-/// Renders the command palette as an overlay.
 pub fn render_command_palette(
     frame: &mut Frame,
     palette: &CommandPaletteState,
@@ -242,23 +201,17 @@ pub fn render_command_palette(
 ) {
     let commands = palette.filtered_commands();
 
-    // Calculate palette dimensions
     let palette_width = 50.min(area.width.saturating_sub(4));
     let palette_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
 
-    // Available vertical space (above input)
     let available_height = input_top_y;
-
-    // Position: centered both horizontally and vertically
     let palette_x = (area.width.saturating_sub(palette_width)) / 2;
     let palette_y = (available_height.saturating_sub(palette_height)) / 2;
 
     let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
 
-    // Clear the area behind the palette
     frame.render_widget(Clear, palette_area);
 
-    // Render outer border
     let outer_block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Yellow))
@@ -270,7 +223,6 @@ pub fn render_command_palette(
         );
     frame.render_widget(outer_block, palette_area);
 
-    // Inner area (inside border)
     let inner_area = Rect::new(
         palette_area.x + 1,
         palette_area.y + 1,
@@ -278,7 +230,6 @@ pub fn render_command_palette(
         palette_area.height.saturating_sub(2),
     );
 
-    // Filter input line at TOP
     let max_filter_len = inner_area.width.saturating_sub(4) as usize;
     let filter_display = if palette.filter.is_empty() {
         "/".to_string()
@@ -297,7 +248,6 @@ pub fn render_command_palette(
     let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
     frame.render_widget(filter_para, filter_area);
 
-    // Separator line
     let separator = "─".repeat(inner_area.width as usize);
     let separator_line = Paragraph::new(Line::from(Span::styled(
         &separator,
@@ -306,7 +256,6 @@ pub fn render_command_palette(
     let separator_area = Rect::new(inner_area.x, inner_area.y + 1, inner_area.width, 1);
     frame.render_widget(separator_line, separator_area);
 
-    // Command list area
     let list_height = inner_area.height.saturating_sub(4);
     let list_area = Rect::new(
         inner_area.x,
@@ -315,7 +264,6 @@ pub fn render_command_palette(
         list_height,
     );
 
-    // Build the list items
     let items: Vec<ListItem> = if commands.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             "  No matching commands",
@@ -355,7 +303,6 @@ pub fn render_command_palette(
     }
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    // Bottom separator
     let bottom_sep_y = inner_area.y + 2 + list_height;
     if bottom_sep_y < inner_area.y + inner_area.height {
         let bottom_separator_area = Rect::new(inner_area.x, bottom_sep_y, inner_area.width, 1);
@@ -368,7 +315,6 @@ pub fn render_command_palette(
         );
     }
 
-    // Keyboard hints at the bottom
     let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
     let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
     let hints_line = Line::from(vec![
@@ -385,24 +331,20 @@ pub fn render_command_palette(
     frame.render_widget(hints_para, hints_area);
 }
 
-// ============================================================================
-// Tests
-// ============================================================================
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
-        let state = CommandPaletteState::new(true);
+        let (state, _) = CommandPaletteState::open(true);
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), COMMANDS.len());
     }
 
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
-        let mut state = CommandPaletteState::new(true);
+        let (mut state, _) = CommandPaletteState::open(true);
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 1);
@@ -411,7 +353,7 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
-        let mut state = CommandPaletteState::new(true);
+        let (mut state, _) = CommandPaletteState::open(true);
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
@@ -419,16 +361,16 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection() {
-        let mut state = CommandPaletteState::new(true);
-        state.selected = 10; // way out of bounds
+        let (mut state, _) = CommandPaletteState::open(true);
+        state.selected = 10;
         state.clamp_selection();
         assert_eq!(state.selected, COMMANDS.len() - 1);
     }
 
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
-        let mut state = CommandPaletteState::new(true);
-        state.filter = "xyz".to_string(); // no matches
+        let (mut state, _) = CommandPaletteState::open(true);
+        state.filter = "xyz".to_string();
         state.selected = 5;
         state.clamp_selection();
         assert_eq!(state.selected, 0);

@@ -257,8 +257,9 @@ pub fn view(app: &AppState, frame: &mut Frame) {
     render_status_line(state, frame, chunks[2]);
 
     // Render overlay (last, so it appears on top)
-    // Uses OverlayState::render() which delegates to each overlay's Overlay trait impl
-    app.overlay.render(frame, area, chunks[1].y);
+    if let Some(overlay) = &app.overlay {
+        overlay.render(frame, area, chunks[1].y);
+    }
 }
 
 /// Renders the input area with model info on top border and path on bottom border.

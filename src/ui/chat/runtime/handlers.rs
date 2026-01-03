@@ -9,7 +9,7 @@ use tokio::sync::mpsc;
 
 use crate::core::interrupt;
 use crate::core::session::{self};
-use crate::ui::chat::overlays::{self, OverlayState};
+use crate::ui::chat::overlays;
 use crate::ui::chat::state::{AgentState, SessionUsage, TuiState};
 use crate::ui::chat::transcript_build::build_transcript_from_events;
 use crate::ui::transcript::HistoryCell;
@@ -47,9 +47,9 @@ fn load_transcript_cells(session_id: &str) -> Result<Vec<HistoryCell>, anyhow::E
 /// Loads the session list (I/O) and opens the overlay if sessions exist.
 /// Shows an error message if no sessions are found or loading fails.
 /// Also triggers a preview of the first session.
-pub fn open_session_picker(tui: &mut TuiState, overlay: &mut OverlayState) {
+pub fn open_session_picker(tui: &mut TuiState, overlay: &mut Option<overlays::Overlay>) {
     // Don't open if another overlay is active
-    if !matches!(overlay, OverlayState::None) {
+    if overlay.is_some() {
         return;
     }
 
@@ -59,20 +59,18 @@ pub fn open_session_picker(tui: &mut TuiState, overlay: &mut OverlayState) {
             push_system(tui, "No sessions found.");
         }
         Ok(sessions) => {
-            // Get a snapshot of current transcript for restore on cancel
-            let original_cells = tui.transcript.cells.clone();
+            if overlay.is_none() {
+                let original_cells = tui.transcript.cells.clone();
+                let (state, effects) = overlays::SessionPickerState::open(sessions, original_cells);
+                *overlay = Some(state.into());
 
-            // Use overlay's try_open for state mutation
-            let config = overlays::session_picker::SessionPickerConfig {
-                sessions,
-                original_cells,
-            };
-            let effects = overlay.try_open::<overlays::SessionPickerState>(config);
-
-            // Execute preview effect immediately (within same I/O context)
-            for effect in effects {
-                if let crate::ui::chat::effects::UiEffect::PreviewSession { session_id } = effect {
-                    preview_session(tui, &session_id);
+                // Execute preview effect immediately (within same I/O context)
+                for effect in effects {
+                    if let crate::ui::chat::effects::UiEffect::PreviewSession { session_id } =
+                        effect
+                    {
+                        preview_session(tui, &session_id);
+                    }
                 }
             }
         }
