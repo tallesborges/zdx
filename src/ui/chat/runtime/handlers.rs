@@ -1,110 +1,101 @@
 //! Effect handlers for the TUI runtime.
 //!
 //! This module contains the implementation of side effects triggered by the reducer.
-//! These functions perform I/O, spawn async tasks, and modify state.
+//! These functions perform I/O and spawn async tasks. They do NOT mutate state directly.
+//!
+//! State mutations happen in the reducer via events. Effect handlers either:
+//! 1. Perform synchronous I/O and return results for the runtime to convert to events
+//! 2. Spawn async tasks that send results via channels (runtime collects and converts to events)
 
-use std::fmt::Display;
+use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
 use crate::core::interrupt;
-use crate::core::session::{self};
-use crate::ui::chat::overlays;
-use crate::ui::chat::state::{AgentState, SessionUsage, TuiState};
+use crate::core::session;
+use crate::ui::chat::events::{SessionUiEvent, UiEvent};
+use crate::ui::chat::state::{AgentState, TuiState};
 use crate::ui::chat::transcript_build::build_transcript_from_events;
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================
-// Helper Methods
+// Session Handlers (Async - return receivers for runtime to poll)
 // ============================================================================
 
-/// Helper to push a system message to the transcript.
-pub fn push_system(tui: &mut TuiState, msg: impl Into<String>) {
-    tui.transcript.cells.push(HistoryCell::system(msg));
-}
-
-/// Helper to push a warning message to the transcript.
-pub fn push_warning(tui: &mut TuiState, prefix: &str, err: impl Display) {
-    tui.transcript
-        .cells
-        .push(HistoryCell::system(format!("{}: {}", prefix, err)));
-}
-
-// ============================================================================
-// Session Handlers
-// ============================================================================
-
-/// Loads transcript cells from a session.
+/// Spawns async session list loading and returns the receiver.
 ///
-/// Shared helper for `load_session` and `preview_session`.
-fn load_transcript_cells(session_id: &str) -> Result<Vec<HistoryCell>, anyhow::Error> {
-    let events = session::load_session(session_id)?;
-    Ok(build_transcript_from_events(&events))
+/// Returns events via channel for the runtime to collect and dispatch to reducer.
+pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> mpsc::Receiver<UiEvent> {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
+
+    tokio::spawn(async move {
+        let event = tokio::task::spawn_blocking(move || match session::list_sessions() {
+            Ok(sessions) if sessions.is_empty() => UiEvent::Session(SessionUiEvent::ListFailed {
+                error: "No sessions found.".to_string(),
+            }),
+            Ok(sessions) => UiEvent::Session(SessionUiEvent::ListLoaded {
+                sessions,
+                original_cells,
+            }),
+            Err(e) => UiEvent::Session(SessionUiEvent::ListFailed {
+                error: format!("Failed to load sessions: {}", e),
+            }),
+        })
+        .await
+        .unwrap_or_else(|e| {
+            UiEvent::Session(SessionUiEvent::ListFailed {
+                error: format!("Task failed: {}", e),
+            })
+        });
+
+        let _ = tx.send(event).await;
+    });
+
+    rx
 }
 
-/// Opens the session picker overlay.
+/// Spawns async session loading (full switch) and returns the receiver.
 ///
-/// Loads the session list (I/O) and opens the overlay if sessions exist.
-/// Shows an error message if no sessions are found or loading fails.
-/// Also triggers a preview of the first session.
-pub fn open_session_picker(tui: &mut TuiState, overlay: &mut Option<overlays::Overlay>) {
-    // Don't open if another overlay is active
-    if overlay.is_some() {
-        return;
-    }
+/// Loads events, builds transcript cells, messages, and history.
+pub fn spawn_session_load(session_id: String) -> mpsc::Receiver<UiEvent> {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
-    // Load sessions (I/O happens here in the effect handler, not reducer)
-    match session::list_sessions() {
-        Ok(sessions) if sessions.is_empty() => {
-            push_system(tui, "No sessions found.");
-        }
-        Ok(sessions) => {
-            if overlay.is_none() {
-                let original_cells = tui.transcript.cells.clone();
-                let (state, effects) = overlays::SessionPickerState::open(sessions, original_cells);
-                *overlay = Some(state.into());
+    tokio::spawn(async move {
+        let id = session_id.clone();
+        let event = tokio::task::spawn_blocking(move || load_session_sync(&id))
+            .await
+            .unwrap_or_else(|e| {
+                UiEvent::Session(SessionUiEvent::LoadFailed {
+                    error: format!("Task failed: {}", e),
+                })
+            });
 
-                // Execute preview effect immediately (within same I/O context)
-                for effect in effects {
-                    if let crate::ui::chat::effects::UiEffect::PreviewSession { session_id } =
-                        effect
-                    {
-                        preview_session(tui, &session_id);
-                    }
-                }
-            }
-        }
-        Err(e) => {
-            push_warning(tui, "Failed to load sessions", e);
-        }
-    }
+        let _ = tx.send(event).await;
+    });
+
+    rx
 }
 
-/// Loads a session by ID and switches to it.
-///
-/// This:
-/// 1. Loads events from the session file
-/// 2. Builds transcript cells from events
-/// 3. Builds API messages for conversation context
-/// 4. Resets all state facets with loaded data
-pub fn load_session(tui: &mut TuiState, session_id: &str) {
+/// Synchronous session loading (runs in blocking task).
+fn load_session_sync(session_id: &str) -> UiEvent {
     // Load session events (I/O)
     let events = match session::load_session(session_id) {
         Ok(events) => events,
         Err(e) => {
-            push_warning(tui, "Failed to load session", e);
-            return;
+            return UiEvent::Session(SessionUiEvent::LoadFailed {
+                error: format!("Failed to load session: {}", e),
+            });
         }
     };
 
     // Build transcript cells from events
-    let transcript_cells = build_transcript_from_events(&events);
+    let cells = build_transcript_from_events(&events);
 
     // Build API messages for conversation context
     let messages = session::events_to_messages(events);
 
     // Build input history from user messages in transcript
-    let command_history: Vec<String> = transcript_cells
+    let history: Vec<String> = cells
         .iter()
         .filter_map(|cell| {
             if let HistoryCell::User { content, .. } = cell {
@@ -116,89 +107,85 @@ pub fn load_session(tui: &mut TuiState, session_id: &str) {
         .collect();
 
     // Create or get the session handle for future appends
-    let session_handle = match session::Session::with_id(session_id.to_string()) {
-        Ok(s) => Some(s),
-        Err(e) => {
-            push_warning(tui, "Warning: Failed to open session for writing", e);
-            None
-        }
-    };
+    let session = session::Session::with_id(session_id.to_string()).ok();
 
-    // Reset state facets with loaded data
-    tui.transcript.cells = transcript_cells;
-    tui.conversation.messages = messages;
-    tui.conversation.session = session_handle;
-    tui.conversation.usage = SessionUsage::new();
-    tui.input.history = command_history;
-    tui.transcript.scroll.reset();
-    tui.transcript.wrap_cache.clear();
-
-    // Show confirmation message
-    let short_id = if session_id.len() > 8 {
-        format!("{}…", &session_id[..8])
-    } else {
-        session_id.to_string()
-    };
-    push_system(tui, format!("Switched to session {}", short_id));
+    UiEvent::Session(SessionUiEvent::Loaded {
+        session_id: session_id.to_string(),
+        cells,
+        messages,
+        history,
+        session,
+    })
 }
 
-/// Previews a session (shows transcript without full switch).
+/// Spawns async session preview loading and returns the receiver.
 ///
-/// Used during session picker navigation to show a live preview.
-/// Only updates transcript cells and display state, not conversation
-/// messages or session handle. The original cells are stored in the
-/// picker state for restore on Esc.
-pub fn preview_session(tui: &mut TuiState, session_id: &str) {
-    // Load transcript cells, silently fail for preview - errors shown on actual load
-    if let Ok(transcript_cells) = load_transcript_cells(session_id) {
-        tui.transcript.cells = transcript_cells;
-        tui.transcript.scroll.reset();
-        tui.transcript.wrap_cache.clear();
-    }
+/// Preview only loads transcript cells (not full session data).
+pub fn spawn_session_preview(session_id: String) -> mpsc::Receiver<UiEvent> {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
+
+    tokio::spawn(async move {
+        let event = tokio::task::spawn_blocking(move || {
+            match session::load_session(&session_id) {
+                Ok(events) => {
+                    let cells = build_transcript_from_events(&events);
+                    UiEvent::Session(SessionUiEvent::PreviewLoaded { cells })
+                }
+                Err(_) => {
+                    // Silent failure for preview - errors shown on actual load
+                    UiEvent::Session(SessionUiEvent::PreviewFailed)
+                }
+            }
+        })
+        .await
+        .unwrap_or(UiEvent::Session(SessionUiEvent::PreviewFailed));
+
+        let _ = tx.send(event).await;
+    });
+
+    rx
 }
 
-/// Creates a new session and shows context info in transcript.
-///
-/// Returns `Ok(())` if session was created successfully, `Err(())` if it failed.
-/// On failure, an error message is already added to the transcript.
-pub fn create_session_and_show_context(tui: &mut TuiState) -> Result<(), ()> {
-    let new_session = match session::Session::new() {
-        Ok(s) => s,
-        Err(e) => {
-            push_warning(tui, "Warning: Failed to create new session", e);
-            return Err(());
-        }
-    };
+/// Spawns async new session creation and returns the receiver.
+pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> mpsc::Receiver<UiEvent> {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
-    let new_path = new_session.path().display().to_string();
-    tui.conversation.session = Some(new_session);
+    tokio::spawn(async move {
+        let event = tokio::task::spawn_blocking(move || {
+            let session = match session::Session::new() {
+                Ok(s) => s,
+                Err(e) => {
+                    return UiEvent::Session(SessionUiEvent::CreateFailed {
+                        error: format!("Failed to create session: {}", e),
+                    });
+                }
+            };
 
-    // Show session path
-    push_system(tui, format!("Session path: {}", new_path));
+            // Load AGENTS.md paths
+            let context_paths = match crate::core::context::build_effective_system_prompt_with_paths(
+                &config,
+                &root,
+            ) {
+                Ok(effective) => effective.loaded_agents_paths,
+                Err(_) => Vec::new(), // Context loading failed, but session was created
+            };
 
-    // Show loaded AGENTS.md files
-    let effective = match crate::core::context::build_effective_system_prompt_with_paths(
-        &tui.config,
-        &tui.agent_opts.root,
-    ) {
-        Ok(e) => e,
-        Err(err) => {
-            push_warning(tui, "Warning: Failed to load context", err);
-            return Ok(()); // Session created, just context loading failed
-        }
-    };
+            UiEvent::Session(SessionUiEvent::Created {
+                session,
+                context_paths,
+            })
+        })
+        .await
+        .unwrap_or_else(|e| {
+            UiEvent::Session(SessionUiEvent::CreateFailed {
+                error: format!("Task failed: {}", e),
+            })
+        });
 
-    if !effective.loaded_agents_paths.is_empty() {
-        let paths_list: Vec<String> = effective
-            .loaded_agents_paths
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect();
-        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        push_system(tui, message);
-    }
+        let _ = tx.send(event).await;
+    });
 
-    Ok(())
+    rx
 }
 
 // ============================================================================

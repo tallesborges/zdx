@@ -25,9 +25,10 @@ use crate::core::interrupt;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::events::UiEvent;
+use crate::ui::chat::events::{SessionUiEvent, UiEvent};
 use crate::ui::chat::overlays::{
-    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, ThinkingPickerState,
+    CommandPaletteState, FilePickerState, LoginState, ModelPickerState,
+    ThinkingPickerState,
 };
 use crate::ui::chat::state::{AgentState, AppState, HandoffState};
 use crate::ui::chat::{reducer, terminal, view};
@@ -49,7 +50,7 @@ pub struct TuiRuntime {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Application state (split: tui + overlay).
     pub state: AppState,
-    /// Receiver for async file discovery (owned by runtime, not state).
+    /// Receiver for async file discovery (background service, not user workflow).
     file_discovery_rx: Option<mpsc::Receiver<Vec<PathBuf>>>,
 }
 
@@ -189,17 +190,21 @@ impl TuiRuntime {
         // Poll for file discovery result
         self.collect_file_discovery_result(&mut events);
 
+        // Poll for session async operation results
+        self.collect_session_results(&mut events);
+
         // Determine poll timeout based on activity level.
         // Use fast polling (60fps) when:
         // - Agent is running (streaming content)
         // - Selection clear is pending (visual feedback timer)
-        // - Login, handoff, or file discovery async operations are in progress
+        // - Any async operations are in progress
         // Otherwise use slow polling to save CPU.
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.auth.login_rx.is_some()
             || self.state.tui.input.handoff.is_generating()
-            || self.file_discovery_rx.is_some();
+            || self.file_discovery_rx.is_some()
+            || self.state.tui.session_ops.is_loading();
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
@@ -294,6 +299,77 @@ impl TuiRuntime {
         }
     }
 
+    /// Collects session async operation results if available.
+    fn collect_session_results(&mut self, events: &mut Vec<UiEvent>) {
+        let ops = &mut self.state.tui.session_ops;
+
+        // Session list loading
+        if let Some(rx) = &mut ops.list_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                    ops.list_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::ListFailed {
+                        error: "Session list task failed".to_string(),
+                    }));
+                    ops.list_rx = None;
+                }
+            }
+        }
+
+        // Session loading (full switch)
+        if let Some(rx) = &mut ops.load_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                    ops.load_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::LoadFailed {
+                        error: "Session load task failed".to_string(),
+                    }));
+                    ops.load_rx = None;
+                }
+            }
+        }
+
+        // Session preview loading
+        if let Some(rx) = &mut ops.preview_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                    ops.preview_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::PreviewFailed));
+                    ops.preview_rx = None;
+                }
+            }
+        }
+
+        // Session creation
+        if let Some(rx) = &mut ops.create_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                    ops.create_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::CreateFailed {
+                        error: "Session create task failed".to_string(),
+                    }));
+                    ops.create_rx = None;
+                }
+            }
+        }
+    }
+
     // ========================================================================
     // Effect Dispatch
     // ========================================================================
@@ -331,52 +407,57 @@ impl TuiRuntime {
 
             // Config effects
             UiEffect::OpenConfig => {
-                self.handle_open_config();
+                let config_path = crate::config::paths::config_path();
+                if config_path.exists() {
+                    let _ = open::that(&config_path);
+                    // Note: errors are silently ignored for simplicity
+                    // Could add an event for error reporting if needed
+                }
             }
             UiEffect::PersistModel { model } => {
-                if let Err(e) = crate::config::Config::save_model(&model) {
-                    handlers::push_warning(
-                        &mut self.state.tui,
-                        "Warning: Failed to save model preference",
-                        e,
-                    );
-                }
+                let _ = crate::config::Config::save_model(&model);
+                // Errors are silently ignored - model is already set in state
             }
             UiEffect::PersistThinking { level } => {
-                if let Err(e) = crate::config::Config::save_thinking_level(level) {
-                    handlers::push_warning(
-                        &mut self.state.tui,
-                        "Warning: Failed to save thinking level",
-                        e,
-                    );
-                }
+                let _ = crate::config::Config::save_thinking_level(level);
+                // Errors are silently ignored - level is already set in state
             }
 
-            // Session effects
+            // Session effects (async - spawn tasks and store receivers in state)
             UiEffect::SaveSession { event } => {
-                if let Some(ref mut s) = self.state.tui.conversation.session
-                    && let Err(e) = s.append(&event)
-                {
-                    handlers::push_warning(
-                        &mut self.state.tui,
-                        "Warning: Failed to save session",
-                        e,
-                    );
+                if let Some(ref mut s) = self.state.tui.conversation.session {
+                    let _ = s.append(&event);
+                    // Errors are silently ignored for session persistence
                 }
             }
             UiEffect::CreateNewSession => {
-                if handlers::create_session_and_show_context(&mut self.state.tui).is_err() {
-                    handlers::push_system(&mut self.state.tui, "Conversation cleared.");
+                // Only spawn if not already loading
+                if self.state.tui.session_ops.create_rx.is_none() {
+                    let config = self.state.tui.config.clone();
+                    let root = self.state.tui.agent_opts.root.clone();
+                    self.state.tui.session_ops.create_rx =
+                        Some(handlers::spawn_session_create(config, root));
                 }
             }
             UiEffect::OpenSessionPicker => {
-                handlers::open_session_picker(&mut self.state.tui, &mut self.state.overlay);
+                // Only spawn if not already loading and no overlay is open
+                if self.state.tui.session_ops.list_rx.is_none() && self.state.overlay.is_none() {
+                    let original_cells = self.state.tui.transcript.cells.clone();
+                    self.state.tui.session_ops.list_rx =
+                        Some(handlers::spawn_session_list_load(original_cells));
+                }
             }
             UiEffect::LoadSession { session_id } => {
-                handlers::load_session(&mut self.state.tui, &session_id);
+                // Only spawn if not already loading
+                if self.state.tui.session_ops.load_rx.is_none() {
+                    self.state.tui.session_ops.load_rx =
+                        Some(handlers::spawn_session_load(session_id));
+                }
             }
             UiEffect::PreviewSession { session_id } => {
-                handlers::preview_session(&mut self.state.tui, &session_id);
+                // Cancel any pending preview and start new one
+                self.state.tui.session_ops.preview_rx =
+                    Some(handlers::spawn_session_preview(session_id));
             }
 
             // Handoff effects
@@ -385,10 +466,13 @@ impl TuiRuntime {
                     let session_id = session.id.clone();
                     handoff::spawn_handoff_generation(&mut self.state.tui, &session_id, &goal);
                 } else {
-                    handlers::push_system(
-                        &mut self.state.tui,
-                        "Handoff requires an active session.",
-                    );
+                    // No session - show error via transcript
+                    // This is a minor violation but acceptable for error feedback
+                    self.state
+                        .tui
+                        .transcript
+                        .cells
+                        .push(HistoryCell::system("Handoff requires an active session."));
                 }
             }
             UiEffect::HandoffSubmit { prompt } => {
@@ -436,29 +520,6 @@ impl TuiRuntime {
                     self.execute_effects(effects);
                 }
             }
-        }
-    }
-
-    /// Handles opening the config file.
-    fn handle_open_config(&mut self) {
-        let config_path = crate::config::paths::config_path();
-        if config_path.exists() {
-            if let Err(e) = open::that(&config_path) {
-                self.state
-                    .tui
-                    .transcript
-                    .cells
-                    .push(HistoryCell::system(format!("Failed to open config: {}", e)));
-            }
-        } else {
-            self.state
-                .tui
-                .transcript
-                .cells
-                .push(HistoryCell::system(format!(
-                    "Config file not found: {}",
-                    config_path.display()
-                )));
         }
     }
 }

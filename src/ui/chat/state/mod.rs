@@ -33,7 +33,7 @@ mod transcript;
 // Re-export types from submodules
 pub use auth::{AuthState, AuthStatus};
 pub use input::{HandoffState, InputState};
-pub use session::{SessionState, SessionUsage};
+pub use session::{SessionOpsState, SessionState, SessionUsage};
 pub use transcript::TranscriptState;
 // Re-export VisibleRange for view.rs
 pub use transcript::VisibleRange;
@@ -163,6 +163,8 @@ pub struct TuiState {
     pub transcript: TranscriptState,
     /// Session and conversation state (session, messages, usage).
     pub conversation: SessionState,
+    /// Session async operations state (loading, creating, previewing).
+    pub session_ops: SessionOpsState,
     /// Authentication state (auth type, login flow).
     pub auth: AuthState,
     /// Agent configuration.
@@ -243,6 +245,7 @@ impl TuiState {
             input,
             transcript,
             conversation,
+            session_ops: SessionOpsState::new(),
             auth,
             config,
             agent_opts,

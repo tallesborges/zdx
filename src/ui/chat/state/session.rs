@@ -2,6 +2,10 @@
 //!
 //! Manages the active session, message history, and token usage tracking.
 
+use tokio::sync::mpsc;
+
+use crate::ui::chat::events::UiEvent;
+
 /// Session and conversation state.
 ///
 /// Encapsulates the active session, message history, and usage tracking.
@@ -51,6 +55,45 @@ impl SessionState {
     pub fn reset(&mut self) {
         self.messages.clear();
         self.usage = SessionUsage::new();
+    }
+}
+
+// ============================================================================
+// Session Operations State (async workflow tracking)
+// ============================================================================
+
+/// Tracks async session operations (loading, creating, previewing).
+///
+/// This is separate from `SessionState` because it tracks in-flight operations,
+/// not the current session data. Follows the same pattern as `AuthState.login_rx`
+/// and `HandoffState::Generating { rx }`.
+#[derive(Default)]
+pub struct SessionOpsState {
+    /// Receiver for async session list loading (for session picker).
+    pub list_rx: Option<mpsc::Receiver<UiEvent>>,
+
+    /// Receiver for async session loading (full switch).
+    pub load_rx: Option<mpsc::Receiver<UiEvent>>,
+
+    /// Receiver for async session preview loading.
+    pub preview_rx: Option<mpsc::Receiver<UiEvent>>,
+
+    /// Receiver for async session creation.
+    pub create_rx: Option<mpsc::Receiver<UiEvent>>,
+}
+
+impl SessionOpsState {
+    /// Creates a new empty SessionOpsState.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Returns true if any async operation is in progress.
+    pub fn is_loading(&self) -> bool {
+        self.list_rx.is_some()
+            || self.load_rx.is_some()
+            || self.preview_rx.is_some()
+            || self.create_rx.is_some()
     }
 }
 

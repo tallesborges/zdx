@@ -4,9 +4,54 @@
 //! All external inputs (terminal, agent, async results) are converted to `UiEvent`
 //! before being processed by the reducer.
 
+use std::path::PathBuf;
+
 use crossterm::event::Event as CrosstermEvent;
 
 use crate::core::events::AgentEvent;
+use crate::core::session::{Session, SessionSummary};
+use crate::providers::anthropic::ChatMessage;
+use crate::ui::transcript::HistoryCell;
+
+/// Session event enum for async session operations.
+#[derive(Debug)]
+pub enum SessionUiEvent {
+    /// Session list loaded for picker.
+    ListLoaded {
+        sessions: Vec<SessionSummary>,
+        original_cells: Vec<HistoryCell>,
+    },
+
+    /// Session list load failed.
+    ListFailed { error: String },
+
+    /// Session loaded successfully (for switching to a session).
+    Loaded {
+        session_id: String,
+        cells: Vec<HistoryCell>,
+        messages: Vec<ChatMessage>,
+        history: Vec<String>,
+        session: Option<Session>,
+    },
+
+    /// Session load failed.
+    LoadFailed { error: String },
+
+    /// Session preview loaded (for session picker navigation).
+    PreviewLoaded { cells: Vec<HistoryCell> },
+
+    /// Session preview load failed (silent - just don't update).
+    PreviewFailed,
+
+    /// New session created successfully.
+    Created {
+        session: Session,
+        context_paths: Vec<PathBuf>,
+    },
+
+    /// New session creation failed.
+    CreateFailed { error: String },
+}
 
 /// Unified event enum for the TUI.
 ///
@@ -36,5 +81,8 @@ pub enum UiEvent {
     HandoffResult(Result<String, String>),
 
     /// File discovery completed for file picker.
-    FilesDiscovered(Vec<std::path::PathBuf>),
+    FilesDiscovered(Vec<PathBuf>),
+
+    /// Session async I/O results.
+    Session(SessionUiEvent),
 }
