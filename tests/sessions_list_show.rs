@@ -315,3 +315,24 @@ fn test_sessions_rename_updates_title() {
     let meta: serde_json::Value = serde_json::from_str(&first_line).unwrap();
     assert_eq!(meta["title"], json!("New Title"));
 }
+
+#[test]
+fn test_sessions_rename_missing_session_fails() {
+    let temp_dir = TempDir::new().unwrap();
+    let missing_path = temp_dir
+        .path()
+        .join("sessions")
+        .join("missing-session.jsonl");
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["sessions", "rename", "missing-session", "New Title"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Session 'missing-session' not found"));
+
+    assert!(
+        !missing_path.exists(),
+        "Renaming a missing session should not create a session file"
+    );
+}
