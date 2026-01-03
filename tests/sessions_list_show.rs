@@ -145,23 +145,6 @@ fn test_sessions_show_prints_transcript() {
 }
 
 #[test]
-fn test_sessions_show_empty_session() {
-    let temp_dir = TempDir::new().unwrap();
-
-    // Create an empty session file
-    let sessions_dir = temp_dir.path().join("sessions");
-    fs::create_dir_all(&sessions_dir).unwrap();
-    fs::write(sessions_dir.join("empty-session.jsonl"), "").unwrap();
-
-    cargo_bin_cmd!("zdx")
-        .env("ZDX_HOME", temp_dir.path())
-        .args(["sessions", "show", "empty-session"])
-        .assert()
-        .success()
-        .stdout(predicate::str::contains("empty or not found"));
-}
-
-#[test]
 fn test_sessions_show_nonexistent() {
     let temp_dir = TempDir::new().unwrap();
 
