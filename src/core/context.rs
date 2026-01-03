@@ -413,6 +413,11 @@ mod tests {
         perms.set_mode(0o000); // No permissions
         fs::set_permissions(&agents_md, perms).unwrap();
 
+        // If the environment still allows reading, skip because the scenario can't be simulated.
+        if fs::read_to_string(&agents_md).is_ok() {
+            return;
+        }
+
         let result = load_all_agents_files(dir.path());
 
         // Restore permissions for cleanup

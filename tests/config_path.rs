@@ -21,10 +21,8 @@ fn test_config_init_creates_file() {
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
-    // Ensure config doesn't exist
     assert!(!config_path.exists());
 
-    // Run zdx config init
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])
@@ -32,10 +30,8 @@ fn test_config_init_creates_file() {
         .success()
         .stdout(predicate::str::contains("Created config at"));
 
-    // Assert the file now exists
     assert!(config_path.exists());
 
-    // Verify content
     let contents = fs::read_to_string(&config_path).unwrap();
     assert!(contents.contains("model ="));
     assert!(contents.contains("max_tokens ="));
@@ -46,10 +42,8 @@ fn test_config_init_fails_if_exists() {
     let dir = tempdir().unwrap();
     let config_path = dir.path().join("config.toml");
 
-    // Create an existing config
     fs::write(&config_path, "# existing config").unwrap();
 
-    // Run zdx config init should fail
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", dir.path())
         .args(["config", "init"])

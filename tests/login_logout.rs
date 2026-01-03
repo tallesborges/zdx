@@ -6,7 +6,6 @@ use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
 use tempfile::tempdir;
 
-/// Test: logout without --anthropic shows error.
 #[test]
 fn test_logout_requires_provider_flag() {
     cargo_bin_cmd!("zdx")
@@ -16,7 +15,6 @@ fn test_logout_requires_provider_flag() {
         .stderr(predicate::str::contains("Please specify a provider"));
 }
 
-/// Test: login without --anthropic shows error.
 #[test]
 fn test_login_requires_provider_flag() {
     cargo_bin_cmd!("zdx")
@@ -26,7 +24,6 @@ fn test_login_requires_provider_flag() {
         .stderr(predicate::str::contains("Please specify a provider"));
 }
 
-/// Test: logout --anthropic when not logged in shows message.
 #[test]
 fn test_logout_when_not_logged_in() {
     let temp = tempdir().unwrap();
@@ -40,7 +37,6 @@ fn test_logout_when_not_logged_in() {
         .stdout(predicate::str::contains("Not logged in to Anthropic"));
 }
 
-/// Test: logout --anthropic clears credentials from oauth.json.
 #[test]
 fn test_logout_clears_credentials() {
     let temp = tempdir().unwrap();
@@ -69,7 +65,6 @@ fn test_logout_clears_credentials() {
     );
 }
 
-/// Test: login --anthropic shows OAuth instructions.
 #[test]
 fn test_login_shows_oauth_instructions() {
     let temp = tempdir().unwrap();
@@ -97,7 +92,6 @@ fn test_login_shows_oauth_instructions() {
     assert!(stdout.contains("code"), "Should mention authorization code");
 }
 
-/// Test: login --anthropic prompts for re-login when already logged in.
 #[test]
 fn test_login_prompts_when_already_logged_in() {
     let temp = tempdir().unwrap();
@@ -128,7 +122,6 @@ fn test_login_prompts_when_already_logged_in() {
     );
 }
 
-/// Test: oauth.json has restricted permissions on Unix.
 #[cfg(unix)]
 #[test]
 fn test_oauth_file_permissions_on_logout() {
