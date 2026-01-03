@@ -11,8 +11,7 @@ use std::path::PathBuf;
 
 use tokio::sync::mpsc;
 
-use crate::core::interrupt;
-use crate::core::session;
+use crate::core::{interrupt, session};
 use crate::ui::chat::events::{SessionUiEvent, UiEvent};
 use crate::ui::chat::state::{AgentState, TuiState};
 use crate::ui::chat::transcript_build::build_transcript_from_events;

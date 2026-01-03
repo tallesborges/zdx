@@ -4,13 +4,13 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::OverlayAction;
 use crate::core::session::{self, SessionSummary, short_session_id};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_VISIBLE_SESSIONS: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_SESSIONS - 2;
