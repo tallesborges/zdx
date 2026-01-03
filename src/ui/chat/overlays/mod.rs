@@ -2,9 +2,18 @@
 //!
 //! Each overlay is self-contained with:
 //! - **State struct** implementing the `Overlay` trait (e.g., `FilePickerState`)
-//! - **Open function** (e.g., `open_file_picker`) - Initializes and shows the overlay
-//! - **Key handler** - Implemented via the `Overlay` trait's `handle_key()` method
-//! - **Render** - Implemented via the `Overlay` trait's `render()` method
+//! - **Trait impl** with `type Config`, `open()`, `render()`, `handle_key()`
+//! - **`From` impl** for conversion to `OverlayState`
+//!
+//! ## Opening Overlays
+//!
+//! Use `OverlayState::try_open::<T>(config)`:
+//!
+//! ```rust,ignore
+//! let effects = overlay.try_open::<FilePickerState>(trigger_pos);
+//! let effects = overlay.try_open::<LoginState>(());
+//! let effects = overlay.try_open::<ModelPickerState>(current_model);
+//! ```
 //!
 //! ## Split State Architecture
 //!
@@ -14,12 +23,6 @@
 //! - `AppState` combines both (defined in `state/mod.rs`)
 //!
 //! This allows overlay handlers to get clean access: `&mut self, &mut TuiState`.
-//!
-//! ## Architecture Note
-//!
-//! The `Overlay` trait provides compile-time enforcement of the overlay contract.
-//! Key handling and rendering are routed through `OverlayState::handle_key()` and
-//! `OverlayState::render()` methods respectively.
 //!
 //! See `docs/ARCHITECTURE.md` "Overlay Contract" section for full details.
 
@@ -32,14 +35,17 @@ pub mod thinking_picker;
 mod traits;
 
 // Re-export the Overlay trait and OverlayAction
-// Re-export state types and open functions
-pub use file_picker::{FilePickerState, discover_files, open_file_picker};
-pub use login::{LoginState, handle_login_result, open_login};
-pub use model_picker::{ModelPickerState, open_model_picker};
-pub use palette::{CommandPaletteState, open_command_palette};
-pub use session_picker::{SessionPickerState, open_session_picker};
-pub use thinking_picker::{ThinkingPickerState, open_thinking_picker};
 pub use traits::{Overlay, OverlayAction};
+
+// Re-export state types (open is now via the trait)
+pub use file_picker::{FilePickerState, discover_files};
+pub use login::{LoginState, handle_login_result};
+pub use model_picker::ModelPickerState;
+pub use palette::CommandPaletteState;
+pub use session_picker::SessionPickerState;
+pub use thinking_picker::ThinkingPickerState;
+
+use crate::ui::chat::effects::UiEffect;
 
 // ============================================================================
 // OverlayState (unified overlay enum)
@@ -70,12 +76,77 @@ pub enum OverlayState {
     FilePicker(FilePickerState),
 }
 
-/// Type alias for overlay state transitions.
-/// Used by `OverlayAction::CloseAndTransition`.
-pub type OverlayStateInner = OverlayState;
+// ============================================================================
+// From impls for type-safe conversion
+// ============================================================================
 
+impl From<CommandPaletteState> for OverlayState {
+    fn from(state: CommandPaletteState) -> Self {
+        OverlayState::CommandPalette(state)
+    }
+}
+
+impl From<ModelPickerState> for OverlayState {
+    fn from(state: ModelPickerState) -> Self {
+        OverlayState::ModelPicker(state)
+    }
+}
+
+impl From<ThinkingPickerState> for OverlayState {
+    fn from(state: ThinkingPickerState) -> Self {
+        OverlayState::ThinkingPicker(state)
+    }
+}
+
+impl From<SessionPickerState> for OverlayState {
+    fn from(state: SessionPickerState) -> Self {
+        OverlayState::SessionPicker(state)
+    }
+}
+
+impl From<LoginState> for OverlayState {
+    fn from(state: LoginState) -> Self {
+        OverlayState::Login(state)
+    }
+}
+
+impl From<FilePickerState> for OverlayState {
+    fn from(state: FilePickerState) -> Self {
+        OverlayState::FilePicker(state)
+    }
+}
+
+// ============================================================================
+// OverlayState methods
+// ============================================================================
 
 impl OverlayState {
+    /// Opens an overlay if none is currently active.
+    ///
+    /// Uses the `Overlay` trait's `open()` method to create the state,
+    /// then converts it to `OverlayState` via `From`.
+    ///
+    /// Returns effects to execute (e.g., async file discovery, open browser).
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let effects = overlay.try_open::<FilePickerState>(trigger_pos);
+    /// let effects = overlay.try_open::<LoginState>(());
+    /// ```
+    pub fn try_open<T>(&mut self, config: T::Config) -> Vec<UiEffect>
+    where
+        T: Overlay + Into<OverlayState>,
+    {
+        if !matches!(self, OverlayState::None) {
+            return vec![];
+        }
+
+        let (state, effects) = T::open(config);
+        *self = state.into();
+        effects
+    }
+
     /// Returns true if any overlay is active.
     #[cfg(test)]
     pub fn is_active(&self) -> bool {

@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::ui::chat::commands::COMMANDS;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
@@ -73,6 +73,12 @@ impl CommandPaletteState {
 // ============================================================================
 
 impl Overlay for CommandPaletteState {
+    type Config = bool; // insert_slash_on_escape
+
+    fn open(insert_slash_on_escape: Self::Config) -> (Self, Vec<UiEffect>) {
+        (Self::new(insert_slash_on_escape), vec![])
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_command_palette(frame, self, area, input_y)
     }
@@ -123,17 +129,6 @@ impl Overlay for CommandPaletteState {
             }
             _ => None,
         }
-    }
-}
-
-// ============================================================================
-// Update Handlers
-// ============================================================================
-
-/// Opens the command palette overlay.
-pub fn open_command_palette(overlay: &mut OverlayState, insert_slash_on_escape: bool) {
-    if matches!(overlay, OverlayState::None) {
-        *overlay = OverlayState::CommandPalette(CommandPaletteState::new(insert_slash_on_escape));
     }
 }
 

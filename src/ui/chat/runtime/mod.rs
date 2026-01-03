@@ -26,7 +26,7 @@ use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::overlays::{open_login, open_model_picker, open_thinking_picker};
+use crate::ui::chat::overlays::{LoginState, ModelPickerState, ThinkingPickerState};
 use crate::ui::chat::state::{AgentState, AppState, HandoffState};
 use crate::ui::chat::{reducer, terminal, view};
 use crate::ui::transcript::HistoryCell;
@@ -402,14 +402,14 @@ impl TuiRuntime {
             // Overlay effects
             UiEffect::OpenModelPicker => {
                 let current_model = self.state.tui.config.model.clone();
-                open_model_picker(&mut self.state.overlay, &current_model);
+                self.state.overlay.try_open::<ModelPickerState>(current_model);
             }
             UiEffect::OpenThinkingPicker => {
                 let current_thinking = self.state.tui.config.thinking_level;
-                open_thinking_picker(&mut self.state.overlay, current_thinking);
+                self.state.overlay.try_open::<ThinkingPickerState>(current_thinking);
             }
             UiEffect::OpenLogin => {
-                let effects = open_login(&mut self.state.overlay);
+                let effects = self.state.overlay.try_open::<LoginState>(());
                 self.execute_effects(effects);
             }
         }

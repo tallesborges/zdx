@@ -9,7 +9,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
-use super::{Overlay, OverlayAction, OverlayState};
+use super::{Overlay, OverlayAction};
 use crate::core::session::{self, SessionSummary};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
@@ -26,6 +26,18 @@ const MAX_VISIBLE_SESSIONS: usize = 10;
 /// This should match the list area height in render (inner_area.height - 2 for hints/separator).
 /// Using a reasonable default that works for typical terminal sizes.
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_SESSIONS - 2;
+
+// ============================================================================
+// Config
+// ============================================================================
+
+/// Configuration for opening the session picker.
+pub struct SessionPickerConfig {
+    /// List of available sessions.
+    pub sessions: Vec<SessionSummary>,
+    /// Snapshot of original transcript cells for restore on Esc.
+    pub original_cells: Vec<HistoryCell>,
+}
 
 // ============================================================================
 // State
@@ -72,6 +84,22 @@ impl SessionPickerState {
 // ============================================================================
 
 impl Overlay for SessionPickerState {
+    type Config = SessionPickerConfig;
+
+    fn open(config: Self::Config) -> (Self, Vec<UiEffect>) {
+        let state = Self::new(config.sessions, config.original_cells);
+        // Preview the first session if available
+        let effects = state
+            .selected_session()
+            .map(|session| {
+                vec![UiEffect::PreviewSession {
+                    session_id: session.id.clone(),
+                }]
+            })
+            .unwrap_or_default();
+        (state, effects)
+    }
+
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         render_session_picker(frame, self, area, input_y)
     }
@@ -142,35 +170,6 @@ impl Overlay for SessionPickerState {
 }
 
 // ============================================================================
-// Update Handlers
-// ============================================================================
-
-/// Opens the session picker overlay with the given sessions.
-///
-/// Takes a snapshot of the current transcript for restore on Esc.
-pub fn open_session_picker(
-    overlay: &mut OverlayState,
-    sessions: Vec<SessionSummary>,
-    original_cells: Vec<HistoryCell>,
-) -> Vec<UiEffect> {
-    if !matches!(overlay, OverlayState::None) {
-        return vec![];
-    }
-
-    *overlay = OverlayState::SessionPicker(SessionPickerState::new(sessions, original_cells));
-
-    // Preview the first session if available
-    if let OverlayState::SessionPicker(picker) = overlay
-        && let Some(session) = picker.selected_session()
-    {
-        vec![UiEffect::PreviewSession {
-            session_id: session.id.clone(),
-        }]
-    } else {
-        vec![]
-    }
-}
-
 // ============================================================================
 // Render
 // ============================================================================
