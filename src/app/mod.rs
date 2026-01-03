@@ -152,9 +152,21 @@ async fn dispatch(cli: Cli) -> Result<()> {
     };
 
     match command {
-        Commands::Exec { prompt, model, thinking } => {
+        Commands::Exec {
+            prompt,
+            model,
+            thinking,
+        } => {
             let session_opts: SessionPersistenceOptions = (&cli.session_args).into();
-            commands::exec::run(&cli.root, &session_opts, &prompt, &config, model.as_deref(), thinking.as_deref()).await
+            commands::exec::run(
+                &cli.root,
+                &session_opts,
+                &prompt,
+                &config,
+                model.as_deref(),
+                thinking.as_deref(),
+            )
+            .await
         }
 
         Commands::Sessions { command } => match command {

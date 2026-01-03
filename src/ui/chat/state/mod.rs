@@ -3,6 +3,15 @@
 //! This module contains all TUI state, separate from terminal ownership.
 //! This separation allows `view()` to borrow state without conflicting
 //! with `terminal.draw()`.
+//!
+//! ## Split State Architecture
+//!
+//! State is split between `TuiState` (non-overlay) and `OverlayState` (overlay):
+//! - `TuiState` contains all non-overlay UI state
+//! - `OverlayState` is an enum of overlay variants (in `overlays/mod.rs`)
+//! - `AppState` combines both for runtime use
+//!
+//! This allows overlay handlers to get `&mut self` and `&mut TuiState` simultaneously.
 
 use std::path::PathBuf;
 
@@ -12,6 +21,7 @@ use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
+use crate::ui::chat::overlays::OverlayState;
 use crate::ui::transcript::HistoryCell;
 
 // Module declarations
@@ -31,131 +41,58 @@ pub use transcript::VisibleRange;
 #[cfg(test)]
 pub use transcript::{ScrollMode, ScrollState};
 
-// Re-export overlay types for backwards compatibility
-pub use crate::ui::chat::overlays::{
-    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, SessionPickerState,
-    ThinkingPickerState,
-};
-
 // ============================================================================
-// Overlay State (Unified)
+// AppState (Combined State)
 // ============================================================================
 
-/// Unified overlay state.
+/// Combined application state for the TUI.
 ///
-/// Only one overlay can be active at a time. This eliminates the cascade of
-/// `if palette.is_some() / if picker.is_some() / if login.is_active()` checks.
-#[derive(Debug, Clone)]
-pub enum OverlayState {
-    /// No overlay active.
-    None,
-    /// Command palette is open.
-    CommandPalette(CommandPaletteState),
-    /// Model picker is open.
-    ModelPicker(ModelPickerState),
-    /// Thinking level picker is open.
-    ThinkingPicker(ThinkingPickerState),
-    /// Session picker is open.
-    SessionPicker(SessionPickerState),
-    /// Login flow is active.
-    Login(LoginState),
-    /// File picker is open (triggered by `@`).
-    FilePicker(FilePickerState),
+/// This struct combines `TuiState` (non-overlay state) with `OverlayState`
+/// (overlay state) to enable the split state architecture where overlay
+/// handlers can get clean access to both without borrow conflicts.
+///
+/// ## Usage
+///
+/// ```rust,ignore
+/// let mut app = AppState::new(config, root, system_prompt, session);
+///
+/// // Overlay handlers get clean access:
+/// if let Some(action) = app.overlay.handle_key(&mut app.tui, key) {
+///     // Process action...
+/// }
+/// ```
+pub struct AppState {
+    /// Non-overlay TUI state.
+    pub tui: TuiState,
+    /// Overlay state (command palette, model picker, etc.).
+    pub overlay: OverlayState,
 }
 
-impl OverlayState {
-    /// Returns true if any overlay is active.
+impl AppState {
+    /// Creates a new AppState.
     #[cfg(test)]
-    pub fn is_active(&self) -> bool {
-        !matches!(self, OverlayState::None)
+    pub fn new(
+        config: Config,
+        root: PathBuf,
+        system_prompt: Option<String>,
+        session: Option<Session>,
+    ) -> Self {
+        Self::with_history(config, root, system_prompt, session, Vec::new())
     }
 
-    /// Returns the command palette state if active.
-    pub fn as_command_palette(&self) -> Option<&CommandPaletteState> {
-        match self {
-            OverlayState::CommandPalette(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the command palette state mutably if active.
-    pub fn as_command_palette_mut(&mut self) -> Option<&mut CommandPaletteState> {
-        match self {
-            OverlayState::CommandPalette(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the model picker state if active.
-    pub fn as_model_picker(&self) -> Option<&ModelPickerState> {
-        match self {
-            OverlayState::ModelPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the model picker state mutably if active.
-    pub fn as_model_picker_mut(&mut self) -> Option<&mut ModelPickerState> {
-        match self {
-            OverlayState::ModelPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the thinking picker state if active.
-    pub fn as_thinking_picker(&self) -> Option<&ThinkingPickerState> {
-        match self {
-            OverlayState::ThinkingPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the thinking picker state mutably if active.
-    pub fn as_thinking_picker_mut(&mut self) -> Option<&mut ThinkingPickerState> {
-        match self {
-            OverlayState::ThinkingPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the login state if active.
-    #[cfg(test)]
-    pub fn as_login(&self) -> Option<&LoginState> {
-        match self {
-            OverlayState::Login(l) => Some(l),
-            _ => None,
-        }
-    }
-
-    /// Returns the session picker state if active.
-    pub fn as_session_picker(&self) -> Option<&SessionPickerState> {
-        match self {
-            OverlayState::SessionPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the session picker state mutably if active.
-    pub fn as_session_picker_mut(&mut self) -> Option<&mut SessionPickerState> {
-        match self {
-            OverlayState::SessionPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the file picker state if active.
-    pub fn as_file_picker(&self) -> Option<&FilePickerState> {
-        match self {
-            OverlayState::FilePicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    /// Returns the file picker state mutably if active.
-    pub fn as_file_picker_mut(&mut self) -> Option<&mut FilePickerState> {
-        match self {
-            OverlayState::FilePicker(p) => Some(p),
-            _ => None,
+    /// Creates an AppState with pre-loaded message history.
+    ///
+    /// Used for resuming previous sessions.
+    pub fn with_history(
+        config: Config,
+        root: PathBuf,
+        system_prompt: Option<String>,
+        session: Option<Session>,
+        history: Vec<ChatMessage>,
+    ) -> Self {
+        Self {
+            tui: TuiState::with_history(config, root, system_prompt, session, history),
+            overlay: OverlayState::None,
         }
     }
 }
@@ -226,7 +163,11 @@ impl AgentState {
 // TuiState
 // ============================================================================
 
-/// TUI application state.
+/// TUI application state (non-overlay).
+///
+/// This contains all state except for overlays. Overlays are stored separately
+/// in `OverlayState` and combined via `AppState` to enable the split state
+/// architecture where overlay handlers can access both without borrow conflicts.
 pub struct TuiState {
     /// Flag indicating the app should quit.
     pub should_quit: bool,
@@ -248,8 +189,6 @@ pub struct TuiState {
     pub agent_state: AgentState,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
-    /// Active overlay state (command palette, model picker, or login).
-    pub overlay: OverlayState,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
@@ -324,7 +263,6 @@ impl TuiState {
             system_prompt,
             agent_state: AgentState::Idle,
             spinner_frame: 0,
-            overlay: OverlayState::None,
             git_branch,
             display_path,
         }
@@ -405,6 +343,10 @@ impl TuiState {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::ui::chat::overlays::{
+        CommandPaletteState, FilePickerState, LoginState, ModelPickerState, OverlayState,
+        ThinkingPickerState,
+    };
 
     // ========================================================================
     // ScrollState Tests

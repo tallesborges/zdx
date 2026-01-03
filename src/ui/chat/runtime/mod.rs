@@ -26,7 +26,8 @@ use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::UiEvent;
-use crate::ui::chat::state::{AgentState, HandoffState, TuiState};
+use crate::ui::chat::overlays::{open_login, open_model_picker, open_thinking_picker};
+use crate::ui::chat::state::{AgentState, AppState, HandoffState};
 use crate::ui::chat::{reducer, terminal, view};
 use crate::ui::transcript::HistoryCell;
 
@@ -44,8 +45,8 @@ pub const IDLE_POLL_DURATION: std::time::Duration = std::time::Duration::from_mi
 pub struct TuiRuntime {
     /// Terminal instance.
     terminal: Terminal<CrosstermBackend<Stdout>>,
-    /// Application state (separate from terminal for borrow-checker friendly rendering).
-    pub state: TuiState,
+    /// Application state (split: tui + overlay).
+    pub state: AppState,
     /// Receiver for async file discovery (owned by runtime, not state).
     file_discovery_rx: Option<mpsc::Receiver<Vec<PathBuf>>>,
 }
@@ -79,7 +80,7 @@ impl TuiRuntime {
         let terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
 
         // Create state
-        let state = TuiState::with_history(config, root, system_prompt, session, history);
+        let state = AppState::with_history(config, root, system_prompt, session, history);
 
         Ok(Self {
             terminal,
@@ -104,12 +105,12 @@ impl TuiRuntime {
     fn event_loop(&mut self) -> Result<()> {
         let mut dirty = true; // Start dirty to ensure initial render
 
-        while !self.state.should_quit {
+        while !self.state.tui.should_quit {
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
             // The agent will send an Interrupted event which resets the flag.
-            if interrupt::is_interrupted() && !self.state.agent_state.is_running() {
-                self.state.should_quit = true;
+            if interrupt::is_interrupted() && !self.state.tui.agent_state.is_running() {
+                self.state.tui.should_quit = true;
                 break;
             }
 
@@ -136,8 +137,8 @@ impl TuiRuntime {
                 // - Other events (input, agent events) always mark dirty
                 let marks_dirty = match &event {
                     UiEvent::Tick => {
-                        self.state.agent_state.is_running()
-                            || self.state.transcript.selection.has_pending_clear()
+                        self.state.tui.agent_state.is_running()
+                            || self.state.tui.transcript.selection.has_pending_clear()
                     }
                     UiEvent::Frame { .. } => false,
                     _ => true,
@@ -192,10 +193,10 @@ impl TuiRuntime {
         // - Selection clear is pending (visual feedback timer)
         // - Login, handoff, or file discovery async operations are in progress
         // Otherwise use slow polling to save CPU.
-        let needs_fast_poll = self.state.agent_state.is_running()
-            || self.state.transcript.selection.has_pending_clear()
-            || self.state.auth.login_rx.is_some()
-            || self.state.input.handoff.is_generating()
+        let needs_fast_poll = self.state.tui.agent_state.is_running()
+            || self.state.tui.transcript.selection.has_pending_clear()
+            || self.state.tui.auth.login_rx.is_some()
+            || self.state.tui.input.handoff.is_generating()
             || self.file_discovery_rx.is_some();
 
         let poll_duration = if needs_fast_poll {
@@ -220,7 +221,7 @@ impl TuiRuntime {
     /// Collects agent events from the channel.
     fn collect_agent_events(&mut self, events: &mut Vec<UiEvent>) {
         while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } =
-            &mut self.state.agent_state
+            &mut self.state.tui.agent_state
         {
             let event = match rx.try_recv() {
                 Ok(ev) => ev,
@@ -234,7 +235,7 @@ impl TuiRuntime {
 
     /// Collects login exchange result if available.
     fn collect_login_result(&mut self, events: &mut Vec<UiEvent>) {
-        let Some(rx) = &mut self.state.auth.login_rx else {
+        let Some(rx) = &mut self.state.tui.auth.login_rx else {
             return;
         };
 
@@ -253,7 +254,7 @@ impl TuiRuntime {
 
     /// Collects handoff generation result if available.
     fn collect_handoff_result(&mut self, events: &mut Vec<UiEvent>) {
-        let HandoffState::Generating { rx, .. } = &mut self.state.input.handoff else {
+        let HandoffState::Generating { rx, .. } = &mut self.state.tui.input.handoff else {
             return;
         };
 
@@ -307,7 +308,7 @@ impl TuiRuntime {
         match effect {
             // Simple effects (inline)
             UiEffect::Quit => {
-                self.state.should_quit = true;
+                self.state.tui.should_quit = true;
             }
             UiEffect::OpenBrowser { url } => {
                 let _ = open::that(&url);
@@ -315,15 +316,15 @@ impl TuiRuntime {
 
             // Agent effects
             UiEffect::StartAgentTurn => {
-                handlers::spawn_agent_turn(&mut self.state);
+                handlers::spawn_agent_turn(&mut self.state.tui);
             }
             UiEffect::InterruptAgent => {
-                handlers::interrupt_agent(&mut self.state);
+                handlers::interrupt_agent(&mut self.state.tui);
             }
 
             // Auth effects
             UiEffect::SpawnTokenExchange { code, verifier } => {
-                handlers::spawn_token_exchange(&mut self.state, &code, &verifier);
+                handlers::spawn_token_exchange(&mut self.state.tui, &code, &verifier);
             }
 
             // Config effects
@@ -333,7 +334,7 @@ impl TuiRuntime {
             UiEffect::PersistModel { model } => {
                 if let Err(e) = crate::config::Config::save_model(&model) {
                     handlers::push_warning(
-                        &mut self.state,
+                        &mut self.state.tui,
                         "Warning: Failed to save model preference",
                         e,
                     );
@@ -342,7 +343,7 @@ impl TuiRuntime {
             UiEffect::PersistThinking { level } => {
                 if let Err(e) = crate::config::Config::save_thinking_level(level) {
                     handlers::push_warning(
-                        &mut self.state,
+                        &mut self.state.tui,
                         "Warning: Failed to save thinking level",
                         e,
                     );
@@ -351,44 +352,65 @@ impl TuiRuntime {
 
             // Session effects
             UiEffect::SaveSession { event } => {
-                if let Some(ref mut s) = self.state.conversation.session
+                if let Some(ref mut s) = self.state.tui.conversation.session
                     && let Err(e) = s.append(&event)
                 {
-                    handlers::push_warning(&mut self.state, "Warning: Failed to save session", e);
+                    handlers::push_warning(
+                        &mut self.state.tui,
+                        "Warning: Failed to save session",
+                        e,
+                    );
                 }
             }
             UiEffect::CreateNewSession => {
-                if handlers::create_session_and_show_context(&mut self.state).is_err() {
-                    handlers::push_system(&mut self.state, "Conversation cleared.");
+                if handlers::create_session_and_show_context(&mut self.state.tui).is_err() {
+                    handlers::push_system(&mut self.state.tui, "Conversation cleared.");
                 }
             }
             UiEffect::OpenSessionPicker => {
-                handlers::open_session_picker(&mut self.state);
+                handlers::open_session_picker(&mut self.state.tui, &mut self.state.overlay);
             }
             UiEffect::LoadSession { session_id } => {
-                handlers::load_session(&mut self.state, &session_id);
+                handlers::load_session(&mut self.state.tui, &session_id);
             }
             UiEffect::PreviewSession { session_id } => {
-                handlers::preview_session(&mut self.state, &session_id);
+                handlers::preview_session(&mut self.state.tui, &session_id);
             }
 
             // Handoff effects
             UiEffect::StartHandoff { goal } => {
-                if let Some(ref session) = self.state.conversation.session {
+                if let Some(ref session) = self.state.tui.conversation.session {
                     let session_id = session.id.clone();
-                    handoff::spawn_handoff_generation(&mut self.state, &session_id, &goal);
+                    handoff::spawn_handoff_generation(&mut self.state.tui, &session_id, &goal);
                 } else {
-                    handlers::push_system(&mut self.state, "Handoff requires an active session.");
+                    handlers::push_system(
+                        &mut self.state.tui,
+                        "Handoff requires an active session.",
+                    );
                 }
             }
             UiEffect::HandoffSubmit { prompt } => {
-                handoff::execute_handoff_submit(&mut self.state, &prompt);
+                handoff::execute_handoff_submit(&mut self.state.tui, &prompt);
             }
 
             // File picker effects
             UiEffect::DiscoverFiles => {
-                let root = self.state.agent_opts.root.clone();
+                let root = self.state.tui.agent_opts.root.clone();
                 self.file_discovery_rx = Some(handlers::spawn_file_discovery(&root));
+            }
+
+            // Overlay effects
+            UiEffect::OpenModelPicker => {
+                let current_model = self.state.tui.config.model.clone();
+                open_model_picker(&mut self.state.overlay, &current_model);
+            }
+            UiEffect::OpenThinkingPicker => {
+                let current_thinking = self.state.tui.config.thinking_level;
+                open_thinking_picker(&mut self.state.overlay, current_thinking);
+            }
+            UiEffect::OpenLogin => {
+                let effects = open_login(&mut self.state.overlay);
+                self.execute_effects(effects);
             }
         }
     }
@@ -399,12 +421,14 @@ impl TuiRuntime {
         if config_path.exists() {
             if let Err(e) = open::that(&config_path) {
                 self.state
+                    .tui
                     .transcript
                     .cells
                     .push(HistoryCell::system(format!("Failed to open config: {}", e)));
             }
         } else {
             self.state
+                .tui
                 .transcript
                 .cells
                 .push(HistoryCell::system(format!(

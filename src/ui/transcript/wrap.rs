@@ -62,6 +62,7 @@ impl WrapCache {
 
     /// Returns true if the cache is empty (test-only).
     #[cfg(test)]
+    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.cache.borrow().is_empty()
     }

@@ -1,7 +1,7 @@
 //! Pure view/render functions for the TUI.
 //!
 //! This module contains all rendering logic. Functions here:
-//! - Take `&TuiState` by immutable reference
+//! - Take `&AppState` by immutable reference
 //! - Draw to a ratatui Frame
 //! - Never mutate state or return effects
 //!
@@ -16,12 +16,8 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::models::ModelOption;
-use crate::ui::chat::overlays::{
-    render_command_palette, render_file_picker, render_login_overlay, render_model_picker,
-    render_session_picker, render_thinking_picker,
-};
 use crate::ui::chat::selection::SelectionState;
-use crate::ui::chat::state::{AgentState, AuthStatus, OverlayState, SessionUsage, TuiState};
+use crate::ui::chat::state::{AgentState, AppState, AuthStatus, SessionUsage, TuiState};
 use crate::ui::transcript::{Style as TranscriptStyle, StyledLine};
 
 /// Minimum height of the input area (lines, including borders).
@@ -172,8 +168,9 @@ fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
 ///
 /// This is a pure render function - it only reads state and draws to frame.
 /// No mutations, no side effects.
-pub fn view(state: &TuiState, frame: &mut Frame) {
+pub fn view(app: &AppState, frame: &mut Frame) {
     let area = frame.area();
+    let state = &app.tui;
 
     // Calculate dynamic input height based on content
     let input_height = calculate_input_height(state, area.height);
@@ -260,27 +257,8 @@ pub fn view(state: &TuiState, frame: &mut Frame) {
     render_status_line(state, frame, chunks[2]);
 
     // Render overlay (last, so it appears on top)
-    match &state.overlay {
-        OverlayState::CommandPalette(palette) => {
-            render_command_palette(frame, palette, area, chunks[1].y);
-        }
-        OverlayState::ModelPicker(picker) => {
-            render_model_picker(frame, picker, area, chunks[1].y);
-        }
-        OverlayState::ThinkingPicker(picker) => {
-            render_thinking_picker(frame, picker, area, chunks[1].y);
-        }
-        OverlayState::SessionPicker(picker) => {
-            render_session_picker(frame, picker, area, chunks[1].y);
-        }
-        OverlayState::FilePicker(picker) => {
-            render_file_picker(frame, picker, area, chunks[1].y);
-        }
-        OverlayState::Login(login_state) => {
-            render_login_overlay(frame, login_state, area);
-        }
-        OverlayState::None => {}
-    }
+    // Uses OverlayState::render() which delegates to each overlay's Overlay trait impl
+    app.overlay.render(frame, area, chunks[1].y);
 }
 
 /// Renders the input area with model info on top border and path on bottom border.

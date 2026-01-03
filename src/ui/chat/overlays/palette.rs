@@ -2,17 +2,17 @@
 //!
 //! Contains state, update handlers, and render function for the command palette.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
+use super::{Overlay, OverlayAction, OverlayState};
 use crate::ui::chat::commands::COMMANDS;
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::reducer;
-use crate::ui::chat::state::{OverlayState, TuiState};
+use crate::ui::chat::state::TuiState;
 
 // ============================================================================
 // State
@@ -60,106 +60,178 @@ impl CommandPaletteState {
             self.selected = self.selected.min(count - 1);
         }
     }
+
+    /// Returns the currently selected command name, if any.
+    fn get_selected_command_name(&self) -> Option<&'static str> {
+        let filtered = self.filtered_commands();
+        filtered.get(self.selected).map(|cmd| cmd.name)
+    }
+}
+
+// ============================================================================
+// Overlay Trait Implementation
+// ============================================================================
+
+impl Overlay for CommandPaletteState {
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        render_command_palette(frame, self, area, input_y)
+    }
+
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Esc => {
+                if self.insert_slash_on_escape {
+                    tui.input.textarea.insert_char('/');
+                }
+                Some(OverlayAction::close())
+            }
+            KeyCode::Char('c') if ctrl => Some(OverlayAction::close()),
+            KeyCode::Up => {
+                let count = self.filtered_commands().len();
+                if count > 0 && self.selected > 0 {
+                    self.selected -= 1;
+                }
+                None
+            }
+            KeyCode::Down => {
+                let count = self.filtered_commands().len();
+                if count > 0 && self.selected < count - 1 {
+                    self.selected += 1;
+                }
+                None
+            }
+            KeyCode::Enter | KeyCode::Tab => {
+                if let Some(cmd_name) = self.get_selected_command_name() {
+                    // Execute command and return its effects
+                    let effects = execute_command(tui, cmd_name);
+                    Some(OverlayAction::close_with(effects))
+                } else {
+                    Some(OverlayAction::close())
+                }
+            }
+            KeyCode::Backspace => {
+                self.filter.pop();
+                self.clamp_selection();
+                None
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.filter.push(c);
+                self.clamp_selection();
+                None
+            }
+            _ => None,
+        }
+    }
 }
 
 // ============================================================================
 // Update Handlers
 // ============================================================================
 
-/// Opens the command palette.
-pub fn open_command_palette(state: &mut TuiState, insert_slash_on_escape: bool) {
-    if matches!(state.overlay, OverlayState::None) {
-        state.overlay =
-            OverlayState::CommandPalette(CommandPaletteState::new(insert_slash_on_escape));
+/// Opens the command palette overlay.
+pub fn open_command_palette(overlay: &mut OverlayState, insert_slash_on_escape: bool) {
+    if matches!(overlay, OverlayState::None) {
+        *overlay = OverlayState::CommandPalette(CommandPaletteState::new(insert_slash_on_escape));
     }
 }
 
-/// Closes the command palette.
-pub fn close_command_palette(state: &mut TuiState, insert_slash: bool) {
-    state.overlay = OverlayState::None;
-    if insert_slash {
-        state.input.textarea.insert_char('/');
-    }
-}
+// ============================================================================
+// Command Execution
+// ============================================================================
 
-/// Handles key events for the command palette.
+/// Executes a slash command by name.
 ///
-/// Returns effects to execute. If a command is selected, executes it directly
-/// via the reducer and returns any resulting effects.
-pub fn handle_palette_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+/// Returns effects for the runtime to execute.
+fn execute_command(tui: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
+    use crate::ui::transcript::HistoryCell;
 
-    match key.code {
-        KeyCode::Esc => {
-            let insert_slash = state
-                .overlay
-                .as_command_palette()
-                .is_some_and(|p| p.insert_slash_on_escape);
-            close_command_palette(state, insert_slash);
-            vec![]
-        }
-        KeyCode::Char('c') if ctrl => {
-            close_command_palette(state, false);
-            vec![]
-        }
-        KeyCode::Up => {
-            palette_select_prev(state);
-            vec![]
-        }
-        KeyCode::Down => {
-            palette_select_next(state);
-            vec![]
-        }
-        KeyCode::Enter | KeyCode::Tab => {
-            let cmd_name = get_selected_command_name(state);
-            close_command_palette(state, false);
-            if let Some(name) = cmd_name {
-                // Execute command directly in reducer, return its effects
-                reducer::execute_command(state, name)
-            } else {
-                vec![]
-            }
-        }
-        KeyCode::Backspace => {
-            if let Some(palette) = state.overlay.as_command_palette_mut() {
-                palette.filter.pop();
-                palette.clamp_selection();
+    match cmd_name {
+        "config" => vec![UiEffect::OpenConfig],
+        "login" => vec![UiEffect::OpenLogin],
+        "logout" => {
+            use crate::providers::oauth::anthropic;
+
+            match anthropic::clear_credentials() {
+                Ok(true) => {
+                    tui.refresh_auth_type();
+                    tui.transcript
+                        .cells
+                        .push(HistoryCell::system("Logged out from Anthropic OAuth."));
+                }
+                Ok(false) => {
+                    tui.transcript
+                        .cells
+                        .push(HistoryCell::system("No OAuth credentials to clear."));
+                }
+                Err(e) => {
+                    tui.transcript
+                        .cells
+                        .push(HistoryCell::system(format!("Logout failed: {}", e)));
+                }
             }
             vec![]
         }
-        KeyCode::Char(c) if !ctrl => {
-            if let Some(palette) = state.overlay.as_command_palette_mut() {
-                palette.filter.push(c);
-                palette.clamp_selection();
-            }
-            vec![]
-        }
+        "model" => vec![UiEffect::OpenModelPicker],
+        "sessions" => vec![UiEffect::OpenSessionPicker],
+        "thinking" => vec![UiEffect::OpenThinkingPicker],
+        "handoff" => execute_handoff(tui),
+        "new" => execute_new(tui),
+        "quit" => execute_quit(tui),
         _ => vec![],
     }
 }
 
-fn palette_select_prev(state: &mut TuiState) {
-    if let Some(palette) = state.overlay.as_command_palette_mut() {
-        let count = palette.filtered_commands().len();
-        if count > 0 && palette.selected > 0 {
-            palette.selected -= 1;
-        }
+fn execute_handoff(tui: &mut TuiState) -> Vec<UiEffect> {
+    use crate::ui::chat::state::HandoffState;
+    use crate::ui::transcript::HistoryCell;
+
+    // Check if we have an active session
+    if tui.conversation.session.is_none() {
+        tui.transcript
+            .cells
+            .push(HistoryCell::system("Handoff requires an active session."));
+        return vec![];
+    }
+
+    // Clear any stale handoff state from previous attempts
+    tui.input.handoff.cancel();
+    tui.clear_input();
+
+    // Set handoff mode - next submit will trigger handoff
+    tui.input.handoff = HandoffState::Pending;
+    vec![]
+}
+
+fn execute_new(tui: &mut TuiState) -> Vec<UiEffect> {
+    use crate::ui::transcript::HistoryCell;
+
+    if tui.agent_state.is_running() {
+        tui.transcript
+            .cells
+            .push(HistoryCell::system("Cannot clear while streaming."));
+        return vec![];
+    }
+
+    tui.reset_conversation();
+
+    if tui.conversation.session.is_some() {
+        vec![UiEffect::CreateNewSession]
+    } else {
+        tui.transcript
+            .cells
+            .push(HistoryCell::system("Conversation cleared."));
+        vec![]
     }
 }
 
-fn palette_select_next(state: &mut TuiState) {
-    if let Some(palette) = state.overlay.as_command_palette_mut() {
-        let count = palette.filtered_commands().len();
-        if count > 0 && palette.selected < count - 1 {
-            palette.selected += 1;
-        }
+fn execute_quit(tui: &mut TuiState) -> Vec<UiEffect> {
+    if tui.agent_state.is_running() {
+        vec![UiEffect::InterruptAgent, UiEffect::Quit]
+    } else {
+        vec![UiEffect::Quit]
     }
-}
-
-fn get_selected_command_name(state: &TuiState) -> Option<&'static str> {
-    let palette = state.overlay.as_command_palette()?;
-    let filtered = palette.filtered_commands();
-    filtered.get(palette.selected).map(|cmd| cmd.name)
 }
 
 // ============================================================================

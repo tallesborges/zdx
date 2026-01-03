@@ -73,20 +73,24 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         Ok(events) if !events.is_empty() => session::format_transcript(&events),
         Ok(_) => {
             state.input.handoff = HandoffState::Idle;
-            state.transcript.cells.push(
-                crate::ui::transcript::HistoryCell::system(
-                    format!("Handoff failed: Session '{}' is empty", session_id),
-                ),
-            );
+            state
+                .transcript
+                .cells
+                .push(crate::ui::transcript::HistoryCell::system(format!(
+                    "Handoff failed: Session '{}' is empty",
+                    session_id
+                )));
             return;
         }
         Err(e) => {
             state.input.handoff = HandoffState::Idle;
-            state.transcript.cells.push(
-                crate::ui::transcript::HistoryCell::system(
-                    format!("Handoff failed: Could not load session: {}", e),
-                ),
-            );
+            state
+                .transcript
+                .cells
+                .push(crate::ui::transcript::HistoryCell::system(format!(
+                    "Handoff failed: Could not load session: {}",
+                    e
+                )));
             return;
         }
     };
@@ -119,7 +123,16 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
         // Spawn the subagent process (async)
         // Args order: --no-save exec -m <model> -t <thinking> -p <prompt>
         let child = match Command::new(exe)
-            .args(["--no-save", "exec", "-m", HANDOFF_MODEL, "-t", HANDOFF_THINKING, "-p", &generation_prompt])
+            .args([
+                "--no-save",
+                "exec",
+                "-m",
+                HANDOFF_MODEL,
+                "-t",
+                HANDOFF_THINKING,
+                "-p",
+                &generation_prompt,
+            ])
             .current_dir(&root)
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())

@@ -88,10 +88,11 @@ pub async fn run_interactive_chat_with_history(
     };
 
     // Add system message for session path
-    if let Some(ref s) = runtime.state.conversation.session {
+    if let Some(ref s) = runtime.state.tui.conversation.session {
         let session_path_msg = format!("Session path: {}", s.path().display());
         runtime
             .state
+            .tui
             .transcript
             .cells
             .push(HistoryCell::system(session_path_msg));
@@ -107,6 +108,7 @@ pub async fn run_interactive_chat_with_history(
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
         runtime
             .state
+            .tui
             .transcript
             .cells
             .push(HistoryCell::system(message));

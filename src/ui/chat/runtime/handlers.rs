@@ -9,8 +9,8 @@ use tokio::sync::mpsc;
 
 use crate::core::interrupt;
 use crate::core::session::{self};
-use crate::ui::chat::overlays::SessionPickerState;
-use crate::ui::chat::state::{AgentState, OverlayState, SessionUsage, TuiState};
+use crate::ui::chat::overlays::{self, OverlayState};
+use crate::ui::chat::state::{AgentState, SessionUsage, TuiState};
 use crate::ui::chat::transcript_build::build_transcript_from_events;
 use crate::ui::transcript::HistoryCell;
 
@@ -19,14 +19,13 @@ use crate::ui::transcript::HistoryCell;
 // ============================================================================
 
 /// Helper to push a system message to the transcript.
-pub fn push_system(state: &mut TuiState, msg: impl Into<String>) {
-    state.transcript.cells.push(HistoryCell::system(msg));
+pub fn push_system(tui: &mut TuiState, msg: impl Into<String>) {
+    tui.transcript.cells.push(HistoryCell::system(msg));
 }
 
 /// Helper to push a warning message to the transcript.
-pub fn push_warning(state: &mut TuiState, prefix: &str, err: impl Display) {
-    state
-        .transcript
+pub fn push_warning(tui: &mut TuiState, prefix: &str, err: impl Display) {
+    tui.transcript
         .cells
         .push(HistoryCell::system(format!("{}: {}", prefix, err)));
 }
@@ -48,34 +47,33 @@ fn load_transcript_cells(session_id: &str) -> Result<Vec<HistoryCell>, anyhow::E
 /// Loads the session list (I/O) and opens the overlay if sessions exist.
 /// Shows an error message if no sessions are found or loading fails.
 /// Also triggers a preview of the first session.
-pub fn open_session_picker(state: &mut TuiState) {
+pub fn open_session_picker(tui: &mut TuiState, overlay: &mut OverlayState) {
     // Don't open if another overlay is active
-    if !matches!(state.overlay, OverlayState::None) {
+    if !matches!(overlay, OverlayState::None) {
         return;
     }
 
     // Load sessions (I/O happens here in the effect handler, not reducer)
     match session::list_sessions() {
         Ok(sessions) if sessions.is_empty() => {
-            push_system(state, "No sessions found.");
+            push_system(tui, "No sessions found.");
         }
         Ok(sessions) => {
-            // Snapshot current transcript cells for restore on Esc
-            let original_cells = state.transcript.cells.clone();
+            // Get a snapshot of current transcript for restore on cancel
+            let original_cells = tui.transcript.cells.clone();
 
-            // Get the first session ID for initial preview
-            let first_session_id = sessions.first().map(|s| s.id.clone());
+            // Use overlay's open function for state mutation
+            let effects = overlays::open_session_picker(overlay, sessions, original_cells);
 
-            state.overlay =
-                OverlayState::SessionPicker(SessionPickerState::new(sessions, original_cells));
-
-            // Trigger initial preview for the first session
-            if let Some(session_id) = first_session_id {
-                preview_session(state, &session_id);
+            // Execute preview effect immediately (within same I/O context)
+            for effect in effects {
+                if let crate::ui::chat::effects::UiEffect::PreviewSession { session_id } = effect {
+                    preview_session(tui, &session_id);
+                }
             }
         }
         Err(e) => {
-            push_warning(state, "Failed to load sessions", e);
+            push_warning(tui, "Failed to load sessions", e);
         }
     }
 }
@@ -87,12 +85,12 @@ pub fn open_session_picker(state: &mut TuiState) {
 /// 2. Builds transcript cells from events
 /// 3. Builds API messages for conversation context
 /// 4. Resets all state facets with loaded data
-pub fn load_session(state: &mut TuiState, session_id: &str) {
+pub fn load_session(tui: &mut TuiState, session_id: &str) {
     // Load session events (I/O)
     let events = match session::load_session(session_id) {
         Ok(events) => events,
         Err(e) => {
-            push_warning(state, "Failed to load session", e);
+            push_warning(tui, "Failed to load session", e);
             return;
         }
     };
@@ -119,19 +117,19 @@ pub fn load_session(state: &mut TuiState, session_id: &str) {
     let session_handle = match session::Session::with_id(session_id.to_string()) {
         Ok(s) => Some(s),
         Err(e) => {
-            push_warning(state, "Warning: Failed to open session for writing", e);
+            push_warning(tui, "Warning: Failed to open session for writing", e);
             None
         }
     };
 
     // Reset state facets with loaded data
-    state.transcript.cells = transcript_cells;
-    state.conversation.messages = messages;
-    state.conversation.session = session_handle;
-    state.conversation.usage = SessionUsage::new();
-    state.input.history = command_history;
-    state.transcript.scroll.reset();
-    state.transcript.wrap_cache.clear();
+    tui.transcript.cells = transcript_cells;
+    tui.conversation.messages = messages;
+    tui.conversation.session = session_handle;
+    tui.conversation.usage = SessionUsage::new();
+    tui.input.history = command_history;
+    tui.transcript.scroll.reset();
+    tui.transcript.wrap_cache.clear();
 
     // Show confirmation message
     let short_id = if session_id.len() > 8 {
@@ -139,7 +137,7 @@ pub fn load_session(state: &mut TuiState, session_id: &str) {
     } else {
         session_id.to_string()
     };
-    push_system(state, format!("Switched to session {}", short_id));
+    push_system(tui, format!("Switched to session {}", short_id));
 }
 
 /// Previews a session (shows transcript without full switch).
@@ -148,17 +146,12 @@ pub fn load_session(state: &mut TuiState, session_id: &str) {
 /// Only updates transcript cells and display state, not conversation
 /// messages or session handle. The original cells are stored in the
 /// picker state for restore on Esc.
-pub fn preview_session(state: &mut TuiState, session_id: &str) {
-    // Only preview if session picker is open
-    if !matches!(state.overlay, OverlayState::SessionPicker(_)) {
-        return;
-    }
-
+pub fn preview_session(tui: &mut TuiState, session_id: &str) {
     // Load transcript cells, silently fail for preview - errors shown on actual load
     if let Ok(transcript_cells) = load_transcript_cells(session_id) {
-        state.transcript.cells = transcript_cells;
-        state.transcript.scroll.reset();
-        state.transcript.wrap_cache.clear();
+        tui.transcript.cells = transcript_cells;
+        tui.transcript.scroll.reset();
+        tui.transcript.wrap_cache.clear();
     }
 }
 
@@ -166,29 +159,29 @@ pub fn preview_session(state: &mut TuiState, session_id: &str) {
 ///
 /// Returns `Ok(())` if session was created successfully, `Err(())` if it failed.
 /// On failure, an error message is already added to the transcript.
-pub fn create_session_and_show_context(state: &mut TuiState) -> Result<(), ()> {
+pub fn create_session_and_show_context(tui: &mut TuiState) -> Result<(), ()> {
     let new_session = match session::Session::new() {
         Ok(s) => s,
         Err(e) => {
-            push_warning(state, "Warning: Failed to create new session", e);
+            push_warning(tui, "Warning: Failed to create new session", e);
             return Err(());
         }
     };
 
     let new_path = new_session.path().display().to_string();
-    state.conversation.session = Some(new_session);
+    tui.conversation.session = Some(new_session);
 
     // Show session path
-    push_system(state, format!("Session path: {}", new_path));
+    push_system(tui, format!("Session path: {}", new_path));
 
     // Show loaded AGENTS.md files
     let effective = match crate::core::context::build_effective_system_prompt_with_paths(
-        &state.config,
-        &state.agent_opts.root,
+        &tui.config,
+        &tui.agent_opts.root,
     ) {
         Ok(e) => e,
         Err(err) => {
-            push_warning(state, "Warning: Failed to load context", err);
+            push_warning(tui, "Warning: Failed to load context", err);
             return Ok(()); // Session created, just context loading failed
         }
     };
@@ -200,7 +193,7 @@ pub fn create_session_and_show_context(state: &mut TuiState) -> Result<(), ()> {
             .map(|p| format!("  - {}", p.display()))
             .collect();
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        push_system(state, message);
+        push_system(tui, message);
     }
 
     Ok(())
@@ -211,24 +204,24 @@ pub fn create_session_and_show_context(state: &mut TuiState) -> Result<(), ()> {
 // ============================================================================
 
 /// Interrupts the running agent.
-pub fn interrupt_agent(state: &mut TuiState) {
-    if state.agent_state.is_running() {
+pub fn interrupt_agent(tui: &mut TuiState) {
+    if tui.agent_state.is_running() {
         interrupt::trigger_ctrl_c();
     }
 }
 
 /// Spawns an agent turn.
-pub fn spawn_agent_turn(state: &mut TuiState) {
+pub fn spawn_agent_turn(tui: &mut TuiState) {
     let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
-    let messages = state.conversation.messages.clone();
-    let config = state.config.clone();
-    let agent_opts = state.agent_opts.clone();
-    let system_prompt = state.system_prompt.clone();
+    let messages = tui.conversation.messages.clone();
+    let config = tui.config.clone();
+    let agent_opts = tui.agent_opts.clone();
+    let system_prompt = tui.system_prompt.clone();
 
     let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
-    if let Some(sess) = state.conversation.session.clone() {
+    if let Some(sess) = tui.conversation.session.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
         let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx, persist_tx]);
         let _persist = session::spawn_persist_task(sess, persist_rx);
@@ -248,7 +241,7 @@ pub fn spawn_agent_turn(state: &mut TuiState) {
         .await;
     });
 
-    state.agent_state = AgentState::Waiting { rx: tui_rx };
+    tui.agent_state = AgentState::Waiting { rx: tui_rx };
 }
 
 // ============================================================================
@@ -256,14 +249,14 @@ pub fn spawn_agent_turn(state: &mut TuiState) {
 // ============================================================================
 
 /// Spawns a token exchange task.
-pub fn spawn_token_exchange(state: &mut TuiState, code: &str, verifier: &str) {
+pub fn spawn_token_exchange(tui: &mut TuiState, code: &str, verifier: &str) {
     use crate::providers::oauth::anthropic;
 
     let code = code.to_string();
     let pkce_verifier = verifier.to_string();
 
     let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
-    state.auth.login_rx = Some(rx);
+    tui.auth.login_rx = Some(rx);
 
     tokio::spawn(async move {
         let pkce = anthropic::Pkce {

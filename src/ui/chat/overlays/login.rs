@@ -1,38 +1,29 @@
 //! Login overlay.
 //!
 //! Contains state, update handlers, and render function for the OAuth login flow.
+//!
+//! ## Flow
+//!
+//! 1. User runs `/login` command → `UiEffect::OpenLogin`
+//! 2. Runtime calls `open_login()` → opens overlay, returns `OpenBrowser` effect
+//! 3. User pastes auth code → `handle_key()` spawns token exchange
+//! 4. Async result arrives → `handle_login_result()` closes overlay or shows error
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+use super::{Overlay, OverlayAction, OverlayState};
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::state::{OverlayState, TuiState};
+use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
 
 // ============================================================================
 // State
 // ============================================================================
-
-/// Events for the login flow (reducer pattern).
-///
-/// These events drive the login overlay state machine.
-#[derive(Debug, Clone)]
-pub enum LoginEvent {
-    /// User requested login (e.g., via `/login` command).
-    LoginRequested,
-    /// User entered the auth code.
-    AuthCodeEntered { code: String },
-    /// Login succeeded.
-    LoginSucceeded,
-    /// Login failed with an error message.
-    LoginFailed { message: String },
-    /// User cancelled the login flow.
-    LoginCancelled,
-}
 
 /// State for the login overlay.
 #[derive(Debug, Clone)]
@@ -54,113 +45,118 @@ pub enum LoginState {
 }
 
 // ============================================================================
-// Update Handlers
+// Overlay Trait Implementation
 // ============================================================================
 
-/// Main login state machine update function.
-pub fn update_login(state: &mut TuiState, event: LoginEvent) -> Vec<UiEffect> {
-    use crate::providers::oauth::anthropic;
+impl Overlay for LoginState {
+    fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
+        // Login overlay centers in full area, doesn't use input_y
+        render_login_overlay(frame, self, area)
+    }
 
-    match event {
-        LoginEvent::LoginRequested => {
-            let pkce = anthropic::generate_pkce();
-            let url = anthropic::build_auth_url(&pkce);
-            state.overlay = OverlayState::Login(LoginState::AwaitingCode {
-                url: url.clone(),
-                pkce_verifier: pkce.verifier,
-                input: String::new(),
-                error: None,
-            });
-            vec![UiEffect::OpenBrowser { url }]
-        }
-        LoginEvent::AuthCodeEntered { code } => {
-            if let OverlayState::Login(LoginState::AwaitingCode { pkce_verifier, .. }) =
-                &state.overlay
-            {
-                let verifier = pkce_verifier.clone();
-                state.overlay = OverlayState::Login(LoginState::Exchanging);
-                vec![UiEffect::SpawnTokenExchange { code, verifier }]
-            } else {
-                vec![]
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match self {
+            LoginState::AwaitingCode { input, .. } => match key.code {
+                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                    tui.auth.login_rx = None;
+                    Some(OverlayAction::close())
+                }
+                KeyCode::Enter => {
+                    let code = input.trim().to_string();
+                    if code.is_empty() {
+                        None
+                    } else {
+                        // Get the verifier before transitioning
+                        let verifier = match self {
+                            LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
+                            _ => return None,
+                        };
+
+                        // Transition to Exchanging state
+                        Some(OverlayAction::Transition {
+                            new_state: OverlayState::Login(LoginState::Exchanging),
+                            effects: vec![UiEffect::SpawnTokenExchange { code, verifier }],
+                        })
+                    }
+                }
+                KeyCode::Backspace => {
+                    input.pop();
+                    None
+                }
+                KeyCode::Char(c) if !ctrl => {
+                    input.push(c);
+                    None
+                }
+                _ => None,
+            },
+            LoginState::Exchanging => {
+                if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
+                    tui.auth.login_rx = None;
+                    Some(OverlayAction::close())
+                } else {
+                    None
+                }
             }
         }
-        LoginEvent::LoginSucceeded => {
-            state.overlay = OverlayState::None;
-            state.refresh_auth_type();
-            state
-                .transcript
+    }
+}
+
+// ============================================================================
+// Async Result Handler
+// ============================================================================
+
+/// Handles the result of an async token exchange.
+pub fn handle_login_result(
+    tui: &mut TuiState,
+    overlay: &mut OverlayState,
+    result: Result<(), String>,
+) {
+    use crate::providers::oauth::anthropic;
+
+    tui.auth.login_rx = None;
+    match result {
+        Ok(()) => {
+            *overlay = OverlayState::None;
+            tui.refresh_auth_type();
+            tui.transcript
                 .cells
                 .push(HistoryCell::system("Logged in with Anthropic OAuth."));
-            vec![]
         }
-        LoginEvent::LoginFailed { message } => {
+        Err(msg) => {
+            // Generate new PKCE for retry
             let pkce = anthropic::generate_pkce();
             let url = anthropic::build_auth_url(&pkce);
-            state.overlay = OverlayState::Login(LoginState::AwaitingCode {
+            *overlay = OverlayState::Login(LoginState::AwaitingCode {
                 url,
                 pkce_verifier: pkce.verifier,
                 input: String::new(),
-                error: Some(message),
+                error: Some(msg),
             });
-            vec![]
-        }
-        LoginEvent::LoginCancelled => {
-            state.overlay = OverlayState::None;
-            state.auth.login_rx = None;
-            vec![]
         }
     }
 }
 
-/// Handles key events for the login overlay.
-pub fn handle_login_key(state: &mut TuiState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+/// Opens the login overlay with a fresh PKCE challenge.
+///
+/// Returns effects to execute (opens browser for OAuth flow).
+pub fn open_login(overlay: &mut OverlayState) -> Vec<UiEffect> {
+    use crate::providers::oauth::anthropic;
 
-    match &mut state.overlay {
-        OverlayState::Login(LoginState::AwaitingCode { input, .. }) => match key.code {
-            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                update_login(state, LoginEvent::LoginCancelled)
-            }
-            KeyCode::Enter => {
-                let code = input.trim().to_string();
-                if !code.is_empty() {
-                    update_login(state, LoginEvent::AuthCodeEntered { code })
-                } else {
-                    vec![]
-                }
-            }
-            KeyCode::Backspace => {
-                input.pop();
-                vec![]
-            }
-            KeyCode::Char(c) if !ctrl => {
-                input.push(c);
-                vec![]
-            }
-            _ => vec![],
-        },
-        OverlayState::Login(LoginState::Exchanging) => {
-            if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                update_login(state, LoginEvent::LoginCancelled)
-            } else {
-                vec![]
-            }
-        }
-        _ => vec![],
+    if !matches!(overlay, OverlayState::None) {
+        return vec![];
     }
-}
 
-/// Handles the result of an async token exchange.
-pub fn handle_login_result(state: &mut TuiState, result: Result<(), String>) {
-    state.auth.login_rx = None;
-    match result {
-        Ok(()) => {
-            let _ = update_login(state, LoginEvent::LoginSucceeded);
-        }
-        Err(msg) => {
-            let _ = update_login(state, LoginEvent::LoginFailed { message: msg });
-        }
-    }
+    let pkce = anthropic::generate_pkce();
+    let url = anthropic::build_auth_url(&pkce);
+    *overlay = OverlayState::Login(LoginState::AwaitingCode {
+        url: url.clone(),
+        pkce_verifier: pkce.verifier,
+        input: String::new(),
+        error: None,
+    });
+    vec![UiEffect::OpenBrowser { url }]
 }
 
 // ============================================================================
@@ -201,10 +197,22 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
         } => {
             let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
 
+            // Show different message based on whether this is initial or retry
+            let status_message = if error.is_some() {
+                "Visit URL to retry authentication:"
+            } else {
+                "Browser opened for authentication."
+            };
+            let status_color = if error.is_some() {
+                Color::Yellow
+            } else {
+                Color::Green
+            };
+
             let mut l = vec![
                 Line::from(Span::styled(
-                    "Browser opened for authentication.",
-                    Style::default().fg(Color::Green),
+                    status_message,
+                    Style::default().fg(status_color),
                 )),
                 Line::from(Span::styled(
                     display_url,

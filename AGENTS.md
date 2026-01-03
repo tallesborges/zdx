@@ -46,14 +46,15 @@
     - `src/ui/chat/commands.rs`: command definitions for command palette
     - `src/ui/chat/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
     - `src/ui/chat/terminal.rs`: terminal setup, restore, panic hooks
-    - `src/ui/chat/overlays/`: self-contained overlay modules (state + update + render)
+    - `src/ui/chat/overlays/`: self-contained overlay modules (state + update + render via `Overlay` trait)
+      - `src/ui/chat/overlays/mod.rs`: overlay exports + `Overlay` trait re-export
+      - `src/ui/chat/overlays/traits.rs`: `Overlay` trait definition (compile-time render contract)
       - `src/ui/chat/overlays/palette.rs`: command palette overlay
       - `src/ui/chat/overlays/model_picker.rs`: model picker overlay
       - `src/ui/chat/overlays/thinking_picker.rs`: thinking level picker overlay
       - `src/ui/chat/overlays/session_picker.rs`: session picker overlay
       - `src/ui/chat/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
       - `src/ui/chat/overlays/login.rs`: OAuth login flow overlay
-      - `src/ui/chat/overlays/mod.rs`: overlay exports
   - `src/ui/markdown/`: markdown parsing and wrapping (shared)
     - `src/ui/markdown/mod.rs`: module exports
     - `src/ui/markdown/parse.rs`: markdown parsing + rendering
@@ -106,7 +107,7 @@
 ## Docs
 
 - `docs/SPEC.md`: contracts (what/behavior)
-- `docs/ARCHITECTURE.md`: system architecture and design
+- `docs/ARCHITECTURE.md`: system architecture and design (includes **Overlay Contract**)
 - `docs/adr/`: durable decisions (why)
 - `docs/plans/`: optional commit-sized plans (how)
 

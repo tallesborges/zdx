@@ -2,16 +2,18 @@
 //!
 //! Contains state, update handlers, and render function for the session picker.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
+use super::{Overlay, OverlayAction, OverlayState};
 use crate::core::session::{self, SessionSummary};
 use crate::ui::chat::effects::UiEffect;
-use crate::ui::chat::state::{OverlayState, TuiState};
+use crate::ui::chat::state::TuiState;
+use crate::ui::transcript::HistoryCell;
 
 // ============================================================================
 // Constants
@@ -66,109 +68,99 @@ impl SessionPickerState {
 }
 
 // ============================================================================
+// Overlay Trait Implementation
+// ============================================================================
+
+impl Overlay for SessionPickerState {
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        render_session_picker(frame, self, area, input_y)
+    }
+
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                // Restore original transcript cells before closing
+                tui.transcript.cells = self.original_cells.clone();
+                tui.transcript.scroll.reset();
+                tui.transcript.wrap_cache.clear();
+                Some(OverlayAction::close())
+            }
+            KeyCode::Up | KeyCode::Char('k') => {
+                if self.selected > 0 {
+                    self.selected -= 1;
+                    // Adjust offset to keep selection visible: if selected < offset, scroll up
+                    if self.selected < self.offset {
+                        self.offset = self.selected;
+                    }
+                }
+                // Emit preview effect for newly selected session
+                self.selected_session().map(|session| {
+                    OverlayAction::Effects(vec![UiEffect::PreviewSession {
+                        session_id: session.id.clone(),
+                    }])
+                })
+            }
+            KeyCode::Down | KeyCode::Char('j') => {
+                if self.selected < self.sessions.len().saturating_sub(1) {
+                    self.selected += 1;
+                    // Adjust offset to keep selection visible: if selected >= offset + visible_height, scroll down
+                    if self.selected >= self.offset + VISIBLE_HEIGHT {
+                        self.offset = self.selected - VISIBLE_HEIGHT + 1;
+                    }
+                }
+                // Emit preview effect for newly selected session
+                self.selected_session().map(|session| {
+                    OverlayAction::Effects(vec![UiEffect::PreviewSession {
+                        session_id: session.id.clone(),
+                    }])
+                })
+            }
+            KeyCode::Enter => {
+                // Block session switch while agent is running (keep overlay open)
+                if tui.agent_state.is_running() {
+                    tui.transcript
+                        .cells
+                        .push(HistoryCell::system("Stop the current task first."));
+                    return None;
+                }
+
+                // Get the selected session ID
+                if let Some(session) = self.selected_session() {
+                    Some(OverlayAction::close_with(vec![UiEffect::LoadSession {
+                        session_id: session.id.clone(),
+                    }]))
+                } else {
+                    // No session selected (empty list), just close
+                    Some(OverlayAction::close())
+                }
+            }
+            _ => None,
+        }
+    }
+}
+
+// ============================================================================
 // Update Handlers
 // ============================================================================
 
-/// Closes the session picker overlay.
-pub fn close_session_picker(state: &mut TuiState) {
-    state.overlay = OverlayState::None;
-}
-
-/// Handles key events for the session picker.
-pub fn handle_session_picker_key(
-    state: &mut TuiState,
-    key: crossterm::event::KeyEvent,
+/// Opens the session picker overlay with the given sessions.
+///
+/// Takes a snapshot of the current transcript for restore on Esc.
+pub fn open_session_picker(
+    overlay: &mut OverlayState,
+    sessions: Vec<SessionSummary>,
+    original_cells: Vec<HistoryCell>,
 ) -> Vec<UiEffect> {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-
-    match key.code {
-        KeyCode::Esc => {
-            // Restore original transcript cells before closing
-            if let Some(picker) = state.overlay.as_session_picker() {
-                state.transcript.cells = picker.original_cells.clone();
-                state.transcript.scroll.reset();
-                state.transcript.wrap_cache.clear();
-            }
-            close_session_picker(state);
-            vec![]
-        }
-        KeyCode::Char('c') if ctrl => {
-            // Restore original transcript cells before closing
-            if let Some(picker) = state.overlay.as_session_picker() {
-                state.transcript.cells = picker.original_cells.clone();
-                state.transcript.scroll.reset();
-                state.transcript.wrap_cache.clear();
-            }
-            close_session_picker(state);
-            vec![]
-        }
-        KeyCode::Up | KeyCode::Char('k') => session_picker_select_prev(state),
-        KeyCode::Down | KeyCode::Char('j') => session_picker_select_next(state),
-        KeyCode::Enter => {
-            // Block session switch while agent is running (keep overlay open)
-            if state.agent_state.is_running() {
-                state
-                    .transcript
-                    .cells
-                    .push(crate::ui::transcript::HistoryCell::system(
-                        "Stop the current task first.",
-                    ));
-                return vec![];
-            }
-
-            // Get the selected session ID before closing
-            if let Some(picker) = state.overlay.as_session_picker()
-                && let Some(session) = picker.selected_session()
-            {
-                let session_id = session.id.clone();
-                close_session_picker(state);
-                vec![UiEffect::LoadSession { session_id }]
-            } else {
-                // No session selected (empty list), just close
-                close_session_picker(state);
-                vec![]
-            }
-        }
-        _ => vec![],
-    }
-}
-
-fn session_picker_select_prev(state: &mut TuiState) -> Vec<UiEffect> {
-    if let Some(picker) = state.overlay.as_session_picker_mut()
-        && picker.selected > 0
-    {
-        picker.selected -= 1;
-        // Adjust offset to keep selection visible: if selected < offset, scroll up
-        if picker.selected < picker.offset {
-            picker.offset = picker.selected;
-        }
+    if !matches!(overlay, OverlayState::None) {
+        return vec![];
     }
 
-    // Emit preview effect for newly selected session
-    if let Some(picker) = state.overlay.as_session_picker()
-        && let Some(session) = picker.selected_session()
-    {
-        vec![UiEffect::PreviewSession {
-            session_id: session.id.clone(),
-        }]
-    } else {
-        vec![]
-    }
-}
+    *overlay = OverlayState::SessionPicker(SessionPickerState::new(sessions, original_cells));
 
-fn session_picker_select_next(state: &mut TuiState) -> Vec<UiEffect> {
-    if let Some(picker) = state.overlay.as_session_picker_mut()
-        && picker.selected < picker.sessions.len().saturating_sub(1)
-    {
-        picker.selected += 1;
-        // Adjust offset to keep selection visible: if selected >= offset + visible_height, scroll down
-        if picker.selected >= picker.offset + VISIBLE_HEIGHT {
-            picker.offset = picker.selected - VISIBLE_HEIGHT + 1;
-        }
-    }
-
-    // Emit preview effect for newly selected session
-    if let Some(picker) = state.overlay.as_session_picker()
+    // Preview the first session if available
+    if let OverlayState::SessionPicker(picker) = overlay
         && let Some(session) = picker.selected_session()
     {
         vec![UiEffect::PreviewSession {
