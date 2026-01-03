@@ -4,9 +4,10 @@
 
 use tokio::sync::mpsc;
 
-use super::handlers::{create_session_and_show_context, push_warning, spawn_agent_turn};
+use super::handlers::spawn_agent_turn;
 use crate::core::session::{self, SessionEvent};
 use crate::ui::chat::state::{HandoffState, TuiState};
+use crate::ui::transcript::HistoryCell;
 
 /// Model to use for handoff generation (fast, cheap).
 const HANDOFF_MODEL: &str = "claude-haiku-4-5";
@@ -40,20 +41,41 @@ written as if the user is starting a fresh conversation with a new agent."#
     )
 }
 
-/// Executes a handoff submit: creates new session and starts agent turn.
+/// Executes a handoff submit: creates session and starts agent turn.
 ///
-/// This is a pure I/O effect handler - state mutations (clearing state, adding
-/// user message to transcript/conversation) happen in the reducer before this
-/// effect is executed.
+/// State mutations (clearing conversation, adding user message to transcript/conversation)
+/// happen in the reducer before this effect is executed.
+/// This creates a new session, saves the message, and starts the agent turn.
+///
+/// Note: Session creation is done synchronously here. This is a minor
+/// architectural compromise for the handoff flow simplicity.
 pub fn execute_handoff_submit(state: &mut TuiState, prompt: &str) {
-    // 1. Create new session (continue even if it fails - user can still chat)
-    let _ = create_session_and_show_context(state);
+    // 1. Create new session (sync - this is fast I/O)
+    match session::Session::new() {
+        Ok(new_session) => {
+            let session_path = new_session.path().display().to_string();
+            state.conversation.session = Some(new_session);
+            state
+                .transcript
+                .cells
+                .push(HistoryCell::system(format!("Session path: {}", session_path)));
+        }
+        Err(e) => {
+            state
+                .transcript
+                .cells
+                .push(HistoryCell::system(format!(
+                    "Warning: Failed to create session: {}",
+                    e
+                )));
+            // Continue without session - user can still chat
+        }
+    }
 
-    // 2. Save user message to session (session now exists from step 1)
-    if let Some(ref mut s) = state.conversation.session
-        && let Err(e) = s.append(&SessionEvent::user_message(prompt))
-    {
-        push_warning(state, "Warning: Failed to save session", e);
+    // 2. Save user message to session if exists
+    if let Some(ref mut s) = state.conversation.session {
+        let _ = s.append(&SessionEvent::user_message(prompt));
+        // Errors are silently ignored for session persistence
     }
 
     // 3. Start agent turn
@@ -62,13 +84,15 @@ pub fn execute_handoff_submit(state: &mut TuiState, prompt: &str) {
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
 ///
-/// This is a pure I/O effect handler - state mutations (like showing status in
-/// transcript) happen in the reducer before this effect is executed.
+/// Note: This function still has some state mutations for error paths.
+/// These are marked as medium-priority violations. The ideal pattern would be
+/// to make session loading async and return errors via events.
 pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &str) {
     use tokio::process::Command;
     use tokio::sync::oneshot;
 
     // Load session content upfront to avoid tool call in subagent
+    // Note: This is synchronous I/O + state mutation - a remaining violation
     let session_content = match session::load_session(session_id) {
         Ok(events) if !events.is_empty() => session::format_transcript(&events),
         Ok(_) => {
@@ -76,7 +100,7 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
             state
                 .transcript
                 .cells
-                .push(crate::ui::transcript::HistoryCell::system(format!(
+                .push(HistoryCell::system(format!(
                     "Handoff failed: Session '{}' is empty",
                     session_id
                 )));
@@ -87,7 +111,7 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
             state
                 .transcript
                 .cells
-                .push(crate::ui::transcript::HistoryCell::system(format!(
+                .push(HistoryCell::system(format!(
                     "Handoff failed: Could not load session: {}",
                     e
                 )));

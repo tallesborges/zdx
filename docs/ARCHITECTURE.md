@@ -115,7 +115,7 @@ pub struct TuiState {
 State is organized into sub-modules for maintainability:
 - `state/auth.rs` - Authentication status
 - `state/input.rs` - Input editor state
-- `state/session.rs` - Session and message history
+- `state/session.rs` - Session, message history, and async session operations
 - `state/transcript.rs` - Transcript display, scroll, cache
 
 ### 2. Messages (Events)
@@ -622,6 +622,23 @@ When adding a new overlay:
 - [ ] Add effect handler in `runtime/mod.rs` if needed
 - [ ] Update this documentation
 
+### Async Receiver Placement
+
+Async operation receivers (`mpsc::Receiver`) should live in **state** (not runtime) when they represent user-visible workflow state. This follows the Elm principle that state tracks everything needed to render the UI.
+
+| Receiver | Location | Rationale |
+|----------|----------|-----------|
+| `auth.login_rx` | `AuthState` | Login flow is user-visible workflow |
+| `input.handoff.rx` | `HandoffState::Generating` | Handoff generation is user-visible |
+| `agent_state.rx` | `AgentState::Waiting/Streaming` | Agent streaming is user-visible |
+| `session_ops.*_rx` | `SessionOpsState` | Session loading/creating is user-visible |
+| `file_discovery_rx` | `TuiRuntime` | Background service, not workflow state |
+
+The pattern:
+1. **Effect** triggers async operation, stores receiver in state
+2. **Runtime** polls receiver in `collect_events()`, pushes event
+3. **Reducer** handles event, mutates state
+
 ### Agent State Machine
 
 The agent goes through distinct states:
@@ -807,7 +824,7 @@ All state changes go through `update()`. Debugging is straightforward:
 | `state/mod.rs` | `AppState`, `TuiState`, and sub-state types |
 | `state/auth.rs` | `AuthState`, `AuthStatus` |
 | `state/input.rs` | `InputState`, textarea, history navigation |
-| `state/session.rs` | `SessionState`, messages, usage tracking |
+| `state/session.rs` | `SessionState`, `SessionOpsState`, messages, usage tracking |
 | `state/transcript.rs` | `TranscriptState`, scroll, selection, cache |
 | `reducer.rs` | `update()` function, all state mutations |
 | `view.rs` | `view()` function, all rendering |
