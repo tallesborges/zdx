@@ -17,7 +17,8 @@ pub fn list() -> Result<()> {
                 .modified
                 .and_then(session::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
-            println!("{}  {}", info.id, modified_str);
+            let display_title = info.display_title();
+            println!("{}  {}  {}", display_title, info.id, modified_str);
         }
     }
     Ok(())
@@ -30,6 +31,14 @@ pub fn show(id: &str) -> Result<()> {
     } else {
         println!("{}", session::format_transcript(&events));
     }
+    Ok(())
+}
+
+pub fn rename(id: &str, title: &str) -> Result<()> {
+    let normalized = session::set_session_title(id, Some(title.to_string()))
+        .with_context(|| format!("rename session '{id}'"))?;
+    let display_title = normalized.unwrap_or_else(|| session::short_session_id(id));
+    println!("Renamed session {} → {}", id, display_title);
     Ok(())
 }
 

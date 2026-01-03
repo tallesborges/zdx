@@ -58,6 +58,11 @@ pub const COMMANDS: &[Command] = &[
         description: "Logout from Anthropic OAuth",
     },
     Command {
+        name: "rename",
+        aliases: &[],
+        description: "Rename the current session",
+    },
+    Command {
         name: "model",
         aliases: &[],
         description: "Switch model",
@@ -115,6 +120,7 @@ mod tests {
         assert_eq!(find_command("handoff").display_name(), "/handoff");
         assert_eq!(find_command("login").display_name(), "/login");
         assert_eq!(find_command("logout").display_name(), "/logout");
+        assert_eq!(find_command("rename").display_name(), "/rename");
         assert_eq!(find_command("model").display_name(), "/model");
         assert_eq!(find_command("new").display_name(), "/new (clear)");
         assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");

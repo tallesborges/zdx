@@ -27,8 +27,7 @@ use crate::providers::anthropic::ChatMessage;
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::events::{SessionUiEvent, UiEvent};
 use crate::ui::chat::overlays::{
-    CommandPaletteState, FilePickerState, LoginState, ModelPickerState,
-    ThinkingPickerState,
+    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, ThinkingPickerState,
 };
 use crate::ui::chat::state::{AgentState, AppState, HandoffState};
 use crate::ui::chat::{reducer, terminal, view};
@@ -368,6 +367,23 @@ impl TuiRuntime {
                 }
             }
         }
+
+        // Session rename
+        if let Some(rx) = &mut ops.rename_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                    ops.rename_rx = None;
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::RenameFailed {
+                        error: "Session rename task failed".to_string(),
+                    }));
+                    ops.rename_rx = None;
+                }
+            }
+        }
     }
 
     // ========================================================================
@@ -428,6 +444,12 @@ impl TuiRuntime {
                 if let Some(ref mut s) = self.state.tui.conversation.session {
                     let _ = s.append(&event);
                     // Errors are silently ignored for session persistence
+                }
+            }
+            UiEffect::RenameSession { session_id, title } => {
+                if self.state.tui.session_ops.rename_rx.is_none() {
+                    self.state.tui.session_ops.rename_rx =
+                        Some(handlers::spawn_session_rename(session_id, title));
                 }
             }
             UiEffect::CreateNewSession => {

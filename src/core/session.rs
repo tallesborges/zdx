@@ -18,7 +18,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::time::SystemTime;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow, bail};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -37,7 +37,12 @@ pub const SCHEMA_VERSION: u32 = 1;
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SessionEvent {
     /// Meta event: first line of a v1+ session file.
-    Meta { schema_version: u32, ts: String },
+    Meta {
+        schema_version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        ts: String,
+    },
 
     /// Message event: user or assistant text.
     Message {
@@ -87,6 +92,7 @@ impl SessionEvent {
     pub fn meta() -> Self {
         Self::Meta {
             schema_version: SCHEMA_VERSION,
+            title: None,
             ts: chrono_timestamp(),
         }
     }
@@ -193,6 +199,24 @@ fn default_interrupted_text() -> String {
 /// Returns an RFC3339 UTC timestamp string.
 fn chrono_timestamp() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+}
+
+fn normalize_title(title: impl Into<String>) -> Option<String> {
+    let trimmed = title.into().trim().to_string();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed)
+    }
+}
+
+/// Returns a shortened session ID for display.
+pub fn short_session_id(id: &str) -> String {
+    if id.len() > 8 {
+        format!("{}…", &id[..8])
+    } else {
+        id.to_string()
+    }
 }
 
 /// Truncates a string to at most `max_bytes`, ensuring we don't split a UTF-8 character.
@@ -322,6 +346,18 @@ impl Session {
     pub fn read_events(&self) -> Result<Vec<SessionEvent>> {
         read_session_events(&self.path)
     }
+
+    /// Updates the session title stored in the meta event.
+    ///
+    /// Writes the meta line with the provided title (or clears it if None/empty),
+    /// preserving all subsequent events. The update is performed atomically via
+    /// write-to-temp-then-rename.
+    pub fn set_title(&mut self, title: Option<String>) -> Result<Option<String>> {
+        self.ensure_meta()?;
+        let normalized = title.and_then(normalize_title);
+        rewrite_meta_with_title(&self.path, normalized.clone())?;
+        Ok(normalized)
+    }
 }
 
 /// Reads session events from a file path, with backward compatibility.
@@ -347,6 +383,83 @@ fn read_session_events(path: &PathBuf) -> Result<Vec<SessionEvent>> {
     }
 
     Ok(events)
+}
+
+/// Rewrites the meta event with an updated title, preserving the rest of the file.
+fn rewrite_meta_with_title(path: &PathBuf, title: Option<String>) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open session file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp session file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Session file is empty"))?;
+
+    let mut meta_event: SessionEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        SessionEvent::Meta {
+            title: ref mut meta_title,
+            ..
+        } => {
+            *meta_title = title;
+        }
+        _ => bail!("First session event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{}", new_meta).context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read session line")?;
+        writeln!(temp, "{}", line).context("Failed to write session line")?;
+    }
+
+    temp.sync_all()
+        .context("Failed to sync temp session file")?;
+    fs::rename(&temp_path, path).context("Failed to replace session file")?;
+    Ok(())
+}
+
+/// Reads only the meta line to extract title (backward compatible).
+fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(path).context("Failed to open session file")?;
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+
+    // Read first non-empty line
+    loop {
+        first_line.clear();
+        let bytes = reader.read_line(&mut first_line)?;
+        if bytes == 0 {
+            return Ok(None); // Empty file
+        }
+        if !first_line.trim().is_empty() {
+            break;
+        }
+    }
+
+    // Parse meta event, defaulting title to None if missing
+    let parsed: SessionEvent = match serde_json::from_str(&first_line) {
+        Ok(event) => event,
+        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+    };
+
+    if let SessionEvent::Meta { title, .. } = parsed {
+        Ok(Some(title))
+    } else {
+        Ok(None) // First event wasn't meta
+    }
 }
 
 /// Generates a unique session ID using UUID v4.
@@ -391,7 +504,17 @@ pub fn spawn_persist_task(mut session: Session, mut rx: AgentEventRx) -> JoinHan
 #[derive(Debug, Clone)]
 pub struct SessionSummary {
     pub id: String,
+    pub title: Option<String>,
     pub modified: Option<SystemTime>,
+}
+
+impl SessionSummary {
+    /// Returns a display-friendly title (or short ID fallback).
+    pub fn display_title(&self) -> String {
+        self.title
+            .clone()
+            .unwrap_or_else(|| short_session_id(&self.id))
+    }
 }
 
 /// Lists all saved sessions.
@@ -416,8 +539,13 @@ pub fn list_sessions() -> Result<Vec<SessionSummary>> {
         {
             let id = stem.to_string_lossy().to_string();
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
+            let title = read_meta_title(&path).unwrap_or(None).flatten();
 
-            sessions.push(SessionSummary { id, modified });
+            sessions.push(SessionSummary {
+                id,
+                title,
+                modified,
+            });
         }
     }
 
@@ -447,6 +575,12 @@ pub fn latest_session_id() -> Result<Option<String>> {
 pub fn load_session_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
     let events = load_session(id)?;
     Ok(events_to_messages(events))
+}
+
+/// Updates a session's title by ID.
+pub fn set_session_title(id: &str, title: Option<String>) -> Result<Option<String>> {
+    let mut session = Session::with_id(id.to_string())?;
+    session.set_title(title)
 }
 
 /// Converts session events to chat messages for API replay.

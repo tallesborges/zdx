@@ -6,10 +6,11 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
-use crate::core::session::{self, SessionSummary};
+use crate::core::session::{self, SessionSummary, short_session_id};
 use crate::ui::chat::effects::UiEffect;
 use crate::ui::chat::state::TuiState;
 use crate::ui::transcript::HistoryCell;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const MAX_VISIBLE_SESSIONS: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_SESSIONS - 2;
@@ -177,14 +178,16 @@ pub fn render_session_picker(
                 .and_then(session::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
 
-            let short_id = if session.id.len() > 8 {
-                format!("{}…", &session.id[..8])
-            } else {
-                session.id.clone()
-            };
+            let display_title = truncate_with_ellipsis(
+                &session.display_title(),
+                (inner_area.width as usize).saturating_sub(20),
+            );
+            let short_id = short_session_id(&session.id);
 
             let line = Line::from(vec![
                 Span::styled(short_id, Style::default().fg(Color::Cyan)),
+                Span::styled("  ", Style::default()),
+                Span::styled(display_title, Style::default().fg(Color::White)),
                 Span::styled("  ", Style::default()),
                 Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
             ]);
@@ -234,6 +237,25 @@ pub fn render_session_picker(
     frame.render_widget(hints_para, hints_area);
 }
 
+fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut truncated = String::new();
+    for ch in text.chars() {
+        let next_width = truncated.width() + ch.width().unwrap_or(0);
+        if next_width + 1 > max_width {
+            break;
+        }
+        truncated.push(ch);
+    }
+    truncated.push('…');
+    truncated
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,10 +275,12 @@ mod tests {
         let sessions = vec![
             SessionSummary {
                 id: "session-1".to_string(),
+                title: None,
                 modified: None,
             },
             SessionSummary {
                 id: "session-2".to_string(),
+                title: None,
                 modified: None,
             },
         ];
@@ -270,6 +294,7 @@ mod tests {
     fn test_session_picker_stores_original_cells() {
         let sessions = vec![SessionSummary {
             id: "s1".to_string(),
+            title: None,
             modified: None,
         }];
         let original_cells = vec![
@@ -285,14 +310,17 @@ mod tests {
         let sessions = vec![
             SessionSummary {
                 id: "s1".to_string(),
+                title: None,
                 modified: None,
             },
             SessionSummary {
                 id: "s2".to_string(),
+                title: None,
                 modified: None,
             },
             SessionSummary {
                 id: "s3".to_string(),
+                title: None,
                 modified: None,
             },
         ];
@@ -313,6 +341,7 @@ mod tests {
             (0..15)
                 .map(|i| SessionSummary {
                     id: format!("session-{}", i),
+                    title: None,
                     modified: None,
                 })
                 .collect(),
@@ -339,6 +368,7 @@ mod tests {
             (0..15)
                 .map(|i| SessionSummary {
                     id: format!("session-{}", i),
+                    title: None,
                     modified: None,
                 })
                 .collect(),
