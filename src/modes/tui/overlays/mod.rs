@@ -11,8 +11,10 @@ pub mod view;
 pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
-pub use login::{LoginState, handle_login_result};
+pub use login::LoginState;
 pub use model_picker::ModelPickerState;
+// Re-export handle_login_result from auth feature for backward compatibility
+pub use crate::modes::tui::auth::handle_login_result;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;
