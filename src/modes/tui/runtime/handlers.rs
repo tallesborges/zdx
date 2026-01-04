@@ -14,8 +14,7 @@ use tokio::sync::mpsc;
 use crate::core::{interrupt, session};
 use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::state::{AgentState, TuiState};
-use crate::modes::tui::transcript_build::build_transcript_from_events;
-use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::transcript::{build_transcript_from_events, HistoryCell};
 
 // ============================================================================
 // Session Handlers (Async - return receivers for runtime to poll)

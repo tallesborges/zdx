@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use crate::core::events::ToolOutput;
 use crate::core::session::SessionEvent;
-use crate::modes::tui::transcript::HistoryCell;
+
+use super::HistoryCell;
 
 /// Builds transcript cells from session events.
 ///
@@ -85,7 +86,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::modes::tui::transcript::ToolState;
+    use super::super::ToolState;
 
     #[test]
     fn test_build_transcript_from_events_empty() {

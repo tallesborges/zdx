@@ -15,9 +15,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::modes::tui::input;
-use crate::modes::tui::selection::SelectionState;
 use crate::modes::tui::state::{AgentState, AppState, TuiState};
-use crate::modes::tui::transcript::{Style as TranscriptStyle, StyledLine};
+use crate::modes::tui::transcript::{LineMapping, SelectionState, Style as TranscriptStyle, StyledLine};
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
@@ -197,8 +196,6 @@ fn render_transcript(state: &TuiState, width: usize) -> (Vec<Line<'static>>, boo
 fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
 
-    use crate::modes::tui::selection::LineMapping;
-
     let mut lines = Vec::new();
 
     // Clear and rebuild the position map
@@ -254,8 +251,6 @@ fn render_transcript_lazy(
     visible: crate::modes::tui::state::VisibleRange,
 ) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
-
-    use crate::modes::tui::selection::LineMapping;
 
     let mut lines = Vec::new();
 
