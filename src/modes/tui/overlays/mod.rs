@@ -12,6 +12,7 @@
 //! - `login.rs`: OAuth login flow overlay
 //! - `file_picker.rs`: File picker triggered by `@`
 //! - `view.rs`: Shared rendering utilities for overlays
+//! - `update.rs`: Overlay key handling and update logic
 //!
 //! ## Extension Trait
 //!
@@ -24,6 +25,7 @@ pub mod login;
 pub mod model_picker;
 pub mod session_picker;
 pub mod thinking_picker;
+mod update;
 pub mod view;
 
 pub use command_palette::CommandPaletteState;
@@ -37,6 +39,8 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;
 pub use thinking_picker::ThinkingPickerState;
+// Re-export update functions
+pub use update::{handle_files_discovered, handle_overlay_key};
 
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
