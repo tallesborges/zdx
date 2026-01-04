@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
 use crate::ui::chat::commands::COMMANDS;
@@ -210,29 +210,17 @@ pub fn render_command_palette(
     area: Rect,
     input_top_y: u16,
 ) {
+    use super::view::{
+        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
+    };
+
     let commands = palette.filtered_commands();
 
-    let palette_width = 50.min(area.width.saturating_sub(4));
-    let palette_height = (commands.len() as u16 + 6).max(7).min(area.height / 2);
+    let palette_width = 50;
+    let palette_height = (commands.len() as u16 + 6).max(7);
 
-    let available_height = input_top_y;
-    let palette_x = (area.width.saturating_sub(palette_width)) / 2;
-    let palette_y = (available_height.saturating_sub(palette_height)) / 2;
-
-    let palette_area = Rect::new(palette_x, palette_y, palette_width, palette_height);
-
-    frame.render_widget(Clear, palette_area);
-
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Yellow))
-        .title(" Commands ")
-        .title_style(
-            Style::default()
-                .fg(Color::Yellow)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(outer_block, palette_area);
+    let palette_area = calculate_overlay_area(area, input_top_y, palette_width, palette_height);
+    render_overlay_container(frame, palette_area, "Commands", Color::Yellow);
 
     let inner_area = Rect::new(
         palette_area.x + 1,
@@ -259,13 +247,7 @@ pub fn render_command_palette(
     let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
     frame.render_widget(filter_para, filter_area);
 
-    let separator = "─".repeat(inner_area.width as usize);
-    let separator_line = Paragraph::new(Line::from(Span::styled(
-        &separator,
-        Style::default().fg(Color::DarkGray),
-    )));
-    let separator_area = Rect::new(inner_area.x, inner_area.y + 1, inner_area.width, 1);
-    frame.render_widget(separator_line, separator_area);
+    render_separator(frame, inner_area, 1);
 
     let list_height = inner_area.height.saturating_sub(4);
     let list_area = Rect::new(
@@ -314,32 +296,18 @@ pub fn render_command_palette(
     }
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    let bottom_sep_y = inner_area.y + 2 + list_height;
-    if bottom_sep_y < inner_area.y + inner_area.height {
-        let bottom_separator_area = Rect::new(inner_area.x, bottom_sep_y, inner_area.width, 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                &separator,
-                Style::default().fg(Color::DarkGray),
-            ))),
-            bottom_separator_area,
-        );
-    }
+    render_separator(frame, inner_area, 2 + list_height);
 
-    let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
-    let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
-    let hints_line = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Yellow)),
-        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Enter", Style::default().fg(Color::Yellow)),
-        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Esc", Style::default().fg(Color::Yellow)),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ]);
-    let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
-    frame.render_widget(hints_para, hints_area);
+    render_hints(
+        frame,
+        inner_area,
+        &[
+            InputHint::new("↑↓", "navigate"),
+            InputHint::new("Enter", "select"),
+            InputHint::new("Esc", "cancel"),
+        ],
+        Color::Yellow,
+    );
 }
 
 #[cfg(test)]

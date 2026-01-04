@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Color, Modifier, Style};
+use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use super::{Overlay, OverlayAction};
 use crate::ui::chat::effects::UiEffect;
@@ -119,24 +119,13 @@ pub fn handle_login_result(
 }
 
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
-    let popup_width = 60.min(area.width.saturating_sub(4));
-    let popup_height = 9.min(area.height.saturating_sub(4));
-    let popup_x = (area.width.saturating_sub(popup_width)) / 2;
-    let popup_y = (area.height.saturating_sub(popup_height)) / 2;
-    let popup_area = Rect::new(popup_x, popup_y, popup_width, popup_height);
+    use super::view::{calculate_overlay_area, render_overlay_container};
 
-    frame.render_widget(Clear, popup_area);
+    let popup_width = 60;
+    let popup_height = 9;
+    let popup_area = calculate_overlay_area(area, area.height, popup_width, popup_height);
 
-    let block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Cyan))
-        .title(" Anthropic Login ")
-        .title_style(
-            Style::default()
-                .fg(Color::Cyan)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(block, popup_area);
+    render_overlay_container(frame, popup_area, "Anthropic Login", Color::Cyan);
 
     let inner = Rect::new(
         popup_area.x + 2,

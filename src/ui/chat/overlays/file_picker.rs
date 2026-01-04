@@ -5,7 +5,7 @@ use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
 use crate::ui::chat::effects::UiEffect;
@@ -294,42 +294,28 @@ pub fn render_file_picker(
     area: Rect,
     input_top_y: u16,
 ) {
+    use super::view::{
+        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
+    };
+
     let file_count = picker.filtered.len();
     let visible_count = file_count.min(MAX_VISIBLE_FILES);
 
-    let picker_width = 50.min(area.width.saturating_sub(4));
+    let picker_width = 50;
     let base_height = if picker.loading || file_count == 0 {
         5
     } else {
         visible_count as u16 + 4
     };
-    let picker_height = base_height.min(area.height / 2);
+    let picker_height = base_height.max(7);
 
-    let available_height = input_top_y;
-
-    let picker_x = (area.width.saturating_sub(picker_width)) / 2;
-    let picker_y = (available_height.saturating_sub(picker_height)) / 2;
-
-    let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
-
-    frame.render_widget(Clear, picker_area);
-
+    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     let title = if picker.loading {
-        " Files (loading...) ".to_string()
+        "Files (loading...)".to_string()
     } else {
-        format!(" Files ({}) ", file_count)
+        format!("Files ({})", file_count)
     };
-
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Blue))
-        .title(title)
-        .title_style(
-            Style::default()
-                .fg(Color::Blue)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(outer_block, picker_area);
+    render_overlay_container(frame, picker_area, &title, Color::Blue);
 
     let inner_area = Rect::new(
         picker_area.x + 1,
@@ -409,31 +395,18 @@ pub fn render_file_picker(
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    let separator = "─".repeat(inner_area.width as usize);
-    let sep_y = inner_area.y + list_height as u16;
-    if sep_y < inner_area.y + inner_area.height {
-        let separator_area = Rect::new(inner_area.x, sep_y, inner_area.width, 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                &separator,
-                Style::default().fg(Color::DarkGray),
-            ))),
-            separator_area,
-        );
-    }
+    render_separator(frame, inner_area, list_height as u16);
 
-    let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
-    let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
-    let hints_line = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Blue)),
-        Span::styled(" nav ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Enter", Style::default().fg(Color::Blue)),
-        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
-        Span::styled("Esc", Style::default().fg(Color::Blue)),
-        Span::styled(" close", Style::default().fg(Color::DarkGray)),
-    ]);
-    let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
-    frame.render_widget(hints_para, hints_area);
+    render_hints(
+        frame,
+        inner_area,
+        &[
+            InputHint::new("↑↓", "nav"),
+            InputHint::new("Enter", "select"),
+            InputHint::new("Esc", "close"),
+        ],
+        Color::Blue,
+    );
 }
 
 #[cfg(test)]
