@@ -150,35 +150,48 @@ auth/mod.rs         (empty)
 
 ---
 
-## Slice 4: Auth Feature (Smallest - Pattern Validation)
+## Slice 4: Auth Feature Module ✅
 
-**Goal:** Extract auth as first feature slice to validate the pattern.
+**Goal:** Extract auth state and login overlay logic into a dedicated feature slice.
 
-**Current Files:**
-- `state/auth.rs` (53 lines) → `auth/state.rs`
+**Files Created/Modified:**
+- `auth/state.rs` - Moved `AuthStatus` and `AuthState` from `state/auth.rs`
+- `auth/reducer.rs` - Moved `handle_login_result` from `overlays/login.rs`
+- `auth/view.rs` - Moved `render_login_overlay` and `truncate_middle` from `overlays/login.rs`
+- `auth/mod.rs` - Updated with re-exports
+- `state/auth.rs` - Thin re-export shim for backward compatibility
+- `overlays/login.rs` - Updated to use auth feature, removed duplicated code
+- `overlays/mod.rs` - Updated to re-export from auth feature
 
 **Tasks:**
-- [ ] Move `state/auth.rs` → `auth/state.rs`
-- [ ] Create `auth/mod.rs` with re-exports
-- [ ] Update `state/mod.rs` to use `crate::modes::tui::auth::AuthState`
-- [ ] Add `pub(crate)` visibility where needed
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): extract auth feature slice`
+- [x] Move `state/auth.rs` → `auth/state.rs`
+- [x] Create `auth/reducer.rs` with `handle_login_result`
+- [x] Create `auth/view.rs` with `render_login_overlay`
+- [x] Create `auth/mod.rs` with re-exports
+- [x] Update `state/auth.rs` to re-export from auth feature
+- [x] Update `overlays/login.rs` to use auth feature
+- [x] Update `overlays/mod.rs` to re-export from auth feature
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 296 tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `chore(tui): extract auth feature slice`
+
+**Completed:** 2025-01-05
 
 **Pattern Established:**
 ```rust
 // auth/mod.rs
 mod state;
-pub use state::{AuthState, AuthStatus};
+mod reducer;
+mod view;
 
-// auth/state.rs
-pub struct AuthState { ... }
-pub enum AuthStatus { ... }
-impl AuthState { ... }
+pub use state::{AuthState, AuthStatus};
+pub use reducer::handle_login_result;
+pub use view::render_login_overlay;
 ```
 
 **Risk:** Low  
-**Duration:** ~15 min
+**Duration:** ~20 min
 
 ---
 
@@ -470,16 +483,16 @@ pub fn handle_mouse(
 
 ```
 Slice 0: Preparation          [~10 min]  ████ ✅ DONE
-Slice 1: Shared (leaf only)   [~15 min]  ██████
-Slice 2: Auth Feature         [~15 min]  ██████
-Slice 3: Session Feature      [~60 min]  ████████████████████████
-Slice 4: Core Dispatcher      [~60 min]  ████████████████████████  ← MOVED UP
-Slice 5: Input Feature        [~90 min]  ████████████████████████████████████
+Slice 1: Shared (leaf only)   [~15 min]  ██████ ✅ DONE
+Slice 2: Core Events          [~30 min]  ████████████ ✅ DONE
+Slice 3: Input Feature        [~90 min]  ████████████████████████████████████ ✅ DONE
+Slice 4: Auth Feature         [~20 min]  ████████ ✅ DONE
+Slice 5: Session Feature      [~60 min]  ████████████████████████
 Slice 6: Transcript Feature   [~180 min] ████████████████████████████████████████████████████████████████████████
 Slice 7: App State            [~30 min]  ████████████
 Slice 8: Cleanup & Docs       [~45 min]  ██████████████████
                               ─────────
-                              ~8.5 hours total (with 1.5x buffer)
+                              ~8 hours total (with 1.5x buffer)
 ```
 
 ---

@@ -35,7 +35,7 @@
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
     - `src/modes/tui/transcript_build.rs`: pure helper to build transcript cells from session events
     - `src/modes/tui/state/mod.rs`: TuiState - all app state (no terminal)
-    - `src/modes/tui/state/auth.rs`: auth status + login flow state
+    - `src/modes/tui/state/auth.rs`: auth state re-exports (from auth feature slice)
     - `src/modes/tui/state/input.rs`: input state re-exports (from input feature slice)
     - `src/modes/tui/state/session.rs`: session + message history state
     - `src/modes/tui/state/transcript.rs`: transcript view state (scroll, selection, cache)
@@ -48,7 +48,11 @@
       - `src/modes/tui/shared/mod.rs`: module exports
       - `src/modes/tui/shared/effects.rs`: effect types returned by reducer for runtime to execute
       - `src/modes/tui/shared/commands.rs`: command definitions for command palette
-    - `src/modes/tui/auth/`: auth feature slice (placeholder)
+    - `src/modes/tui/auth/`: auth feature slice (authentication state, login handling)
+      - `src/modes/tui/auth/mod.rs`: module exports
+      - `src/modes/tui/auth/state.rs`: AuthStatus + AuthState (auth type detection, login flow state)
+      - `src/modes/tui/auth/reducer.rs`: login result handling, OAuth flow state transitions
+      - `src/modes/tui/auth/view.rs`: login overlay rendering
     - `src/modes/tui/core/`: core feature slice (event aggregator)
       - `src/modes/tui/core/mod.rs`: module exports
       - `src/modes/tui/core/events.rs`: UiEvent + SessionUiEvent (aggregator for all TUI events)
@@ -65,7 +69,7 @@
       - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
       - `src/modes/tui/overlays/session_picker.rs`: session picker overlay
       - `src/modes/tui/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
-      - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay
+      - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay (state + key handling; rendering delegated to auth feature)
     - `src/modes/tui/markdown/`: markdown parsing and wrapping
       - `src/modes/tui/markdown/mod.rs`: module exports
       - `src/modes/tui/markdown/parse.rs`: markdown parsing + rendering
