@@ -24,11 +24,9 @@ pub mod markdown;
 pub mod overlays;
 pub mod reducer;
 pub mod runtime;
-pub mod selection;
 pub mod state;
 pub mod terminal;
 pub mod transcript;
-pub mod transcript_build;
 pub mod view;
 
 use std::io::{IsTerminal, Write, stderr};
