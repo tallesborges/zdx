@@ -127,7 +127,12 @@ pub fn render_session_picker(
     let picker_height = (visible_count as u16 + 5).max(7);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
-    render_overlay_container(frame, picker_area, &format!("Sessions ({})", session_count), Color::Blue);
+    render_overlay_container(
+        frame,
+        picker_area,
+        &format!("Sessions ({})", session_count),
+        Color::Blue,
+    );
 
     let inner_area = Rect::new(
         picker_area.x + 1,
