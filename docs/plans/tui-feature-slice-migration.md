@@ -62,15 +62,15 @@ src/modes/tui/
 
 ---
 
-## Slice 0: Preparation (Foundation)
+## Slice 0: Preparation (Foundation) ✅
 
 **Goal:** Create directory structure, no functional changes.
 
 **Tasks:**
-- [ ] Create empty directories: `shared/`, `core/`, `input/`, `session/`, `auth/`
-- [ ] Create placeholder `mod.rs` files with `// TODO: migrate` comments
-- [ ] Run `cargo check` to ensure no breakage
-- [ ] Commit: `chore(tui): create feature-slice directory structure`
+- [x] Create empty directories: `shared/`, `core/`, `input/`, `session/`, `auth/`
+- [x] Create placeholder `mod.rs` files with `// TODO: migrate` comments
+- [x] Run `cargo check` to ensure no breakage
+- [x] Commit: `chore(tui): create feature-slice directory structure`
 
 **Files Created:**
 ```
@@ -80,6 +80,9 @@ input/mod.rs        (empty)
 session/mod.rs      (empty)
 auth/mod.rs         (empty)
 ```
+
+**Completed:** 2025-01-04  
+**Commit:** `85b4e3e`
 
 **Risk:** None  
 **Duration:** ~10 min
@@ -434,7 +437,7 @@ pub fn handle_mouse(
 ## Migration Order Summary (Revised)
 
 ```
-Slice 0: Preparation          [~10 min]  ████
+Slice 0: Preparation          [~10 min]  ████ ✅ DONE
 Slice 1: Shared (leaf only)   [~15 min]  ██████
 Slice 2: Auth Feature         [~15 min]  ██████
 Slice 3: Session Feature      [~60 min]  ████████████████████████
