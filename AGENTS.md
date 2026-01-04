@@ -64,8 +64,10 @@
       - `src/modes/tui/session/state.rs`: SessionState, SessionOpsState, SessionUsage
       - `src/modes/tui/session/reducer.rs`: session event handlers (loading, switching, creating, renaming)
       - `src/modes/tui/session/view.rs`: session picker overlay rendering
-    - `src/modes/tui/overlays/`: self-contained overlay modules
+    - `src/modes/tui/overlays/`: overlay feature slice (modal UI components)
       - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
+      - `src/modes/tui/overlays/update.rs`: overlay key handling and update logic
+      - `src/modes/tui/overlays/view.rs`: shared rendering utilities for overlays
       - `src/modes/tui/overlays/command_palette.rs`: command palette overlay
       - `src/modes/tui/overlays/model_picker.rs`: model picker overlay
       - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
