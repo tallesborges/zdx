@@ -12,7 +12,7 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::core::{interrupt, session};
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::state::{AgentState, TuiState};
 use crate::modes::tui::transcript_build::build_transcript_from_events;
 use crate::modes::tui::transcript::HistoryCell;

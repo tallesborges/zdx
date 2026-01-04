@@ -4,7 +4,7 @@
 
 use tokio::sync::mpsc;
 
-use crate::modes::tui::events::UiEvent;
+use crate::modes::tui::core::events::UiEvent;
 
 /// Session and conversation state.
 ///
