@@ -15,6 +15,7 @@ mod wrap;
 mod build;
 mod selection;
 mod state;
+mod update;
 
 // Re-export existing display types
 pub use cell::{CellId, HistoryCell, ToolState};
@@ -38,3 +39,6 @@ pub use selection::{LineMapping, SelectionState};
 
 // Re-export build function
 pub use build::build_transcript_from_events;
+
+// Re-export update functions
+pub use update::{apply_pending_delta, apply_scroll_delta, handle_agent_event, handle_mouse};
