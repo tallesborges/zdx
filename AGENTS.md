@@ -33,16 +33,14 @@
     - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
     - `src/modes/tui/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
-    - `src/modes/tui/transcript_build.rs`: pure helper to build transcript cells from session events
     - `src/modes/tui/state/mod.rs`: TuiState - all app state (no terminal)
     - `src/modes/tui/state/auth.rs`: auth state re-exports (from auth feature slice)
     - `src/modes/tui/state/input.rs`: input state re-exports (from input feature slice)
     - `src/modes/tui/state/session.rs`: session state re-exports (from session feature slice)
-    - `src/modes/tui/state/transcript.rs`: transcript view state (scroll, selection, cache)
-    - `src/modes/tui/reducer.rs`: reducer - all state mutations happen here
-    - `src/modes/tui/view.rs`: pure render functions (no mutations)
-    - `src/modes/tui/events.rs`: UI event types
-    - `src/modes/tui/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
+    - `src/modes/tui/state/transcript.rs`: transcript state re-exports (from transcript feature slice)
+    - `src/modes/tui/reducer.rs`: reducer - orchestrates state mutations, delegates to feature slices
+    - `src/modes/tui/view.rs`: pure render functions (no mutations), delegates transcript rendering
+    - `src/modes/tui/events.rs`: UI event types (re-exports from core feature slice)
     - `src/modes/tui/terminal.rs`: terminal setup, restore, panic hooks
     - `src/modes/tui/shared/`: shared leaf types (no feature dependencies)
       - `src/modes/tui/shared/mod.rs`: module exports
@@ -79,8 +77,13 @@
       - `src/modes/tui/markdown/parse.rs`: markdown parsing + rendering
       - `src/modes/tui/markdown/wrap.rs`: styled span wrapping
       - `src/modes/tui/markdown/stream.rs`: streaming collector + commit logic
-    - `src/modes/tui/transcript/`: transcript model
+    - `src/modes/tui/transcript/`: transcript feature slice (transcript state, rendering, updates)
       - `src/modes/tui/transcript/mod.rs`: module exports
+      - `src/modes/tui/transcript/state.rs`: TranscriptState, ScrollState, SelectionState management
+      - `src/modes/tui/transcript/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
+      - `src/modes/tui/transcript/build.rs`: pure helper to build transcript cells from session events
+      - `src/modes/tui/transcript/update.rs`: agent event handlers, mouse handling, delta coalescing
+      - `src/modes/tui/transcript/render.rs`: transcript rendering (full and lazy), style conversion
       - `src/modes/tui/transcript/cell.rs`: HistoryCell + rendering
       - `src/modes/tui/transcript/wrap.rs`: wrapping + wrap cache
       - `src/modes/tui/transcript/style.rs`: transcript style types

@@ -241,7 +241,7 @@ pub use view::render_session_picker;
 
 ---
 
-## Slice 6: Transcript Feature (Largest)
+## Slice 6: Transcript Feature (Largest) ✅
 
 **Goal:** Extract transcript - the largest feature slice.
 
@@ -257,33 +257,31 @@ pub use view::render_session_picker;
 
 **Tasks:**
 
-### 6a: Move State Files (~45 min)
-- [ ] Move `state/transcript.rs` → `transcript/state.rs`
-- [ ] Move `selection.rs` → `transcript/selection.rs`
-- [ ] Move `transcript_build.rs` → `transcript/build.rs`
-- [ ] Update `transcript/mod.rs` with new modules
-- [ ] Add `pub(crate)` visibility where needed
-- [ ] Update imports
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): move transcript state files`
+### 6a: Move State Files (~45 min) ✅
+- [x] Move `state/transcript.rs` → `transcript/state.rs`
+- [x] Move `selection.rs` → `transcript/selection.rs`
+- [x] Move `transcript_build.rs` → `transcript/build.rs`
+- [x] Update `transcript/mod.rs` with new modules
+- [x] Add `pub(crate)` visibility where needed
+- [x] Update imports
+- [x] Run `cargo test`
+- [x] Commit: `refactor(tui): move transcript state files`
 
-### 6b: Extract Update Logic (~1 hour)
-- [ ] Extract from `reducer.rs`:
+### 6b: Extract Update Logic (~1 hour) ✅
+- [x] Extract from `reducer.rs`:
   - `handle_agent_event()`
   - `apply_pending_delta()`
   - `apply_scroll_delta()`
   - `handle_mouse()`
   - `screen_to_transcript_pos()`
-  - `handle_handoff_result()`
-  - `handle_files_discovered()`
   → `transcript/update.rs`
-- [ ] Update `core/mod.rs` to dispatch agent events to `transcript::handle_agent_event`
-- [ ] Update imports
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): extract transcript update logic`
+- [x] Update main reducer to delegate agent events to `transcript::handle_agent_event`
+- [x] Update imports
+- [x] Run `cargo test`
+- [x] Commit: `refactor(tui): extract transcript update logic`
 
-### 6c: Extract Render Logic (~1 hour)
-- [ ] Extract from `view.rs`:
+### 6c: Extract Render Logic (~1 hour) ✅
+- [x] Extract from `view.rs`:
   - `render_transcript()`
   - `render_transcript_full()`
   - `render_transcript_lazy()`
@@ -292,28 +290,36 @@ pub use view::render_session_picker;
   - `convert_style()`
   - `calculate_cell_line_counts()`
   → `transcript/render.rs`
-- [ ] Update `core/render.rs` to call `transcript::render`
-- [ ] Update imports
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): extract transcript render logic`
+- [x] Update main view to call `transcript::render_transcript`
+- [x] Update imports
+- [x] Run `cargo test`
+- [x] Commit: `refactor(tui): extract transcript render logic`
 
-**Handler Signatures:**
+**Completed:** 2025-01-XX
+
+**Pattern Established:**
 ```rust
-// transcript/update.rs
-pub fn handle_agent_event(
-    transcript: &mut TranscriptState,
-    agent_state: &mut AgentState,
-    event: &AgentEvent,
-) -> Vec<UiEffect>
+// transcript/mod.rs
+mod state;
+mod selection;
+mod build;
+mod update;
+mod render;
 
-pub fn handle_mouse(
-    transcript: &mut TranscriptState,
-    mouse: MouseEvent,
-)
+pub use state::{TranscriptState, VisibleRange};
+pub use selection::{LineMapping, SelectionState};
+pub use build::build_transcript_from_events;
+pub use update::{apply_pending_delta, apply_scroll_delta, handle_agent_event, handle_mouse};
+pub use render::{calculate_cell_line_counts, render_transcript, SPINNER_SPEED_DIVISOR};
+
+// Also re-export existing sub-modules
+pub use cell::{CellId, HistoryCell, ToolState};
+pub use wrap::WrapCache;
+pub use style::{Style, StyledLine, StyledSpan};
 ```
 
 **Risk:** High (largest file, most dependencies)  
-**Duration:** ~3 hours (split into 3 sub-commits)
+**Duration:** ~2.5 hours (split into 3 sub-commits)
 
 ---
 
