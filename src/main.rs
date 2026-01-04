@@ -1,15 +1,15 @@
-mod app;
+mod cli;
 mod config;
 mod core;
+mod modes;
 mod models;
 mod providers;
 mod tools;
-mod ui;
 
 use crate::core::interrupt;
 
 fn main() {
-    if let Err(e) = app::run() {
+    if let Err(e) = cli::run() {
         if e.downcast_ref::<interrupt::InterruptedError>().is_some() {
             std::process::exit(130);
         }

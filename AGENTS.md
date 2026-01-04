@@ -4,16 +4,16 @@
 
 ## Where things are
 
-- `src/main.rs`: binary entrypoint (delegates to `src/app/`)
+- `src/main.rs`: binary entrypoint (delegates to `src/cli/`)
 - `src/default_config.toml`: default configuration template
-- `src/app/`: CLI arguments + command dispatch
-  - `src/app/mod.rs`: clap structs + dispatch
-  - `src/app/commands/mod.rs`: command module exports
-  - `src/app/commands/chat.rs`: chat command handler (includes piped stdin fallback)
-  - `src/app/commands/exec.rs`: exec command handler
-  - `src/app/commands/sessions.rs`: list/show/resume sessions
-  - `src/app/commands/config.rs`: config path/init handlers
-  - `src/app/commands/auth.rs`: login/logout flows
+- `src/cli/`: CLI arguments + command dispatch
+  - `src/cli/mod.rs`: clap structs + dispatch
+  - `src/cli/commands/mod.rs`: command module exports
+  - `src/cli/commands/chat.rs`: chat command handler (includes piped stdin fallback)
+  - `src/cli/commands/exec.rs`: exec command handler
+  - `src/cli/commands/sessions.rs`: list/show/resume sessions
+  - `src/cli/commands/config.rs`: config path/init handlers
+  - `src/cli/commands/auth.rs`: login/logout flows
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for TUI model picker
 - `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
@@ -25,45 +25,45 @@
   - `src/core/interrupt.rs`: signal handling
   - `src/core/agent.rs`: agent loop + event channels
   - `src/core/session.rs`: session persistence
-- `src/ui/`: terminal UI
-  - `src/ui/mod.rs`: UI module exports
-  - `src/ui/exec.rs`: streamed stdout/stderr rendering + exec mode wrapper
-  - `src/ui/chat/`: interactive TUI (Elm-like architecture)
-    - `src/ui/chat/mod.rs`: entry points (run_interactive_chat) + module declarations
-    - `src/ui/chat/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
-    - `src/ui/chat/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
-    - `src/ui/chat/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
-    - `src/ui/chat/transcript_build.rs`: pure helper to build transcript cells from session events
-    - `src/ui/chat/state/mod.rs`: TuiState - all app state (no terminal)
-    - `src/ui/chat/state/auth.rs`: auth status + login flow state
-    - `src/ui/chat/state/input.rs`: input editor state
-    - `src/ui/chat/state/session.rs`: session + message history state
-    - `src/ui/chat/state/transcript.rs`: transcript view state (scroll, selection, cache)
-    - `src/ui/chat/reducer.rs`: reducer - all state mutations happen here
-    - `src/ui/chat/view.rs`: pure render functions (no mutations)
-    - `src/ui/chat/effects.rs`: effect types returned by reducer for runtime to execute
-    - `src/ui/chat/events.rs`: UI event types
-    - `src/ui/chat/commands.rs`: command definitions for command palette
-    - `src/ui/chat/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
-    - `src/ui/chat/terminal.rs`: terminal setup, restore, panic hooks
-    - `src/ui/chat/overlays/`: self-contained overlay modules
-      - `src/ui/chat/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
-      - `src/ui/chat/overlays/command_palette.rs`: command palette overlay
-      - `src/ui/chat/overlays/model_picker.rs`: model picker overlay
-      - `src/ui/chat/overlays/thinking_picker.rs`: thinking level picker overlay
-      - `src/ui/chat/overlays/session_picker.rs`: session picker overlay
-      - `src/ui/chat/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
-      - `src/ui/chat/overlays/login.rs`: OAuth login flow overlay
-  - `src/ui/markdown/`: markdown parsing and wrapping (shared)
-    - `src/ui/markdown/mod.rs`: module exports
-    - `src/ui/markdown/parse.rs`: markdown parsing + rendering
-    - `src/ui/markdown/wrap.rs`: styled span wrapping
-    - `src/ui/markdown/stream.rs`: streaming collector + commit logic
-  - `src/ui/transcript/`: transcript model (shared)
-    - `src/ui/transcript/mod.rs`: module exports
-    - `src/ui/transcript/cell.rs`: HistoryCell + rendering
-    - `src/ui/transcript/wrap.rs`: wrapping + wrap cache
-    - `src/ui/transcript/style.rs`: transcript style types
+- `src/modes/`: runtime execution modes
+  - `src/modes/mod.rs`: mode module exports
+  - `src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
+  - `src/modes/tui/`: full-screen interactive TUI (Elm-like architecture)
+    - `src/modes/tui/mod.rs`: entry points (run_interactive_chat) + module declarations
+    - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
+    - `src/modes/tui/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
+    - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
+    - `src/modes/tui/transcript_build.rs`: pure helper to build transcript cells from session events
+    - `src/modes/tui/state/mod.rs`: TuiState - all app state (no terminal)
+    - `src/modes/tui/state/auth.rs`: auth status + login flow state
+    - `src/modes/tui/state/input.rs`: input editor state
+    - `src/modes/tui/state/session.rs`: session + message history state
+    - `src/modes/tui/state/transcript.rs`: transcript view state (scroll, selection, cache)
+    - `src/modes/tui/reducer.rs`: reducer - all state mutations happen here
+    - `src/modes/tui/view.rs`: pure render functions (no mutations)
+    - `src/modes/tui/effects.rs`: effect types returned by reducer for runtime to execute
+    - `src/modes/tui/events.rs`: UI event types
+    - `src/modes/tui/commands.rs`: command definitions for command palette
+    - `src/modes/tui/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
+    - `src/modes/tui/terminal.rs`: terminal setup, restore, panic hooks
+    - `src/modes/tui/overlays/`: self-contained overlay modules
+      - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
+      - `src/modes/tui/overlays/command_palette.rs`: command palette overlay
+      - `src/modes/tui/overlays/model_picker.rs`: model picker overlay
+      - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
+      - `src/modes/tui/overlays/session_picker.rs`: session picker overlay
+      - `src/modes/tui/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
+      - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay
+    - `src/modes/tui/markdown/`: markdown parsing and wrapping
+      - `src/modes/tui/markdown/mod.rs`: module exports
+      - `src/modes/tui/markdown/parse.rs`: markdown parsing + rendering
+      - `src/modes/tui/markdown/wrap.rs`: styled span wrapping
+      - `src/modes/tui/markdown/stream.rs`: streaming collector + commit logic
+    - `src/modes/tui/transcript/`: transcript model
+      - `src/modes/tui/transcript/mod.rs`: module exports
+      - `src/modes/tui/transcript/cell.rs`: HistoryCell + rendering
+      - `src/modes/tui/transcript/wrap.rs`: wrapping + wrap cache
+      - `src/modes/tui/transcript/style.rs`: transcript style types
 - `src/tools/`: tool implementations + schemas
   - `src/tools/mod.rs`: tool module exports + tool registry
   - `src/tools/bash.rs`: bash/shell command tool
@@ -95,7 +95,7 @@
 - Rust edition: 2024 (see `Cargo.toml`)
 - Formatting: rustfmt defaults
 - Errors: prefer `anyhow::Result` + `Context` at I/O boundaries
-- Keep `src/core/` UI-agnostic: terminal I/O belongs in `src/ui/` only
+- Keep `src/core/` UI-agnostic: terminal I/O belongs in `src/modes/` only
 
 ## Tests (keep it light)
 
