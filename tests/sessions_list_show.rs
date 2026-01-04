@@ -329,7 +329,9 @@ fn test_sessions_rename_missing_session_fails() {
         .args(["sessions", "rename", "missing-session", "New Title"])
         .assert()
         .failure()
-        .stderr(predicate::str::contains("Session 'missing-session' not found"));
+        .stderr(predicate::str::contains(
+            "Session 'missing-session' not found",
+        ));
 
     assert!(
         !missing_path.exists(),

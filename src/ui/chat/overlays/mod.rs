@@ -60,42 +60,6 @@ pub enum Overlay {
     FilePicker(FilePickerState),
 }
 
-impl From<CommandPaletteState> for Overlay {
-    fn from(state: CommandPaletteState) -> Self {
-        Overlay::CommandPalette(state)
-    }
-}
-
-impl From<ModelPickerState> for Overlay {
-    fn from(state: ModelPickerState) -> Self {
-        Overlay::ModelPicker(state)
-    }
-}
-
-impl From<ThinkingPickerState> for Overlay {
-    fn from(state: ThinkingPickerState) -> Self {
-        Overlay::ThinkingPicker(state)
-    }
-}
-
-impl From<SessionPickerState> for Overlay {
-    fn from(state: SessionPickerState) -> Self {
-        Overlay::SessionPicker(state)
-    }
-}
-
-impl From<LoginState> for Overlay {
-    fn from(state: LoginState) -> Self {
-        Overlay::Login(state)
-    }
-}
-
-impl From<FilePickerState> for Overlay {
-    fn from(state: FilePickerState) -> Self {
-        Overlay::FilePicker(state)
-    }
-}
-
 impl Overlay {
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         match self {
@@ -122,41 +86,6 @@ impl Overlay {
     pub fn as_file_picker_mut(&mut self) -> Option<&mut FilePickerState> {
         match self {
             Overlay::FilePicker(p) => Some(p),
-            _ => None,
-        }
-    }
-}
-
-// ============================================================================
-// Test helpers
-// ============================================================================
-
-#[cfg(test)]
-impl Overlay {
-    pub fn as_command_palette(&self) -> Option<&CommandPaletteState> {
-        match self {
-            Overlay::CommandPalette(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn as_model_picker(&self) -> Option<&ModelPickerState> {
-        match self {
-            Overlay::ModelPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn as_thinking_picker(&self) -> Option<&ThinkingPickerState> {
-        match self {
-            Overlay::ThinkingPicker(p) => Some(p),
-            _ => None,
-        }
-    }
-
-    pub fn as_login(&self) -> Option<&LoginState> {
-        match self {
-            Overlay::Login(l) => Some(l),
             _ => None,
         }
     }

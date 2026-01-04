@@ -6,27 +6,17 @@ use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 /// Calculates the area for an overlay, centered horizontally and vertically
 /// within the available height (usually above the input bar).
-pub fn calculate_overlay_area(
-    area: Rect,
-    available_height: u16,
-    width: u16,
-    height: u16,
-) -> Rect {
+pub fn calculate_overlay_area(area: Rect, available_height: u16, width: u16, height: u16) -> Rect {
     let width = width.min(area.width.saturating_sub(4));
     let height = height.min(available_height.saturating_sub(2));
-    
+
     let overlay_x = (area.width.saturating_sub(width)) / 2;
     let overlay_y = (available_height.saturating_sub(height)) / 2;
     Rect::new(overlay_x, overlay_y, width, height)
 }
 
 /// Renders the base container for an overlay (clears background, draws border and title).
-pub fn render_overlay_container(
-    frame: &mut Frame,
-    area: Rect,
-    title: &str,
-    border_color: Color,
-) {
+pub fn render_overlay_container(frame: &mut Frame, area: Rect, title: &str, border_color: Color) {
     frame.render_widget(Clear, area);
 
     let block = Block::default()
@@ -54,12 +44,7 @@ impl<'a> InputHint<'a> {
 }
 
 /// Renders a line of keyboard hints at the bottom of the overlay.
-pub fn render_hints(
-    frame: &mut Frame,
-    area: Rect,
-    hints: &[InputHint],
-    highlight_color: Color,
-) {
+pub fn render_hints(frame: &mut Frame, area: Rect, hints: &[InputHint], highlight_color: Color) {
     let hints_y = area.y + area.height.saturating_sub(1);
     let hints_area = Rect::new(area.x, hints_y, area.width, 1);
 

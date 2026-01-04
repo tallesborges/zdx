@@ -517,46 +517,23 @@ mod tests {
         assert!(none.is_none());
 
         let (palette, _) = CommandPaletteState::open(true);
-        let overlay: Option<Overlay> = Some(palette.into());
+        let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 
         let (picker, _) = ModelPickerState::open("test");
-        let overlay: Option<Overlay> = Some(picker.into());
+        let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
         assert!(overlay.is_some());
 
         let (thinking, _) = ThinkingPickerState::open(ThinkingLevel::Off);
-        let overlay: Option<Overlay> = Some(thinking.into());
+        let overlay: Option<Overlay> = Some(Overlay::ThinkingPicker(thinking));
         assert!(overlay.is_some());
 
         let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging));
         assert!(overlay.is_some());
 
         let (file_picker, _) = FilePickerState::open(0);
-        let overlay: Option<Overlay> = Some(file_picker.into());
+        let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
         assert!(overlay.is_some());
-    }
-
-    #[test]
-    fn test_overlay_accessors() {
-        let (palette, _) = CommandPaletteState::open(true);
-        let overlay = Overlay::from(palette);
-        assert!(overlay.as_command_palette().is_some());
-        assert!(overlay.as_model_picker().is_none());
-        assert!(overlay.as_thinking_picker().is_none());
-        assert!(overlay.as_login().is_none());
-
-        let (picker, _) = ModelPickerState::open("test");
-        let overlay = Overlay::from(picker);
-        assert!(overlay.as_command_palette().is_none());
-        assert!(overlay.as_model_picker().is_some());
-
-        let (thinking_picker, _) = ThinkingPickerState::open(ThinkingLevel::Medium);
-        let overlay = Overlay::from(thinking_picker);
-        assert!(overlay.as_thinking_picker().is_some());
-        assert!(overlay.as_model_picker().is_none());
-
-        let overlay = Overlay::Login(LoginState::Exchanging);
-        assert!(overlay.as_login().is_some());
     }
 
     // ========================================================================

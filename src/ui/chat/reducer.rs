@@ -700,7 +700,7 @@ fn handle_session_list_loaded(
     }
 
     let (state, effects) = SessionPickerState::open(sessions, original_cells);
-    app.overlay = Some(state.into());
+    app.overlay = Some(Overlay::SessionPicker(state));
 
     // Process any preview effects by directly loading the first session preview
     // Note: This is a small compromise - we trigger the preview effect inline
