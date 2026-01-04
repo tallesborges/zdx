@@ -18,7 +18,7 @@ use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;
 pub use thinking_picker::ThinkingPickerState;
 
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 
 // ============================================================================

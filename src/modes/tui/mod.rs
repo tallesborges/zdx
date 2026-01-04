@@ -19,8 +19,6 @@ pub mod session;
 pub mod shared;
 
 // Existing modules (will be migrated incrementally)
-pub mod commands;
-pub mod effects;
 pub mod events;
 pub mod markdown;
 pub mod overlays;

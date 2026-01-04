@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 
 const MAX_VISIBLE_FILES: usize = 10;

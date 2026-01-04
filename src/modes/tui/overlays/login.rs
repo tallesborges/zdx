@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::{Overlay, OverlayAction};
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 use crate::modes::tui::transcript::HistoryCell;
 
