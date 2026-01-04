@@ -195,171 +195,49 @@ pub use view::render_login_overlay;
 
 ---
 
-## Slice 3: Session Feature
+## Slice 5: Session Feature Module ✅
 
 **Goal:** Extract session state, events, and update logic.
 
-**Current Files:**
-- `state/session.rs` (261 lines) → `session/state.rs`
-- `SessionUiEvent` from `events.rs` → `session/events.rs`
-- Parts of `reducer.rs` (session handlers) → `session/update.rs`
-- Usage display helpers from `view.rs` → `session/usage.rs`
+**Files Created/Modified:**
+- `session/state.rs` - Moved `SessionState`, `SessionOpsState`, `SessionUsage` from `state/session.rs`
+- `session/reducer.rs` - Extracted session event handlers from `reducer.rs`
+- `session/view.rs` - Extracted `render_session_picker` from `overlays/session_picker.rs`
+- `session/mod.rs` - Updated with re-exports
+- `state/session.rs` - Thin re-export shim for backward compatibility
+- `overlays/session_picker.rs` - Updated to delegate rendering to session feature
+- `reducer.rs` - Removed session handlers, delegates to `session::handle_session_event`
 
 **Tasks:**
-- [ ] Move `state/session.rs` → `session/state.rs`
-- [ ] Extract `SessionUiEvent` from `events.rs` → `session/events.rs`
-- [ ] Create `session/mod.rs` with re-exports
-- [ ] Extract session-related functions from `reducer.rs`:
-  - `handle_session_list_loaded()`
-  - `handle_session_loaded()`
-  - `handle_session_preview_loaded()`
-  - `handle_session_created()`
-  - `handle_session_renamed()`
-  → `session/update.rs`
-- [ ] Extract from `view.rs`:
-  - `build_usage_display()`
-  - `build_token_breakdown()`
-  → `session/usage.rs`
-- [ ] Update old `events.rs` to import from `session/events.rs`
-- [ ] Add `pub(crate)` visibility where needed
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): extract session feature slice`
+- [x] Move `state/session.rs` → `session/state.rs`
+- [x] Create `session/reducer.rs` with session event handlers
+- [x] Create `session/view.rs` with `render_session_picker`
+- [x] Create `session/mod.rs` with re-exports
+- [x] Update `state/session.rs` to re-export from session feature
+- [x] Update `overlays/session_picker.rs` to use session feature view
+- [x] Update main reducer to delegate session events to `session::handle_session_event`
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 296 tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Update `AGENTS.md` with new structure
+- [x] Commit: `chore(tui): extract session feature slice`
 
-**New Structure:**
+**Completed:** 2025-01-05
+
+**Pattern Established:**
 ```rust
 // session/mod.rs
 mod state;
-mod events;
-mod update;
-mod usage;
+mod reducer;
+mod view;
 
-pub use state::{SessionState, SessionOpsState, SessionUsage};
-pub use events::SessionUiEvent;
-pub use update::handle_session_event;
-pub use usage::{render_usage_display, render_token_breakdown};
-
-// session/update.rs - handlers take ONLY session state
-pub fn handle_session_event(
-    session: &mut SessionState,
-    transcript: &mut TranscriptState,  // explicit dependency
-    event: SessionUiEvent,
-) -> Vec<UiEffect>
-```
-
-**Risk:** Medium (first reducer split, first feature-specific event)  
-**Duration:** ~1 hour
-
----
-
-## Slice 4: Core Dispatcher (Moved Earlier!)
-
-**Goal:** Create core/ with update dispatcher and UiEvent aggregator BEFORE extracting more features.
-
-**Why now?** Prevents `reducer.rs` from becoming a "Frankenstein" dispatcher as we extract features.
-
-**Tasks:**
-- [ ] Create `core/events.rs` with `UiEvent` enum (imports from `session/events.rs`)
-- [ ] Move remaining event types from old `events.rs` → `core/events.rs`
-- [ ] Delete old `events.rs` (or keep as re-export shim)
-- [ ] Create `core/mod.rs` with skeleton `update()` dispatcher
-- [ ] Create `core/render.rs` with skeleton `render()` 
-- [ ] Wire `core::update` to call `session::handle_session_event`
-- [ ] Update `runtime/mod.rs` to use `core::update` and `core::render`
-- [ ] Keep old `reducer.rs` and `view.rs` for remaining logic (will shrink in later slices)
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): create core dispatcher with UiEvent aggregator`
-
-**New Structure:**
-```rust
-// core/events.rs - the aggregator
-use crate::modes::tui::session::SessionUiEvent;
-
-pub enum UiEvent {
-    Tick,
-    Frame { width: u16, height: u16 },
-    Terminal(CrosstermEvent),
-    Agent(AgentEvent),
-    Session(SessionUiEvent),  // imported from session/
-    LoginResult(Result<(), String>),
-    HandoffResult(Result<String, String>),
-    FilesDiscovered(Vec<PathBuf>),
-}
-
-// core/mod.rs
-mod events;
-mod render;
-
-pub use events::UiEvent;
-pub use render::render;
-
-pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
-    match event {
-        UiEvent::Session(e) => {
-            session::handle_session_event(
-                &mut app.tui.conversation,
-                &mut app.tui.transcript,
-                e,
-            )
-        }
-        // Other events still delegate to old reducer.rs for now
-        _ => crate::modes::tui::reducer::update_legacy(app, event),
-    }
-}
+pub use state::{SessionOpsState, SessionState, SessionUsage};
+pub use reducer::handle_session_event;
+pub use view::render_session_picker;
 ```
 
 **Risk:** Medium  
-**Duration:** ~1 hour
-
----
-
-## Slice 5: Input Feature
-
-**Goal:** Extract input state, keyboard handling, handoff logic.
-
-**Current Files:**
-- `state/input.rs` (212 lines) → `input/state.rs`
-- Handoff types from `state/input.rs` → `input/handoff.rs`
-- Parts of `reducer.rs` → `input/update.rs`
-- Parts of `view.rs` → `input/render.rs`
-
-**Tasks:**
-- [ ] Move `state/input.rs` → `input/state.rs`
-- [ ] Extract `HandoffState` and related → `input/handoff.rs`
-- [ ] Create `input/mod.rs`
-- [ ] Extract from `reducer.rs`:
-  - `handle_main_key()`
-  - `handle_paste()`
-  - `submit_input()`
-  - History navigation functions
-  - Handoff result handler
-  → `input/update.rs`
-- [ ] Extract from `view.rs`:
-  - `render_input()`
-  - `render_handoff_input()`
-  - `wrap_textarea()`
-  - `calculate_input_height()`
-  → `input/render.rs`
-- [ ] Update `core/mod.rs` to dispatch keyboard events to `input::handle_key`
-- [ ] Add `pub(crate)` visibility where needed
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): extract input feature slice`
-
-**Handler Signature (Avoid Borrow Conflicts):**
-```rust
-// input/update.rs - take only what you need
-pub fn handle_key(
-    input: &mut InputState,
-    transcript: &mut TranscriptState,  // for adding cells
-    session: &SessionState,            // read-only check
-    key: KeyEvent,
-) -> Vec<UiEffect>
-
-// NOT this (causes borrow conflicts):
-// pub fn handle_key(tui: &mut TuiState, key: KeyEvent)
-```
-
-**Risk:** Medium  
-**Duration:** ~1.5 hours
+**Duration:** ~45 min
 
 ---
 
@@ -487,7 +365,7 @@ Slice 1: Shared (leaf only)   [~15 min]  ██████ ✅ DONE
 Slice 2: Core Events          [~30 min]  ████████████ ✅ DONE
 Slice 3: Input Feature        [~90 min]  ████████████████████████████████████ ✅ DONE
 Slice 4: Auth Feature         [~20 min]  ████████ ✅ DONE
-Slice 5: Session Feature      [~60 min]  ████████████████████████
+Slice 5: Session Feature      [~45 min]  ██████████████████ ✅ DONE
 Slice 6: Transcript Feature   [~180 min] ████████████████████████████████████████████████████████████████████████
 Slice 7: App State            [~30 min]  ████████████
 Slice 8: Cleanup & Docs       [~45 min]  ██████████████████

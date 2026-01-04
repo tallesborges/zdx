@@ -5,20 +5,16 @@
 //!
 //! This is the single source of truth for how events modify state.
 
-use std::path::PathBuf;
-
 use crossterm::event::{Event, MouseEventKind};
 
 use crate::core::interrupt;
-use crate::core::session::{SessionEvent, SessionSummary, short_session_id};
-use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
-use crate::modes::tui::overlays::{
-    Overlay, OverlayAction, SessionPickerState, handle_login_result,
-};
+use crate::core::session::SessionEvent;
+use crate::modes::tui::core::events::UiEvent;
+use crate::modes::tui::overlays::{Overlay, OverlayAction, handle_login_result};
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::{AgentState, AppState, SessionUsage, TuiState};
+use crate::modes::tui::state::{AgentState, AppState, TuiState};
 use crate::modes::tui::transcript::{HistoryCell, ToolState};
-use crate::modes::tui::{input, view};
+use crate::modes::tui::{input, session, view};
 
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 3;
@@ -55,66 +51,10 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
 
-        // Session async result events
-        UiEvent::Session(session_event) => match session_event {
-            SessionUiEvent::ListLoaded {
-                sessions,
-                original_cells,
-            } => {
-                handle_session_list_loaded(app, sessions, original_cells);
-                vec![]
-            }
-            SessionUiEvent::ListFailed { error } => {
-                app.tui.transcript.cells.push(HistoryCell::system(&error));
-                vec![]
-            }
-            SessionUiEvent::Loaded {
-                session_id,
-                cells,
-                messages,
-                history,
-                session,
-            } => {
-                handle_session_loaded(&mut app.tui, &session_id, cells, messages, history, session);
-                vec![]
-            }
-            SessionUiEvent::LoadFailed { error } => {
-                app.tui.transcript.cells.push(HistoryCell::system(&error));
-                vec![]
-            }
-            SessionUiEvent::PreviewLoaded { cells } => {
-                handle_session_preview_loaded(&mut app.tui, cells);
-                vec![]
-            }
-            SessionUiEvent::PreviewFailed => {
-                // Silent failure for preview - errors shown on actual load
-                vec![]
-            }
-            SessionUiEvent::Created {
-                session,
-                context_paths,
-            } => {
-                handle_session_created(&mut app.tui, session, context_paths);
-                vec![]
-            }
-            SessionUiEvent::CreateFailed { error } => {
-                app.tui.transcript.cells.push(HistoryCell::system(&error));
-                // Still show "Conversation cleared" since the conversation was reset
-                app.tui
-                    .transcript
-                    .cells
-                    .push(HistoryCell::system("Conversation cleared."));
-                vec![]
-            }
-            SessionUiEvent::Renamed { session_id, title } => {
-                handle_session_renamed(&mut app.tui, &session_id, title);
-                vec![]
-            }
-            SessionUiEvent::RenameFailed { error } => {
-                app.tui.transcript.cells.push(HistoryCell::system(&error));
-                vec![]
-            }
-        },
+        // Session async result events - delegate to session feature
+        UiEvent::Session(session_event) => {
+            session::handle_session_event(&mut app.tui, &mut app.overlay, session_event)
+        }
     }
 }
 
@@ -327,109 +267,6 @@ fn handle_files_discovered(overlay: &mut Option<Overlay>, files: Vec<std::path::
     if let Some(picker) = overlay.as_mut().and_then(|o| o.as_file_picker_mut()) {
         picker.set_files(files);
     }
-}
-
-// ============================================================================
-// Session Event Handlers
-// ============================================================================
-
-/// Handles session list loaded - opens session picker overlay.
-fn handle_session_list_loaded(
-    app: &mut AppState,
-    sessions: Vec<SessionSummary>,
-    original_cells: Vec<HistoryCell>,
-) {
-    if app.overlay.is_some() {
-        return; // Don't open if another overlay is active
-    }
-
-    let (state, effects) = SessionPickerState::open(sessions, original_cells);
-    app.overlay = Some(Overlay::SessionPicker(state));
-
-    // Process any preview effects by directly loading the first session preview
-    // Note: This is a small compromise - we trigger the preview effect inline
-    // rather than returning it, since we're already in the reducer
-    for effect in effects {
-        if let UiEffect::PreviewSession { session_id } = effect {
-            // We can't spawn async from here, so we'll let the runtime handle it
-            // The session picker already has the data it needs to show
-            // Preview will be triggered when user navigates
-            let _ = session_id; // Suppress unused warning
-        }
-    }
-}
-
-/// Handles session loaded - switches to the session.
-fn handle_session_loaded(
-    tui: &mut TuiState,
-    session_id: &str,
-    cells: Vec<HistoryCell>,
-    messages: Vec<crate::providers::anthropic::ChatMessage>,
-    history: Vec<String>,
-    session: Option<crate::core::session::Session>,
-) {
-    // Reset state facets with loaded data
-    tui.transcript.cells = cells;
-    tui.conversation.messages = messages;
-    tui.conversation.session = session;
-    tui.conversation.usage = SessionUsage::new();
-    tui.input.history = history;
-    tui.transcript.scroll.reset();
-    tui.transcript.wrap_cache.clear();
-
-    // Show confirmation message
-    let short_id = if session_id.len() > 8 {
-        format!("{}…", &session_id[..8])
-    } else {
-        session_id.to_string()
-    };
-    tui.transcript.cells.push(HistoryCell::system(format!(
-        "Switched to session {}",
-        short_id
-    )));
-}
-
-/// Handles session preview loaded - shows transcript without full switch.
-fn handle_session_preview_loaded(tui: &mut TuiState, cells: Vec<HistoryCell>) {
-    tui.transcript.cells = cells;
-    tui.transcript.scroll.reset();
-    tui.transcript.wrap_cache.clear();
-}
-
-/// Handles session created - sets up the new session.
-fn handle_session_created(
-    tui: &mut TuiState,
-    session: crate::core::session::Session,
-    context_paths: Vec<PathBuf>,
-) {
-    let session_path = session.path().display().to_string();
-    tui.conversation.session = Some(session);
-
-    // Show session path
-    tui.transcript.cells.push(HistoryCell::system(format!(
-        "Session path: {}",
-        session_path
-    )));
-
-    // Show loaded AGENTS.md files
-    if !context_paths.is_empty() {
-        let paths_list: Vec<String> = context_paths
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect();
-        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        tui.transcript.cells.push(HistoryCell::system(message));
-    }
-}
-
-/// Handles session rename success.
-fn handle_session_renamed(tui: &mut TuiState, session_id: &str, title: Option<String>) {
-    let short_id = short_session_id(session_id);
-    let display_title = title.unwrap_or_else(|| short_id.clone());
-    tui.transcript.cells.push(HistoryCell::system(format!(
-        "Session {} renamed to \"{}\".",
-        short_id, display_title
-    )));
 }
 
 // ============================================================================
