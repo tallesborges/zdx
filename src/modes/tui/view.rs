@@ -15,6 +15,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
 use crate::modes::tui::state::{AgentState, AppState, TuiState};
+use crate::modes::tui::overlays::OverlayExt;
 use crate::modes::tui::{input, transcript};
 
 /// Height of status line below input.
@@ -120,9 +121,7 @@ pub fn view(app: &AppState, frame: &mut Frame) {
     render_status_line(state, frame, chunks[2]);
 
     // Render overlay (last, so it appears on top)
-    if let Some(overlay) = &app.overlay {
-        overlay.render(frame, area, chunks[1].y);
-    }
+    app.overlay.render(frame, area, chunks[1].y);
 }
 
 /// Renders the status line below the input.
