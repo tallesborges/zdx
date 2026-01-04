@@ -11,6 +11,9 @@
 //! - `update()` (in reducer.rs): The reducer - all state mutations happen here
 //! - `view()` (in view.rs): Pure render, no mutations
 
+// App state composition (see app.rs for state hierarchy)
+pub mod app;
+
 // Feature slices (Elm-like architecture - see docs/plans/tui-feature-slice-migration.md)
 pub mod auth;
 pub mod core;

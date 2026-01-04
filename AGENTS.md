@@ -30,10 +30,11 @@
   - `src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `src/modes/tui/`: full-screen interactive TUI (Elm-like architecture)
     - `src/modes/tui/mod.rs`: entry points (run_interactive_chat) + module declarations
+    - `src/modes/tui/app.rs`: AppState + TuiState + AgentState (state composition, hierarchy)
     - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
     - `src/modes/tui/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
-    - `src/modes/tui/state/mod.rs`: TuiState - all app state (no terminal)
+    - `src/modes/tui/state/mod.rs`: state re-export hub (backward compatibility shim)
     - `src/modes/tui/state/auth.rs`: auth state re-exports (from auth feature slice)
     - `src/modes/tui/state/input.rs`: input state re-exports (from input feature slice)
     - `src/modes/tui/state/session.rs`: session state re-exports (from session feature slice)
