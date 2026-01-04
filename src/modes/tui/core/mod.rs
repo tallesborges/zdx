@@ -5,6 +5,8 @@
 
 pub mod events;
 
+// Re-export event types for convenience (used by runtime, reducer)
+#[allow(unused_imports)]
 pub use events::{SessionUiEvent, UiEvent};
 
 // TODO: create update dispatcher (Slice 4)

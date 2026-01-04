@@ -89,36 +89,68 @@ auth/mod.rs         (empty)
 
 ---
 
-## Slice 1: Shared Types (Leaf Types Only)
+## Slice 1: Shared Types (Leaf Types Only) ✅
 
 **Goal:** Move ONLY leaf types to `shared/`. NOT `UiEvent` (it has feature deps).
 
 **Tasks:**
-- [ ] Move `effects.rs` → `shared/effects.rs`
-- [ ] Move `commands.rs` → `shared/commands.rs`
-- [ ] Create `shared/mod.rs` with re-exports
-- [ ] **DO NOT move `events.rs` yet** (it contains `UiEvent` which depends on features)
-- [ ] Update imports for effects and commands
-- [ ] Update `mod.rs` to declare `shared` module and re-export for backward compat
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): move leaf types to shared/ module`
+- [x] Move `effects.rs` → `shared/effects.rs`
+- [x] Move `commands.rs` → `shared/commands.rs`
+- [x] Create `shared/mod.rs` with re-exports
+- [x] **DO NOT move `events.rs` yet** (it contains `UiEvent` which depends on features)
+- [x] Update imports for effects and commands
+- [x] Update `mod.rs` to declare `shared` module and re-export for backward compat
+- [x] Run `cargo test`
+- [x] Commit: `refactor(tui): move leaf types to shared/ module`
 
-**Why not events.rs?**
-```
-UiEvent contains:
-  - Session(SessionUiEvent)  ← depends on session/
-  - Agent(AgentEvent)        ← depends on core/
-  
-Moving UiEvent to shared/ would create circular deps:
-  shared → session → shared  ← CYCLE!
-```
+**Completed:** 2025-01-04
 
 **Risk:** Low  
 **Duration:** ~15 min
 
 ---
 
-## Slice 2: Auth Feature (Smallest - Pattern Validation)
+## Slice 2: Core Events Module ✅
+
+**Goal:** Create core/ with UiEvent aggregator.
+
+**Tasks:**
+- [x] Create `core/events.rs` with `UiEvent` and `SessionUiEvent`
+- [x] Create `core/mod.rs` with re-exports
+- [x] Keep old `events.rs` as re-export shim for backward compat
+- [x] Run `cargo test`
+
+**Completed:** 2025-01-04
+
+**Risk:** Low  
+**Duration:** ~30 min
+
+---
+
+## Slice 3: Input Feature Module ✅
+
+**Goal:** Extract input state, keyboard handling, and handoff logic into feature slice.
+
+**Tasks:**
+- [x] Create `input/state.rs` with InputState and HandoffState
+- [x] Create `input/reducer.rs` with key handling, submit, handoff result
+- [x] Create `input/view.rs` with render_input, render_handoff_input, build_usage_display
+- [x] Create `input/mod.rs` with re-exports
+- [x] Update `state/input.rs` to re-export from input feature
+- [x] Update main reducer to delegate input key handling to input::handle_main_key
+- [x] Update main view to delegate input rendering to input::render_input
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 293 tests pass
+- [x] Commit: `chore(tui): extract input feature slice`
+
+**Completed:** 2025-01-05
+
+**Risk:** Medium  
+**Duration:** ~1.5 hours
+
+---
+
+## Slice 4: Auth Feature (Smallest - Pattern Validation)
 
 **Goal:** Extract auth as first feature slice to validate the pattern.
 
