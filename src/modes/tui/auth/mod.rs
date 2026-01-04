@@ -1,13 +1,14 @@
 //! Auth feature slice.
 //!
 //! Owns authentication state, login flow handling, and login overlay rendering.
-//! See `docs/plans/tui-feature-slice-migration.md` for migration plan.
 //!
 //! ## Module Structure
 //!
 //! - `state.rs`: AuthStatus, AuthState - authentication type and login flow state
 //! - `reducer.rs`: Login result handling, OAuth flow state transitions
 //! - `view.rs`: Login overlay rendering
+//!
+//! See `docs/ARCHITECTURE.md` for the TUI architecture overview.
 
 mod reducer;
 mod state;

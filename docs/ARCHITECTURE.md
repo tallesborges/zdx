@@ -27,16 +27,14 @@ src/
 │   ├── oauth.rs         # OAuth token storage
 │   └── anthropic/       # Anthropic API client
 ├── tools/               # Tool implementations (bash, edit, read, write)
-└── ui/                  # Terminal UI
+└── modes/               # Execution modes
     ├── exec.rs          # Non-interactive exec mode
-    ├── markdown/        # Markdown parsing and wrapping
-    ├── transcript/      # Transcript model (cells, wrapping)
-    └── chat/            # Interactive TUI (Elm architecture)
+    └── tui/             # Interactive TUI (Elm architecture)
 ```
 
 ## TUI Architecture (Elm-Like)
 
-The interactive chat TUI (`src/ui/chat/`) follows the **Elm Architecture** (TEA), also known as Model-View-Update (MVU). This is a unidirectional data flow pattern that makes state management predictable and testable.
+The interactive chat TUI (`src/modes/tui/`) follows the **Elm Architecture** (TEA), also known as Model-View-Update (MVU). This is a unidirectional data flow pattern that makes state management predictable and testable.
 
 ### Core Principle
 
@@ -85,7 +83,7 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 
 ### 1. Model (State)
 
-**File:** `src/ui/chat/state/mod.rs`
+**File:** `src/modes/tui/app.rs`
 
 Application state is split: `TuiState` (non-overlay) + `OverlayState` (overlay), combined in `AppState`.
 These are plain data structures with no I/O:
@@ -120,7 +118,7 @@ State is organized into sub-modules for maintainability:
 
 ### 2. Messages (Events)
 
-**File:** `src/ui/chat/events.rs`
+**File:** `src/modes/tui/core/events.rs`
 
 All inputs are converted to a unified `UiEvent` type before processing:
 
@@ -144,7 +142,7 @@ This unification simplifies the reducer—it only needs to handle one event type
 
 ### 3. Update (Reducer)
 
-**File:** `src/ui/chat/reducer.rs`
+**File:** `src/modes/tui/reducer.rs`
 
 The reducer is the **single source of truth** for state transitions:
 
@@ -193,7 +191,7 @@ Key properties:
 
 ### 4. View
 
-**File:** `src/ui/chat/view.rs`
+**File:** `src/modes/tui/view.rs`
 
 Pure rendering functions that draw the UI:
 
@@ -233,7 +231,7 @@ This pragmatic use of interior mutability avoids expensive recomputation while k
 
 ### 5. Effects
 
-**File:** `src/ui/chat/effects.rs`
+**File:** `src/modes/tui/shared/effects.rs`
 
 Effects are descriptions of side effects, not the side effects themselves:
 
@@ -258,7 +256,7 @@ Effects are **pure I/O operations**—the runtime executes them without calling 
 
 ### 6. Runtime
 
-**File:** `src/ui/chat/mod.rs`
+**File:** `src/modes/tui/runtime/mod.rs`
 
 The `TuiRuntime` orchestrates the event loop. It's intentionally simple—just event collection, dispatch, and I/O:
 
@@ -323,7 +321,7 @@ It does **no state logic**—that's entirely in the reducer.
 Only one overlay can be active at a time. The active overlay lives alongside the main TUI state:
 
 ```rust
-// src/ui/chat/overlays/mod.rs
+// src/modes/tui/overlays/mod.rs
 pub enum Overlay {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
@@ -333,7 +331,7 @@ pub enum Overlay {
     FilePicker(FilePickerState),
 }
 
-// src/ui/chat/state/mod.rs
+// src/modes/tui/app.rs
 pub struct AppState {
     pub tui: TuiState,
     pub overlay: Option<Overlay>,
@@ -357,7 +355,7 @@ Overlays are modal UI components that temporarily take over keyboard input. Each
 ### Key Handler Integration
 
 ```rust
-// src/ui/chat/reducer.rs
+// src/modes/tui/reducer.rs
 fn handle_key(app: &mut AppState, key: KeyEvent) -> Vec<UiEffect> {
     if let Some(overlay) = app.overlay.as_mut() {
         return match overlay.handle_key(&mut app.tui, key) {
@@ -390,8 +388,8 @@ There is no separate mutation enum: overlays update their own state in place and
 
 ### Adding a New Overlay
 
-- Create `src/ui/chat/overlays/xxx.rs` with state, `open()`, `render()`, and `handle_key()` functions.
-- Add the variant to `Overlay` in `src/ui/chat/overlays/mod.rs` and export the state type.
+- Create `src/modes/tui/overlays/xxx.rs` with state, `open()`, `render()`, and `handle_key()` functions.
+- Add the variant to `Overlay` in `src/modes/tui/overlays/mod.rs` and export the state type.
 - Update `Overlay::render`/`handle_key` matches with the new variant.
 - Add any new `UiEffect` variants and runtime handlers if async work is needed.
 - Keep state transitions local to the overlay; use `UiEffect`/`UiEvent` for global side effects.
@@ -400,7 +398,7 @@ There is no separate mutation enum: overlays update their own state in place and
 
 When adding a new overlay:
 
-- [ ] Create `src/ui/chat/overlays/xxx.rs`
+- [ ] Create `src/modes/tui/overlays/xxx.rs`
 - [ ] Define `XxxState` with `open()`, `render()`, and `handle_key()` helpers
 - [ ] Add `Overlay::Xxx` variant in `overlays/mod.rs` and export the state type
 - [ ] Wire `Overlay::render`/`Overlay::handle_key` matches for the new variant
@@ -598,35 +596,107 @@ All state changes go through `update()`. Debugging is straightforward:
 | Effects | Side effect descriptions | No |
 | Runtime | Execution | Yes |
 
+
 ## File Reference
 
+All paths relative to `src/modes/tui/`.
+
+### Core Files
 | File | Purpose |
 |------|---------|
-| `mod.rs` | Entry points, module declarations |
+| `mod.rs` | Entry points, module declarations, `run_interactive_chat()` |
+| `app.rs` | `AppState`, `TuiState`, `AgentState` - top-level state hierarchy |
+| `reducer.rs` | `update()` function - all state mutations |
+| `view.rs` | `view()` function - all rendering |
+| `terminal.rs` | Terminal setup, restore, panic hooks |
+
+### Runtime
+| File | Purpose |
+|------|---------|
 | `runtime/mod.rs` | `TuiRuntime`, event loop, effect dispatch |
 | `runtime/handlers.rs` | Effect handlers (session ops, agent spawn, auth) |
 | `runtime/handoff.rs` | Handoff generation handlers (subagent spawning) |
-| `transcript_build.rs` | Pure helper to build transcript cells from session events |
-| `state/mod.rs` | `AppState`, `TuiState`, and sub-state types |
-| `state/auth.rs` | `AuthState`, `AuthStatus` |
-| `state/input.rs` | `InputState`, textarea, history navigation |
-| `state/session.rs` | `SessionState`, `SessionOpsState`, messages, usage tracking |
-| `state/transcript.rs` | `TranscriptState`, scroll, selection, cache |
-| `reducer.rs` | `update()` function, all state mutations |
-| `view.rs` | `view()` function, all rendering |
-| `effects.rs` | `UiEffect` enum |
-| `events.rs` | `UiEvent` enum |
-| `commands.rs` | Slash command definitions |
-| `selection.rs` | Text selection, clipboard, position mapping |
-| `terminal.rs` | Terminal setup, restore, panic hooks |
-| `overlays/mod.rs` | Overlay exports, `OverlayState` enum, dispatch methods |
-| `overlays/traits.rs` | `Overlay` trait and `OverlayAction` types |
-| `overlays/palette.rs` | Command palette overlay |
+
+### Core Events
+| File | Purpose |
+|------|---------|
+| `core/mod.rs` | Core module exports |
+| `core/events.rs` | `UiEvent`, `SessionUiEvent` - unified event types |
+| `events.rs` | Re-export hub for event types |
+
+### State (re-export hub)
+| File | Purpose |
+|------|---------|
+| `state/mod.rs` | Re-exports state types from feature modules |
+| `state/auth.rs` | Re-export shim for `AuthState` |
+| `state/input.rs` | Re-export shim for `InputState` |
+| `state/session.rs` | Re-export shim for `SessionState` |
+| `state/transcript.rs` | Re-export shim for `TranscriptState` |
+
+### Auth Feature
+| File | Purpose |
+|------|---------|
+| `auth/mod.rs` | Auth module exports |
+| `auth/state.rs` | `AuthState`, `AuthStatus` |
+| `auth/reducer.rs` | Login result handling, OAuth flow |
+| `auth/view.rs` | Login overlay rendering |
+
+### Input Feature
+| File | Purpose |
+|------|---------|
+| `input/mod.rs` | Input module exports |
+| `input/state.rs` | `InputState`, `HandoffState` |
+| `input/reducer.rs` | Key handling, input submission, handoff |
+| `input/view.rs` | Input area rendering |
+
+### Session Feature
+| File | Purpose |
+|------|---------|
+| `session/mod.rs` | Session module exports |
+| `session/state.rs` | `SessionState`, `SessionOpsState`, `SessionUsage` |
+| `session/reducer.rs` | Session event handlers |
+| `session/view.rs` | Session picker rendering |
+
+### Transcript Feature
+| File | Purpose |
+|------|---------|
+| `transcript/mod.rs` | Transcript module exports |
+| `transcript/state.rs` | `TranscriptState`, `ScrollState`, `SelectionState` |
+| `transcript/cell.rs` | `HistoryCell`, `CellId`, `ToolState` |
+| `transcript/build.rs` | Build transcript from session events |
+| `transcript/update.rs` | Agent event handling, scroll delta |
+| `transcript/render.rs` | Transcript rendering, lazy rendering |
+| `transcript/selection.rs` | Text selection, clipboard |
+| `transcript/style.rs` | `StyledLine`, `StyledSpan` |
+| `transcript/wrap.rs` | `WrapCache`, line wrapping |
+
+### Overlays
+| File | Purpose |
+|------|---------|
+| `overlays/mod.rs` | `Overlay` enum, `OverlayAction`, `OverlayExt` trait |
+| `overlays/update.rs` | Overlay key handling dispatch |
+| `overlays/view.rs` | Shared overlay rendering utilities |
+| `overlays/command_palette.rs` | Command palette overlay |
 | `overlays/model_picker.rs` | Model picker overlay |
 | `overlays/thinking_picker.rs` | Thinking level picker overlay |
 | `overlays/session_picker.rs` | Session picker overlay |
 | `overlays/file_picker.rs` | File picker overlay (triggered by `@`) |
 | `overlays/login.rs` | OAuth login flow overlay |
+
+### Shared Types
+| File | Purpose |
+|------|---------|
+| `shared/mod.rs` | Shared module exports |
+| `shared/effects.rs` | `UiEffect` enum |
+| `shared/commands.rs` | Slash command definitions |
+
+### Markdown
+| File | Purpose |
+|------|---------|
+| `markdown/mod.rs` | Markdown module exports |
+| `markdown/parse.rs` | Markdown parsing and rendering |
+| `markdown/wrap.rs` | Styled span wrapping |
+| `markdown/stream.rs` | Streaming collector and commit logic |
 
 ## Related Documentation
 

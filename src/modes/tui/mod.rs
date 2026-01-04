@@ -14,14 +14,14 @@
 // App state composition (see app.rs for state hierarchy)
 pub mod app;
 
-// Feature slices (Elm-like architecture - see docs/plans/tui-feature-slice-migration.md)
+// Feature slices (see docs/ARCHITECTURE.md for Elm-like architecture)
 pub mod auth;
 pub mod core;
 pub mod input;
 pub mod session;
 pub mod shared;
 
-// Existing modules (will be migrated incrementally)
+// Core modules
 pub mod events;
 pub mod markdown;
 pub mod overlays;

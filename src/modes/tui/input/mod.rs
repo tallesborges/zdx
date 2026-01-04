@@ -1,13 +1,14 @@
 //! Input feature slice.
 //!
 //! Owns input state, keyboard handling, and handoff logic.
-//! See `docs/plans/tui-feature-slice-migration.md` for migration plan.
 //!
 //! ## Module Structure
 //!
 //! - `state.rs`: InputState, HandoffState - all input-related state
 //! - `reducer.rs`: Key handling, input submission, handoff result handling
 //! - `view.rs`: Input area rendering (normal and handoff modes)
+//!
+//! See `docs/ARCHITECTURE.md` for the TUI architecture overview.
 
 mod reducer;
 mod state;
