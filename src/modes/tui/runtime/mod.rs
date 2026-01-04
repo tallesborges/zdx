@@ -25,7 +25,7 @@ use crate::core::interrupt;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::overlays::{
     CommandPaletteState, FilePickerState, LoginState, ModelPickerState, Overlay,
     ThinkingPickerState,
