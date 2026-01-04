@@ -8,7 +8,7 @@
 use crossterm::event::Event;
 
 use crate::modes::tui::core::events::UiEvent;
-use crate::modes::tui::overlays::{Overlay, OverlayExt, handle_login_result};
+use crate::modes::tui::overlays::{self, handle_login_result};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::{AppState, TuiState};
 use crate::modes::tui::{input, session, transcript, view};
@@ -41,7 +41,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::FilesDiscovered(files) => {
-            handle_files_discovered(&mut app.overlay, files);
+            overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
         }
 
@@ -105,24 +105,13 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    // Try to dispatch to the active overlay using OverlayExt trait
-    if let Some(effects) = app.overlay.handle_key(&mut app.tui, key) {
+    // Try to dispatch to the active overlay
+    if let Some(effects) = overlays::handle_overlay_key(&mut app.tui, &mut app.overlay, key) {
         return effects;
     }
 
     // No overlay active - delegate to input feature module
     input::handle_main_key(app, key)
-}
-
-// ============================================================================
-// File Picker Handler
-// ============================================================================
-
-/// Handles the file discovery result.
-fn handle_files_discovered(overlay: &mut Option<Overlay>, files: Vec<std::path::PathBuf>) {
-    if let Some(picker) = overlay.as_mut().and_then(|o| o.as_file_picker_mut()) {
-        picker.set_files(files);
-    }
 }
 
 #[cfg(test)]
