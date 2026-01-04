@@ -7,7 +7,7 @@ use ratatui::widgets::{List, ListItem, ListState};
 
 use super::OverlayAction;
 use crate::config::ThinkingLevel;
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 use crate::modes::tui::transcript::HistoryCell;
 

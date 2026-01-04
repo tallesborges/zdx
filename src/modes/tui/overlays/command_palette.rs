@@ -6,8 +6,8 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
-use crate::modes::tui::commands::COMMANDS;
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::commands::COMMANDS;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 
 #[derive(Debug, Clone)]
@@ -81,7 +81,7 @@ impl CommandPaletteState {
         }
     }
 
-    pub fn filtered_commands(&self) -> Vec<&'static crate::modes::tui::commands::Command> {
+    pub fn filtered_commands(&self) -> Vec<&'static crate::modes::tui::shared::commands::Command> {
         if self.filter.is_empty() {
             COMMANDS.iter().collect()
         } else {

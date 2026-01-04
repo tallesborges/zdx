@@ -8,7 +8,7 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use super::OverlayAction;
 use crate::core::session::{self, SessionSummary, short_session_id};
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::TuiState;
 use crate::modes::tui::transcript::HistoryCell;
 

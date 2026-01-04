@@ -11,7 +11,7 @@ use crossterm::event::{Event, KeyCode, KeyModifiers, MouseEventKind};
 
 use crate::core::interrupt;
 use crate::core::session::{SessionEvent, SessionSummary, short_session_id};
-use crate::modes::tui::effects::UiEffect;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::overlays::{Overlay, OverlayAction, SessionPickerState, handle_login_result};
 use crate::modes::tui::state::{AgentState, AppState, HandoffState, SessionUsage, TuiState};
