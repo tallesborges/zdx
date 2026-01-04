@@ -41,11 +41,17 @@
     - `src/modes/tui/state/transcript.rs`: transcript view state (scroll, selection, cache)
     - `src/modes/tui/reducer.rs`: reducer - all state mutations happen here
     - `src/modes/tui/view.rs`: pure render functions (no mutations)
-    - `src/modes/tui/effects.rs`: effect types returned by reducer for runtime to execute
     - `src/modes/tui/events.rs`: UI event types
-    - `src/modes/tui/commands.rs`: command definitions for command palette
     - `src/modes/tui/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
     - `src/modes/tui/terminal.rs`: terminal setup, restore, panic hooks
+    - `src/modes/tui/shared/`: shared leaf types (no feature dependencies)
+      - `src/modes/tui/shared/mod.rs`: module exports
+      - `src/modes/tui/shared/effects.rs`: effect types returned by reducer for runtime to execute
+      - `src/modes/tui/shared/commands.rs`: command definitions for command palette
+    - `src/modes/tui/auth/`: auth feature slice (placeholder)
+    - `src/modes/tui/core/`: core feature slice (placeholder)
+    - `src/modes/tui/input/`: input feature slice (placeholder)
+    - `src/modes/tui/session/`: session feature slice (placeholder)
     - `src/modes/tui/overlays/`: self-contained overlay modules
       - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
       - `src/modes/tui/overlays/command_palette.rs`: command palette overlay
