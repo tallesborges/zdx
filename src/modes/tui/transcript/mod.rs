@@ -13,6 +13,7 @@ mod wrap;
 
 // New feature slice modules
 mod build;
+mod render;
 mod selection;
 mod state;
 mod update;
@@ -42,3 +43,6 @@ pub use build::build_transcript_from_events;
 
 // Re-export update functions
 pub use update::{apply_pending_delta, apply_scroll_delta, handle_agent_event, handle_mouse};
+
+// Re-export render functions
+pub use render::{calculate_cell_line_counts, render_transcript, SPINNER_SPEED_DIVISOR};
