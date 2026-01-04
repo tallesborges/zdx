@@ -1,4 +1,22 @@
 //! Overlay modules for the TUI.
+//!
+//! Overlays are modal UI components that temporarily take over keyboard input.
+//! Each overlay is self-contained: it owns its state, key handler, and render function.
+//!
+//! ## Module Structure
+//!
+//! - `command_palette.rs`: Command palette for slash commands
+//! - `model_picker.rs`: Model selection picker
+//! - `thinking_picker.rs`: Thinking level selection picker
+//! - `session_picker.rs`: Session history picker
+//! - `login.rs`: OAuth login flow overlay
+//! - `file_picker.rs`: File picker triggered by `@`
+//! - `view.rs`: Shared rendering utilities for overlays
+//!
+//! ## Extension Trait
+//!
+//! `OverlayExt` provides convenience methods for `Option<Overlay>` to encapsulate
+//! the common patterns used in the reducer.
 
 pub mod command_palette;
 pub mod file_picker;
@@ -89,6 +107,51 @@ impl Overlay {
         match self {
             Overlay::FilePicker(p) => Some(p),
             _ => None,
+        }
+    }
+}
+
+// ============================================================================
+// OverlayExt - Extension trait for Option<Overlay>
+// ============================================================================
+
+/// Extension trait for `Option<Overlay>` providing convenience methods.
+///
+/// This trait encapsulates the common overlay handling patterns used in the
+/// reducer, making the main key handling logic cleaner.
+pub trait OverlayExt {
+    /// Handles a key event if an overlay is active.
+    ///
+    /// Returns `Some(effects)` if the overlay handled the key (the overlay may
+    /// have been closed), or `None` if no overlay was active.
+    ///
+    /// This method:
+    /// - Dispatches the key to the active overlay's handler
+    /// - Closes the overlay if `OverlayAction::Close` is returned
+    /// - Returns any effects to be executed
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>>;
+
+    /// Renders the overlay if one is active.
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16);
+}
+
+impl OverlayExt for Option<Overlay> {
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>> {
+        let overlay = self.as_mut()?;
+
+        Some(match overlay.handle_key(tui, key) {
+            None => vec![],
+            Some(OverlayAction::Close(effects)) => {
+                *self = None;
+                effects
+            }
+            Some(OverlayAction::Effects(effects)) => effects,
+        })
+    }
+
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+        if let Some(overlay) = self {
+            overlay.render(frame, area, input_y);
         }
     }
 }

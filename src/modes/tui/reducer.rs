@@ -8,7 +8,7 @@
 use crossterm::event::Event;
 
 use crate::modes::tui::core::events::UiEvent;
-use crate::modes::tui::overlays::{handle_login_result, Overlay, OverlayAction};
+use crate::modes::tui::overlays::{Overlay, OverlayExt, handle_login_result};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::state::{AppState, TuiState};
 use crate::modes::tui::{input, session, transcript, view};
@@ -105,16 +105,9 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    // Try to dispatch to the active overlay
-    if let Some(overlay) = app.overlay.as_mut() {
-        return match overlay.handle_key(&mut app.tui, key) {
-            None => vec![], // Overlay handled it, continue
-            Some(OverlayAction::Close(effects)) => {
-                app.overlay = None;
-                effects
-            }
-            Some(OverlayAction::Effects(effects)) => effects,
-        };
+    // Try to dispatch to the active overlay using OverlayExt trait
+    if let Some(effects) = app.overlay.handle_key(&mut app.tui, key) {
+        return effects;
     }
 
     // No overlay active - delegate to input feature module
