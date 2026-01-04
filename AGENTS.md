@@ -37,7 +37,7 @@
     - `src/modes/tui/state/mod.rs`: TuiState - all app state (no terminal)
     - `src/modes/tui/state/auth.rs`: auth state re-exports (from auth feature slice)
     - `src/modes/tui/state/input.rs`: input state re-exports (from input feature slice)
-    - `src/modes/tui/state/session.rs`: session + message history state
+    - `src/modes/tui/state/session.rs`: session state re-exports (from session feature slice)
     - `src/modes/tui/state/transcript.rs`: transcript view state (scroll, selection, cache)
     - `src/modes/tui/reducer.rs`: reducer - all state mutations happen here
     - `src/modes/tui/view.rs`: pure render functions (no mutations)
@@ -61,13 +61,17 @@
       - `src/modes/tui/input/state.rs`: InputState + HandoffState
       - `src/modes/tui/input/reducer.rs`: key handling, input submission, handoff result handling
       - `src/modes/tui/input/view.rs`: input area rendering (normal + handoff modes)
-    - `src/modes/tui/session/`: session feature slice (placeholder)
+    - `src/modes/tui/session/`: session feature slice (session state, session operations)
+      - `src/modes/tui/session/mod.rs`: module exports
+      - `src/modes/tui/session/state.rs`: SessionState, SessionOpsState, SessionUsage
+      - `src/modes/tui/session/reducer.rs`: session event handlers (loading, switching, creating, renaming)
+      - `src/modes/tui/session/view.rs`: session picker overlay rendering
     - `src/modes/tui/overlays/`: self-contained overlay modules
       - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
       - `src/modes/tui/overlays/command_palette.rs`: command palette overlay
       - `src/modes/tui/overlays/model_picker.rs`: model picker overlay
       - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
-      - `src/modes/tui/overlays/session_picker.rs`: session picker overlay
+      - `src/modes/tui/overlays/session_picker.rs`: session picker overlay (state + key handling; rendering delegated to session feature)
       - `src/modes/tui/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
       - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay (state + key handling; rendering delegated to auth feature)
     - `src/modes/tui/markdown/`: markdown parsing and wrapping

@@ -2,5 +2,20 @@
 //!
 //! Owns session state, session events, and session-related update logic.
 //! See `docs/plans/tui-feature-slice-migration.md` for migration plan.
+//!
+//! ## Module Structure
+//!
+//! - `state.rs`: SessionState, SessionOpsState, SessionUsage - session and conversation state
+//! - `reducer.rs`: Session event handlers (loading, switching, creating, renaming)
+//! - `view.rs`: Session picker overlay rendering
 
-// TODO: migrate state/session.rs and SessionUiEvent here (Slice 3)
+mod reducer;
+mod state;
+mod view;
+
+// Re-export state types
+pub use state::{SessionOpsState, SessionState, SessionUsage};
+// Re-export reducer functions
+pub use reducer::handle_session_event;
+// Re-export view functions
+pub use view::render_session_picker;
