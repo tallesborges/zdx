@@ -11,6 +11,14 @@
 //! - `update()` (in reducer.rs): The reducer - all state mutations happen here
 //! - `view()` (in view.rs): Pure render, no mutations
 
+// Feature slices (Elm-like architecture - see docs/plans/tui-feature-slice-migration.md)
+pub mod auth;
+pub mod core;
+pub mod input;
+pub mod session;
+pub mod shared;
+
+// Existing modules (will be migrated incrementally)
 pub mod commands;
 pub mod effects;
 pub mod events;
