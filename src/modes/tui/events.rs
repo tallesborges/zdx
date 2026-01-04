@@ -1,7 +1,7 @@
-//! Re-export module for backward compatibility during migration.
+//! Re-export hub for event types.
 //!
 //! The canonical location is `crate::modes::tui::core::events`.
-//! This re-export will be removed once all imports are updated.
+//! This module re-exports types for convenience at the `tui` level.
 
 #[allow(unused_imports)]
 pub use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
