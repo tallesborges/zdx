@@ -323,7 +323,64 @@ pub use style::{Style, StyledLine, StyledSpan};
 
 ---
 
-## Slice 7: App State Consolidation
+## Slice 7: Overlays Feature Module ✅
+
+**Goal:** Extract overlay state and logic into a dedicated feature slice.
+
+**Files Created/Modified:**
+- `overlays/update.rs` - Created with `handle_overlay_key` and `handle_files_discovered`
+- `overlays/mod.rs` - Added `OverlayExt` trait for `Option<Overlay>` convenience methods
+- `reducer.rs` - Updated to use `overlays::handle_overlay_key` and `overlays::handle_files_discovered`
+- `view.rs` - Updated to use `OverlayExt::render` trait method
+
+**Tasks:**
+
+### 7a: Add OverlayExt Trait (~30 min) ✅
+- [x] Add `OverlayExt` trait to `overlays/mod.rs`
+- [x] Implement `handle_key()` method for `Option<Overlay>`
+- [x] Implement `render()` method for `Option<Overlay>`
+- [x] Update `reducer.rs` to use trait
+- [x] Update `view.rs` to use trait
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 300 tests pass
+- [x] Commit: `refactor(tui): add OverlayExt trait for cleaner overlay handling`
+
+### 7b: Extract Update Logic (~30 min) ✅
+- [x] Create `overlays/update.rs` with:
+  - `handle_overlay_key()` - wrapper function for reducer
+  - `handle_files_discovered()` - moved from reducer.rs
+- [x] Add re-exports in `overlays/mod.rs`
+- [x] Update `reducer.rs` to use `overlays::handle_overlay_key`
+- [x] Update `reducer.rs` to use `overlays::handle_files_discovered`
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 300 tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): extract overlay update logic to dedicated module`
+
+**Completed:** 2025-01-XX
+
+**Pattern Established:**
+```rust
+// overlays/mod.rs
+mod update;
+pub mod view;
+// ... overlay sub-modules ...
+
+pub use update::{handle_files_discovered, handle_overlay_key};
+
+// OverlayExt trait for Option<Overlay>
+pub trait OverlayExt {
+    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>>;
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16);
+}
+```
+
+**Risk:** Low  
+**Duration:** ~1 hour
+
+---
+
+## Slice 8: App State Consolidation
 
 **Goal:** Create `app.rs` with clean AppState composition.
 
@@ -340,7 +397,7 @@ pub use style::{Style, StyledLine, StyledSpan};
 
 ---
 
-## Slice 8: Cleanup & Documentation
+## Slice 9: Cleanup & Documentation
 
 **Goal:** Remove old files, update documentation.
 
@@ -372,11 +429,12 @@ Slice 2: Core Events          [~30 min]  ████████████ �
 Slice 3: Input Feature        [~90 min]  ████████████████████████████████████ ✅ DONE
 Slice 4: Auth Feature         [~20 min]  ████████ ✅ DONE
 Slice 5: Session Feature      [~45 min]  ██████████████████ ✅ DONE
-Slice 6: Transcript Feature   [~180 min] ████████████████████████████████████████████████████████████████████████
-Slice 7: App State            [~30 min]  ████████████
-Slice 8: Cleanup & Docs       [~45 min]  ██████████████████
+Slice 6: Transcript Feature   [~180 min] ████████████████████████████████████████████████████████████████████████ ✅ DONE
+Slice 7: Overlays Feature     [~60 min]  ████████████████████████ ✅ DONE
+Slice 8: App State            [~30 min]  ████████████
+Slice 9: Cleanup & Docs       [~45 min]  ██████████████████
                               ─────────
-                              ~8 hours total (with 1.5x buffer)
+                              ~9 hours total (with 1.5x buffer)
 ```
 
 ---
@@ -432,10 +490,13 @@ Slice 5 (Input)    Slice 6 (Transcript)  [can be parallel after Core]
     │              │
     └──────┬───────┘
            ▼
-    Slice 7 (App State)
+    Slice 7 (Overlays)
            │
            ▼
-    Slice 8 (Cleanup)
+    Slice 8 (App State)
+           │
+           ▼
+    Slice 9 (Cleanup)
 ```
 
 ---
