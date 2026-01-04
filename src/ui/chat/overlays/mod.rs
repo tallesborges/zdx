@@ -6,6 +6,7 @@ pub mod login;
 pub mod model_picker;
 pub mod session_picker;
 pub mod thinking_picker;
+pub mod view;
 
 pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;

@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Clear, List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState};
 
 use super::OverlayAction;
 use crate::config::ThinkingLevel;
@@ -78,30 +78,17 @@ pub fn render_thinking_picker(
     area: Rect,
     input_top_y: u16,
 ) {
+    use super::view::{
+        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
+    };
+
     let levels = ThinkingLevel::all();
 
-    let picker_width = 45.min(area.width.saturating_sub(4));
-    let picker_height = (levels.len() as u16 + 5).min(area.height / 2);
+    let picker_width = 45;
+    let picker_height = (levels.len() as u16 + 5).max(7);
 
-    let available_height = input_top_y;
-
-    let picker_x = (area.width.saturating_sub(picker_width)) / 2;
-    let picker_y = (available_height.saturating_sub(picker_height)) / 2;
-
-    let picker_area = Rect::new(picker_x, picker_y, picker_width, picker_height);
-
-    frame.render_widget(Clear, picker_area);
-
-    let outer_block = Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(Color::Magenta))
-        .title(" Thinking Level ")
-        .title_style(
-            Style::default()
-                .fg(Color::Magenta)
-                .add_modifier(Modifier::BOLD),
-        );
-    frame.render_widget(outer_block, picker_area);
+    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
+    render_overlay_container(frame, picker_area, "Thinking Level", Color::Magenta);
 
     let inner_area = Rect::new(
         picker_area.x + 1,
@@ -144,31 +131,16 @@ pub fn render_thinking_picker(
     list_state.select(Some(picker.selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    let separator = "─".repeat(inner_area.width as usize);
-    let sep_y = inner_area.y + list_height;
-    if sep_y < inner_area.y + inner_area.height {
-        let separator_area = Rect::new(inner_area.x, sep_y, inner_area.width, 1);
-        frame.render_widget(
-            Paragraph::new(Line::from(Span::styled(
-                &separator,
-                Style::default().fg(Color::DarkGray),
-            ))),
-            separator_area,
-        );
-    }
+    render_separator(frame, inner_area, list_height);
 
-    let hints_y = inner_area.y + inner_area.height.saturating_sub(1);
-    let hints_area = Rect::new(inner_area.x, hints_y, inner_area.width, 1);
-    let hints_line = Line::from(vec![
-        Span::styled("↑↓", Style::default().fg(Color::Magenta)),
-        Span::styled(" navigate ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Enter", Style::default().fg(Color::Magenta)),
-        Span::styled(" select ", Style::default().fg(Color::DarkGray)),
-        Span::styled("•", Style::default().fg(Color::DarkGray)),
-        Span::styled(" Esc", Style::default().fg(Color::Magenta)),
-        Span::styled(" cancel", Style::default().fg(Color::DarkGray)),
-    ]);
-    let hints_para = Paragraph::new(hints_line).alignment(Alignment::Center);
-    frame.render_widget(hints_para, hints_area);
+    render_hints(
+        frame,
+        inner_area,
+        &[
+            InputHint::new("↑↓", "navigate"),
+            InputHint::new("Enter", "select"),
+            InputHint::new("Esc", "cancel"),
+        ],
+        Color::Magenta,
+    );
 }
