@@ -380,17 +380,29 @@ pub trait OverlayExt {
 
 ---
 
-## Slice 8: App State Consolidation
+## Slice 8: App State Consolidation ✅
 
 **Goal:** Create `app.rs` with clean AppState composition.
 
 **Tasks:**
-- [ ] Create `app.rs` with `AppState` and `TuiState` definitions
-- [ ] Move remaining state composition from `state/mod.rs`
-- [ ] Update `state/mod.rs` to only re-export from feature modules
-- [ ] Consider removing `state/` directory if empty
-- [ ] Run `cargo test`
-- [ ] Commit: `refactor(tui): consolidate app state`
+- [x] Create `app.rs` with `AppState` and `TuiState` definitions
+- [x] Move `AgentState` to `app.rs` (closely related to state composition)
+- [x] Move helper functions (`get_git_branch`, `shorten_path`) to `app.rs`
+- [x] Update `state/mod.rs` to only re-export from `app.rs` and feature modules
+- [x] Add `#[allow(unused_imports)]` for backward compat re-exports
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all 300 tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Update `AGENTS.md` with new `app.rs` module
+- [x] Commit: `refactor(tui): consolidate app state into dedicated module`
+
+**Files Created/Modified:**
+- `app.rs` - Created with `AppState`, `TuiState`, `AgentState`, and startup helpers
+- `state/mod.rs` - Reduced to pure re-export hub (tests remain for backward compat)
+- `mod.rs` - Added `pub mod app;` declaration
+- `AGENTS.md` - Added `app.rs` to "Where things are"
+
+**Completed:** 2025-01-XX
 
 **Risk:** Low  
 **Duration:** ~30 min
@@ -431,7 +443,7 @@ Slice 4: Auth Feature         [~20 min]  ████████ ✅ DONE
 Slice 5: Session Feature      [~45 min]  ██████████████████ ✅ DONE
 Slice 6: Transcript Feature   [~180 min] ████████████████████████████████████████████████████████████████████████ ✅ DONE
 Slice 7: Overlays Feature     [~60 min]  ████████████████████████ ✅ DONE
-Slice 8: App State            [~30 min]  ████████████
+Slice 8: App State            [~30 min]  ████████████ ✅ DONE
 Slice 9: Cleanup & Docs       [~45 min]  ██████████████████
                               ─────────
                               ~9 hours total (with 1.5x buffer)
