@@ -11,7 +11,9 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::ThinkingLevel;
 use crate::models::ModelOption;
-use crate::modes::tui::state::{AuthStatus, SessionUsage, TuiState};
+use crate::modes::tui::app::TuiState;
+use crate::modes::tui::auth::AuthStatus;
+use crate::modes::tui::session::SessionUsage;
 
 /// Minimum height of the input area (lines, including borders).
 const INPUT_HEIGHT_MIN: u16 = 5;

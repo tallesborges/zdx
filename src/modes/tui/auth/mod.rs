@@ -5,18 +5,18 @@
 //! ## Module Structure
 //!
 //! - `state.rs`: AuthStatus, AuthState - authentication type and login flow state
-//! - `reducer.rs`: Login result handling, OAuth flow state transitions
-//! - `view.rs`: Login overlay rendering
+//! - `update.rs`: Login result handling, OAuth flow state transitions
+//! - `render.rs`: Login overlay rendering
 //!
 //! See `docs/ARCHITECTURE.md` for the TUI architecture overview.
 
-mod reducer;
+mod update;
 mod state;
-mod view;
+mod render;
 
 // Re-export state types
 pub use state::{AuthState, AuthStatus};
 // Re-export reducer functions
-pub use reducer::handle_login_result;
+pub use update::{handle_login_result, LoginOverlayAction};
 // Re-export view functions
-pub use view::render_login_overlay;
+pub use render::render_login_overlay;

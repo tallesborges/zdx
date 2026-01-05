@@ -11,8 +11,9 @@ use crate::core::events::AgentEvent;
 use crate::core::interrupt;
 use crate::core::session::SessionEvent;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::{AgentState, TuiState};
-use crate::modes::tui::transcript::{HistoryCell, ToolState};
+use crate::modes::tui::shared::internal::{SessionCommand, StateCommand};
+use crate::modes::tui::app::AgentState;
+use crate::modes::tui::transcript::{HistoryCell, ToolState, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 3;
@@ -25,20 +26,26 @@ const MOUSE_SCROLL_LINES: usize = 3;
 ///
 /// This is the main entry point for agent events. It updates transcript cells
 /// based on streaming text, tool use, thinking, and turn completion.
-pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffect> {
-    match event {
+pub fn handle_agent_event(
+    transcript: &mut TranscriptState,
+    agent_state: &mut AgentState,
+    has_session: bool,
+    event: &AgentEvent,
+) -> (Vec<UiEffect>, Vec<StateCommand>) {
+    let mut commands = Vec::new();
+    let effects = match event {
         AgentEvent::AssistantDelta { text } => {
-            handle_assistant_delta(tui, text);
+            handle_assistant_delta(transcript, agent_state, text);
             vec![]
         }
         AgentEvent::AssistantComplete { .. } => {
             // Apply any pending delta before finalizing to ensure no content is lost.
             // This is critical because multiple events can be processed in one loop
             // iteration, and TurnComplete may follow immediately after AssistantComplete.
-            apply_pending_delta(tui);
+            apply_pending_delta(transcript, agent_state);
 
-            if let AgentState::Streaming { cell_id, .. } = &tui.agent_state
-                && let Some(cell) = tui.transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
+            if let AgentState::Streaming { cell_id, .. } = &agent_state
+                && let Some(cell) = transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
             {
                 cell.finalize_assistant();
             }
@@ -47,28 +54,28 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
         AgentEvent::Error { message, .. } => {
             // Apply any pending delta before resetting agent state to preserve
             // partial content that was streamed before the error occurred.
-            apply_pending_delta(tui);
+            apply_pending_delta(transcript, agent_state);
 
-            tui.transcript
+            transcript
                 .cells
                 .push(HistoryCell::system(format!("Error: {}", message)));
             // Reset agent state - the turn is over due to the error
-            tui.agent_state = AgentState::Idle;
+            *agent_state = AgentState::Idle;
             vec![]
         }
         AgentEvent::Interrupted => {
-            handle_interrupted(tui);
+            handle_interrupted(transcript, agent_state);
             vec![]
         }
         AgentEvent::ToolRequested { id, name, input } => {
             let tool_cell = HistoryCell::tool_running(id, name, input.clone());
-            tui.transcript.cells.push(tool_cell);
+            transcript.cells.push(tool_cell);
             vec![]
         }
         AgentEvent::ToolInputReady { id, input, .. } => {
             // Update the existing tool cell with the complete input
             if let Some(cell) =
-                tui.transcript.cells.iter_mut().find(
+                transcript.cells.iter_mut().find(
                     |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
                 )
             {
@@ -79,7 +86,7 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
         AgentEvent::ToolStarted { .. } => vec![],
         AgentEvent::ToolFinished { id, result } => {
             if let Some(cell) =
-                tui.transcript.cells.iter_mut().find(
+                transcript.cells.iter_mut().find(
                     |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
                 )
             {
@@ -94,14 +101,15 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
             // Apply any pending delta before resetting agent state to ensure no
             // content is lost. This handles edge cases where AssistantComplete wasn't
             // received or didn't have a chance to apply the delta.
-            apply_pending_delta(tui);
+            apply_pending_delta(transcript, agent_state);
 
-            // Turn completed - update messages and reset agent state
-            tui.conversation.messages = messages.clone();
-            tui.agent_state = AgentState::Idle;
+            commands.push(StateCommand::Session(SessionCommand::SetMessages(
+                messages.clone(),
+            )));
+            *agent_state = AgentState::Idle;
 
             // Save assistant message to session if enabled
-            if !final_text.is_empty() && tui.conversation.session.is_some() {
+            if !final_text.is_empty() && has_session {
                 vec![UiEffect::SaveSession {
                     event: SessionEvent::assistant_message(final_text),
                 }]
@@ -111,12 +119,12 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
         }
         // Thinking events - create or update thinking cells in transcript
         AgentEvent::ThinkingDelta { text } => {
-            handle_thinking_delta(tui, text);
+            handle_thinking_delta(transcript, agent_state, text);
             vec![]
         }
         AgentEvent::ThinkingComplete { signature, .. } => {
             // Find the last streaming thinking cell and finalize it
-            if let Some(cell) = tui.transcript.cells.iter_mut().rev().find(|c| {
+            if let Some(cell) = transcript.cells.iter_mut().rev().find(|c| {
                 matches!(
                     c,
                     HistoryCell::Thinking {
@@ -135,13 +143,12 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
             cache_read_input_tokens,
             cache_creation_input_tokens,
         } => {
-            // Accumulate usage for session-wide tracking
-            tui.conversation.usage.add(
-                *input_tokens,
-                *output_tokens,
-                *cache_read_input_tokens,
-                *cache_creation_input_tokens,
-            );
+            commands.push(StateCommand::Session(SessionCommand::UpdateUsage {
+                input: *input_tokens,
+                output: *output_tokens,
+                cache_read: *cache_read_input_tokens,
+                cache_write: *cache_creation_input_tokens,
+            }));
             vec![]
         }
         AgentEvent::TurnStarted => {
@@ -153,7 +160,9 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
             // For now, we only show final output in ToolFinished
             vec![]
         }
-    }
+    };
+
+    (effects, commands)
 }
 
 // ============================================================================
@@ -161,17 +170,17 @@ pub fn handle_agent_event(tui: &mut TuiState, event: &AgentEvent) -> Vec<UiEffec
 // ============================================================================
 
 /// Handles assistant text delta events.
-fn handle_assistant_delta(tui: &mut TuiState, text: &str) {
-    match &mut tui.agent_state {
+fn handle_assistant_delta(transcript: &mut TranscriptState, agent_state: &mut AgentState, text: &str) {
+    match agent_state {
         AgentState::Waiting { .. } => {
             // Create streaming cell and transition to Streaming state
             let cell = HistoryCell::assistant_streaming("");
             let cell_id = cell.id();
-            tui.transcript.cells.push(cell);
+            transcript.cells.push(cell);
 
-            let old_state = std::mem::replace(&mut tui.agent_state, AgentState::Idle);
+            let old_state = std::mem::replace(agent_state, AgentState::Idle);
             if let AgentState::Waiting { rx } = old_state {
-                tui.agent_state = AgentState::Streaming {
+                *agent_state = AgentState::Streaming {
                     rx,
                     cell_id,
                     pending_delta: text.to_string(),
@@ -186,8 +195,7 @@ fn handle_assistant_delta(tui: &mut TuiState, text: &str) {
             // Check if we need a new assistant cell:
             // - current cell is finalized assistant, or
             // - current cell is not an assistant (e.g., thinking cell)
-            let needs_new_cell = tui
-                .transcript
+            let needs_new_cell = transcript
                 .cells
                 .iter()
                 .find(|c| c.id() == *cell_id)
@@ -205,7 +213,7 @@ fn handle_assistant_delta(tui: &mut TuiState, text: &str) {
             if needs_new_cell {
                 let new_cell = HistoryCell::assistant_streaming("");
                 let new_cell_id = new_cell.id();
-                tui.transcript.cells.push(new_cell);
+                transcript.cells.push(new_cell);
                 *cell_id = new_cell_id;
                 pending_delta.clear();
                 pending_delta.push_str(text);
@@ -218,15 +226,15 @@ fn handle_assistant_delta(tui: &mut TuiState, text: &str) {
 }
 
 /// Handles thinking text delta events.
-fn handle_thinking_delta(tui: &mut TuiState, text: &str) {
+fn handle_thinking_delta(transcript: &mut TranscriptState, agent_state: &mut AgentState, text: &str) {
     // Transition from Waiting to Streaming
-    if let AgentState::Waiting { .. } = &tui.agent_state {
-        let old_state = std::mem::replace(&mut tui.agent_state, AgentState::Idle);
+    if let AgentState::Waiting { .. } = agent_state {
+        let old_state = std::mem::replace(agent_state, AgentState::Idle);
         if let AgentState::Waiting { rx } = old_state {
             let cell = HistoryCell::thinking_streaming(text);
             let cell_id = cell.id();
-            tui.transcript.cells.push(cell);
-            tui.agent_state = AgentState::Streaming {
+            transcript.cells.push(cell);
+            *agent_state = AgentState::Streaming {
                 rx,
                 cell_id,
                 pending_delta: String::new(),
@@ -236,8 +244,7 @@ fn handle_thinking_delta(tui: &mut TuiState, text: &str) {
     }
 
     // Find the last cell and check if it's a streaming thinking cell
-    let should_create_new = tui
-        .transcript
+    let should_create_new = transcript
         .cells
         .last()
         .map(|cell| {
@@ -254,24 +261,24 @@ fn handle_thinking_delta(tui: &mut TuiState, text: &str) {
     if should_create_new {
         // Create a new streaming thinking cell
         let cell = HistoryCell::thinking_streaming(text);
-        tui.transcript.cells.push(cell);
+        transcript.cells.push(cell);
     } else {
         // Append to the existing streaming thinking cell
-        if let Some(cell) = tui.transcript.cells.last_mut() {
+        if let Some(cell) = transcript.cells.last_mut() {
             cell.append_thinking_delta(text);
         }
     }
 }
 
 /// Handles interruption events.
-fn handle_interrupted(tui: &mut TuiState) {
+fn handle_interrupted(transcript: &mut TranscriptState, agent_state: &mut AgentState) {
     // Apply any pending delta before resetting agent state to preserve
     // partial content that was streamed before the interruption.
-    apply_pending_delta(tui);
+    apply_pending_delta(transcript, agent_state);
 
     // Mark any running tools or streaming cells as cancelled
     let mut any_marked = false;
-    for cell in &mut tui.transcript.cells {
+    for cell in &mut transcript.cells {
         let was_active = matches!(
             cell,
             HistoryCell::Assistant {
@@ -294,8 +301,7 @@ fn handle_interrupted(tui: &mut TuiState) {
     // If no streaming/running cells were marked, mark the last user cell
     // (this means we interrupted before any response was generated)
     if !any_marked
-        && let Some(last_user) = tui
-            .transcript
+        && let Some(last_user) = transcript
             .cells
             .iter_mut()
             .rev()
@@ -305,7 +311,7 @@ fn handle_interrupted(tui: &mut TuiState) {
     }
 
     interrupt::reset();
-    tui.agent_state = AgentState::Idle;
+    *agent_state = AgentState::Idle;
 }
 
 // ============================================================================
@@ -317,43 +323,43 @@ fn handle_interrupted(tui: &mut TuiState) {
 /// Supports:
 /// - Scroll wheel (up/down) with delta accumulation
 /// - Click-and-drag selection with auto-copy on release
-pub fn handle_mouse(tui: &mut TuiState, mouse: MouseEvent, transcript_margin: u16) {
+pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcript_margin: u16) {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             // Accumulate negative delta (up = negative)
-            tui.transcript
+            transcript
                 .scroll_accumulator
                 .accumulate(-(MOUSE_SCROLL_LINES as i32));
         }
         MouseEventKind::ScrollDown => {
             // Accumulate positive delta (down = positive)
-            tui.transcript
+            transcript
                 .scroll_accumulator
                 .accumulate(MOUSE_SCROLL_LINES as i32);
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // Start selection at clicked position
             if let Some((line, col)) =
-                screen_to_transcript_pos(tui, mouse.column, mouse.row, transcript_margin)
+                screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
-                tui.transcript.start_selection(line, col);
+                transcript.start_selection(line, col);
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             // Extend selection while dragging
-            if tui.transcript.selection.is_selecting
+            if transcript.selection.is_selecting
                 && let Some((line, col)) =
-                    screen_to_transcript_pos(tui, mouse.column, mouse.row, transcript_margin)
+                    screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
-                tui.transcript.extend_selection(line, col);
+                transcript.extend_selection(line, col);
             }
         }
         MouseEventKind::Up(MouseButton::Left) => {
             // Finish selection and auto-copy if there's selected text
-            tui.transcript.finish_selection();
-            if tui.transcript.has_selection() {
+            transcript.finish_selection();
+            if transcript.has_selection() {
                 // Copy to clipboard and schedule visual clear
-                let _ = tui.transcript.copy_and_schedule_clear();
+                let _ = transcript.copy_and_schedule_clear();
             }
         }
         _ => {}
@@ -364,7 +370,7 @@ pub fn handle_mouse(tui: &mut TuiState, mouse: MouseEvent, transcript_margin: u1
 ///
 /// Returns `None` if the position is outside the transcript area.
 pub fn screen_to_transcript_pos(
-    tui: &TuiState,
+    transcript: &TranscriptState,
     screen_x: u16,
     screen_y: u16,
     margin: u16,
@@ -381,15 +387,15 @@ pub fn screen_to_transcript_pos(
 
     // Check if position is within transcript area vertically
     // The transcript area is at the top, from y=0 to y=viewport_height-1
-    let viewport_height = tui.transcript.viewport_height;
+    let viewport_height = transcript.viewport_height;
     if screen_y as usize >= viewport_height {
         return None; // Click is in input or status area, not transcript
     }
 
     // Get scroll offset and line counts
-    let scroll_offset = tui.transcript.scroll.get_offset(viewport_height);
-    let position_map_len = tui.transcript.position_map.len();
-    let cached_total = tui.transcript.scroll.cached_line_count;
+    let scroll_offset = transcript.scroll.get_offset(viewport_height);
+    let position_map_len = transcript.position_map.len();
+    let cached_total = transcript.scroll.cached_line_count;
 
     if position_map_len == 0 {
         return None; // No content to select
@@ -423,10 +429,10 @@ pub fn screen_to_transcript_pos(
     // Get the line mapping - indexing differs based on rendering mode
     let mapping = if is_lazy_mode {
         // Lazy mode: position_map is indexed 0 to visible_count-1
-        tui.transcript.position_map.get(content_y)?
+        transcript.position_map.get(content_y)?
     } else {
         // Full mode: position_map is indexed by global line number
-        tui.transcript.position_map.get(absolute_line)?
+        transcript.position_map.get(absolute_line)?
     };
 
     // Convert display column (x position) to grapheme index
@@ -451,15 +457,15 @@ pub fn screen_to_transcript_pos(
 // ============================================================================
 
 /// Applies any pending delta to the streaming cell (coalescing).
-pub fn apply_pending_delta(tui: &mut TuiState) {
+pub fn apply_pending_delta(transcript: &mut TranscriptState, agent_state: &mut AgentState) {
     if let AgentState::Streaming {
         cell_id,
         pending_delta,
         ..
-    } = &mut tui.agent_state
+    } = agent_state
         && !pending_delta.is_empty()
     {
-        if let Some(cell) = tui.transcript.cells.iter_mut().find(|c| c.id() == *cell_id) {
+        if let Some(cell) = transcript.cells.iter_mut().find(|c| c.id() == *cell_id) {
             cell.append_assistant_delta(pending_delta);
         }
         pending_delta.clear();
@@ -470,16 +476,16 @@ pub fn apply_pending_delta(tui: &mut TuiState) {
 ///
 /// Called once per frame after all events are processed to coalesce
 /// rapid scroll events (especially from trackpads) into a single scroll.
-pub fn apply_scroll_delta(tui: &mut TuiState) {
-    let delta = tui.transcript.scroll_accumulator.take_delta();
+pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
+    let delta = transcript.scroll_accumulator.take_delta();
     if delta == 0 {
         return;
     }
 
     let lines = delta.unsigned_abs() as usize;
     if delta < 0 {
-        tui.transcript.scroll_up(lines);
+        transcript.scroll_up(lines);
     } else {
-        tui.transcript.scroll_down(lines);
+        transcript.scroll_down(lines);
     }
 }

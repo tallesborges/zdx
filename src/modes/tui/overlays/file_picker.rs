@@ -9,7 +9,8 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::{InputCommand, StateCommand};
+use crate::modes::tui::input::InputState;
 
 const MAX_VISIBLE_FILES: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
@@ -45,16 +46,23 @@ impl FilePickerState {
         render_file_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        input: &InputState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        match key.code {
+        let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                Some(OverlayAction::close())
+                (Some(OverlayAction::close()), vec![])
             }
             KeyCode::Enter | KeyCode::Tab => {
-                self.select_file_and_insert(tui);
-                Some(OverlayAction::close())
+                let mut commands = Vec::new();
+                if let Some(command) = self.select_file_and_insert(input) {
+                    commands.push(StateCommand::Input(command));
+                }
+                (Some(OverlayAction::close()), commands)
             }
             KeyCode::Up => {
                 if self.selected > 0 {
@@ -63,7 +71,7 @@ impl FilePickerState {
                         self.offset = self.selected;
                     }
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Down => {
                 if self.selected < self.filtered.len().saturating_sub(1) {
@@ -72,7 +80,7 @@ impl FilePickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Char('p') if ctrl => {
                 if self.selected > 0 {
@@ -81,7 +89,7 @@ impl FilePickerState {
                         self.offset = self.selected;
                     }
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Char('n') if ctrl => {
                 if self.selected < self.filtered.len().saturating_sub(1) {
@@ -90,27 +98,28 @@ impl FilePickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                None
+                (None, vec![])
             }
-            _ => {
-                tui.input.textarea.input(key);
+            _ => (None, vec![]),
+        };
 
-                let pattern = self.get_filter_pattern(tui);
-                self.apply_filter(&pattern);
-
-                if self.is_trigger_deleted(tui) {
-                    Some(OverlayAction::close())
-                } else {
-                    None
-                }
-            }
-        }
+        (action, commands)
     }
 
     pub fn selected_file(&self) -> Option<&PathBuf> {
         self.filtered
             .get(self.selected)
             .and_then(|&idx| self.files.get(idx))
+    }
+
+    pub fn should_route_input_key(key: KeyEvent) -> bool {
+        let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        match key.code {
+            KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::Up | KeyCode::Down => false,
+            KeyCode::Char('p') if ctrl => false,
+            KeyCode::Char('n') if ctrl => false,
+            _ => true,
+        }
     }
 
     pub fn apply_filter(&mut self, pattern: &str) {
@@ -142,9 +151,9 @@ impl FilePickerState {
         self.filtered = (0..self.files.len()).collect();
     }
 
-    fn get_cursor_byte_pos(tui: &TuiState) -> usize {
-        let text = tui.get_input_text();
-        let (row, col) = tui.input.textarea.cursor();
+    fn get_cursor_byte_pos(input: &InputState) -> usize {
+        let text = input.get_text();
+        let (row, col) = input.textarea.cursor();
         let lines: Vec<&str> = text.lines().collect();
 
         let mut pos = 0;
@@ -159,10 +168,10 @@ impl FilePickerState {
         pos
     }
 
-    fn get_filter_pattern(&self, tui: &TuiState) -> String {
-        let text = tui.get_input_text();
+    fn get_filter_pattern(&self, input: &InputState) -> String {
+        let text = input.get_text();
         let trigger_pos = self.trigger_pos;
-        let cursor_pos = Self::get_cursor_byte_pos(tui);
+        let cursor_pos = Self::get_cursor_byte_pos(input);
 
         if trigger_pos < text.len() && trigger_pos < cursor_pos {
             let start = trigger_pos + 1;
@@ -175,27 +184,25 @@ impl FilePickerState {
         String::new()
     }
 
-    fn is_trigger_deleted(&self, tui: &TuiState) -> bool {
-        let text = tui.get_input_text();
+    fn is_trigger_deleted(&self, input: &InputState) -> bool {
+        let text = input.get_text();
         let trigger_pos = self.trigger_pos;
 
         if trigger_pos >= text.len() || text.as_bytes().get(trigger_pos) != Some(&b'@') {
             return true;
         }
 
-        let cursor_pos = Self::get_cursor_byte_pos(tui);
+        let cursor_pos = Self::get_cursor_byte_pos(input);
         cursor_pos <= trigger_pos
     }
 
-    fn select_file_and_insert(&self, tui: &mut TuiState) {
-        let Some(selected_path) = self.selected_file().cloned() else {
-            return;
-        };
+    fn select_file_and_insert(&self, input: &InputState) -> Option<InputCommand> {
+        let selected_path = self.selected_file().cloned()?;
 
         let trigger_pos = self.trigger_pos;
 
-        let text = tui.get_input_text();
-        let cursor_byte_pos = Self::get_cursor_byte_pos(tui);
+        let text = input.get_text();
+        let cursor_byte_pos = Self::get_cursor_byte_pos(input);
 
         let path_str = selected_path.to_string_lossy();
         let before_at = &text[..=trigger_pos];
@@ -208,10 +215,6 @@ impl FilePickerState {
         let new_text = format!("{}{} {}", before_at, path_str, after_cursor);
 
         let new_cursor_byte_pos = trigger_pos + 1 + path_str.len() + 1;
-
-        tui.input.textarea.select_all();
-        tui.input.textarea.cut();
-        tui.input.textarea.insert_str(&new_text);
 
         let new_lines: Vec<&str> = new_text.lines().collect();
         let mut remaining = new_cursor_byte_pos;
@@ -234,24 +237,17 @@ impl FilePickerState {
             target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
         }
 
-        tui.input
-            .textarea
-            .move_cursor(tui_textarea::CursorMove::Top);
-        tui.input
-            .textarea
-            .move_cursor(tui_textarea::CursorMove::Head);
+        Some(InputCommand::SetTextAndCursor {
+            text: new_text,
+            cursor_row: target_row,
+            cursor_col: target_col,
+        })
+    }
 
-        for _ in 0..target_row {
-            tui.input
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Down);
-        }
-
-        for _ in 0..target_col {
-            tui.input
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Forward);
-        }
+    pub fn update_from_input(&mut self, input: &InputState) -> bool {
+        let pattern = self.get_filter_pattern(input);
+        self.apply_filter(&pattern);
+        self.is_trigger_deleted(input)
     }
 }
 
@@ -414,7 +410,6 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     use super::*;
-    use crate::config::Config;
 
     fn make_key_event(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -425,16 +420,46 @@ mod tests {
         }
     }
 
-    fn create_test_state() -> TuiState {
-        let config = Config::default();
-        TuiState::new(config, std::path::PathBuf::new(), None, None)
+    fn create_test_state() -> InputState {
+        InputState::new()
+    }
+
+    fn apply_input_command(input: &mut InputState, command: InputCommand) {
+        use tui_textarea::CursorMove;
+
+        match command {
+            InputCommand::SetTextAndCursor {
+                text,
+                cursor_row,
+                cursor_col,
+            } => {
+                input.set_text(&text);
+                input.textarea.move_cursor(CursorMove::Top);
+                input.textarea.move_cursor(CursorMove::Head);
+                for _ in 0..cursor_row {
+                    input.textarea.move_cursor(CursorMove::Down);
+                }
+                for _ in 0..cursor_col {
+                    input.textarea.move_cursor(CursorMove::Forward);
+                }
+            }
+            InputCommand::SetHistory(history) => {
+                input.history = history;
+                input.reset_navigation();
+            }
+            InputCommand::Clear => input.clear(),
+            InputCommand::SetText(text) => input.set_text(&text),
+            InputCommand::InsertChar(ch) => input.textarea.insert_char(ch),
+            InputCommand::ClearHistory => input.clear_history(),
+            InputCommand::SetHandoffState(state) => input.handoff = state,
+        }
     }
 
     #[test]
     fn test_file_picker_select_file_simple() {
-        let mut tui = create_test_state();
+        let mut input = create_test_state();
 
-        tui.input.textarea.insert_str("@");
+        input.textarea.insert_str("@");
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
@@ -442,18 +467,23 @@ mod tests {
             PathBuf::from("src/lib.rs"),
         ]);
 
-        let action = picker.handle_key(&mut tui, make_key_event(KeyCode::Enter));
+        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
+        for command in commands {
+            if let StateCommand::Input(command) = command {
+                apply_input_command(&mut input, command);
+            }
+        }
 
-        let text = tui.get_input_text();
+        let text = input.get_text();
         assert_eq!(text, "@src/main.rs ");
     }
 
     #[test]
     fn test_file_picker_select_file_with_filter() {
-        let mut tui = create_test_state();
+        let mut input = create_test_state();
 
-        tui.input.textarea.insert_str("@lib");
+        input.textarea.insert_str("@lib");
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
@@ -462,55 +492,68 @@ mod tests {
         ]);
         picker.apply_filter("lib");
 
-        let action = picker.handle_key(&mut tui, make_key_event(KeyCode::Enter));
+        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
+        for command in commands {
+            if let StateCommand::Input(command) = command {
+                apply_input_command(&mut input, command);
+            }
+        }
 
-        let text = tui.get_input_text();
+        let text = input.get_text();
         assert_eq!(text, "@src/lib.rs ");
     }
 
     #[test]
     fn test_file_picker_select_with_text_before_and_after() {
-        let mut tui = create_test_state();
+        let mut input = create_test_state();
 
-        tui.input.textarea.insert_str("Hello @filter world");
+        input.textarea.insert_str("Hello @filter world");
         for _ in 0..6 {
-            tui.input
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Back);
+            input.textarea.move_cursor(tui_textarea::CursorMove::Back);
         }
 
         let (mut picker, _) = FilePickerState::open(6);
         picker.set_files(vec![PathBuf::from("src/main.rs")]);
 
-        let action = picker.handle_key(&mut tui, make_key_event(KeyCode::Tab));
+        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Tab));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
+        for command in commands {
+            if let StateCommand::Input(command) = command {
+                apply_input_command(&mut input, command);
+            }
+        }
 
-        let text = tui.get_input_text();
+        let text = input.get_text();
         assert_eq!(text, "Hello @src/main.rs  world");
     }
 
     #[test]
     fn test_file_picker_select_empty_list_closes() {
-        let mut tui = create_test_state();
+        let mut input = create_test_state();
 
-        tui.input.textarea.insert_str("@");
+        input.textarea.insert_str("@");
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![]);
 
-        let action = picker.handle_key(&mut tui, make_key_event(KeyCode::Enter));
+        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
+        for command in commands {
+            if let StateCommand::Input(command) = command {
+                apply_input_command(&mut input, command);
+            }
+        }
 
-        let text = tui.get_input_text();
+        let text = input.get_text();
         assert_eq!(text, "@");
     }
 
     #[test]
     fn test_file_picker_navigate_then_select() {
-        let mut tui = create_test_state();
+        let mut input = create_test_state();
 
-        tui.input.textarea.insert_str("@");
+        input.textarea.insert_str("@");
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
@@ -519,13 +562,18 @@ mod tests {
             PathBuf::from("c.txt"),
         ]);
 
-        picker.handle_key(&mut tui, make_key_event(KeyCode::Down));
-        picker.handle_key(&mut tui, make_key_event(KeyCode::Down));
+        let _ = picker.handle_key(&input, make_key_event(KeyCode::Down));
+        let _ = picker.handle_key(&input, make_key_event(KeyCode::Down));
 
-        let action = picker.handle_key(&mut tui, make_key_event(KeyCode::Enter));
+        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
+        for command in commands {
+            if let StateCommand::Input(command) = command {
+                apply_input_command(&mut input, command);
+            }
+        }
 
-        let text = tui.get_input_text();
+        let text = input.get_text();
         assert_eq!(text, "@c.txt ");
     }
 }

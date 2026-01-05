@@ -34,37 +34,30 @@
     - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
     - `src/modes/tui/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
-    - `src/modes/tui/state/mod.rs`: state re-export hub (backward compatibility shim)
-    - `src/modes/tui/state/auth.rs`: auth state re-exports (from auth feature slice)
-    - `src/modes/tui/state/input.rs`: input state re-exports (from input feature slice)
-    - `src/modes/tui/state/session.rs`: session state re-exports (from session feature slice)
-    - `src/modes/tui/state/transcript.rs`: transcript state re-exports (from transcript feature slice)
-    - `src/modes/tui/reducer.rs`: reducer - orchestrates state mutations, delegates to feature slices
-    - `src/modes/tui/view.rs`: pure render functions (no mutations), delegates transcript rendering
-    - `src/modes/tui/events.rs`: UI event types (re-exports from core feature slice)
+    - `src/modes/tui/update.rs`: reducer - orchestrates state mutations, delegates to feature slices
+    - `src/modes/tui/render.rs`: pure render functions (no mutations), delegates transcript rendering
+    - `src/modes/tui/events.rs`: UiEvent + SessionUiEvent (aggregator for all TUI events)
     - `src/modes/tui/terminal.rs`: terminal setup, restore, panic hooks
     - `src/modes/tui/shared/`: shared leaf types (no feature dependencies)
       - `src/modes/tui/shared/mod.rs`: module exports
       - `src/modes/tui/shared/effects.rs`: effect types returned by reducer for runtime to execute
       - `src/modes/tui/shared/commands.rs`: command definitions for command palette
+      - `src/modes/tui/shared/internal.rs`: StateCommand + cross-slice mutation enums
     - `src/modes/tui/auth/`: auth feature slice (authentication state, login handling)
       - `src/modes/tui/auth/mod.rs`: module exports
       - `src/modes/tui/auth/state.rs`: AuthStatus + AuthState (auth type detection, login flow state)
-      - `src/modes/tui/auth/reducer.rs`: login result handling, OAuth flow state transitions
-      - `src/modes/tui/auth/view.rs`: login overlay rendering
-    - `src/modes/tui/core/`: core feature slice (event aggregator)
-      - `src/modes/tui/core/mod.rs`: module exports
-      - `src/modes/tui/core/events.rs`: UiEvent + SessionUiEvent (aggregator for all TUI events)
+      - `src/modes/tui/auth/update.rs`: login result handling, OAuth flow state transitions
+      - `src/modes/tui/auth/render.rs`: login overlay rendering
     - `src/modes/tui/input/`: input feature slice (keyboard handling, handoff)
       - `src/modes/tui/input/mod.rs`: module exports
       - `src/modes/tui/input/state.rs`: InputState + HandoffState
-      - `src/modes/tui/input/reducer.rs`: key handling, input submission, handoff result handling
-      - `src/modes/tui/input/view.rs`: input area rendering (normal + handoff modes)
+      - `src/modes/tui/input/update.rs`: key handling, input submission, handoff result handling
+      - `src/modes/tui/input/render.rs`: input area rendering (normal + handoff modes)
     - `src/modes/tui/session/`: session feature slice (session state, session operations)
       - `src/modes/tui/session/mod.rs`: module exports
       - `src/modes/tui/session/state.rs`: SessionState, SessionOpsState, SessionUsage
-      - `src/modes/tui/session/reducer.rs`: session event handlers (loading, switching, creating, renaming)
-      - `src/modes/tui/session/view.rs`: session picker overlay rendering
+      - `src/modes/tui/session/update.rs`: session event handlers (loading, switching, creating, renaming)
+      - `src/modes/tui/session/render.rs`: session picker overlay rendering
     - `src/modes/tui/overlays/`: overlay feature slice (modal UI components)
       - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
       - `src/modes/tui/overlays/update.rs`: overlay key handling and update logic

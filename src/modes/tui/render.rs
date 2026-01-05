@@ -14,7 +14,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use ratatui::Frame;
 
-use crate::modes::tui::state::{AgentState, AppState, TuiState};
+use crate::modes::tui::app::{AgentState, AppState, TuiState};
 use crate::modes::tui::overlays::OverlayExt;
 use crate::modes::tui::{input, transcript};
 
@@ -32,7 +32,7 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 ///
 /// This is a pure render function - it only reads state and draws to frame.
 /// No mutations, no side effects.
-pub fn view(app: &AppState, frame: &mut Frame) {
+pub fn render(app: &AppState, frame: &mut Frame) {
     let area = frame.area();
     let state = &app.tui;
 

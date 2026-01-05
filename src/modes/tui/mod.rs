@@ -8,15 +8,14 @@
 //!   - `runtime/mod.rs`: Core event loop and effect dispatch
 //!   - `runtime/handlers.rs`: Effect handler implementations (I/O, spawning)
 //! - `TuiState` (in state/): All app state, no terminal
-//! - `update()` (in reducer.rs): The reducer - all state mutations happen here
-//! - `view()` (in view.rs): Pure render, no mutations
+//! - `update()` (in update.rs): The reducer - all state mutations happen here
+//! - `render()` (in render.rs): Pure render, no mutations
 
 // App state composition (see app.rs for state hierarchy)
 pub mod app;
 
 // Feature slices (see docs/ARCHITECTURE.md for Elm-like architecture)
 pub mod auth;
-pub mod core;
 pub mod input;
 pub mod session;
 pub mod shared;
@@ -25,12 +24,11 @@ pub mod shared;
 pub mod events;
 pub mod markdown;
 pub mod overlays;
-pub mod reducer;
+pub mod update;
 pub mod runtime;
-pub mod state;
 pub mod terminal;
 pub mod transcript;
-pub mod view;
+pub mod render;
 
 use std::io::{IsTerminal, Write, stderr};
 use std::path::PathBuf;

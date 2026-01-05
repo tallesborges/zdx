@@ -33,8 +33,6 @@ use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
 pub use login::LoginState;
 pub use model_picker::ModelPickerState;
-// Re-export handle_login_result from auth feature for backward compatibility
-pub use crate::modes::tui::auth::handle_login_result;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;
@@ -43,7 +41,8 @@ pub use thinking_picker::ThinkingPickerState;
 pub use update::{handle_files_discovered, handle_overlay_key};
 
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::StateCommand;
+use crate::modes::tui::app::TuiState;
 
 // ============================================================================
 // OverlayAction
@@ -96,13 +95,17 @@ impl Overlay {
         }
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         match self {
             Overlay::CommandPalette(p) => p.handle_key(tui, key),
             Overlay::ModelPicker(p) => p.handle_key(tui, key),
             Overlay::ThinkingPicker(p) => p.handle_key(tui, key),
             Overlay::SessionPicker(p) => p.handle_key(tui, key),
-            Overlay::FilePicker(p) => p.handle_key(tui, key),
+            Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
             Overlay::Login(l) => l.handle_key(tui, key),
         }
     }
@@ -126,36 +129,80 @@ impl Overlay {
 pub trait OverlayExt {
     /// Handles a key event if an overlay is active.
     ///
-    /// Returns `Some(effects)` if the overlay handled the key (the overlay may
-    /// have been closed), or `None` if no overlay was active.
+    /// Returns `(Some(effects), commands)` if the overlay handled the key (the
+    /// overlay may have been closed), or `(None, [])` if no overlay was active.
     ///
     /// This method:
     /// - Dispatches the key to the active overlay's handler
     /// - Closes the overlay if `OverlayAction::Close` is returned
     /// - Returns any effects to be executed
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>>;
+    fn handle_key(
+        &mut self,
+        tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<Vec<UiEffect>>, Vec<StateCommand>);
 
     /// Renders the overlay if one is active.
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16);
 }
 
 impl OverlayExt for Option<Overlay> {
-    fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>> {
-        let overlay = self.as_mut()?;
+    fn handle_key(
+        &mut self,
+        tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<Vec<UiEffect>>, Vec<StateCommand>) {
+        let Some(overlay) = self.as_mut() else {
+            return (None, vec![]);
+        };
 
-        Some(match overlay.handle_key(tui, key) {
+        let (action, commands) = overlay.handle_key(tui, key);
+        let effects = match action {
             None => vec![],
             Some(OverlayAction::Close(effects)) => {
                 *self = None;
                 effects
             }
             Some(OverlayAction::Effects(effects)) => effects,
-        })
+        };
+
+        (Some(effects), commands)
     }
 
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         if let Some(overlay) = self {
             overlay.render(frame, area, input_y);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::ThinkingLevel;
+
+    #[test]
+    fn test_overlay_is_some() {
+        let none: Option<Overlay> = None;
+        assert!(none.is_none());
+
+        let (palette, _) = CommandPaletteState::open(true);
+        let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
+        assert!(overlay.is_some());
+
+        let (picker, _) = ModelPickerState::open("test");
+        let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
+        assert!(overlay.is_some());
+
+        let (thinking, _) = ThinkingPickerState::open(ThinkingLevel::Off);
+        let overlay: Option<Overlay> = Some(Overlay::ThinkingPicker(thinking));
+        assert!(overlay.is_some());
+
+        let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging));
+        assert!(overlay.is_some());
+
+        let (file_picker, _) = FilePickerState::open(0);
+        let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
+        assert!(overlay.is_some());
     }
 }

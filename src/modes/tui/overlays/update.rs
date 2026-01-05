@@ -9,7 +9,8 @@ use crossterm::event::KeyEvent;
 
 use super::{Overlay, OverlayExt};
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::StateCommand;
+use crate::modes::tui::app::TuiState;
 
 /// Handles a key event for the active overlay.
 ///
@@ -24,16 +25,18 @@ use crate::modes::tui::state::TuiState;
 /// # Example
 ///
 /// ```ignore
-/// if let Some(effects) = overlays::handle_overlay_key(&mut app.tui, &mut app.overlay, key) {
+/// let (effects, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
+/// apply_state_commands(&mut app.tui, commands);
+/// if let Some(effects) = effects {
 ///     return effects;
 /// }
 /// // No overlay active - handle key normally
 /// ```
 pub fn handle_overlay_key(
-    tui: &mut TuiState,
+    tui: &TuiState,
     overlay: &mut Option<Overlay>,
     key: KeyEvent,
-) -> Option<Vec<UiEffect>> {
+) -> (Option<Vec<UiEffect>>, Vec<StateCommand>) {
     overlay.handle_key(tui, key)
 }
 

@@ -5,18 +5,18 @@
 //! ## Module Structure
 //!
 //! - `state.rs`: SessionState, SessionOpsState, SessionUsage - session and conversation state
-//! - `reducer.rs`: Session event handlers (loading, switching, creating, renaming)
-//! - `view.rs`: Session picker overlay rendering
+//! - `update.rs`: Session event handlers (loading, switching, creating, renaming)
+//! - `render.rs`: Session picker overlay rendering
 //!
 //! See `docs/ARCHITECTURE.md` for the TUI architecture overview.
 
-mod reducer;
+mod update;
 mod state;
-mod view;
+mod render;
 
 // Re-export state types
 pub use state::{SessionOpsState, SessionState, SessionUsage};
 // Re-export reducer functions
-pub use reducer::handle_session_event;
+pub use update::{handle_session_event, SessionOverlayAction};
 // Re-export view functions
-pub use view::render_session_picker;
+pub use render::render_session_picker;
