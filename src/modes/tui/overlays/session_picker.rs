@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
@@ -10,6 +12,7 @@ use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
 use crate::modes::tui::transcript::HistoryCell;
 
 const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_SESSIONS - 2
+const COPIED_FEEDBACK_DURATION_MS: u128 = 300;
 
 #[derive(Debug, Clone)]
 pub struct SessionPickerState {
@@ -17,6 +20,8 @@ pub struct SessionPickerState {
     pub selected: usize,
     pub offset: usize,
     pub original_cells: Vec<HistoryCell>,
+    /// When the last copy occurred (for showing brief "Copied!" feedback).
+    pub copied_at: Option<Instant>,
 }
 
 impl SessionPickerState {
@@ -29,6 +34,7 @@ impl SessionPickerState {
             selected: 0,
             offset: 0,
             original_cells,
+            copied_at: None,
         };
         let effects = state
             .selected_session()
@@ -119,6 +125,18 @@ impl SessionPickerState {
                     (Some(OverlayAction::close()), vec![])
                 }
             }
+            KeyCode::Char('y') => {
+                if let Some(session) = self.selected_session() {
+                    (
+                        Some(OverlayAction::Effects(vec![UiEffect::CopyToClipboard {
+                            text: session.id.clone(),
+                        }])),
+                        vec![],
+                    )
+                } else {
+                    (None, vec![])
+                }
+            }
             _ => (None, vec![]),
         };
 
@@ -127,6 +145,13 @@ impl SessionPickerState {
 
     pub fn selected_session(&self) -> Option<&SessionSummary> {
         self.sessions.get(self.selected)
+    }
+
+    /// Returns true if the "Copied!" feedback should be shown.
+    pub fn should_show_copied(&self) -> bool {
+        self.copied_at
+            .map(|t| t.elapsed().as_millis() < COPIED_FEEDBACK_DURATION_MS)
+            .unwrap_or(false)
     }
 }
 

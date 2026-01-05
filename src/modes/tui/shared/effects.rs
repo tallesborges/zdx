@@ -90,4 +90,10 @@ pub enum UiEffect {
         /// Byte position of the `@` trigger in the input text.
         trigger_pos: usize,
     },
+
+    /// Copy text to clipboard.
+    CopyToClipboard {
+        /// Text to copy.
+        text: String,
+    },
 }
