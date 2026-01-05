@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::state::{HandoffState, InputState};
 use crate::core::session::SessionEvent;
 use crate::modes::tui::app::AgentState;
-use crate::modes::tui::overlays::{Overlay, OverlayRequest};
+use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{SessionCommand, StateCommand, TranscriptCommand};
 use crate::modes::tui::transcript::HistoryCell;
@@ -16,11 +16,7 @@ use crate::providers::anthropic::ChatMessage;
 
 /// Handles paste events for input.
 pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
-    if let Some(Overlay::Login(crate::modes::tui::overlays::LoginState::AwaitingCode {
-        input,
-        ..
-    })) = overlay
-    {
+    if let Some(Overlay::Login(LoginState::AwaitingCode { input, .. })) = overlay {
         input.push_str(text);
     } else {
         input.textarea.insert_str(text);

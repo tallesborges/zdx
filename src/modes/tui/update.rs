@@ -10,9 +10,11 @@ use crossterm::event::Event;
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::overlays::{self, FilePickerState, Overlay};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand};
-use crate::modes::tui::{auth, input, overlays, render, session, transcript};
+use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::{auth, input, render, session, transcript};
 
 /// The main reducer function.
 ///
@@ -114,23 +116,17 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::HandoffSessionCreated { session } => {
             let session_path = session.path().display().to_string();
             app.tui.conversation.session = Some(session);
-            app.tui
-                .transcript
-                .cells
-                .push(crate::modes::tui::transcript::HistoryCell::system(format!(
-                    "Session path: {}",
-                    session_path
-                )));
+            app.tui.transcript.cells.push(HistoryCell::system(format!(
+                "Session path: {}",
+                session_path
+            )));
             vec![UiEffect::StartAgentTurn]
         }
         UiEvent::HandoffSessionCreateFailed { error } => {
-            app.tui
-                .transcript
-                .cells
-                .push(crate::modes::tui::transcript::HistoryCell::system(format!(
-                    "Warning: Failed to create session: {}",
-                    error
-                )));
+            app.tui.transcript.cells.push(HistoryCell::system(format!(
+                "Warning: Failed to create session: {}",
+                error
+            )));
             vec![UiEffect::StartAgentTurn]
         }
         UiEvent::FileDiscoveryStarted { rx, cancel } => {
@@ -461,8 +457,8 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    if let Some(crate::modes::tui::overlays::Overlay::FilePicker(picker)) = app.overlay.as_mut()
-        && crate::modes::tui::overlays::FilePickerState::should_route_input_key(key)
+    if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
+        && FilePickerState::should_route_input_key(key)
     {
         app.tui.input.textarea.input(key);
         if picker.update_from_input(&app.tui.input) {

@@ -29,19 +29,21 @@
 //! This allows overlay handlers to get `&mut self` and `&mut TuiState` simultaneously.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
+use crate::core::events::AgentEvent;
 use crate::core::session::Session;
 // Feature state imports
 use crate::modes::tui::auth::AuthState;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::session::{SessionOpsState, SessionState};
-use crate::modes::tui::transcript::{HistoryCell, TranscriptState};
-use crate::providers::anthropic::ChatMessage;
+use crate::modes::tui::transcript::{CellId, HistoryCell, TranscriptState};
+use crate::providers::anthropic::{ChatContentBlock, ChatMessage};
 
 // ============================================================================
 // AppState (Combined State)
@@ -100,16 +102,16 @@ pub enum AgentState {
     /// Streaming response in progress.
     Streaming {
         /// Receiver for agent events.
-        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::AgentEvent>>,
+        rx: mpsc::Receiver<Arc<AgentEvent>>,
         /// ID of the streaming assistant cell in transcript.
-        cell_id: crate::modes::tui::transcript::CellId,
+        cell_id: CellId,
         /// Buffered delta text to apply on next tick (coalescing).
         pending_delta: String,
     },
     /// Waiting for first response.
     Waiting {
         /// Receiver for agent events.
-        rx: mpsc::Receiver<std::sync::Arc<crate::core::events::AgentEvent>>,
+        rx: mpsc::Receiver<Arc<AgentEvent>>,
     },
 }
 
@@ -235,7 +237,7 @@ impl TuiState {
                     blocks
                         .iter()
                         .filter_map(|b| {
-                            if let crate::providers::anthropic::ChatContentBlock::Text(t) = b {
+                            if let ChatContentBlock::Text(t) = b {
                                 Some(t.as_str())
                             } else {
                                 None

@@ -10,12 +10,14 @@ use std::sync::Arc;
 use anyhow::{Result, bail};
 use futures_util::StreamExt;
 use serde_json::Value;
+use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 
 use crate::config::Config;
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
+use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
@@ -32,10 +34,10 @@ pub struct AgentOptions {
 ///
 /// Used with `run_turn` for concurrent rendering and session persistence.
 /// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
-pub type AgentEventTx = tokio::sync::mpsc::Sender<Arc<AgentEvent>>;
+pub type AgentEventTx = mpsc::Sender<Arc<AgentEvent>>;
 
 /// Channel-based event receiver (async, bounded).
-pub type AgentEventRx = tokio::sync::mpsc::Receiver<Arc<AgentEvent>>;
+pub type AgentEventRx = mpsc::Receiver<Arc<AgentEvent>>;
 
 /// Default channel capacity for event streams.
 ///
@@ -44,7 +46,7 @@ pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 128;
 
 /// Creates a bounded event channel with the default capacity.
 pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
-    tokio::sync::mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
+    mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
 }
 
 /// Event sink wrapper that provides best-effort and reliable send modes.
@@ -211,18 +213,18 @@ pub async fn run_turn(
 
     // Tool loop - keep going until we get a final response
     loop {
-        if crate::core::interrupt::is_interrupted() {
+        if interrupt::is_interrupted() {
             sink.important(AgentEvent::Interrupted).await;
-            return Err(crate::core::interrupt::InterruptedError.into());
+            return Err(InterruptedError.into());
         }
 
         // Use select! to make the API call interruptible (important for slow responses
         // like Opus with extended thinking which can take 30+ seconds before first chunk)
         let stream_result = tokio::select! {
             biased;
-            _ = crate::core::interrupt::wait_for_interrupt() => {
+            _ = interrupt::wait_for_interrupt() => {
                 sink.important(AgentEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                return Err(InterruptedError.into());
             }
             result = client.send_messages_stream(&messages, &tools, system_prompt) => result,
         };
@@ -242,9 +244,9 @@ pub async fn run_turn(
 
         // Process stream events with periodic interrupt checking
         loop {
-            if crate::core::interrupt::is_interrupted() {
+            if interrupt::is_interrupted() {
                 sink.important(AgentEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                return Err(InterruptedError.into());
             }
 
             // Use timeout to periodically check for interrupts even if stream stalls
@@ -435,7 +437,7 @@ pub async fn run_turn(
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Check if interrupted during tool execution
-            if crate::core::interrupt::is_interrupted() {
+            if interrupt::is_interrupted() {
                 // Emit TurnComplete with partial messages before Interrupted
                 // This ensures the TUI has the complete conversation state
                 sink.important(AgentEvent::TurnComplete {
@@ -444,7 +446,7 @@ pub async fn run_turn(
                 })
                 .await;
                 sink.important(AgentEvent::Interrupted).await;
-                return Err(crate::core::interrupt::InterruptedError.into());
+                return Err(InterruptedError.into());
             }
 
             // Continue the loop for the next response
@@ -516,7 +518,7 @@ async fn execute_tools_async(
     loop {
         tokio::select! {
             biased;
-            _ = crate::core::interrupt::wait_for_interrupt() => {
+            _ = interrupt::wait_for_interrupt() => {
                 // Abort all remaining tasks
                 join_set.abort_all();
 

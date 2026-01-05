@@ -7,7 +7,8 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::{OverlayAction, OverlayRequest};
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::shared::commands::COMMANDS;
+use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::shared::commands::{COMMANDS, Command};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
     AuthCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
@@ -95,7 +96,7 @@ impl CommandPaletteState {
         (action, commands)
     }
 
-    pub fn filtered_commands(&self) -> Vec<&'static crate::modes::tui::shared::commands::Command> {
+    pub fn filtered_commands(&self) -> Vec<&'static Command> {
         if self.filter.is_empty() {
             COMMANDS.iter().collect()
         } else {
@@ -215,9 +216,7 @@ fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     (
         vec![],
         vec![
-            StateCommand::Input(InputCommand::SetHandoffState(
-                crate::modes::tui::input::HandoffState::Pending,
-            )),
+            StateCommand::Input(InputCommand::SetHandoffState(HandoffState::Pending)),
             StateCommand::Input(InputCommand::Clear),
         ],
     )

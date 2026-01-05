@@ -14,3 +14,7 @@ too-many-arguments-threshold = 7
 
 # Allow common prefixes in enum variants (like ErrorKind::IoError)
 enum-variant-name-threshold = 3
+
+# Warn on absolute paths with more than 4 segments
+# 4 segments allows: std::env::var, tokio::sync::mpsc, crate::config::Config
+absolute-paths-max-segments = 4
