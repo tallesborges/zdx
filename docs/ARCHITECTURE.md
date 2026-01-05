@@ -70,9 +70,8 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
     - **Close:** Returns effects to run after dismissal (e.g., `LoadSession`).
 
 ### Async & Concurrency
-- **Receivers in State:** `mpsc::Receiver`s for user-visible workflows (e.g., Auth, Agent Streaming) live in `AppState`. The runtime polls them and emits `UiEvent`s.
-- **Receiver lifecycle:** `*Started` event → reducer stores receiver → runtime polls → result event → reducer clears receiver (mirrors `AgentSpawned`/`LoginExchangeStarted`/`HandoffGenerationStarted` patterns).
-- **Background Tasks:** Pure background tasks (e.g., file discovery) have receivers in the Runtime, which feeds results into the event loop.
+- **Receivers in State:** Receivers for async workflows live in `AppState`. The runtime polls them and emits `UiEvent`s.
+- **Receiver lifecycle:** `*Started` event → reducer stores receiver → runtime polls → result event → reducer clears receiver.
 
 ### Performance
 - **Delta Coalescing:** High-frequency events (streaming text, scrolling) are buffered and applied once per frame (`UiEvent::Frame`).
