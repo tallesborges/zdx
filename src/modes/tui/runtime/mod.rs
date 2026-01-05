@@ -26,6 +26,7 @@ use crate::core::session::Session;
 use crate::modes::tui::app::{AgentState, AppState};
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
 use crate::providers::anthropic::ChatMessage;
@@ -191,7 +192,7 @@ impl TuiRuntime {
         // Otherwise use slow polling to save CPU.
         let file_discovery_pending = matches!(
             &self.state.overlay,
-            Some(crate::modes::tui::overlays::Overlay::FilePicker(picker)) if picker.discovery_rx.is_some()
+            Some(Overlay::FilePicker(picker)) if picker.discovery_rx.is_some()
         );
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.transcript.selection.has_pending_clear()

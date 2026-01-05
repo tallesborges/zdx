@@ -4,18 +4,21 @@
 
 use tokio::sync::mpsc;
 
+use crate::core::session::Session;
+use crate::models::ModelPricing;
 use crate::modes::tui::events::UiEvent;
 use crate::modes::tui::shared::internal::SessionCommand;
+use crate::providers::anthropic::ChatMessage;
 
 /// Session and conversation state.
 ///
 /// Encapsulates the active session, message history, and usage tracking.
 pub struct SessionState {
     /// Active session for persistence (if enabled).
-    pub session: Option<crate::core::session::Session>,
+    pub session: Option<Session>,
 
     /// Conversation messages (API format).
-    pub messages: Vec<crate::providers::anthropic::ChatMessage>,
+    pub messages: Vec<ChatMessage>,
 
     /// Cumulative token usage for this session.
     pub usage: SessionUsage,
@@ -38,10 +41,7 @@ impl SessionState {
     }
 
     /// Creates a SessionState with an active session and message history.
-    pub fn with_session(
-        session: Option<crate::core::session::Session>,
-        messages: Vec<crate::providers::anthropic::ChatMessage>,
-    ) -> Self {
+    pub fn with_session(session: Option<Session>, messages: Vec<ChatMessage>) -> Self {
         Self {
             session,
             messages,
@@ -220,7 +220,7 @@ impl SessionUsage {
     /// Calculates the total cost for this session in USD.
     ///
     /// Uses the pricing from the model (prices are per million tokens).
-    pub fn calculate_cost(&self, pricing: &crate::models::ModelPricing) -> f64 {
+    pub fn calculate_cost(&self, pricing: &ModelPricing) -> f64 {
         let million = 1_000_000.0;
 
         let input_cost = (self.input_tokens as f64 / million) * pricing.input;
@@ -234,7 +234,7 @@ impl SessionUsage {
     /// Calculates the cost savings from cache hits.
     ///
     /// Returns the amount saved by using cache_read instead of regular input pricing.
-    pub fn cache_savings(&self, pricing: &crate::models::ModelPricing) -> f64 {
+    pub fn cache_savings(&self, pricing: &ModelPricing) -> f64 {
         let million = 1_000_000.0;
 
         // Savings = what we would have paid at input price - what we actually paid at cache_read price

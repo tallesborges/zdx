@@ -15,8 +15,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
+use crate::modes::tui::input;
 use crate::modes::tui::overlays::OverlayExt;
-use crate::modes::tui::{input, transcript};
+use crate::modes::tui::transcript::{self, CellId};
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
@@ -177,9 +178,6 @@ pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height:
 ///
 /// This is a thin wrapper around transcript::calculate_cell_line_counts
 /// that passes the TRANSCRIPT_MARGIN constant.
-pub fn calculate_cell_line_counts(
-    state: &TuiState,
-    terminal_width: usize,
-) -> Vec<(crate::modes::tui::transcript::CellId, usize)> {
+pub fn calculate_cell_line_counts(state: &TuiState, terminal_width: usize) -> Vec<(CellId, usize)> {
     transcript::calculate_cell_line_counts(state, terminal_width, TRANSCRIPT_MARGIN)
 }

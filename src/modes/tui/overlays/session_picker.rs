@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use super::OverlayAction;
 use crate::core::session::SessionSummary;
 use crate::modes::tui::app::TuiState;
+use crate::modes::tui::session::render_session_picker;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
 use crate::modes::tui::transcript::HistoryCell;
@@ -49,7 +50,7 @@ impl SessionPickerState {
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         // Delegate to session feature view
-        crate::modes::tui::session::render_session_picker(frame, self, area, input_y)
+        render_session_picker(frame, self, area, input_y)
     }
 
     pub fn handle_key(

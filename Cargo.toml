@@ -35,6 +35,9 @@ url = "2.5"
 uuid = { version = "1.19.0", features = ["v4"] }
 ignore = "0.4"
 
+[lints.clippy]
+absolute_paths = "warn"
+
 [dev-dependencies]
 assert_cmd = "2.1.1"
 predicates = "3.1.3"

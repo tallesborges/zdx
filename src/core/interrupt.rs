@@ -1,8 +1,12 @@
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use tokio::sync::Notify;
+
+use crate::modes::tui::terminal;
+
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
-static INTERRUPT_NOTIFY: OnceLock<tokio::sync::Notify> = OnceLock::new();
+static INTERRUPT_NOTIFY: OnceLock<Notify> = OnceLock::new();
 
 #[derive(Debug)]
 pub struct InterruptedError;
@@ -28,9 +32,7 @@ pub fn init() {
 }
 
 fn notify_waiters() {
-    INTERRUPT_NOTIFY
-        .get_or_init(tokio::sync::Notify::new)
-        .notify_waiters();
+    INTERRUPT_NOTIFY.get_or_init(Notify::new).notify_waiters();
 }
 
 /// Triggers an interrupt via Ctrl+C, force-exiting on a second Ctrl+C.
@@ -38,7 +40,7 @@ pub fn trigger_ctrl_c() {
     if INTERRUPTED.swap(true, Ordering::SeqCst) {
         // Second interrupt - force exit.
         // Restore terminal first since process::exit() bypasses Drop handlers.
-        let _ = crate::modes::tui::terminal::restore_terminal();
+        let _ = terminal::restore_terminal();
         std::process::exit(130);
     }
     notify_waiters();
@@ -55,10 +57,7 @@ pub async fn wait_for_interrupt() {
         if is_interrupted() {
             return;
         }
-        INTERRUPT_NOTIFY
-            .get_or_init(tokio::sync::Notify::new)
-            .notified()
-            .await;
+        INTERRUPT_NOTIFY.get_or_init(Notify::new).notified().await;
     }
 }
 
