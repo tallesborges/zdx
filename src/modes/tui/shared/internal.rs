@@ -58,6 +58,12 @@ pub enum SessionCommand {
     AppendMessage(ChatMessage),
     SetSession(Option<Session>),
     ResetUsage,
+    SetUsage {
+        input: u64,
+        output: u64,
+        cache_read: u64,
+        cache_write: u64,
+    },
     UpdateUsage {
         input: u64,
         output: u64,

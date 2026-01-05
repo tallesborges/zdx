@@ -7,16 +7,16 @@
 
 use crossterm::event::Event;
 
+use crate::modes::tui::app::{AgentState, AppState, TuiState};
 use crate::modes::tui::events::UiEvent;
-use crate::modes::tui::overlays;
+use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::session::SessionUsage;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
     AuthCommand, ConfigCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
 };
-use crate::modes::tui::app::{AgentState, AppState, TuiState};
-use crate::modes::tui::input::HandoffState;
-use crate::modes::tui::{auth, input, render, session, transcript};
-use crate::modes::tui::{session::SessionUsage, transcript::TranscriptState};
+use crate::modes::tui::transcript::TranscriptState;
+use crate::modes::tui::{auth, input, overlays, render, session, transcript};
 
 /// The main reducer function.
 ///
@@ -38,13 +38,31 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => {
             let has_session = app.tui.conversation.session.is_some();
-            let (effects, commands) = transcript::handle_agent_event(
+            let (mut effects, commands) = transcript::handle_agent_event(
                 &mut app.tui.transcript,
                 &mut app.tui.agent_state,
                 has_session,
                 &agent_event,
             );
             apply_state_commands(&mut app.tui, commands);
+
+            // Save usage to session after turn completes
+            if matches!(
+                agent_event,
+                crate::core::events::AgentEvent::TurnComplete { .. }
+            ) && has_session
+            {
+                let usage = &app.tui.conversation.usage;
+                effects.push(UiEffect::SaveSession {
+                    event: crate::core::session::SessionEvent::usage(
+                        usage.input_tokens,
+                        usage.output_tokens,
+                        usage.cache_read_tokens,
+                        usage.cache_write_tokens,
+                    ),
+                });
+            }
+
             effects
         }
         UiEvent::AgentSpawned { rx } => {
@@ -85,7 +103,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             apply_state_commands(&mut app.tui, commands);
             vec![]
         }
-        UiEvent::HandoffGenerationStarted { goal, rx, cancel_tx } => {
+        UiEvent::HandoffGenerationStarted {
+            goal,
+            rx,
+            cancel_tx,
+        } => {
             app.tui.input.handoff = HandoffState::Generating {
                 goal,
                 rx,
@@ -96,21 +118,23 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::HandoffSessionCreated { session } => {
             let session_path = session.path().display().to_string();
             app.tui.conversation.session = Some(session);
-            app.tui.transcript.cells.push(
-                crate::modes::tui::transcript::HistoryCell::system(format!(
+            app.tui
+                .transcript
+                .cells
+                .push(crate::modes::tui::transcript::HistoryCell::system(format!(
                     "Session path: {}",
                     session_path
-                )),
-            );
+                )));
             vec![UiEffect::StartAgentTurn]
         }
         UiEvent::HandoffSessionCreateFailed { error } => {
-            app.tui.transcript.cells.push(
-                crate::modes::tui::transcript::HistoryCell::system(format!(
+            app.tui
+                .transcript
+                .cells
+                .push(crate::modes::tui::transcript::HistoryCell::system(format!(
                     "Warning: Failed to create session: {}",
                     error
-                )),
-            );
+                )));
             vec![UiEffect::StartAgentTurn]
         }
         UiEvent::FilesDiscovered(files) => {
@@ -148,7 +172,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 fn apply_state_commands(tui: &mut TuiState, commands: Vec<StateCommand>) {
     for command in commands {
         match command {
-            StateCommand::Transcript(command) => apply_transcript_command(&mut tui.transcript, command),
+            StateCommand::Transcript(command) => {
+                apply_transcript_command(&mut tui.transcript, command)
+            }
             StateCommand::Input(command) => apply_input_command(&mut tui.input, command),
             StateCommand::Session(command) => apply_session_command(&mut tui.conversation, command),
             StateCommand::Auth(command) => apply_auth_command(&mut tui.auth, command),
@@ -161,7 +187,9 @@ fn apply_transcript_command(transcript: &mut TranscriptState, command: Transcrip
     match command {
         TranscriptCommand::AppendCell(cell) => transcript.cells.push(cell),
         TranscriptCommand::AppendSystemMessage(message) => {
-            transcript.cells.push(crate::modes::tui::transcript::HistoryCell::system(message));
+            transcript
+                .cells
+                .push(crate::modes::tui::transcript::HistoryCell::system(message));
         }
         TranscriptCommand::Clear => transcript.reset(),
         TranscriptCommand::ReplaceCells(cells) => transcript.cells = cells,
@@ -220,6 +248,15 @@ fn apply_session_command(
         SessionCommand::AppendMessage(message) => session.messages.push(message),
         SessionCommand::SetSession(session_handle) => session.session = session_handle,
         SessionCommand::ResetUsage => session.usage = SessionUsage::new(),
+        SessionCommand::SetUsage {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        } => {
+            session.usage = SessionUsage::new();
+            session.usage.add(input, output, cache_read, cache_write);
+        }
         SessionCommand::UpdateUsage {
             input,
             output,
@@ -296,8 +333,7 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
-    if let Some(crate::modes::tui::overlays::Overlay::FilePicker(picker)) =
-        app.overlay.as_mut()
+    if let Some(crate::modes::tui::overlays::Overlay::FilePicker(picker)) = app.overlay.as_mut()
         && crate::modes::tui::overlays::FilePickerState::should_route_input_key(key)
     {
         app.tui.input.textarea.input(key);

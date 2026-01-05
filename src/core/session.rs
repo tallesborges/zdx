@@ -85,6 +85,15 @@ pub enum SessionEvent {
         signature: Option<String>,
         ts: String,
     },
+
+    /// Usage event: token usage snapshot after a turn.
+    Usage {
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+        ts: String,
+    },
 }
 
 impl SessionEvent {
@@ -149,6 +158,22 @@ impl SessionEvent {
         Self::Thinking {
             content: content.into(),
             signature,
+            ts: chrono_timestamp(),
+        }
+    }
+
+    /// Creates a new usage event.
+    pub fn usage(
+        input_tokens: u64,
+        output_tokens: u64,
+        cache_read_tokens: u64,
+        cache_write_tokens: u64,
+    ) -> Self {
+        Self::Usage {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
             ts: chrono_timestamp(),
         }
     }
@@ -737,6 +762,9 @@ pub fn events_to_messages(
             SessionEvent::Interrupted { .. } => {
                 // Skip interrupted events when loading for API
             }
+            SessionEvent::Usage { .. } => {
+                // Skip usage events when loading for API (they're for session tracking only)
+            }
         }
     }
 
@@ -749,6 +777,35 @@ pub fn events_to_messages(
     );
 
     messages
+}
+
+/// Extracts cumulative usage from session events.
+///
+/// Sums all Usage events to reconstruct the total token usage for the session.
+/// Returns (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens).
+pub fn extract_usage_from_events(events: &[SessionEvent]) -> (u64, u64, u64, u64) {
+    let mut input = 0u64;
+    let mut output = 0u64;
+    let mut cache_read = 0u64;
+    let mut cache_write = 0u64;
+
+    for event in events {
+        if let SessionEvent::Usage {
+            input_tokens,
+            output_tokens,
+            cache_read_tokens,
+            cache_write_tokens,
+            ..
+        } = event
+        {
+            input += input_tokens;
+            output += output_tokens;
+            cache_read += cache_read_tokens;
+            cache_write += cache_write_tokens;
+        }
+    }
+
+    (input, output, cache_read, cache_write)
 }
 
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
@@ -812,6 +869,9 @@ pub fn format_transcript(events: &[SessionEvent]) -> String {
             }
             SessionEvent::Interrupted { .. } => {
                 output.push_str("### Interrupted\n\n");
+            }
+            SessionEvent::Usage { .. } => {
+                // Skip usage events in transcript display
             }
         }
     }
@@ -1265,5 +1325,95 @@ mod tests {
         let transcript = format_transcript(&events);
         assert!(transcript.contains("### Thinking"));
         assert!(transcript.contains("Analyzing the request..."));
+    }
+
+    #[test]
+    fn test_usage_event_serialization() {
+        let usage = SessionEvent::usage(1000, 500, 2000, 100);
+        let json = serde_json::to_string(&usage).unwrap();
+        assert!(json.contains("\"type\":\"usage\""));
+        assert!(json.contains("\"input_tokens\":1000"));
+        assert!(json.contains("\"output_tokens\":500"));
+        assert!(json.contains("\"cache_read_tokens\":2000"));
+        assert!(json.contains("\"cache_write_tokens\":100"));
+    }
+
+    #[test]
+    fn test_usage_event_deserialization() {
+        let json = r#"{"type":"usage","input_tokens":1000,"output_tokens":500,"cache_read_tokens":2000,"cache_write_tokens":100,"ts":"2024-01-01T00:00:00Z"}"#;
+        let event: SessionEvent = serde_json::from_str(json).unwrap();
+        match event {
+            SessionEvent::Usage {
+                input_tokens,
+                output_tokens,
+                cache_read_tokens,
+                cache_write_tokens,
+                ..
+            } => {
+                assert_eq!(input_tokens, 1000);
+                assert_eq!(output_tokens, 500);
+                assert_eq!(cache_read_tokens, 2000);
+                assert_eq!(cache_write_tokens, 100);
+            }
+            _ => panic!("Expected Usage event"),
+        }
+    }
+
+    #[test]
+    fn test_extract_usage_from_events() {
+        let events = vec![
+            SessionEvent::user_message("hello"),
+            SessionEvent::assistant_message("hi"),
+            SessionEvent::usage(100, 50, 200, 25),
+            SessionEvent::user_message("bye"),
+            SessionEvent::assistant_message("goodbye"),
+            SessionEvent::usage(150, 75, 300, 30),
+        ];
+
+        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
+        assert_eq!(input, 250); // 100 + 150
+        assert_eq!(output, 125); // 50 + 75
+        assert_eq!(cache_read, 500); // 200 + 300
+        assert_eq!(cache_write, 55); // 25 + 30
+    }
+
+    #[test]
+    fn test_extract_usage_from_events_empty() {
+        let events = vec![
+            SessionEvent::user_message("hello"),
+            SessionEvent::assistant_message("hi"),
+        ];
+
+        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
+        assert_eq!(input, 0);
+        assert_eq!(output, 0);
+        assert_eq!(cache_read, 0);
+        assert_eq!(cache_write, 0);
+    }
+
+    #[test]
+    fn test_session_usage_roundtrip() {
+        let _temp = setup_temp_zdx_home();
+
+        let mut session = Session::with_id(unique_session_id("usage-roundtrip")).unwrap();
+        session
+            .append(&SessionEvent::user_message("hello"))
+            .unwrap();
+        session
+            .append(&SessionEvent::assistant_message("hi"))
+            .unwrap();
+        session
+            .append(&SessionEvent::usage(1000, 500, 2000, 100))
+            .unwrap();
+
+        let events = session.read_events().unwrap();
+        // meta + user + assistant + usage = 4 events
+        assert_eq!(events.len(), 4);
+
+        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
+        assert_eq!(input, 1000);
+        assert_eq!(output, 500);
+        assert_eq!(cache_read, 2000);
+        assert_eq!(cache_write, 100);
     }
 }

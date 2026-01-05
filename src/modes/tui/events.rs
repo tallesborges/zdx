@@ -34,6 +34,8 @@ pub enum SessionUiEvent {
         messages: Vec<ChatMessage>,
         history: Vec<String>,
         session: Option<Session>,
+        /// Restored token usage from session.
+        usage: (u64, u64, u64, u64),
     },
 
     /// Session load failed.
@@ -86,9 +88,7 @@ pub enum UiEvent {
     Agent(AgentEvent),
 
     /// Agent turn spawned; reducer should set agent state to Waiting.
-    AgentSpawned {
-        rx: mpsc::Receiver<Arc<AgentEvent>>,
-    },
+    AgentSpawned { rx: mpsc::Receiver<Arc<AgentEvent>> },
 
     /// Async login token exchange completed.
     LoginResult(Result<(), String>),
