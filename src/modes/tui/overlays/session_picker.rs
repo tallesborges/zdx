@@ -4,9 +4,9 @@ use ratatui::layout::Rect;
 
 use super::OverlayAction;
 use crate::core::session::SessionSummary;
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
-use crate::modes::tui::app::TuiState;
 use crate::modes::tui::transcript::HistoryCell;
 
 const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_SESSIONS - 2
@@ -54,18 +54,16 @@ impl SessionPickerState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
-            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                (
-                    Some(OverlayAction::close()),
-                    vec![
-                        StateCommand::Transcript(TranscriptCommand::ReplaceCells(
-                            self.original_cells.clone(),
-                        )),
-                        StateCommand::Transcript(TranscriptCommand::ResetScroll),
-                        StateCommand::Transcript(TranscriptCommand::ClearWrapCache),
-                    ],
-                )
-            }
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
+                Some(OverlayAction::close()),
+                vec![
+                    StateCommand::Transcript(TranscriptCommand::ReplaceCells(
+                        self.original_cells.clone(),
+                    )),
+                    StateCommand::Transcript(TranscriptCommand::ResetScroll),
+                    StateCommand::Transcript(TranscriptCommand::ClearWrapCache),
+                ],
+            ),
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
                     self.selected -= 1;

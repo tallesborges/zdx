@@ -10,9 +10,9 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use crate::core::events::AgentEvent;
 use crate::core::interrupt;
 use crate::core::session::SessionEvent;
+use crate::modes::tui::app::AgentState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{SessionCommand, StateCommand};
-use crate::modes::tui::app::AgentState;
 use crate::modes::tui::transcript::{HistoryCell, ToolState, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
@@ -33,134 +33,131 @@ pub fn handle_agent_event(
     event: &AgentEvent,
 ) -> (Vec<UiEffect>, Vec<StateCommand>) {
     let mut commands = Vec::new();
-    let effects = match event {
-        AgentEvent::AssistantDelta { text } => {
-            handle_assistant_delta(transcript, agent_state, text);
-            vec![]
-        }
-        AgentEvent::AssistantComplete { .. } => {
-            // Apply any pending delta before finalizing to ensure no content is lost.
-            // This is critical because multiple events can be processed in one loop
-            // iteration, and TurnComplete may follow immediately after AssistantComplete.
-            apply_pending_delta(transcript, agent_state);
-
-            if let AgentState::Streaming { cell_id, .. } = &agent_state
-                && let Some(cell) = transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
-            {
-                cell.finalize_assistant();
-            }
-            vec![]
-        }
-        AgentEvent::Error { message, .. } => {
-            // Apply any pending delta before resetting agent state to preserve
-            // partial content that was streamed before the error occurred.
-            apply_pending_delta(transcript, agent_state);
-
-            transcript
-                .cells
-                .push(HistoryCell::system(format!("Error: {}", message)));
-            // Reset agent state - the turn is over due to the error
-            *agent_state = AgentState::Idle;
-            vec![]
-        }
-        AgentEvent::Interrupted => {
-            handle_interrupted(transcript, agent_state);
-            vec![]
-        }
-        AgentEvent::ToolRequested { id, name, input } => {
-            let tool_cell = HistoryCell::tool_running(id, name, input.clone());
-            transcript.cells.push(tool_cell);
-            vec![]
-        }
-        AgentEvent::ToolInputReady { id, input, .. } => {
-            // Update the existing tool cell with the complete input
-            if let Some(cell) =
-                transcript.cells.iter_mut().find(
-                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
-                )
-            {
-                cell.set_tool_input(input.clone());
-            }
-            vec![]
-        }
-        AgentEvent::ToolStarted { .. } => vec![],
-        AgentEvent::ToolFinished { id, result } => {
-            if let Some(cell) =
-                transcript.cells.iter_mut().find(
-                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
-                )
-            {
-                cell.set_tool_result(result.clone());
-            }
-            vec![]
-        }
-        AgentEvent::TurnComplete {
-            final_text,
-            messages,
-        } => {
-            // Apply any pending delta before resetting agent state to ensure no
-            // content is lost. This handles edge cases where AssistantComplete wasn't
-            // received or didn't have a chance to apply the delta.
-            apply_pending_delta(transcript, agent_state);
-
-            commands.push(StateCommand::Session(SessionCommand::SetMessages(
-                messages.clone(),
-            )));
-            *agent_state = AgentState::Idle;
-
-            // Save assistant message to session if enabled
-            if !final_text.is_empty() && has_session {
-                vec![UiEffect::SaveSession {
-                    event: SessionEvent::assistant_message(final_text),
-                }]
-            } else {
+    let effects =
+        match event {
+            AgentEvent::AssistantDelta { text } => {
+                handle_assistant_delta(transcript, agent_state, text);
                 vec![]
             }
-        }
-        // Thinking events - create or update thinking cells in transcript
-        AgentEvent::ThinkingDelta { text } => {
-            handle_thinking_delta(transcript, agent_state, text);
-            vec![]
-        }
-        AgentEvent::ThinkingComplete { signature, .. } => {
-            // Find the last streaming thinking cell and finalize it
-            if let Some(cell) = transcript.cells.iter_mut().rev().find(|c| {
-                matches!(
-                    c,
-                    HistoryCell::Thinking {
-                        is_streaming: true,
-                        ..
-                    }
-                )
-            }) {
-                cell.finalize_thinking(signature.clone());
+            AgentEvent::AssistantComplete { .. } => {
+                // Apply any pending delta before finalizing to ensure no content is lost.
+                // This is critical because multiple events can be processed in one loop
+                // iteration, and TurnComplete may follow immediately after AssistantComplete.
+                apply_pending_delta(transcript, agent_state);
+
+                if let AgentState::Streaming { cell_id, .. } = &agent_state
+                    && let Some(cell) = transcript.cells.iter_mut().find(|c| c.id() == *cell_id)
+                {
+                    cell.finalize_assistant();
+                }
+                vec![]
             }
-            vec![]
-        }
-        AgentEvent::UsageUpdate {
-            input_tokens,
-            output_tokens,
-            cache_read_input_tokens,
-            cache_creation_input_tokens,
-        } => {
-            commands.push(StateCommand::Session(SessionCommand::UpdateUsage {
-                input: *input_tokens,
-                output: *output_tokens,
-                cache_read: *cache_read_input_tokens,
-                cache_write: *cache_creation_input_tokens,
-            }));
-            vec![]
-        }
-        AgentEvent::TurnStarted => {
-            // Turn start - no UI updates needed yet
-            vec![]
-        }
-        AgentEvent::ToolOutputDelta { .. } => {
-            // TODO: Update tool cell with streaming output
-            // For now, we only show final output in ToolFinished
-            vec![]
-        }
-    };
+            AgentEvent::Error { message, .. } => {
+                // Apply any pending delta before resetting agent state to preserve
+                // partial content that was streamed before the error occurred.
+                apply_pending_delta(transcript, agent_state);
+
+                transcript
+                    .cells
+                    .push(HistoryCell::system(format!("Error: {}", message)));
+                // Reset agent state - the turn is over due to the error
+                *agent_state = AgentState::Idle;
+                vec![]
+            }
+            AgentEvent::Interrupted => {
+                handle_interrupted(transcript, agent_state);
+                vec![]
+            }
+            AgentEvent::ToolRequested { id, name, input } => {
+                let tool_cell = HistoryCell::tool_running(id, name, input.clone());
+                transcript.cells.push(tool_cell);
+                vec![]
+            }
+            AgentEvent::ToolInputReady { id, input, .. } => {
+                // Update the existing tool cell with the complete input
+                if let Some(cell) = transcript.cells.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
+                ) {
+                    cell.set_tool_input(input.clone());
+                }
+                vec![]
+            }
+            AgentEvent::ToolStarted { .. } => vec![],
+            AgentEvent::ToolFinished { id, result } => {
+                if let Some(cell) = transcript.cells.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
+                ) {
+                    cell.set_tool_result(result.clone());
+                }
+                vec![]
+            }
+            AgentEvent::TurnComplete {
+                final_text,
+                messages,
+            } => {
+                // Apply any pending delta before resetting agent state to ensure no
+                // content is lost. This handles edge cases where AssistantComplete wasn't
+                // received or didn't have a chance to apply the delta.
+                apply_pending_delta(transcript, agent_state);
+
+                commands.push(StateCommand::Session(SessionCommand::SetMessages(
+                    messages.clone(),
+                )));
+                *agent_state = AgentState::Idle;
+
+                // Save assistant message to session if enabled
+                if !final_text.is_empty() && has_session {
+                    vec![UiEffect::SaveSession {
+                        event: SessionEvent::assistant_message(final_text),
+                    }]
+                } else {
+                    vec![]
+                }
+            }
+            // Thinking events - create or update thinking cells in transcript
+            AgentEvent::ThinkingDelta { text } => {
+                handle_thinking_delta(transcript, agent_state, text);
+                vec![]
+            }
+            AgentEvent::ThinkingComplete { signature, .. } => {
+                // Find the last streaming thinking cell and finalize it
+                if let Some(cell) = transcript.cells.iter_mut().rev().find(|c| {
+                    matches!(
+                        c,
+                        HistoryCell::Thinking {
+                            is_streaming: true,
+                            ..
+                        }
+                    )
+                }) {
+                    cell.finalize_thinking(signature.clone());
+                }
+                vec![]
+            }
+            AgentEvent::UsageUpdate {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            } => {
+                commands.push(StateCommand::Session(SessionCommand::UpdateUsage {
+                    input: *input_tokens,
+                    output: *output_tokens,
+                    cache_read: *cache_read_input_tokens,
+                    cache_write: *cache_creation_input_tokens,
+                }));
+                vec![]
+            }
+            AgentEvent::TurnStarted => {
+                // Turn start - no UI updates needed yet
+                vec![]
+            }
+            AgentEvent::ToolOutputDelta { .. } => {
+                // TODO: Update tool cell with streaming output
+                // For now, we only show final output in ToolFinished
+                vec![]
+            }
+        };
 
     (effects, commands)
 }
@@ -170,7 +167,11 @@ pub fn handle_agent_event(
 // ============================================================================
 
 /// Handles assistant text delta events.
-fn handle_assistant_delta(transcript: &mut TranscriptState, agent_state: &mut AgentState, text: &str) {
+fn handle_assistant_delta(
+    transcript: &mut TranscriptState,
+    agent_state: &mut AgentState,
+    text: &str,
+) {
     match agent_state {
         AgentState::Waiting { .. } => {
             // Create streaming cell and transition to Streaming state
@@ -226,7 +227,11 @@ fn handle_assistant_delta(transcript: &mut TranscriptState, agent_state: &mut Ag
 }
 
 /// Handles thinking text delta events.
-fn handle_thinking_delta(transcript: &mut TranscriptState, agent_state: &mut AgentState, text: &str) {
+fn handle_thinking_delta(
+    transcript: &mut TranscriptState,
+    agent_state: &mut AgentState,
+    text: &str,
+) {
     // Transition from Waiting to Streaming
     if let AgentState::Waiting { .. } = agent_state {
         let old_state = std::mem::replace(agent_state, AgentState::Idle);

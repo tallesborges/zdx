@@ -3,10 +3,10 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::OverlayAction;
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{AuthCommand, StateCommand};
-use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
@@ -47,12 +47,10 @@ impl LoginState {
 
         match self {
             LoginState::AwaitingCode { input, .. } => match key.code {
-                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                    (
-                        Some(OverlayAction::close()),
-                        vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
-                    )
-                }
+                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
+                    Some(OverlayAction::close()),
+                    vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
+                ),
                 KeyCode::Enter => {
                     let code = input.trim().to_string();
                     if code.is_empty() {

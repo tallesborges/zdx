@@ -10,13 +10,13 @@
 //!
 //! See `docs/ARCHITECTURE.md` for the TUI architecture overview.
 
-mod update;
-mod state;
 mod render;
+mod state;
+mod update;
 
 // Re-export state types
 // Re-export reducer functions
-pub use update::{handle_handoff_result, handle_main_key, handle_paste};
-pub use state::{HandoffState, InputState};
 // Re-export view functions
 pub use render::{calculate_input_height, render_input};
+pub use state::{HandoffState, InputState};
+pub use update::{handle_handoff_result, handle_main_key, handle_paste};

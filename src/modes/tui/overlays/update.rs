@@ -8,9 +8,9 @@ use std::path::PathBuf;
 use crossterm::event::KeyEvent;
 
 use super::{Overlay, OverlayExt};
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::StateCommand;
-use crate::modes::tui::app::TuiState;
 
 /// Handles a key event for the active overlay.
 ///

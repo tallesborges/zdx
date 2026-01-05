@@ -19,30 +19,23 @@ mod state;
 mod update;
 
 // Re-export existing display types
+// Re-export build function
+pub use build::build_transcript_from_events;
 pub use cell::{CellId, HistoryCell, ToolState};
-pub use style::{Style, StyledLine, StyledSpan};
-pub use wrap::WrapCache;
-
-// Re-export state types
-pub use state::{TranscriptState, VisibleRange};
-
-// Re-export scroll types (used by tests in state/mod.rs via state/transcript.rs shim)
-#[allow(unused_imports)] // Used in test configurations via state/transcript.rs shim
-pub use state::{ScrollMode, ScrollState};
-
+// Re-export render functions
+pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
+// Re-export selection types (only those used externally)
+pub use selection::{LineMapping, SelectionState};
 // Test-only exports (used in transcript/state.rs tests)
 #[cfg(test)]
 #[allow(unused_imports)]
 pub use state::{CellLineInfo, ScrollAccumulator};
-
-// Re-export selection types (only those used externally)
-pub use selection::{LineMapping, SelectionState};
-
-// Re-export build function
-pub use build::build_transcript_from_events;
-
+// Re-export scroll types (used by tests in state/mod.rs via state/transcript.rs shim)
+#[allow(unused_imports)] // Used in test configurations via state/transcript.rs shim
+pub use state::{ScrollMode, ScrollState};
+// Re-export state types
+pub use state::{TranscriptState, VisibleRange};
+pub use style::{Style, StyledLine, StyledSpan};
 // Re-export update functions
 pub use update::{apply_pending_delta, apply_scroll_delta, handle_agent_event, handle_mouse};
-
-// Re-export render functions
-pub use render::{calculate_cell_line_counts, render_transcript, SPINNER_SPEED_DIVISOR};
+pub use wrap::WrapCache;

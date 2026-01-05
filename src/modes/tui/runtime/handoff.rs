@@ -53,11 +53,7 @@ pub fn execute_handoff_submit(prompt: &str) -> Result<Session, String> {
 }
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
-pub fn spawn_handoff_generation(
-    session_id: &str,
-    goal: &str,
-    root: &std::path::Path,
-) -> UiEvent {
+pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &std::path::Path) -> UiEvent {
     use tokio::process::Command;
 
     let (tx, rx) = mpsc::channel::<Result<String, String>>(1);

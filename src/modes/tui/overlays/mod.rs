@@ -40,9 +40,9 @@ pub use thinking_picker::ThinkingPickerState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
 
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::StateCommand;
-use crate::modes::tui::app::TuiState;
 
 // ============================================================================
 // OverlayAction
