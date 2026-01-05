@@ -106,12 +106,20 @@ pub fn render_session_picker(
 
     render_separator(frame, inner_area, list_height as u16);
 
+    // Show "Copied!" feedback briefly, otherwise show normal hint
+    let copy_hint = if picker.should_show_copied() {
+        InputHint::new("✓", "Copied!")
+    } else {
+        InputHint::new("y", "copy id")
+    };
+
     render_hints(
         frame,
         inner_area,
         &[
             InputHint::new("↑↓", "navigate"),
             InputHint::new("Enter", "select"),
+            copy_hint,
             InputHint::new("Esc", "cancel"),
         ],
         Color::Blue,

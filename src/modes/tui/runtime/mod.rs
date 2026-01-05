@@ -551,6 +551,14 @@ impl TuiRuntime {
                     self.set_overlay(Overlay::Login(state), effects);
                 }
             }
+
+            // Clipboard effects
+            UiEffect::CopyToClipboard { text } => {
+                use crate::modes::tui::shared::Clipboard;
+                if Clipboard::copy(&text).is_ok() {
+                    self.dispatch_event(UiEvent::ClipboardCopied);
+                }
+            }
         }
     }
 }

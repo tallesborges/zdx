@@ -117,6 +117,9 @@ pub enum UiEvent {
     /// File discovery completed for file picker.
     FilesDiscovered(Vec<PathBuf>),
 
+    /// Clipboard copy completed successfully.
+    ClipboardCopied,
+
     /// Session async I/O results.
     Session(SessionUiEvent),
 }

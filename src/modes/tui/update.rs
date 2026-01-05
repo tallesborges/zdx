@@ -142,6 +142,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
 
+        // Clipboard copy succeeded - show brief feedback in session picker
+        UiEvent::ClipboardCopied => {
+            if let Some(overlays::Overlay::SessionPicker(picker)) = &mut app.overlay {
+                picker.copied_at = Some(std::time::Instant::now());
+            }
+            vec![]
+        }
+
         // Session async result events - delegate to session feature
         UiEvent::Session(session_event) => {
             let (mut effects, commands, overlay_action) =
