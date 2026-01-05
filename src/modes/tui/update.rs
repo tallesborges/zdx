@@ -133,7 +133,17 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 )));
             vec![UiEffect::StartAgentTurn]
         }
+        UiEvent::FileDiscoveryStarted { rx, cancel } => {
+            if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
+                picker.discovery_rx = Some(rx);
+                picker.discovery_cancel = Some(cancel);
+            }
+            vec![]
+        }
         UiEvent::FilesDiscovered(files) => {
+            if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
+                picker.discovery_rx = None;
+            }
             overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
         }

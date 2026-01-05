@@ -89,7 +89,7 @@ impl OverlayAction {
 // Overlay
 // ============================================================================
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub enum Overlay {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
