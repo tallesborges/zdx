@@ -478,6 +478,11 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         return apply_overlay_action(app, action);
     }
 
+    // If overlay is active but returned no action, it still consumed the key
+    if app.overlay.is_some() {
+        return vec![];
+    }
+
     // No overlay active - delegate to input feature module
     let session_id = app
         .tui
