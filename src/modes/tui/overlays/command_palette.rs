@@ -6,12 +6,12 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::commands::COMMANDS;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
     AuthCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
 };
-use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub struct CommandPaletteState {
@@ -140,19 +140,23 @@ fn execute_logout() -> (Vec<UiEffect>, Vec<StateCommand>) {
     match anthropic::clear_credentials() {
         Ok(true) => {
             commands.push(StateCommand::Auth(AuthCommand::RefreshStatus));
-            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
-                "Logged out from Anthropic OAuth.".to_string(),
-            )));
+            commands.push(StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage(
+                    "Logged out from Anthropic OAuth.".to_string(),
+                ),
+            ));
         }
         Ok(false) => {
-            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
-                "No OAuth credentials to clear.".to_string(),
-            )));
+            commands.push(StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage(
+                    "No OAuth credentials to clear.".to_string(),
+                ),
+            ));
         }
         Err(e) => {
-            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
-                format!("Logout failed: {}", e),
-            )));
+            commands.push(StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage(format!("Logout failed: {}", e)),
+            ));
         }
     }
 
@@ -170,7 +174,9 @@ fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     } else {
         (
             vec![],
-            vec![StateCommand::Input(InputCommand::SetText("/rename ".to_string()))],
+            vec![StateCommand::Input(InputCommand::SetText(
+                "/rename ".to_string(),
+            ))],
         )
     }
 }
@@ -218,9 +224,9 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     if tui.conversation.session.is_some() {
         (vec![UiEffect::CreateNewSession], commands)
     } else {
-        commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
-            "Conversation cleared.".to_string(),
-        )));
+        commands.push(StateCommand::Transcript(
+            TranscriptCommand::AppendSystemMessage("Conversation cleared.".to_string()),
+        ));
         (vec![], commands)
     }
 }

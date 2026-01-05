@@ -23,16 +23,16 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::core::interrupt;
 use crate::core::session::Session;
-use crate::providers::anthropic::ChatMessage;
-use crate::modes::tui::shared::effects::UiEffect;
+use crate::modes::tui::app::{AgentState, AppState};
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::{
     CommandPaletteState, FilePickerState, LoginState, ModelPickerState, Overlay,
     ThinkingPickerState,
 };
-use crate::modes::tui::app::{AgentState, AppState};
-use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
+use crate::providers::anthropic::ChatMessage;
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
 pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);
@@ -506,14 +506,12 @@ impl TuiRuntime {
                     )));
                 }
             }
-            UiEffect::HandoffSubmit { prompt } => {
-                match handoff::execute_handoff_submit(&prompt) {
-                    Ok(session) => self.dispatch_event(UiEvent::HandoffSessionCreated { session }),
-                    Err(error) => {
-                        self.dispatch_event(UiEvent::HandoffSessionCreateFailed { error });
-                    }
+            UiEffect::HandoffSubmit { prompt } => match handoff::execute_handoff_submit(&prompt) {
+                Ok(session) => self.dispatch_event(UiEvent::HandoffSessionCreated { session }),
+                Err(error) => {
+                    self.dispatch_event(UiEvent::HandoffSessionCreateFailed { error });
                 }
-            }
+            },
 
             // File picker effects
             UiEffect::DiscoverFiles => {

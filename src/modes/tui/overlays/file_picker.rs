@@ -8,9 +8,9 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayAction;
+use crate::modes::tui::input::InputState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{InputCommand, StateCommand};
-use crate::modes::tui::input::InputState;
 
 const MAX_VISIBLE_FILES: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;

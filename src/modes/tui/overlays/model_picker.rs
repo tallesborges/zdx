@@ -7,9 +7,9 @@ use ratatui::widgets::{List, ListItem, ListState};
 
 use super::OverlayAction;
 use crate::models::AVAILABLE_MODELS;
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
-use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {

@@ -8,11 +8,11 @@
 //! The separation from TuiRuntime eliminates borrow-checker conflicts
 //! that previously required cloning state for rendering.
 
+use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
-use ratatui::Frame;
 
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
 use crate::modes::tui::overlays::OverlayExt;

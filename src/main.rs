@@ -1,8 +1,8 @@
 mod cli;
 mod config;
 mod core;
-mod modes;
 mod models;
+mod modes;
 mod providers;
 mod tools;
 

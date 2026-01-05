@@ -12,7 +12,7 @@ use ratatui::text::{Line, Span};
 
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::transcript::{
-    CellId, LineMapping, SelectionState, StyledLine, Style as TranscriptStyle, VisibleRange,
+    CellId, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine, VisibleRange,
 };
 
 /// Spinner speed divisor (render frames per spinner frame).

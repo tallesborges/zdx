@@ -5,8 +5,8 @@
 
 use std::ops::Range;
 
-use super::selection::{PositionMap, SelectionState};
 use super::CellId;
+use super::selection::{PositionMap, SelectionState};
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]

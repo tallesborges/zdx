@@ -24,11 +24,11 @@ pub mod shared;
 pub mod events;
 pub mod markdown;
 pub mod overlays;
-pub mod update;
+pub mod render;
 pub mod runtime;
 pub mod terminal;
 pub mod transcript;
-pub mod render;
+pub mod update;
 
 use std::io::{IsTerminal, Write, stderr};
 use std::path::PathBuf;
@@ -39,8 +39,8 @@ pub use runtime::TuiRuntime;
 
 use crate::config::Config;
 use crate::core::session::Session;
-use crate::providers::anthropic::ChatMessage;
 use crate::modes::tui::transcript::HistoryCell;
+use crate::providers::anthropic::ChatMessage;
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(

@@ -35,14 +35,13 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::session::Session;
-use crate::providers::anthropic::ChatMessage;
-
 // Feature state imports
 use crate::modes::tui::auth::AuthState;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::session::{SessionOpsState, SessionState};
 use crate::modes::tui::transcript::{HistoryCell, TranscriptState};
+use crate::providers::anthropic::ChatMessage;
 
 // ============================================================================
 // AppState (Combined State)
@@ -261,7 +260,6 @@ impl TuiState {
 
         transcript
     }
-
 }
 
 // ============================================================================

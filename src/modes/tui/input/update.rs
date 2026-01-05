@@ -7,17 +7,18 @@ use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::state::{HandoffState, InputState};
 use crate::core::session::SessionEvent;
+use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{SessionCommand, StateCommand, TranscriptCommand};
-use crate::modes::tui::app::AgentState;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
 /// Handles paste events for input.
 pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
     if let Some(Overlay::Login(crate::modes::tui::overlays::LoginState::AwaitingCode {
-        input, ..
+        input,
+        ..
     })) = overlay
     {
         input.push_str(text);
@@ -50,15 +51,11 @@ pub fn handle_main_key(
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
                 input.textarea.move_cursor(tui_textarea::CursorMove::Up);
-                input
-                    .textarea
-                    .move_cursor(tui_textarea::CursorMove::End);
+                input.textarea.move_cursor(tui_textarea::CursorMove::End);
                 input.textarea.delete_next_char(); // delete the newline
             } else {
                 // Clear current line
-                input
-                    .textarea
-                    .move_cursor(tui_textarea::CursorMove::Head);
+                input.textarea.move_cursor(tui_textarea::CursorMove::Head);
                 input.textarea.delete_line_by_end();
             }
             (vec![], vec![])
@@ -82,7 +79,9 @@ pub fn handle_main_key(
             }],
             vec![],
         ),
-        KeyCode::Char('t') if ctrl && !shift && !alt => (vec![UiEffect::OpenThinkingPicker], vec![]),
+        KeyCode::Char('t') if ctrl && !shift && !alt => {
+            (vec![UiEffect::OpenThinkingPicker], vec![])
+        }
         KeyCode::Char('c') if ctrl => {
             // Ctrl+C: interrupt agent, clear input, or quit
             if agent_state.is_running() {
@@ -132,16 +131,12 @@ pub fn handle_main_key(
         ),
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
-            input
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Top);
+            input.textarea.move_cursor(tui_textarea::CursorMove::Top);
             (vec![], vec![])
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
-            input
-                .textarea
-                .move_cursor(tui_textarea::CursorMove::Bottom);
+            input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
             (vec![], vec![])
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
@@ -185,10 +180,7 @@ pub fn handle_main_key(
                 };
                 // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
                 let trigger_pos = cursor_pos.saturating_sub(1);
-                return (
-                    vec![UiEffect::OpenFilePicker { trigger_pos }],
-                    vec![],
-                );
+                return (vec![UiEffect::OpenFilePicker { trigger_pos }], vec![]);
             }
 
             (vec![], vec![])
@@ -303,17 +295,15 @@ fn submit_input(
         input.history.push(text.clone());
 
         return (
-            vec![UiEffect::HandoffSubmit { prompt: text.clone() }],
+            vec![UiEffect::HandoffSubmit {
+                prompt: text.clone(),
+            }],
             vec![
                 StateCommand::Transcript(TranscriptCommand::Clear),
                 StateCommand::Session(SessionCommand::ClearMessages),
                 StateCommand::Session(SessionCommand::ResetUsage),
-                StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(
-                    &text,
-                ))),
-                StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(
-                    &text,
-                ))),
+                StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
+                StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
             ],
         );
     }
@@ -341,12 +331,8 @@ fn submit_input(
     (
         effects,
         vec![
-            StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(
-                &text,
-            ))),
-            StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(
-                &text,
-            ))),
+            StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
+            StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
         ],
     )
 }
