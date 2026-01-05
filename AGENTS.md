@@ -125,8 +125,7 @@
 ## Docs
 
 - `docs/SPEC.md`: contracts (what/behavior)
-- `docs/ARCHITECTURE.md`: system architecture and design (includes **Overlay Contract**)
-- `docs/adr/`: durable decisions (why)
+- `docs/ARCHITECTURE.md`: system architecture and design (Elm/MVU patterns, key patterns)
 - `docs/plans/`: optional commit-sized plans (how)
 
 ## Delegating tasks (subagent pattern)
