@@ -8,7 +8,10 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use super::OverlayAction;
 use crate::modes::tui::shared::commands::COMMANDS;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::{
+    AuthCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
+};
+use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub struct CommandPaletteState {
@@ -34,51 +37,58 @@ impl CommandPaletteState {
         render_command_palette(frame, self, area, input_y)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        match key.code {
+        let (action, commands) = match key.code {
             KeyCode::Esc => {
+                let mut commands = Vec::new();
                 if self.insert_slash_on_escape {
-                    tui.input.textarea.insert_char('/');
+                    commands.push(StateCommand::Input(InputCommand::InsertChar('/')));
                 }
-                Some(OverlayAction::close())
+                (Some(OverlayAction::close()), commands)
             }
-            KeyCode::Char('c') if ctrl => Some(OverlayAction::close()),
+            KeyCode::Char('c') if ctrl => (Some(OverlayAction::close()), vec![]),
             KeyCode::Up => {
                 let count = self.filtered_commands().len();
                 if count > 0 && self.selected > 0 {
                     self.selected -= 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Down => {
                 let count = self.filtered_commands().len();
                 if count > 0 && self.selected < count - 1 {
                     self.selected += 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(cmd_name) = self.get_selected_command_name() {
-                    let effects = execute_command(tui, cmd_name);
-                    Some(OverlayAction::close_with(effects))
+                    let (effects, commands) = execute_command(tui, cmd_name);
+                    (Some(OverlayAction::close_with(effects)), commands)
                 } else {
-                    Some(OverlayAction::close())
+                    (Some(OverlayAction::close()), vec![])
                 }
             }
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.clamp_selection();
-                None
+                (None, vec![])
             }
             KeyCode::Char(c) if !ctrl => {
                 self.filter.push(c);
                 self.clamp_selection();
-                None
+                (None, vec![])
             }
-            _ => None,
-        }
+            _ => (None, vec![]),
+        };
+
+        (action, commands)
     }
 
     pub fn filtered_commands(&self) -> Vec<&'static crate::modes::tui::shared::commands::Command> {
@@ -107,96 +117,115 @@ impl CommandPaletteState {
     }
 }
 
-fn execute_command(tui: &mut TuiState, cmd_name: &str) -> Vec<UiEffect> {
-    use crate::modes::tui::transcript::HistoryCell;
-
+fn execute_command(tui: &TuiState, cmd_name: &str) -> (Vec<UiEffect>, Vec<StateCommand>) {
     match cmd_name {
-        "config" => vec![UiEffect::OpenConfig],
-        "login" => vec![UiEffect::OpenLogin],
-        "logout" => {
-            use crate::providers::oauth::anthropic;
-
-            match anthropic::clear_credentials() {
-                Ok(true) => {
-                    tui.refresh_auth_type();
-                    tui.transcript
-                        .cells
-                        .push(HistoryCell::system("Logged out from Anthropic OAuth."));
-                }
-                Ok(false) => {
-                    tui.transcript
-                        .cells
-                        .push(HistoryCell::system("No OAuth credentials to clear."));
-                }
-                Err(e) => {
-                    tui.transcript
-                        .cells
-                        .push(HistoryCell::system(format!("Logout failed: {}", e)));
-                }
-            }
-            vec![]
-        }
-        "rename" => {
-            if tui.conversation.session.is_none() {
-                tui.transcript
-                    .cells
-                    .push(HistoryCell::system("No active session to rename."));
-                vec![]
-            } else {
-                tui.input.set_text("/rename ");
-                vec![]
-            }
-        }
-        "model" => vec![UiEffect::OpenModelPicker],
-        "sessions" => vec![UiEffect::OpenSessionPicker],
-        "thinking" => vec![UiEffect::OpenThinkingPicker],
+        "config" => (vec![UiEffect::OpenConfig], vec![]),
+        "login" => (vec![UiEffect::OpenLogin], vec![]),
+        "logout" => execute_logout(),
+        "rename" => execute_rename(tui),
+        "model" => (vec![UiEffect::OpenModelPicker], vec![]),
+        "sessions" => (vec![UiEffect::OpenSessionPicker], vec![]),
+        "thinking" => (vec![UiEffect::OpenThinkingPicker], vec![]),
         "handoff" => execute_handoff(tui),
         "new" => execute_new(tui),
-        "quit" => execute_quit(tui),
-        _ => vec![],
+        "quit" => (execute_quit(tui), vec![]),
+        _ => (vec![], vec![]),
     }
 }
 
-fn execute_handoff(tui: &mut TuiState) -> Vec<UiEffect> {
-    use crate::modes::tui::state::HandoffState;
-    use crate::modes::tui::transcript::HistoryCell;
+fn execute_logout() -> (Vec<UiEffect>, Vec<StateCommand>) {
+    use crate::providers::oauth::anthropic;
 
+    let mut commands = Vec::new();
+    match anthropic::clear_credentials() {
+        Ok(true) => {
+            commands.push(StateCommand::Auth(AuthCommand::RefreshStatus));
+            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
+                "Logged out from Anthropic OAuth.".to_string(),
+            )));
+        }
+        Ok(false) => {
+            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
+                "No OAuth credentials to clear.".to_string(),
+            )));
+        }
+        Err(e) => {
+            commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
+                format!("Logout failed: {}", e),
+            )));
+        }
+    }
+
+    (vec![], commands)
+}
+
+fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     if tui.conversation.session.is_none() {
-        tui.transcript
-            .cells
-            .push(HistoryCell::system("Handoff requires an active session."));
-        return vec![];
+        (
+            vec![],
+            vec![StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage("No active session to rename.".to_string()),
+            )],
+        )
+    } else {
+        (
+            vec![],
+            vec![StateCommand::Input(InputCommand::SetText("/rename ".to_string()))],
+        )
     }
-
-    tui.input.handoff.cancel();
-    tui.clear_input();
-    tui.input.handoff = HandoffState::Pending;
-    vec![]
 }
 
-fn execute_new(tui: &mut TuiState) -> Vec<UiEffect> {
-    use crate::modes::tui::transcript::HistoryCell;
-
-    if tui.agent_state.is_running() {
-        tui.transcript
-            .cells
-            .push(HistoryCell::system("Cannot clear while streaming."));
-        return vec![];
+fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+    if tui.conversation.session.is_none() {
+        return (
+            vec![],
+            vec![StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage(
+                    "Handoff requires an active session.".to_string(),
+                ),
+            )],
+        );
     }
 
-    tui.reset_conversation();
+    (
+        vec![],
+        vec![
+            StateCommand::Input(InputCommand::SetHandoffState(
+                crate::modes::tui::input::HandoffState::Pending,
+            )),
+            StateCommand::Input(InputCommand::Clear),
+        ],
+    )
+}
+
+fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+    if tui.agent_state.is_running() {
+        return (
+            vec![],
+            vec![StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage("Cannot clear while streaming.".to_string()),
+            )],
+        );
+    }
+
+    let mut commands = vec![
+        StateCommand::Transcript(TranscriptCommand::Clear),
+        StateCommand::Session(SessionCommand::ClearMessages),
+        StateCommand::Session(SessionCommand::ResetUsage),
+        StateCommand::Input(InputCommand::ClearHistory),
+    ];
 
     if tui.conversation.session.is_some() {
-        vec![UiEffect::CreateNewSession]
+        (vec![UiEffect::CreateNewSession], commands)
     } else {
-        tui.transcript
-            .cells
-            .push(HistoryCell::system("Conversation cleared."));
-        vec![]
+        commands.push(StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(
+            "Conversation cleared.".to_string(),
+        )));
+        (vec![], commands)
     }
 }
 
-fn execute_quit(tui: &mut TuiState) -> Vec<UiEffect> {
+fn execute_quit(tui: &TuiState) -> Vec<UiEffect> {
     if tui.agent_state.is_running() {
         vec![UiEffect::InterruptAgent, UiEffect::Quit]
     } else {

@@ -5,7 +5,8 @@ use ratatui::layout::Rect;
 use super::OverlayAction;
 use crate::core::session::SessionSummary;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::transcript::HistoryCell;
 
 const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_SESSIONS - 2
@@ -45,15 +46,25 @@ impl SessionPickerState {
         crate::modes::tui::session::render_session_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        match key.code {
+        let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                tui.transcript.cells = self.original_cells.clone();
-                tui.transcript.scroll.reset();
-                tui.transcript.wrap_cache.clear();
-                Some(OverlayAction::close())
+                (
+                    Some(OverlayAction::close()),
+                    vec![
+                        StateCommand::Transcript(TranscriptCommand::ReplaceCells(
+                            self.original_cells.clone(),
+                        )),
+                        StateCommand::Transcript(TranscriptCommand::ResetScroll),
+                        StateCommand::Transcript(TranscriptCommand::ClearWrapCache),
+                    ],
+                )
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 if self.selected > 0 {
@@ -62,11 +73,14 @@ impl SessionPickerState {
                         self.offset = self.selected;
                     }
                 }
-                self.selected_session().map(|session| {
-                    OverlayAction::Effects(vec![UiEffect::PreviewSession {
-                        session_id: session.id.clone(),
-                    }])
-                })
+                (
+                    self.selected_session().map(|session| {
+                        OverlayAction::Effects(vec![UiEffect::PreviewSession {
+                            session_id: session.id.clone(),
+                        }])
+                    }),
+                    vec![],
+                )
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 if self.selected < self.sessions.len().saturating_sub(1) {
@@ -75,30 +89,42 @@ impl SessionPickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                self.selected_session().map(|session| {
-                    OverlayAction::Effects(vec![UiEffect::PreviewSession {
-                        session_id: session.id.clone(),
-                    }])
-                })
+                (
+                    self.selected_session().map(|session| {
+                        OverlayAction::Effects(vec![UiEffect::PreviewSession {
+                            session_id: session.id.clone(),
+                        }])
+                    }),
+                    vec![],
+                )
             }
             KeyCode::Enter => {
                 if tui.agent_state.is_running() {
-                    tui.transcript
-                        .cells
-                        .push(HistoryCell::system("Stop the current task first."));
-                    return None;
+                    return (
+                        None,
+                        vec![StateCommand::Transcript(
+                            TranscriptCommand::AppendSystemMessage(
+                                "Stop the current task first.".to_string(),
+                            ),
+                        )],
+                    );
                 }
 
                 if let Some(session) = self.selected_session() {
-                    Some(OverlayAction::close_with(vec![UiEffect::LoadSession {
-                        session_id: session.id.clone(),
-                    }]))
+                    (
+                        Some(OverlayAction::close_with(vec![UiEffect::LoadSession {
+                            session_id: session.id.clone(),
+                        }])),
+                        vec![],
+                    )
                 } else {
-                    Some(OverlayAction::close())
+                    (Some(OverlayAction::close()), vec![])
                 }
             }
-            _ => None,
-        }
+            _ => (None, vec![]),
+        };
+
+        (action, commands)
     }
 
     pub fn selected_session(&self) -> Option<&SessionSummary> {

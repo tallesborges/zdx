@@ -2,12 +2,10 @@
 //!
 //! Handles spawning a subagent to generate handoff prompts from session context.
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use super::handlers::spawn_agent_turn;
-use crate::core::session::{self, SessionEvent};
-use crate::modes::tui::state::{HandoffState, TuiState};
-use crate::modes::tui::transcript::HistoryCell;
+use crate::core::session::{self, Session, SessionEvent};
+use crate::modes::tui::events::UiEvent;
 
 /// Model to use for handoff generation (fast, cheap).
 const HANDOFF_MODEL: &str = "claude-haiku-4-5";
@@ -41,87 +39,59 @@ written as if the user is starting a fresh conversation with a new agent."#
     )
 }
 
-/// Executes a handoff submit: creates session and starts agent turn.
+/// Executes a handoff submit: creates a new session and persists the prompt.
 ///
-/// State mutations (clearing conversation, adding user message to transcript/conversation)
-/// happen in the reducer before this effect is executed.
-/// This creates a new session, saves the message, and starts the agent turn.
-///
-/// Note: Session creation is done synchronously here. This is a minor
-/// architectural compromise for the handoff flow simplicity.
-pub fn execute_handoff_submit(state: &mut TuiState, prompt: &str) {
-    // 1. Create new session (sync - this is fast I/O)
-    match session::Session::new() {
-        Ok(new_session) => {
-            let session_path = new_session.path().display().to_string();
-            state.conversation.session = Some(new_session);
-            state.transcript.cells.push(HistoryCell::system(format!(
-                "Session path: {}",
-                session_path
-            )));
-        }
-        Err(e) => {
-            state.transcript.cells.push(HistoryCell::system(format!(
-                "Warning: Failed to create session: {}",
-                e
-            )));
-            // Continue without session - user can still chat
-        }
-    }
+/// Returns the new session for the reducer to store, or an error string.
+pub fn execute_handoff_submit(prompt: &str) -> Result<Session, String> {
+    let mut session = session::Session::new().map_err(|e| e.to_string())?;
 
-    // 2. Save user message to session if exists
-    if let Some(ref mut s) = state.conversation.session {
-        let _ = s.append(&SessionEvent::user_message(prompt));
+    if let Err(_err) = session.append(&SessionEvent::user_message(prompt)) {
         // Errors are silently ignored for session persistence
     }
 
-    // 3. Start agent turn
-    spawn_agent_turn(state);
+    Ok(session)
 }
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
-///
-/// Note: This function still has some state mutations for error paths.
-/// These are marked as medium-priority violations. The ideal pattern would be
-/// to make session loading async and return errors via events.
-pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &str) {
+pub fn spawn_handoff_generation(
+    session_id: &str,
+    goal: &str,
+    root: &std::path::Path,
+) -> UiEvent {
     use tokio::process::Command;
-    use tokio::sync::oneshot;
-
-    // Load session content upfront to avoid tool call in subagent
-    // Note: This is synchronous I/O + state mutation - a remaining violation
-    let session_content = match session::load_session(session_id) {
-        Ok(events) if !events.is_empty() => session::format_transcript(&events),
-        Ok(_) => {
-            state.input.handoff = HandoffState::Idle;
-            state.transcript.cells.push(HistoryCell::system(format!(
-                "Handoff failed: Session '{}' is empty",
-                session_id
-            )));
-            return;
-        }
-        Err(e) => {
-            state.input.handoff = HandoffState::Idle;
-            state.transcript.cells.push(HistoryCell::system(format!(
-                "Handoff failed: Could not load session: {}",
-                e
-            )));
-            return;
-        }
-    };
-
-    let generation_prompt = build_handoff_prompt(&session_content, goal);
-    let root = state.agent_opts.root.clone();
 
     let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
     let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
 
-    // Transition to Generating state with channel receivers for async polling
-    state.input.handoff = HandoffState::Generating {
-        goal: goal.to_string(),
-        rx,
-        cancel_tx,
+    // Load session content upfront to avoid tool call in subagent
+    let session_content = match session::load_session(session_id) {
+        Ok(events) if !events.is_empty() => session::format_transcript(&events),
+        Ok(_) => {
+            let _ = tx.try_send(Err(format!(
+                "Handoff failed: Session '{}' is empty",
+                session_id
+            )));
+            return UiEvent::HandoffGenerationStarted {
+                goal: goal.to_string(),
+                rx,
+                cancel_tx,
+            };
+        }
+        Err(e) => {
+            let _ = tx.try_send(Err(format!(
+                "Handoff failed: Could not load session: {}",
+                e
+            )));
+            return UiEvent::HandoffGenerationStarted {
+                goal: goal.to_string(),
+                rx,
+                cancel_tx,
+            };
+        }
     };
+
+    let generation_prompt = build_handoff_prompt(&session_content, goal);
+    let root = root.to_path_buf();
 
     tokio::spawn(async move {
         // Get the current executable path
@@ -202,4 +172,10 @@ pub fn spawn_handoff_generation(state: &mut TuiState, session_id: &str, goal: &s
 
         let _ = tx.send(result).await;
     });
+
+    UiEvent::HandoffGenerationStarted {
+        goal: goal.to_string(),
+        rx,
+        cancel_tx,
+    }
 }

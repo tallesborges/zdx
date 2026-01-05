@@ -60,7 +60,7 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 │               └──────┬───────┘                                   │
 │                      ▼                                           │
 │         ┌────────────────────────────┐                           │
-│         │     reducer::update()      │                           │
+│         │      update::update()      │                           │
 │         │  &mut AppState × UiEvent   │                           │
 │         │      → Vec<UiEffect>       │                           │
 │         └─────────────┬──────────────┘                           │
@@ -74,8 +74,8 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 │             │                  │                                 │
 │             ▼                  ▼                                 │
 │        ┌─────────┐     ┌───────────────┐                         │
-│        │ view()  │     │execute_effect()│                        │
-│        │ render  │     │  side effects  │                        │
+│        │render() │     │execute_effect()│                        │
+│        │         │     │  side effects  │                        │
 │        └─────────┘     └───────────────┘                         │
 │                                                                  │
 └─────────────────────────────────────────────────────────────────┘
@@ -85,13 +85,13 @@ The only exception is **render-time caches** which use interior mutability (`Ref
 
 **File:** `src/modes/tui/app.rs`
 
-Application state is split: `TuiState` (non-overlay) + `OverlayState` (overlay), combined in `AppState`.
+Application state is split: `TuiState` (non-overlay) + `Option<Overlay>` (overlay), combined in `AppState`.
 These are plain data structures with no I/O:
 
 ```rust
 pub struct AppState {
     pub tui: TuiState,
-    pub overlay: OverlayState,
+    pub overlay: Option<Overlay>,
 }
 
 pub struct TuiState {
@@ -110,26 +110,31 @@ pub struct TuiState {
 }
 ```
 
-State is organized into sub-modules for maintainability:
-- `state/auth.rs` - Authentication status
-- `state/input.rs` - Input editor state
-- `state/session.rs` - Session, message history, and async session operations
-- `state/transcript.rs` - Transcript display, scroll, cache
+State is organized into feature slices for maintainability:
+- `auth/state.rs` - Authentication status
+- `input/state.rs` - Input editor state
+- `session/state.rs` - Session, message history, and async session operations
+- `transcript/state.rs` - Transcript display, scroll, cache
 
 ### 2. Messages (Events)
 
-**File:** `src/modes/tui/core/events.rs`
+**File:** `src/modes/tui/events.rs`
 
 All inputs are converted to a unified `UiEvent` type before processing:
 
 ```rust
 pub enum UiEvent {
-    Tick,                            // Timer for animations
-    Frame { width, height },         // Per-frame layout/delta updates
-    Terminal(CrosstermEvent),        // Keyboard, mouse, paste, resize
-    Agent(AgentEvent),               // Streaming text, tool calls, completion
-    LoginResult(Result<(), String>), // Async OAuth result
+    Tick,                              // Timer for animations
+    Frame { width, height },           // Per-frame layout/delta updates
+    Terminal(CrosstermEvent),          // Keyboard, mouse, paste, resize
+    Agent(AgentEvent),                 // Streaming text, tool calls, completion
+    AgentSpawned { rx },               // Agent channel wired up
+    LoginResult(Result<(), String>),   // Async OAuth result
+    LoginExchangeStarted { rx },       // OAuth exchange channel wired up
     HandoffResult(Result<String, String>),
+    HandoffGenerationStarted { .. },   // Handoff generation channel wired up
+    FilesDiscovered(Vec<PathBuf>),     // File picker results
+    Session(SessionUiEvent),           // Session async results
 }
 ```
 
@@ -142,7 +147,7 @@ This unification simplifies the reducer—it only needs to handle one event type
 
 ### 3. Update (Reducer)
 
-**File:** `src/modes/tui/reducer.rs`
+**File:** `src/modes/tui/update.rs`
 
 The reducer is the **single source of truth** for state transitions:
 
@@ -159,7 +164,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
-        UiEvent::Agent(agent_event) => handle_agent_event(&mut app.tui, &agent_event),
+        UiEvent::Agent(agent_event) => {
+            let (effects, commands) = transcript::handle_agent_event(
+                &mut app.tui.transcript,
+                &mut app.tui.agent_state,
+                app.tui.conversation.session.is_some(),
+                &agent_event,
+            );
+            apply_state_commands(&mut app.tui, commands);
+            effects
+        }
         UiEvent::LoginResult(result) => { /* ... */ }
         UiEvent::HandoffResult(result) => { /* ... */ }
     }
@@ -168,17 +182,17 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 /// Handles per-frame state updates (layout, delta coalescing, cell info).
 fn handle_frame(tui: &mut TuiState, width: u16, height: u16) {
     // Update transcript layout
-    let viewport_height = view::calculate_transcript_height_with_state(tui, height);
+    let viewport_height = render::calculate_transcript_height_with_state(tui, height);
     tui.transcript.update_layout((width, height), viewport_height);
 
     // Apply coalesced streaming text deltas
-    apply_pending_delta(tui);
+    apply_pending_delta(&mut tui.transcript, &mut tui.agent_state);
 
     // Apply coalesced scroll events
-    apply_scroll_delta(tui);
+    apply_scroll_delta(&mut tui.transcript);
 
     // Update cell line info for lazy rendering
-    let counts = view::calculate_cell_line_counts(tui, width as usize);
+    let counts = render::calculate_cell_line_counts(tui, width as usize);
     tui.transcript.scroll.update_cell_line_info(counts);
 }
 ```
@@ -189,14 +203,55 @@ Key properties:
 - Returns effects for the runtime to execute
 - Never performs I/O directly
 
+### StateCommand (Cross-Slice Mutations)
+
+Feature update functions return `StateCommand` values for any mutation that falls outside
+their own slice. The main reducer applies them after the handler returns to keep
+data flow explicit and centralized.
+
+```rust
+// update.rs
+let (effects, commands) =
+    input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, session_id, key);
+apply_state_commands(&mut app.tui, commands);
+```
+
+```rust
+// shared/internal.rs
+pub enum StateCommand {
+    Transcript(TranscriptCommand),
+    Input(InputCommand),
+    Session(SessionCommand),
+    Auth(AuthCommand),
+    Config(ConfigCommand),
+}
+```
+
+### Feature Slice Contract
+
+Every feature module must expose:
+- `state.rs` with the feature's state type
+- `update.rs` with event handlers (pure state mutations + effects/commands)
+- `render.rs` for pure rendering
+
+Update functions:
+- Take only their own state as mutable
+- Accept dependencies as read-only references
+- Return `Vec<UiEffect>` for runtime side effects
+- Return `Vec<StateCommand>` for cross-slice mutations
+
+Render functions:
+- Take state as immutable reference
+- Never mutate state or return effects
+
 ### 4. View
 
-**File:** `src/modes/tui/view.rs`
+**File:** `src/modes/tui/render.rs`
 
 Pure rendering functions that draw the UI:
 
 ```rust
-pub fn view(app: &AppState, frame: &mut Frame) {
+pub fn render(app: &AppState, frame: &mut Frame) {
     let state = &app.tui;
 
     // Layout calculation
@@ -342,12 +397,12 @@ The `Option` wrapper keeps the reducer logic simple: either an overlay owns inpu
 
 ## Overlay Contract
 
-Overlays are modal UI components that temporarily take over keyboard input. Each overlay is **self-contained**: it owns its state, key handler, and render function. Overlays mutate their own state (and the shared `TuiState`) directly; global changes still go through effects and reducer-driven events.
+Overlays are modal UI components that temporarily take over keyboard input. Each overlay is **self-contained**: it owns its state, key handler, and render function. Overlays mutate their own state directly and return `StateCommand` values for cross-slice mutations; global changes still go through effects and reducer-driven events.
 
 ### Lifecycle
 
 1. **Open**: A reducer returns `UiEffect::OpenXxx` (e.g., command palette, model picker). The runtime executes the effect by creating the overlay state and setting `AppState.overlay = Some(Overlay::Xxx(state))`. Some overlays return additional effects from `open()` (e.g., file discovery, OAuth browser open).
-2. **Handle input**: While an overlay is active, key events are routed to it first. The overlay mutates `self` and `TuiState` directly, then optionally returns an `OverlayAction`:
+2. **Handle input**: While an overlay is active, key events are routed to it first. The overlay mutates `self` and returns an `OverlayAction` plus optional `StateCommand` values:
    - `Close(Vec<UiEffect>)` closes the overlay and schedules effects
    - `Effects(Vec<UiEffect>)` keeps the overlay open but triggers effects
 3. **Async results**: Background tasks feed `UiEvent`s back into the reducer (e.g., `UiEvent::LoginResult`, `UiEvent::FilesDiscovered`, session events). Reducer helpers update overlay state based on those events (e.g., `handle_login_result`, `handle_files_discovered`).
@@ -355,24 +410,23 @@ Overlays are modal UI components that temporarily take over keyboard input. Each
 ### Key Handler Integration
 
 ```rust
-// src/modes/tui/reducer.rs
+// src/modes/tui/update.rs
 fn handle_key(app: &mut AppState, key: KeyEvent) -> Vec<UiEffect> {
-    if let Some(overlay) = app.overlay.as_mut() {
-        return match overlay.handle_key(&mut app.tui, key) {
-            None => vec![], // Overlay handled it
-            Some(OverlayAction::Close(effects)) => {
-                app.overlay = None;
-                effects
-            }
-            Some(OverlayAction::Effects(effects)) => effects,
-        };
+    let (effects, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
+    apply_state_commands(&mut app.tui, commands);
+    if let Some(effects) = effects {
+        return effects;
     }
 
-    handle_main_key(app, key)
+    let session_id = app.tui.conversation.session.as_ref().map(|s| s.id.clone());
+    let (effects, commands) =
+        input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, session_id, key);
+    apply_state_commands(&mut app.tui, commands);
+    effects
 }
 ```
 
-There is no separate mutation enum: overlays update their own state in place and only return actions when the reducer needs to close the overlay or dispatch effects.
+Cross-slice mutations are expressed through `StateCommand` values and applied by the reducer after the overlay handler returns.
 
 ### Effect Pattern
 
@@ -606,8 +660,8 @@ All paths relative to `src/modes/tui/`.
 |------|---------|
 | `mod.rs` | Entry points, module declarations, `run_interactive_chat()` |
 | `app.rs` | `AppState`, `TuiState`, `AgentState` - top-level state hierarchy |
-| `reducer.rs` | `update()` function - all state mutations |
-| `view.rs` | `view()` function - all rendering |
+| `update.rs` | `update()` function - all state mutations |
+| `render.rs` | `render()` function - all rendering |
 | `terminal.rs` | Terminal setup, restore, panic hooks |
 
 ### Runtime
@@ -620,42 +674,31 @@ All paths relative to `src/modes/tui/`.
 ### Core Events
 | File | Purpose |
 |------|---------|
-| `core/mod.rs` | Core module exports |
-| `core/events.rs` | `UiEvent`, `SessionUiEvent` - unified event types |
-| `events.rs` | Re-export hub for event types |
-
-### State (re-export hub)
-| File | Purpose |
-|------|---------|
-| `state/mod.rs` | Re-exports state types from feature modules |
-| `state/auth.rs` | Re-export shim for `AuthState` |
-| `state/input.rs` | Re-export shim for `InputState` |
-| `state/session.rs` | Re-export shim for `SessionState` |
-| `state/transcript.rs` | Re-export shim for `TranscriptState` |
+| `events.rs` | `UiEvent`, `SessionUiEvent` - unified event types |
 
 ### Auth Feature
 | File | Purpose |
 |------|---------|
 | `auth/mod.rs` | Auth module exports |
 | `auth/state.rs` | `AuthState`, `AuthStatus` |
-| `auth/reducer.rs` | Login result handling, OAuth flow |
-| `auth/view.rs` | Login overlay rendering |
+| `auth/update.rs` | Login result handling, OAuth flow |
+| `auth/render.rs` | Login overlay rendering |
 
 ### Input Feature
 | File | Purpose |
 |------|---------|
 | `input/mod.rs` | Input module exports |
 | `input/state.rs` | `InputState`, `HandoffState` |
-| `input/reducer.rs` | Key handling, input submission, handoff |
-| `input/view.rs` | Input area rendering |
+| `input/update.rs` | Key handling, input submission, handoff |
+| `input/render.rs` | Input area rendering |
 
 ### Session Feature
 | File | Purpose |
 |------|---------|
 | `session/mod.rs` | Session module exports |
 | `session/state.rs` | `SessionState`, `SessionOpsState`, `SessionUsage` |
-| `session/reducer.rs` | Session event handlers |
-| `session/view.rs` | Session picker rendering |
+| `session/update.rs` | Session event handlers |
+| `session/render.rs` | Session picker rendering |
 
 ### Transcript Feature
 | File | Purpose |
@@ -689,6 +732,7 @@ All paths relative to `src/modes/tui/`.
 | `shared/mod.rs` | Shared module exports |
 | `shared/effects.rs` | `UiEffect` enum |
 | `shared/commands.rs` | Slash command definitions |
+| `shared/internal.rs` | `StateCommand` enums for cross-slice mutations |
 
 ### Markdown
 | File | Purpose |

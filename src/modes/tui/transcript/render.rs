@@ -10,7 +10,7 @@
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::transcript::{
     CellId, LineMapping, SelectionState, StyledLine, Style as TranscriptStyle, VisibleRange,
 };

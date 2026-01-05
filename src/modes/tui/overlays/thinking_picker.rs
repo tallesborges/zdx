@@ -8,8 +8,8 @@ use ratatui::widgets::{List, ListItem, ListState};
 use super::OverlayAction;
 use crate::config::ThinkingLevel;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
-use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub struct ThinkingPickerState {
@@ -29,46 +29,54 @@ impl ThinkingPickerState {
         render_thinking_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        _tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        match key.code {
+        let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                Some(OverlayAction::close())
+                (Some(OverlayAction::close()), vec![])
             }
             KeyCode::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Down => {
                 if self.selected < ThinkingLevel::all().len() - 1 {
                     self.selected += 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Enter => {
                 let levels = ThinkingLevel::all();
                 let Some(&level) = levels.get(self.selected) else {
-                    return Some(OverlayAction::close());
+                    return (Some(OverlayAction::close()), vec![]);
                 };
-
-                tui.config.thinking_level = level;
 
                 let message = if level == ThinkingLevel::Off {
                     "Thinking disabled".to_string()
                 } else {
                     format!("Thinking level set to {}", level.display_name())
                 };
-                tui.transcript.cells.push(HistoryCell::system(message));
-
-                Some(OverlayAction::close_with(vec![UiEffect::PersistThinking {
-                    level,
-                }]))
+                (
+                    Some(OverlayAction::close_with(vec![UiEffect::PersistThinking {
+                        level,
+                    }])),
+                    vec![
+                        StateCommand::Config(ConfigCommand::SetThinkingLevel(level)),
+                        StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(message)),
+                    ],
+                )
             }
-            _ => None,
-        }
+            _ => (None, vec![]),
+        };
+
+        (action, commands)
     }
 }
 

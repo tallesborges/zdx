@@ -160,17 +160,6 @@ pub struct TuiState {
 }
 
 impl TuiState {
-    /// Creates a new TuiState.
-    #[cfg(test)]
-    pub fn new(
-        config: Config,
-        root: PathBuf,
-        system_prompt: Option<String>,
-        session: Option<Session>,
-    ) -> Self {
-        Self::with_history(config, root, system_prompt, session, Vec::new())
-    }
-
     /// Creates a TuiState with pre-loaded message history.
     ///
     /// Used for resuming previous sessions.
@@ -273,36 +262,6 @@ impl TuiState {
         transcript
     }
 
-    /// Refreshes the cached auth type (call after login/logout).
-    pub fn refresh_auth_type(&mut self) {
-        self.auth.refresh();
-    }
-
-    /// Gets the current input text.
-    pub fn get_input_text(&self) -> String {
-        self.input.get_text()
-    }
-
-    /// Clears the input textarea.
-    pub fn clear_input(&mut self) {
-        self.input.clear();
-    }
-
-    /// Resets history navigation state.
-    pub fn reset_history_navigation(&mut self) {
-        self.input.reset_navigation();
-    }
-
-    /// Resets conversation state for a new session.
-    ///
-    /// Clears transcript, messages, usage, and input history.
-    /// Does NOT clear the session handle - a new session should be
-    /// created via effect after calling this.
-    pub fn reset_conversation(&mut self) {
-        self.transcript.reset();
-        self.conversation.reset();
-        self.input.clear_history();
-    }
 }
 
 // ============================================================================

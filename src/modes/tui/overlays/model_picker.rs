@@ -8,8 +8,8 @@ use ratatui::widgets::{List, ListItem, ListState};
 use super::OverlayAction;
 use crate::models::AVAILABLE_MODELS;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
-use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
@@ -29,44 +29,54 @@ impl ModelPickerState {
         render_model_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        _tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        match key.code {
+        let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                Some(OverlayAction::close())
+                (Some(OverlayAction::close()), vec![])
             }
             KeyCode::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Down => {
                 if self.selected < AVAILABLE_MODELS.len() - 1 {
                     self.selected += 1;
                 }
-                None
+                (None, vec![])
             }
             KeyCode::Enter => {
                 let Some(model) = AVAILABLE_MODELS.get(self.selected) else {
-                    return Some(OverlayAction::close());
+                    return (Some(OverlayAction::close()), vec![]);
                 };
 
                 let model_id = model.id.to_string();
                 let display_name = model.display_name;
 
-                tui.config.model = model_id.clone();
-                tui.transcript
-                    .cells
-                    .push(HistoryCell::system(format!("Switched to {}", display_name)));
-
-                Some(OverlayAction::close_with(vec![UiEffect::PersistModel {
-                    model: model_id,
-                }]))
+                (
+                    Some(OverlayAction::close_with(vec![UiEffect::PersistModel {
+                        model: model_id.clone(),
+                    }])),
+                    vec![
+                        StateCommand::Config(ConfigCommand::SetModel(model_id)),
+                        StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(format!(
+                            "Switched to {}",
+                            display_name
+                        ))),
+                    ],
+                )
             }
-            _ => None,
-        }
+            _ => (None, vec![]),
+        };
+
+        (action, commands)
     }
 }
 

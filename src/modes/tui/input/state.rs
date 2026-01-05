@@ -11,7 +11,7 @@ use tokio::sync::{mpsc, oneshot};
 /// - `Pending`: User is typing the goal in textarea
 /// - `Generating`: Async subagent is generating the handoff prompt
 /// - `Ready`: Generated prompt is in textarea, awaiting confirmation
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub enum HandoffState {
     #[default]
     Idle,

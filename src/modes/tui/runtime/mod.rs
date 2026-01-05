@@ -25,14 +25,14 @@ use crate::core::interrupt;
 use crate::core::session::Session;
 use crate::providers::anthropic::ChatMessage;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::overlays::{
     CommandPaletteState, FilePickerState, LoginState, ModelPickerState, Overlay,
     ThinkingPickerState,
 };
-use crate::modes::tui::state::{AgentState, AppState, HandoffState};
-use crate::modes::tui::{reducer, terminal, view};
-use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::app::{AgentState, AppState};
+use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::{render, terminal, update};
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
 pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);
@@ -146,7 +146,7 @@ impl TuiRuntime {
                     UiEvent::Frame { .. } => false,
                     _ => true,
                 };
-                let effects = reducer::update(&mut self.state, event);
+                let effects = update::update(&mut self.state, event);
                 if marks_dirty || !effects.is_empty() {
                     dirty = true;
                 }
@@ -157,7 +157,7 @@ impl TuiRuntime {
             if dirty {
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {
-                    view::view(&self.state, frame);
+                    render::render(&self.state, frame);
                 })?;
 
                 dirty = false;
@@ -398,6 +398,13 @@ impl TuiRuntime {
         }
     }
 
+    fn dispatch_event(&mut self, event: UiEvent) {
+        let effects = update::update(&mut self.state, event);
+        if !effects.is_empty() {
+            self.execute_effects(effects);
+        }
+    }
+
     /// Executes a single effect by dispatching to the appropriate handler.
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
@@ -411,15 +418,17 @@ impl TuiRuntime {
 
             // Agent effects
             UiEffect::StartAgentTurn => {
-                handlers::spawn_agent_turn(&mut self.state.tui);
+                let event = handlers::spawn_agent_turn(&self.state.tui);
+                self.dispatch_event(event);
             }
             UiEffect::InterruptAgent => {
-                handlers::interrupt_agent(&mut self.state.tui);
+                handlers::interrupt_agent(&self.state.tui);
             }
 
             // Auth effects
             UiEffect::SpawnTokenExchange { code, verifier } => {
-                handlers::spawn_token_exchange(&mut self.state.tui, &code, &verifier);
+                let event = handlers::spawn_token_exchange(&code, &verifier);
+                self.dispatch_event(event);
             }
 
             // Config effects
@@ -487,19 +496,23 @@ impl TuiRuntime {
             UiEffect::StartHandoff { goal } => {
                 if let Some(ref session) = self.state.tui.conversation.session {
                     let session_id = session.id.clone();
-                    handoff::spawn_handoff_generation(&mut self.state.tui, &session_id, &goal);
+                    let root = self.state.tui.agent_opts.root.clone();
+                    let event =
+                        handoff::spawn_handoff_generation(&session_id, &goal, root.as_path());
+                    self.dispatch_event(event);
                 } else {
-                    // No session - show error via transcript
-                    // This is a minor violation but acceptable for error feedback
-                    self.state
-                        .tui
-                        .transcript
-                        .cells
-                        .push(HistoryCell::system("Handoff requires an active session."));
+                    self.dispatch_event(UiEvent::HandoffResult(Err(
+                        "Handoff requires an active session.".to_string(),
+                    )));
                 }
             }
             UiEffect::HandoffSubmit { prompt } => {
-                handoff::execute_handoff_submit(&mut self.state.tui, &prompt);
+                match handoff::execute_handoff_submit(&prompt) {
+                    Ok(session) => self.dispatch_event(UiEvent::HandoffSessionCreated { session }),
+                    Err(error) => {
+                        self.dispatch_event(UiEvent::HandoffSessionCreateFailed { error });
+                    }
+                }
             }
 
             // File picker effects

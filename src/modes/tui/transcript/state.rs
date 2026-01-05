@@ -561,4 +561,173 @@ mod tests {
         assert_eq!(scroll.cached_line_count, 0);
         assert!(scroll.is_following());
     }
+
+    // ========================================================================
+    // ScrollState Tests (moved from state/mod.rs)
+    // ========================================================================
+
+    #[test]
+    fn test_scroll_state_default() {
+        let scroll = ScrollState::default();
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+        assert_eq!(scroll.cached_line_count, 0);
+        assert!(scroll.is_following());
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_follow_mode() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        // In follow mode, offset should show the bottom
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 80); // 100 - 20 = 80
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_anchored_mode() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 30 };
+
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 30);
+    }
+
+    #[test]
+    fn test_scroll_state_get_offset_clamps_to_max() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 95 }; // Too close to bottom
+
+        let offset = scroll.get_offset(20);
+        assert_eq!(offset, 80); // max_offset = 100 - 20 = 80
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_up_from_follow() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        scroll.scroll_up(5, 20);
+
+        // Should anchor at line 75 (80 - 5)
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 75 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_up_clamped_to_zero() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 3 };
+
+        scroll.scroll_up(10, 20); // Would go negative
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 0 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_to_bottom() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 75 };
+
+        scroll.scroll_down(10, 20); // Would exceed max
+
+        // Should transition to FollowLatest
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_partial() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 50 };
+
+        scroll.scroll_down(10, 20);
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_down_noop_when_following() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        assert!(scroll.is_following());
+
+        scroll.scroll_down(10, 20);
+
+        // Should still be following
+        assert!(scroll.is_following());
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_to_top() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        scroll.scroll_to_top();
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 0 }));
+    }
+
+    #[test]
+    fn test_scroll_state_scroll_to_bottom() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 30 };
+
+        scroll.scroll_to_bottom();
+
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+    }
+
+    #[test]
+    fn test_scroll_state_page_up() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        // Start at bottom (follow mode, offset = 80)
+
+        scroll.page_up(20);
+
+        // Should move up by viewport_height (20), so 80 - 20 = 60
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_page_down() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 40 };
+
+        scroll.page_down(20);
+
+        assert!(matches!(scroll.mode, ScrollMode::Anchored { offset: 60 }));
+    }
+
+    #[test]
+    fn test_scroll_state_has_content_below() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+
+        // At top, should have content below
+        scroll.mode = ScrollMode::Anchored { offset: 0 };
+        assert!(scroll.has_content_below(20));
+
+        // At bottom, should not have content below
+        scroll.scroll_to_bottom();
+        assert!(!scroll.has_content_below(20));
+    }
+
+    #[test]
+    fn test_scroll_state_reset() {
+        let mut scroll = ScrollState::new();
+        scroll.update_line_count(100);
+        scroll.mode = ScrollMode::Anchored { offset: 50 };
+
+        scroll.reset();
+
+        assert!(matches!(scroll.mode, ScrollMode::FollowLatest));
+        assert_eq!(scroll.cached_line_count, 0);
+    }
 }

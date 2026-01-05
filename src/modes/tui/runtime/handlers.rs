@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::core::{interrupt, session};
-use crate::modes::tui::core::events::{SessionUiEvent, UiEvent};
-use crate::modes::tui::state::{AgentState, TuiState};
+use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::app::TuiState;
 use crate::modes::tui::transcript::{build_transcript_from_events, HistoryCell};
 
 // ============================================================================
@@ -225,14 +225,14 @@ pub fn spawn_session_rename(session_id: String, title: Option<String>) -> mpsc::
 // ============================================================================
 
 /// Interrupts the running agent.
-pub fn interrupt_agent(tui: &mut TuiState) {
+pub fn interrupt_agent(tui: &TuiState) {
     if tui.agent_state.is_running() {
         interrupt::trigger_ctrl_c();
     }
 }
 
 /// Spawns an agent turn.
-pub fn spawn_agent_turn(tui: &mut TuiState) {
+pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
     let messages = tui.conversation.messages.clone();
@@ -262,7 +262,7 @@ pub fn spawn_agent_turn(tui: &mut TuiState) {
         .await;
     });
 
-    tui.agent_state = AgentState::Waiting { rx: tui_rx };
+    UiEvent::AgentSpawned { rx: tui_rx }
 }
 
 // ============================================================================
@@ -270,14 +270,13 @@ pub fn spawn_agent_turn(tui: &mut TuiState) {
 // ============================================================================
 
 /// Spawns a token exchange task.
-pub fn spawn_token_exchange(tui: &mut TuiState, code: &str, verifier: &str) {
+pub fn spawn_token_exchange(code: &str, verifier: &str) -> UiEvent {
     use crate::providers::oauth::anthropic;
 
     let code = code.to_string();
     let pkce_verifier = verifier.to_string();
 
     let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
-    tui.auth.login_rx = Some(rx);
 
     tokio::spawn(async move {
         let pkce = anthropic::Pkce {
@@ -292,6 +291,8 @@ pub fn spawn_token_exchange(tui: &mut TuiState, code: &str, verifier: &str) {
         };
         let _ = tx.send(result).await;
     });
+
+    UiEvent::LoginExchangeStarted { rx }
 }
 
 // ============================================================================

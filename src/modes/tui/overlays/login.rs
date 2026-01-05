@@ -5,7 +5,8 @@ use ratatui::layout::Rect;
 use super::OverlayAction;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::state::TuiState;
+use crate::modes::tui::shared::internal::{AuthCommand, StateCommand};
+use crate::modes::tui::app::TuiState;
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
@@ -37,49 +38,60 @@ impl LoginState {
         render_login_overlay(frame, self, area)
     }
 
-    pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<OverlayAction> {
+    pub fn handle_key(
+        &mut self,
+        _tui: &TuiState,
+        key: KeyEvent,
+    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
             LoginState::AwaitingCode { input, .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                    tui.auth.login_rx = None;
-                    Some(OverlayAction::close())
+                    (
+                        Some(OverlayAction::close()),
+                        vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
+                    )
                 }
                 KeyCode::Enter => {
                     let code = input.trim().to_string();
                     if code.is_empty() {
-                        return None;
+                        return (None, vec![]);
                     }
 
                     let verifier = match self {
                         LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
-                        _ => return None,
+                        _ => return (None, vec![]),
                     };
 
                     *self = LoginState::Exchanging;
 
-                    Some(OverlayAction::Effects(vec![UiEffect::SpawnTokenExchange {
-                        code,
-                        verifier,
-                    }]))
+                    (
+                        Some(OverlayAction::Effects(vec![UiEffect::SpawnTokenExchange {
+                            code,
+                            verifier,
+                        }])),
+                        vec![],
+                    )
                 }
                 KeyCode::Backspace => {
                     input.pop();
-                    None
+                    (None, vec![])
                 }
                 KeyCode::Char(c) if !ctrl => {
                     input.push(c);
-                    None
+                    (None, vec![])
                 }
-                _ => None,
+                _ => (None, vec![]),
             },
             LoginState::Exchanging => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                    tui.auth.login_rx = None;
-                    Some(OverlayAction::close())
+                    (
+                        Some(OverlayAction::close()),
+                        vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
+                    )
                 } else {
-                    None
+                    (None, vec![])
                 }
             }
         }
