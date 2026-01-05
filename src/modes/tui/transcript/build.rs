@@ -4,10 +4,9 @@
 
 use std::collections::HashMap;
 
+use super::HistoryCell;
 use crate::core::events::ToolOutput;
 use crate::core::session::SessionEvent;
-
-use super::HistoryCell;
 
 /// Builds transcript cells from session events.
 ///
@@ -75,6 +74,9 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
             SessionEvent::Interrupted { .. } => {
                 // Skip interrupted events when loading
             }
+            SessionEvent::Usage { .. } => {
+                // Skip usage events when building transcript (they're for tracking only)
+            }
         }
     }
 
@@ -85,8 +87,8 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
 mod tests {
     use serde_json::json;
 
-    use super::*;
     use super::super::ToolState;
+    use super::*;
 
     #[test]
     fn test_build_transcript_from_events_empty() {

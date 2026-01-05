@@ -7,10 +7,11 @@ use std::path::PathBuf;
 use crate::core::session::{Session, SessionSummary, short_session_id};
 use crate::modes::tui::events::SessionUiEvent;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{InputCommand, SessionCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{
+    InputCommand, SessionCommand, StateCommand, TranscriptCommand,
+};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
-
 
 /// Handles session UI events.
 ///
@@ -53,6 +54,7 @@ pub fn handle_session_event(
             messages,
             history,
             session,
+            usage,
         } => {
             handle_session_loaded(
                 session,
@@ -60,6 +62,7 @@ pub fn handle_session_event(
                 cells,
                 messages,
                 history,
+                usage,
                 &mut commands,
             );
             vec![]
@@ -117,6 +120,7 @@ fn handle_session_loaded(
     cells: Vec<HistoryCell>,
     messages: Vec<ChatMessage>,
     history: Vec<String>,
+    usage: (u64, u64, u64, u64),
     commands: &mut Vec<StateCommand>,
 ) {
     commands.push(StateCommand::Transcript(TranscriptCommand::ReplaceCells(
@@ -126,7 +130,12 @@ fn handle_session_loaded(
     commands.push(StateCommand::Transcript(TranscriptCommand::ClearWrapCache));
     commands.push(StateCommand::Session(SessionCommand::SetMessages(messages)));
     commands.push(StateCommand::Session(SessionCommand::SetSession(session)));
-    commands.push(StateCommand::Session(SessionCommand::ResetUsage));
+    commands.push(StateCommand::Session(SessionCommand::SetUsage {
+        input: usage.0,
+        output: usage.1,
+        cache_read: usage.2,
+        cache_write: usage.3,
+    }));
     commands.push(StateCommand::Input(InputCommand::SetHistory(history)));
 
     // Show confirmation message
@@ -156,7 +165,9 @@ fn handle_session_created(
     commands: &mut Vec<StateCommand>,
 ) {
     let session_path = session.path().display().to_string();
-    commands.push(StateCommand::Session(SessionCommand::SetSession(Some(session))));
+    commands.push(StateCommand::Session(SessionCommand::SetSession(Some(
+        session,
+    ))));
 
     // Show session path
     commands.push(StateCommand::Transcript(

@@ -12,9 +12,9 @@ use std::path::PathBuf;
 use tokio::sync::mpsc;
 
 use crate::core::{interrupt, session};
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::transcript::{build_transcript_from_events, HistoryCell};
+use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::transcript::{HistoryCell, build_transcript_from_events};
 
 // ============================================================================
 // Session Handlers (Async - return receivers for runtime to poll)
@@ -86,6 +86,9 @@ fn load_session_sync(session_id: &str) -> UiEvent {
         }
     };
 
+    // Extract usage from events before consuming them
+    let usage = session::extract_usage_from_events(&events);
+
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
 
@@ -113,6 +116,7 @@ fn load_session_sync(session_id: &str) -> UiEvent {
         messages,
         history,
         session,
+        usage,
     })
 }
 
