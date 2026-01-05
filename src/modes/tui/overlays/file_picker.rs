@@ -1,4 +1,6 @@
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
@@ -6,6 +8,7 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use tokio::sync::oneshot;
 
 use super::OverlayAction;
 use crate::modes::tui::input::InputState;
@@ -17,7 +20,7 @@ const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
 const MAX_FILES: usize = 1000;
 const MAX_DEPTH: usize = 15;
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct FilePickerState {
     pub trigger_pos: usize,
     pub files: Vec<PathBuf>,
@@ -25,6 +28,17 @@ pub struct FilePickerState {
     pub selected: usize,
     pub offset: usize,
     pub loading: bool,
+    pub discovery_rx: Option<oneshot::Receiver<Vec<PathBuf>>>,
+    /// Set to true on Drop to stop the background file walk.
+    pub discovery_cancel: Option<Arc<AtomicBool>>,
+}
+
+impl Drop for FilePickerState {
+    fn drop(&mut self) {
+        if let Some(cancel) = &self.discovery_cancel {
+            cancel.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 impl FilePickerState {
@@ -37,6 +51,8 @@ impl FilePickerState {
                 selected: 0,
                 offset: 0,
                 loading: true,
+                discovery_rx: None,
+                discovery_cancel: None,
             },
             vec![UiEffect::DiscoverFiles],
         )
@@ -252,7 +268,7 @@ impl FilePickerState {
 }
 
 /// Discovers project files, respecting .gitignore.
-pub fn discover_files(root: &std::path::Path) -> Vec<PathBuf> {
+pub fn discover_files(root: &std::path::Path, cancel: &AtomicBool) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 
     let mut files = Vec::new();
@@ -263,6 +279,10 @@ pub fn discover_files(root: &std::path::Path) -> Vec<PathBuf> {
         .build();
 
     for entry in walker.flatten() {
+        if cancel.load(Ordering::Relaxed) {
+            return files;
+        }
+
         if !entry.file_type().is_some_and(|ft| ft.is_file()) {
             continue;
         }

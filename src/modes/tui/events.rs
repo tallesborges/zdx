@@ -6,6 +6,7 @@
 
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::{mpsc, oneshot};
@@ -129,7 +130,13 @@ pub enum UiEvent {
     /// Handoff session creation failed.
     HandoffSessionCreateFailed { error: String },
 
-    /// File discovery completed for file picker.
+    /// File discovery started.
+    FileDiscoveryStarted {
+        rx: oneshot::Receiver<Vec<PathBuf>>,
+        cancel: Arc<AtomicBool>,
+    },
+
+    /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),
 
     /// Clipboard copy completed successfully.

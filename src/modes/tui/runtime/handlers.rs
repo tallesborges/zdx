@@ -8,8 +8,10 @@
 //! 2. Spawn async tasks that send results via channels (runtime collects and converts to events)
 
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
 
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::core::{interrupt, session};
 use crate::modes::tui::app::TuiState;
@@ -300,23 +302,22 @@ pub fn spawn_token_exchange(code: &str, verifier: &str) -> UiEvent {
 // File Picker Handlers
 // ============================================================================
 
-/// Spawns async file discovery and returns the receiver.
-///
-/// The runtime owns the receiver (not state) for cleaner Elm-like separation.
-pub fn spawn_file_discovery(root: &std::path::Path) -> mpsc::Receiver<Vec<std::path::PathBuf>> {
+/// Spawns async file discovery with cancellation support.
+pub fn spawn_file_discovery(root: &std::path::Path) -> UiEvent {
     use crate::modes::tui::overlays::discover_files;
 
     let root = root.to_path_buf();
 
-    let (tx, rx) = mpsc::channel::<Vec<std::path::PathBuf>>(1);
+    let (tx, rx) = oneshot::channel::<Vec<std::path::PathBuf>>();
+    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel_clone = cancel.clone();
 
-    // Use spawn_blocking since file walking is CPU/IO bound
     tokio::spawn(async move {
-        let files = tokio::task::spawn_blocking(move || discover_files(&root))
+        let files = tokio::task::spawn_blocking(move || discover_files(&root, &cancel_clone))
             .await
             .unwrap_or_default();
-        let _ = tx.send(files).await;
+        let _ = tx.send(files);
     });
 
-    rx
+    UiEvent::FileDiscoveryStarted { rx, cancel }
 }

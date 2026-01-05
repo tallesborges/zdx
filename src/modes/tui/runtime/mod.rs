@@ -46,8 +46,6 @@ pub struct TuiRuntime {
     terminal: Terminal<CrosstermBackend<Stdout>>,
     /// Application state (split: tui + overlay).
     pub state: AppState,
-    /// Receiver for async file discovery (background service, not user workflow).
-    file_discovery_rx: Option<mpsc::Receiver<Vec<PathBuf>>>,
 }
 
 impl TuiRuntime {
@@ -81,11 +79,7 @@ impl TuiRuntime {
         // Create state
         let state = AppState::with_history(config, root, system_prompt, session, history);
 
-        Ok(Self {
-            terminal,
-            state,
-            file_discovery_rx: None,
-        })
+        Ok(Self { terminal, state })
     }
 
     /// Runs the main event loop.
@@ -195,11 +189,15 @@ impl TuiRuntime {
         // - Selection clear is pending (visual feedback timer)
         // - Any async operations are in progress
         // Otherwise use slow polling to save CPU.
+        let file_discovery_pending = matches!(
+            &self.state.overlay,
+            Some(crate::modes::tui::overlays::Overlay::FilePicker(picker)) if picker.discovery_rx.is_some()
+        );
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.auth.login_rx.is_some()
             || self.state.tui.input.handoff.is_generating()
-            || self.file_discovery_rx.is_some()
+            || file_discovery_pending
             || self.state.tui.session_ops.is_loading();
 
         let poll_duration = if needs_fast_poll {
@@ -276,21 +274,26 @@ impl TuiRuntime {
 
     /// Collects file discovery result if available.
     fn collect_file_discovery_result(&mut self, events: &mut Vec<UiEvent>) {
-        let Some(rx) = &mut self.file_discovery_rx else {
+        use tokio::sync::oneshot;
+
+        use crate::modes::tui::overlays::Overlay;
+
+        let Some(Overlay::FilePicker(picker)) = &mut self.state.overlay else {
+            return;
+        };
+
+        let Some(rx) = &mut picker.discovery_rx else {
             return;
         };
 
         match rx.try_recv() {
             Ok(files) => {
                 events.push(UiEvent::FilesDiscovered(files));
-                // Clear the receiver after getting results
-                self.file_discovery_rx = None;
             }
-            Err(mpsc::error::TryRecvError::Empty) => {}
-            Err(mpsc::error::TryRecvError::Disconnected) => {
-                // Task failed, close the file picker gracefully
+            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Closed) => {
+                // Emit empty list so picker shows "No files found"
                 events.push(UiEvent::FilesDiscovered(Vec::new()));
-                self.file_discovery_rx = None;
             }
         }
     }
@@ -502,7 +505,8 @@ impl TuiRuntime {
             // File picker effects
             UiEffect::DiscoverFiles => {
                 let root = self.state.tui.agent_opts.root.clone();
-                self.file_discovery_rx = Some(handlers::spawn_file_discovery(&root));
+                let event = handlers::spawn_file_discovery(&root);
+                self.dispatch_event(event);
             }
 
             // Clipboard effects
