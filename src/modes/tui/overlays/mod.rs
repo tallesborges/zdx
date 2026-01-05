@@ -45,18 +45,30 @@ use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::StateCommand;
 
 // ============================================================================
-// OverlayAction
+// OverlayRequest / OverlayAction
 // ============================================================================
+
+/// Requests to open a new overlay.
+#[derive(Debug)]
+pub enum OverlayRequest {
+    CommandPalette { command_mode: bool },
+    ModelPicker,
+    ThinkingPicker,
+    Login,
+    FilePicker { trigger_pos: usize },
+}
 
 /// Action returned by overlay key handlers.
 ///
 /// - `None` = continue with overlay open, no effects
 /// - `Some(Close(effects))` = close overlay, execute effects
 /// - `Some(Effects(effects))` = stay open but run effects
+/// - `Some(Open(request))` = replace overlay with a new one
 #[derive(Debug)]
 pub enum OverlayAction {
     Close(Vec<UiEffect>),
     Effects(Vec<UiEffect>),
+    Open(OverlayRequest),
 }
 
 impl OverlayAction {
@@ -66,6 +78,10 @@ impl OverlayAction {
 
     pub fn close_with(effects: Vec<UiEffect>) -> Self {
         OverlayAction::Close(effects)
+    }
+
+    pub fn open(request: OverlayRequest) -> Self {
+        OverlayAction::Open(request)
     }
 }
 
@@ -122,53 +138,13 @@ impl Overlay {
 // OverlayExt - Extension trait for Option<Overlay>
 // ============================================================================
 
-/// Extension trait for `Option<Overlay>` providing convenience methods.
-///
-/// This trait encapsulates the common overlay handling patterns used in the
-/// reducer, making the main key handling logic cleaner.
+/// Extension trait for `Option<Overlay>` providing convenience render helpers.
 pub trait OverlayExt {
-    /// Handles a key event if an overlay is active.
-    ///
-    /// Returns `(Some(effects), commands)` if the overlay handled the key (the
-    /// overlay may have been closed), or `(None, [])` if no overlay was active.
-    ///
-    /// This method:
-    /// - Dispatches the key to the active overlay's handler
-    /// - Closes the overlay if `OverlayAction::Close` is returned
-    /// - Returns any effects to be executed
-    fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<Vec<UiEffect>>, Vec<StateCommand>);
-
     /// Renders the overlay if one is active.
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16);
 }
 
 impl OverlayExt for Option<Overlay> {
-    fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<Vec<UiEffect>>, Vec<StateCommand>) {
-        let Some(overlay) = self.as_mut() else {
-            return (None, vec![]);
-        };
-
-        let (action, commands) = overlay.handle_key(tui, key);
-        let effects = match action {
-            None => vec![],
-            Some(OverlayAction::Close(effects)) => {
-                *self = None;
-                effects
-            }
-            Some(OverlayAction::Effects(effects)) => effects,
-        };
-
-        (Some(effects), commands)
-    }
-
     fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         if let Some(overlay) = self {
             overlay.render(frame, area, input_y);

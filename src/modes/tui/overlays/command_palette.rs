@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use super::OverlayAction;
+use super::{OverlayAction, OverlayRequest};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::commands::COMMANDS;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -69,8 +69,12 @@ impl CommandPaletteState {
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(cmd_name) = self.get_selected_command_name() {
-                    let (effects, commands) = execute_command(tui, cmd_name);
-                    (Some(OverlayAction::close_with(effects)), commands)
+                    let (open_overlay, effects, commands) = execute_command(tui, cmd_name);
+                    let action = match open_overlay {
+                        Some(request) => Some(OverlayAction::open(request)),
+                        None => Some(OverlayAction::close_with(effects)),
+                    };
+                    (action, commands)
                 } else {
                     (Some(OverlayAction::close()), vec![])
                 }
@@ -117,19 +121,34 @@ impl CommandPaletteState {
     }
 }
 
-fn execute_command(tui: &TuiState, cmd_name: &str) -> (Vec<UiEffect>, Vec<StateCommand>) {
+fn execute_command(
+    tui: &TuiState,
+    cmd_name: &str,
+) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateCommand>) {
     match cmd_name {
-        "config" => (vec![UiEffect::OpenConfig], vec![]),
-        "login" => (vec![UiEffect::OpenLogin], vec![]),
-        "logout" => execute_logout(),
-        "rename" => execute_rename(tui),
-        "model" => (vec![UiEffect::OpenModelPicker], vec![]),
-        "sessions" => (vec![UiEffect::OpenSessionPicker], vec![]),
-        "thinking" => (vec![UiEffect::OpenThinkingPicker], vec![]),
-        "handoff" => execute_handoff(tui),
-        "new" => execute_new(tui),
-        "quit" => (execute_quit(tui), vec![]),
-        _ => (vec![], vec![]),
+        "config" => (None, vec![UiEffect::OpenConfig], vec![]),
+        "login" => (Some(OverlayRequest::Login), vec![], vec![]),
+        "logout" => {
+            let (effects, commands) = execute_logout();
+            (None, effects, commands)
+        }
+        "rename" => {
+            let (effects, commands) = execute_rename(tui);
+            (None, effects, commands)
+        }
+        "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
+        "sessions" => (None, vec![UiEffect::OpenSessionPicker], vec![]),
+        "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
+        "handoff" => {
+            let (effects, commands) = execute_handoff(tui);
+            (None, effects, commands)
+        }
+        "new" => {
+            let (effects, commands) = execute_new(tui);
+            (None, effects, commands)
+        }
+        "quit" => (None, execute_quit(tui), vec![]),
+        _ => (None, vec![], vec![]),
     }
 }
 

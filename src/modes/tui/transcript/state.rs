@@ -7,6 +7,7 @@ use std::ops::Range;
 
 use super::CellId;
 use super::selection::{PositionMap, SelectionState};
+use crate::modes::tui::shared::internal::TranscriptCommand;
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -325,6 +326,24 @@ impl TranscriptState {
         self.cells.clear();
         self.scroll.reset();
         self.wrap_cache.clear();
+    }
+
+    /// Applies a cross-slice transcript command.
+    pub fn apply(&mut self, command: TranscriptCommand) {
+        match command {
+            TranscriptCommand::AppendCell(cell) => self.cells.push(cell),
+            TranscriptCommand::AppendSystemMessage(message) => {
+                self.cells.push(super::HistoryCell::system(message));
+            }
+            TranscriptCommand::Clear => self.reset(),
+            TranscriptCommand::ReplaceCells(cells) => self.cells = cells,
+            TranscriptCommand::ResetScroll => self.scroll.reset(),
+            TranscriptCommand::ClearWrapCache => self.wrap_cache.clear(),
+            TranscriptCommand::ScrollToTop => self.scroll_to_top(),
+            TranscriptCommand::ScrollToBottom => self.scroll_to_bottom(),
+            TranscriptCommand::PageUp => self.page_up(),
+            TranscriptCommand::PageDown => self.page_down(),
+        }
     }
 
     /// Scrolls up by the given number of lines.

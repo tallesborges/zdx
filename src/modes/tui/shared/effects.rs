@@ -1,7 +1,7 @@
 //! UI effect types.
 //!
 //! Effects are commands returned by the reducer that the runtime executes.
-//! They represent side effects like spawning async tasks, persisting state, etc.
+//! They represent I/O and task spawning only (no direct UI mutations).
 //!
 //! This keeps the reducer pure: it only mutates state and returns effects,
 //! never performs I/O or spawns tasks directly.
@@ -69,27 +69,6 @@ pub enum UiEffect {
 
     /// Discover project files for the file picker.
     DiscoverFiles,
-
-    /// Open the model picker overlay.
-    OpenModelPicker,
-
-    /// Open the thinking level picker overlay.
-    OpenThinkingPicker,
-
-    /// Open the login overlay and start OAuth flow.
-    OpenLogin,
-
-    /// Open the command palette overlay.
-    OpenCommandPalette {
-        /// Whether to start in command mode (with `/` prefix).
-        command_mode: bool,
-    },
-
-    /// Open the file picker overlay (triggered by `@`).
-    OpenFilePicker {
-        /// Byte position of the `@` trigger in the input text.
-        trigger_pos: usize,
-    },
 
     /// Copy text to clipboard.
     CopyToClipboard {

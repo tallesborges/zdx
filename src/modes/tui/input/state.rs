@@ -4,6 +4,8 @@
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::modes::tui::shared::internal::InputCommand;
+
 /// Handoff feature state machine.
 ///
 /// Models the lifecycle of a handoff operation:
@@ -130,6 +132,43 @@ impl InputState {
         self.textarea.select_all();
         self.textarea.cut();
         self.textarea.insert_str(text);
+    }
+
+    /// Applies a cross-slice input command.
+    pub fn apply(&mut self, command: InputCommand) {
+        match command {
+            InputCommand::Clear => self.clear(),
+            InputCommand::SetText(text) => self.set_text(&text),
+            InputCommand::InsertChar(ch) => {
+                self.textarea.insert_char(ch);
+            }
+            InputCommand::SetTextAndCursor {
+                text,
+                cursor_row,
+                cursor_col,
+            } => {
+                use tui_textarea::CursorMove;
+
+                self.set_text(&text);
+                self.textarea.move_cursor(CursorMove::Top);
+                self.textarea.move_cursor(CursorMove::Head);
+                for _ in 0..cursor_row {
+                    self.textarea.move_cursor(CursorMove::Down);
+                }
+                for _ in 0..cursor_col {
+                    self.textarea.move_cursor(CursorMove::Forward);
+                }
+            }
+            InputCommand::SetHistory(history) => {
+                self.history = history;
+                self.reset_navigation();
+            }
+            InputCommand::ClearHistory => self.clear_history(),
+            InputCommand::SetHandoffState(state) => {
+                self.handoff.cancel();
+                self.handoff = state;
+            }
+        }
     }
 
     /// Resets history navigation state.

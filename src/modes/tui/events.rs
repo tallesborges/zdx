@@ -18,6 +18,9 @@ use crate::providers::anthropic::ChatMessage;
 /// Session event enum for async session operations.
 #[derive(Debug)]
 pub enum SessionUiEvent {
+    /// Session list load started; reducer should store the receiver.
+    ListStarted { rx: mpsc::Receiver<UiEvent> },
+
     /// Session list loaded for picker.
     ListLoaded {
         sessions: Vec<SessionSummary>,
@@ -26,6 +29,9 @@ pub enum SessionUiEvent {
 
     /// Session list load failed.
     ListFailed { error: String },
+
+    /// Session load started; reducer should store the receiver.
+    LoadStarted { rx: mpsc::Receiver<UiEvent> },
 
     /// Session loaded successfully (for switching to a session).
     Loaded {
@@ -41,11 +47,17 @@ pub enum SessionUiEvent {
     /// Session load failed.
     LoadFailed { error: String },
 
+    /// Session preview load started; reducer should store the receiver.
+    PreviewStarted { rx: mpsc::Receiver<UiEvent> },
+
     /// Session preview loaded (for session picker navigation).
     PreviewLoaded { cells: Vec<HistoryCell> },
 
     /// Session preview load failed (silent - just don't update).
     PreviewFailed,
+
+    /// Session creation started; reducer should store the receiver.
+    CreateStarted { rx: mpsc::Receiver<UiEvent> },
 
     /// New session created successfully.
     Created {
@@ -55,6 +67,9 @@ pub enum SessionUiEvent {
 
     /// New session creation failed.
     CreateFailed { error: String },
+
+    /// Session rename started; reducer should store the receiver.
+    RenameStarted { rx: mpsc::Receiver<UiEvent> },
 
     /// Session rename succeeded.
     Renamed {
