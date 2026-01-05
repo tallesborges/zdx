@@ -42,7 +42,7 @@
       - `src/modes/tui/shared/mod.rs`: module exports
       - `src/modes/tui/shared/effects.rs`: effect types returned by reducer for runtime to execute
       - `src/modes/tui/shared/commands.rs`: command definitions for command palette
-      - `src/modes/tui/shared/internal.rs`: StateCommand + cross-slice mutation enums
+      - `src/modes/tui/shared/internal.rs`: StateCommand + cross-slice mutation enums (applied via slice `apply()`)
       - `src/modes/tui/shared/clipboard.rs`: clipboard I/O (OSC 52 + arboard fallback)
     - `src/modes/tui/auth/`: auth feature slice (authentication state, login handling)
       - `src/modes/tui/auth/mod.rs`: module exports
@@ -60,7 +60,7 @@
       - `src/modes/tui/session/update.rs`: session event handlers (loading, switching, creating, renaming)
       - `src/modes/tui/session/render.rs`: session picker overlay rendering
     - `src/modes/tui/overlays/`: overlay feature slice (modal UI components)
-      - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayExt` trait for `Option<Overlay>`
+      - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayRequest`, `OverlayExt` render helpers
       - `src/modes/tui/overlays/update.rs`: overlay key handling and update logic
       - `src/modes/tui/overlays/view.rs`: shared rendering utilities for overlays
       - `src/modes/tui/overlays/command_palette.rs`: command palette overlay

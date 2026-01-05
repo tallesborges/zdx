@@ -8,14 +8,10 @@
 use crossterm::event::Event;
 
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
-use crate::modes::tui::events::UiEvent;
+use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
-use crate::modes::tui::session::SessionUsage;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{
-    AuthCommand, ConfigCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
-};
-use crate::modes::tui::transcript::TranscriptState;
+use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand};
 use crate::modes::tui::{auth, input, overlays, render, session, transcript};
 
 /// The main reducer function.
@@ -151,25 +147,189 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
 
         // Session async result events - delegate to session feature
-        UiEvent::Session(session_event) => {
-            let (mut effects, commands, overlay_action) =
-                session::handle_session_event(session_event);
-            apply_state_commands(&mut app.tui, commands);
-
-            if let session::SessionOverlayAction::OpenSessionPicker {
+        UiEvent::Session(session_event) => match session_event {
+            SessionUiEvent::ListStarted { rx } => {
+                app.tui.session_ops.list_rx = Some(rx);
+                vec![]
+            }
+            SessionUiEvent::ListLoaded {
                 sessions,
                 original_cells,
-            } = overlay_action
-                && app.overlay.is_none()
-            {
-                let (state, overlay_effects) =
-                    overlays::SessionPickerState::open(sessions, original_cells);
-                app.overlay = Some(overlays::Overlay::SessionPicker(state));
-                effects.extend(overlay_effects);
-            }
+            } => {
+                app.tui.session_ops.list_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::ListLoaded {
+                        sessions,
+                        original_cells,
+                    });
+                apply_state_commands(&mut app.tui, commands);
 
-            effects
-        }
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
+            SessionUiEvent::ListFailed { error } => {
+                app.tui.session_ops.list_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::ListFailed { error });
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+            SessionUiEvent::LoadStarted { rx } => {
+                app.tui.session_ops.load_rx = Some(rx);
+                vec![]
+            }
+            SessionUiEvent::Loaded {
+                session_id,
+                cells,
+                messages,
+                history,
+                session,
+                usage,
+            } => {
+                app.tui.session_ops.load_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::Loaded {
+                        session_id,
+                        cells,
+                        messages,
+                        history,
+                        session,
+                        usage,
+                    });
+                apply_state_commands(&mut app.tui, commands);
+
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
+            SessionUiEvent::LoadFailed { error } => {
+                app.tui.session_ops.load_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::LoadFailed { error });
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+            SessionUiEvent::PreviewStarted { rx } => {
+                app.tui.session_ops.preview_rx = Some(rx);
+                vec![]
+            }
+            SessionUiEvent::PreviewLoaded { cells } => {
+                app.tui.session_ops.preview_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::PreviewLoaded { cells });
+                apply_state_commands(&mut app.tui, commands);
+
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
+            SessionUiEvent::PreviewFailed => {
+                app.tui.session_ops.preview_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::PreviewFailed);
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+            SessionUiEvent::CreateStarted { rx } => {
+                app.tui.session_ops.create_rx = Some(rx);
+                vec![]
+            }
+            SessionUiEvent::Created {
+                session,
+                context_paths,
+            } => {
+                app.tui.session_ops.create_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::Created {
+                        session,
+                        context_paths,
+                    });
+                apply_state_commands(&mut app.tui, commands);
+
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
+            SessionUiEvent::CreateFailed { error } => {
+                app.tui.session_ops.create_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::CreateFailed { error });
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+            SessionUiEvent::RenameStarted { rx } => {
+                app.tui.session_ops.rename_rx = Some(rx);
+                vec![]
+            }
+            SessionUiEvent::Renamed { session_id, title } => {
+                app.tui.session_ops.rename_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::Renamed { session_id, title });
+                apply_state_commands(&mut app.tui, commands);
+
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
+            SessionUiEvent::RenameFailed { error } => {
+                app.tui.session_ops.rename_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::RenameFailed { error });
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+        },
     }
 }
 
@@ -180,104 +340,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 fn apply_state_commands(tui: &mut TuiState, commands: Vec<StateCommand>) {
     for command in commands {
         match command {
-            StateCommand::Transcript(command) => {
-                apply_transcript_command(&mut tui.transcript, command)
-            }
-            StateCommand::Input(command) => apply_input_command(&mut tui.input, command),
-            StateCommand::Session(command) => apply_session_command(&mut tui.conversation, command),
-            StateCommand::Auth(command) => apply_auth_command(&mut tui.auth, command),
+            StateCommand::Transcript(command) => tui.transcript.apply(command),
+            StateCommand::Input(command) => tui.input.apply(command),
+            StateCommand::Session(command) => tui.conversation.apply(command),
+            StateCommand::Auth(command) => tui.auth.apply(command),
             StateCommand::Config(command) => apply_config_command(tui, command),
         }
-    }
-}
-
-fn apply_transcript_command(transcript: &mut TranscriptState, command: TranscriptCommand) {
-    match command {
-        TranscriptCommand::AppendCell(cell) => transcript.cells.push(cell),
-        TranscriptCommand::AppendSystemMessage(message) => {
-            transcript
-                .cells
-                .push(crate::modes::tui::transcript::HistoryCell::system(message));
-        }
-        TranscriptCommand::Clear => transcript.reset(),
-        TranscriptCommand::ReplaceCells(cells) => transcript.cells = cells,
-        TranscriptCommand::ResetScroll => transcript.scroll.reset(),
-        TranscriptCommand::ClearWrapCache => transcript.wrap_cache.clear(),
-        TranscriptCommand::ScrollToTop => transcript.scroll_to_top(),
-        TranscriptCommand::ScrollToBottom => transcript.scroll_to_bottom(),
-        TranscriptCommand::PageUp => transcript.page_up(),
-        TranscriptCommand::PageDown => transcript.page_down(),
-    }
-}
-
-fn apply_input_command(input: &mut crate::modes::tui::input::InputState, command: InputCommand) {
-    match command {
-        InputCommand::Clear => input.clear(),
-        InputCommand::SetText(text) => input.set_text(&text),
-        InputCommand::InsertChar(ch) => {
-            input.textarea.insert_char(ch);
-        }
-        InputCommand::SetTextAndCursor {
-            text,
-            cursor_row,
-            cursor_col,
-        } => {
-            use tui_textarea::CursorMove;
-
-            input.set_text(&text);
-            input.textarea.move_cursor(CursorMove::Top);
-            input.textarea.move_cursor(CursorMove::Head);
-            for _ in 0..cursor_row {
-                input.textarea.move_cursor(CursorMove::Down);
-            }
-            for _ in 0..cursor_col {
-                input.textarea.move_cursor(CursorMove::Forward);
-            }
-        }
-        InputCommand::SetHistory(history) => {
-            input.history = history;
-            input.reset_navigation();
-        }
-        InputCommand::ClearHistory => input.clear_history(),
-        InputCommand::SetHandoffState(state) => {
-            input.handoff.cancel();
-            input.handoff = state;
-        }
-    }
-}
-
-fn apply_session_command(
-    session: &mut crate::modes::tui::session::SessionState,
-    command: SessionCommand,
-) {
-    match command {
-        SessionCommand::ClearMessages => session.messages.clear(),
-        SessionCommand::SetMessages(messages) => session.messages = messages,
-        SessionCommand::AppendMessage(message) => session.messages.push(message),
-        SessionCommand::SetSession(session_handle) => session.session = session_handle,
-        SessionCommand::ResetUsage => session.usage = SessionUsage::new(),
-        SessionCommand::SetUsage {
-            input,
-            output,
-            cache_read,
-            cache_write,
-        } => {
-            session.usage = SessionUsage::new();
-            session.usage.add(input, output, cache_read, cache_write);
-        }
-        SessionCommand::UpdateUsage {
-            input,
-            output,
-            cache_read,
-            cache_write,
-        } => session.usage.add(input, output, cache_read, cache_write),
-    }
-}
-
-fn apply_auth_command(auth: &mut crate::modes::tui::auth::AuthState, command: AuthCommand) {
-    match command {
-        AuthCommand::RefreshStatus => auth.refresh(),
-        AuthCommand::ClearLoginRx => auth.login_rx = None,
     }
 }
 
@@ -285,6 +353,48 @@ fn apply_config_command(tui: &mut TuiState, command: ConfigCommand) {
     match command {
         ConfigCommand::SetModel(model) => tui.config.model = model,
         ConfigCommand::SetThinkingLevel(level) => tui.config.thinking_level = level,
+    }
+}
+
+fn apply_overlay_action(app: &mut AppState, action: overlays::OverlayAction) -> Vec<UiEffect> {
+    match action {
+        overlays::OverlayAction::Close(effects) => {
+            app.overlay = None;
+            effects
+        }
+        overlays::OverlayAction::Effects(effects) => effects,
+        overlays::OverlayAction::Open(request) => open_overlay_request(app, request),
+    }
+}
+
+fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -> Vec<UiEffect> {
+    match request {
+        overlays::OverlayRequest::CommandPalette { command_mode } => {
+            let (state, effects) = overlays::CommandPaletteState::open(command_mode);
+            app.overlay = Some(overlays::Overlay::CommandPalette(state));
+            effects
+        }
+        overlays::OverlayRequest::ModelPicker => {
+            let (state, effects) = overlays::ModelPickerState::open(&app.tui.config.model);
+            app.overlay = Some(overlays::Overlay::ModelPicker(state));
+            effects
+        }
+        overlays::OverlayRequest::ThinkingPicker => {
+            let (state, effects) =
+                overlays::ThinkingPickerState::open(app.tui.config.thinking_level);
+            app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
+            effects
+        }
+        overlays::OverlayRequest::Login => {
+            let (state, effects) = overlays::LoginState::open();
+            app.overlay = Some(overlays::Overlay::Login(state));
+            effects
+        }
+        overlays::OverlayRequest::FilePicker { trigger_pos } => {
+            let (state, effects) = overlays::FilePickerState::open(trigger_pos);
+            app.overlay = Some(overlays::Overlay::FilePicker(state));
+            effects
+        }
     }
 }
 
@@ -352,10 +462,10 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     }
 
     // Try to dispatch to the active overlay
-    let (effects, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
+    let (action, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
     apply_state_commands(&mut app.tui, commands);
-    if let Some(effects) = effects {
-        return effects;
+    if let Some(action) = action {
+        return apply_overlay_action(app, action);
     }
 
     // No overlay active - delegate to input feature module
@@ -365,9 +475,17 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .session
         .as_ref()
         .map(|session| session.id.clone());
-    let (effects, commands) =
+    let (effects, commands, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, session_id, key);
     apply_state_commands(&mut app.tui, commands);
+    if let Some(request) = overlay_request
+        && app.overlay.is_none()
+    {
+        let mut overlay_effects = open_overlay_request(app, request);
+        overlay_effects.extend(effects);
+        return overlay_effects;
+    }
+
     effects
 }
 

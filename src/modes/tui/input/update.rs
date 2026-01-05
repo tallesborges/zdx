@@ -8,7 +8,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use super::state::{HandoffState, InputState};
 use crate::core::session::SessionEvent;
 use crate::modes::tui::app::AgentState;
-use crate::modes::tui::overlays::Overlay;
+use crate::modes::tui::overlays::{Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{SessionCommand, StateCommand, TranscriptCommand};
 use crate::modes::tui::transcript::HistoryCell;
@@ -33,12 +33,12 @@ pub fn handle_main_key(
     agent_state: &AgentState,
     session_id: Option<String>,
     key: crossterm::event::KeyEvent,
-) -> (Vec<UiEffect>, Vec<StateCommand>) {
+) -> (Vec<UiEffect>, Vec<StateCommand>, Option<OverlayRequest>) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-    let (effects, commands) = match key.code {
+    let (effects, commands, overlay_request) = match key.code {
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
         KeyCode::Char('u') if ctrl && !shift && !alt => {
             let (row, _) = input.textarea.cursor();
@@ -58,39 +58,41 @@ pub fn handle_main_key(
                 input.textarea.move_cursor(tui_textarea::CursorMove::Head);
                 input.textarea.delete_line_by_end();
             }
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         KeyCode::Char('/') if !ctrl && !shift && !alt => {
             if input.get_text().is_empty() {
                 (
-                    vec![UiEffect::OpenCommandPalette {
-                        command_mode: false,
-                    }],
                     vec![],
+                    vec![],
+                    Some(OverlayRequest::CommandPalette {
+                        command_mode: false,
+                    }),
                 )
             } else {
                 input.textarea.input(key);
-                (vec![], vec![])
+                (vec![], vec![], None)
             }
         }
         KeyCode::Char('p') if ctrl && !shift && !alt => (
-            vec![UiEffect::OpenCommandPalette {
-                command_mode: false,
-            }],
             vec![],
+            vec![],
+            Some(OverlayRequest::CommandPalette {
+                command_mode: false,
+            }),
         ),
         KeyCode::Char('t') if ctrl && !shift && !alt => {
-            (vec![UiEffect::OpenThinkingPicker], vec![])
+            (vec![], vec![], Some(OverlayRequest::ThinkingPicker))
         }
         KeyCode::Char('c') if ctrl => {
             // Ctrl+C: interrupt agent, clear input, or quit
             if agent_state.is_running() {
-                (vec![UiEffect::InterruptAgent], vec![])
+                (vec![UiEffect::InterruptAgent], vec![], None)
             } else if !input.get_text().is_empty() {
                 input.clear();
-                (vec![], vec![])
+                (vec![], vec![], None)
             } else {
-                (vec![UiEffect::Quit], vec![])
+                (vec![UiEffect::Quit], vec![], None)
             }
         }
         KeyCode::Enter if !shift && !alt => {
@@ -98,46 +100,50 @@ pub fn handle_main_key(
         }
         KeyCode::Char('j') if ctrl => {
             input.textarea.insert_newline();
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         KeyCode::Esc => {
             if input.handoff.is_active() {
                 // Cancel handoff mode
                 input.handoff.cancel();
                 input.clear();
-                (vec![], vec![])
+                (vec![], vec![], None)
             } else if agent_state.is_running() {
-                (vec![UiEffect::InterruptAgent], vec![])
+                (vec![UiEffect::InterruptAgent], vec![], None)
             } else {
                 input.clear();
-                (vec![], vec![])
+                (vec![], vec![], None)
             }
         }
         KeyCode::PageUp => (
             vec![],
             vec![StateCommand::Transcript(TranscriptCommand::PageUp)],
+            None,
         ),
         KeyCode::PageDown => (
             vec![],
             vec![StateCommand::Transcript(TranscriptCommand::PageDown)],
+            None,
         ),
         KeyCode::Home if ctrl => (
             vec![],
             vec![StateCommand::Transcript(TranscriptCommand::ScrollToTop)],
+            None,
         ),
         KeyCode::End if ctrl => (
             vec![],
             vec![StateCommand::Transcript(TranscriptCommand::ScrollToBottom)],
+            None,
         ),
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
             input.textarea.move_cursor(tui_textarea::CursorMove::Top);
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
             input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         KeyCode::Up if !ctrl && !shift && !alt => {
             if input.should_navigate_up() {
@@ -145,7 +151,7 @@ pub fn handle_main_key(
             } else {
                 input.textarea.input(key);
             }
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         KeyCode::Down if !ctrl && !shift && !alt => {
             if input.should_navigate_down() {
@@ -153,7 +159,7 @@ pub fn handle_main_key(
             } else {
                 input.textarea.input(key);
             }
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
         _ => {
             input.reset_navigation();
@@ -180,14 +186,18 @@ pub fn handle_main_key(
                 };
                 // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
                 let trigger_pos = cursor_pos.saturating_sub(1);
-                return (vec![UiEffect::OpenFilePicker { trigger_pos }], vec![]);
+                return (
+                    vec![],
+                    vec![],
+                    Some(OverlayRequest::FilePicker { trigger_pos }),
+                );
             }
 
-            (vec![], vec![])
+            (vec![], vec![], None)
         }
     };
 
-    (effects, commands)
+    (effects, commands, overlay_request)
 }
 
 /// Handles input submission.
@@ -195,9 +205,9 @@ fn submit_input(
     input: &mut InputState,
     agent_state: &AgentState,
     session_id: Option<String>,
-) -> (Vec<UiEffect>, Vec<StateCommand>) {
+) -> (Vec<UiEffect>, Vec<StateCommand>, Option<OverlayRequest>) {
     if !matches!(agent_state, AgentState::Idle) {
-        return (vec![], vec![]);
+        return (vec![], vec![], None);
     }
 
     // Block input during handoff generation (prevent state interleaving)
@@ -209,6 +219,7 @@ fn submit_input(
                     "Handoff generation in progress. Press Esc to cancel.".to_string(),
                 ),
             )],
+            None,
         );
     }
 
@@ -225,6 +236,7 @@ fn submit_input(
                 vec![StateCommand::Transcript(
                     TranscriptCommand::AppendSystemMessage("Usage: /rename <title>".to_string()),
                 )],
+                None,
             );
         }
         if let Some(session_id) = session_id {
@@ -235,6 +247,7 @@ fn submit_input(
                     title: Some(title.to_string()),
                 }],
                 vec![],
+                None,
             );
         } else {
             input.clear();
@@ -245,6 +258,7 @@ fn submit_input(
                         "No active session to rename.".to_string(),
                     ),
                 )],
+                None,
             );
         }
     }
@@ -261,6 +275,7 @@ fn submit_input(
                         "Handoff goal cannot be empty.".to_string(),
                     ),
                 )],
+                None,
             );
         }
         input.clear();
@@ -273,6 +288,7 @@ fn submit_input(
                     text
                 )),
             )],
+            None,
         );
     }
 
@@ -287,6 +303,7 @@ fn submit_input(
                         "Handoff prompt cannot be empty.".to_string(),
                     ),
                 )],
+                None,
             );
         }
         input.handoff = HandoffState::Idle;
@@ -305,12 +322,13 @@ fn submit_input(
                 StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
                 StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
             ],
+            None,
         );
     }
 
     // Normal message submission
     if text.trim().is_empty() {
-        return (vec![], vec![]);
+        return (vec![], vec![], None);
     }
 
     input.history.push(text.clone());
@@ -334,6 +352,7 @@ fn submit_input(
             StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
             StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
         ],
+        None,
     )
 }
 

@@ -5,6 +5,7 @@
 use tokio::sync::mpsc;
 
 use crate::modes::tui::events::UiEvent;
+use crate::modes::tui::shared::internal::SessionCommand;
 
 /// Session and conversation state.
 ///
@@ -45,6 +46,32 @@ impl SessionState {
             session,
             messages,
             usage: SessionUsage::new(),
+        }
+    }
+
+    /// Applies a cross-slice session command.
+    pub fn apply(&mut self, command: SessionCommand) {
+        match command {
+            SessionCommand::ClearMessages => self.messages.clear(),
+            SessionCommand::SetMessages(messages) => self.messages = messages,
+            SessionCommand::AppendMessage(message) => self.messages.push(message),
+            SessionCommand::SetSession(session_handle) => self.session = session_handle,
+            SessionCommand::ResetUsage => self.usage = SessionUsage::new(),
+            SessionCommand::SetUsage {
+                input,
+                output,
+                cache_read,
+                cache_write,
+            } => {
+                self.usage = SessionUsage::new();
+                self.usage.add(input, output, cache_read, cache_write);
+            }
+            SessionCommand::UpdateUsage {
+                input,
+                output,
+                cache_read,
+                cache_write,
+            } => self.usage.add(input, output, cache_read, cache_write),
         }
     }
 }

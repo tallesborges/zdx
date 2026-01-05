@@ -44,14 +44,14 @@ State is organized into **feature slices** (auth, input, session, transcript), e
 ### 2. Update (The Reducer)
 The `update` function is the single source of truth for state transitions. It handles `UiEvent`s and returns `Vec<UiEffect>`. It never performs I/O directly.
 
-**StateCommands:** Feature slices return `StateCommand` enums to request mutations on other slices (e.g., Input slice requesting a Transcript scroll), keeping dependencies explicit.
+**StateCommands:** Feature slices return `StateCommand` enums to request mutations on other slices (e.g., Input slice requesting a Transcript scroll). The reducer routes each command to the owning slice’s `apply()` method.
 
 ### 3. View
 Pure functions render `&AppState` to a Ratatui frame.
 *   **Interior Mutability:** `RefCell` is used *only* for render-time caches (markdown wrapping, selection mapping) to avoid expensive re-computations without mutating logical state.
 
 ### 4. Effects & Runtime
-`UiEffect` describes I/O (e.g., `Quit`, `OpenBrowser`, `SaveSession`).
+`UiEffect` describes I/O and task spawning only (e.g., `Quit`, `OpenBrowser`, `SaveSession`).
 The `TuiRuntime`:
 1.  Collects events (User input, Agent messages, Async channels).
 2.  Feeds them to `update`.
@@ -65,12 +65,13 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
 - **Mutual Exclusion:** Only one overlay is active at a time.
 - **Input Priority:** Active overlay intercepts keys before the main app.
 - **Lifecycle:**
-    - **Open:** Triggered by `UiEffect` (e.g., `OpenFilePicker`), often spawning initial async work (e.g., `DiscoverFiles`).
+    - **Open:** Set directly by the reducer (often from input or overlay actions). File picker opening returns `DiscoverFiles` for I/O.
     - **Update:** Internal mutations + `StateCommand`s for global changes.
     - **Close:** Returns effects to run after dismissal (e.g., `LoadSession`).
 
 ### Async & Concurrency
 - **Receivers in State:** `mpsc::Receiver`s for user-visible workflows (e.g., Auth, Agent Streaming) live in `AppState`. The runtime polls them and emits `UiEvent`s.
+- **Receiver lifecycle:** `*Started` event → reducer stores receiver → runtime polls → result event → reducer clears receiver (mirrors `AgentSpawned`/`LoginExchangeStarted`/`HandoffGenerationStarted` patterns).
 - **Background Tasks:** Pure background tasks (e.g., file discovery) have receivers in the Runtime, which feeds results into the event loop.
 
 ### Performance

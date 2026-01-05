@@ -26,10 +26,6 @@ use crate::core::session::Session;
 use crate::modes::tui::app::{AgentState, AppState};
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
-use crate::modes::tui::overlays::{
-    CommandPaletteState, FilePickerState, LoginState, ModelPickerState, Overlay,
-    ThinkingPickerState,
-};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
 use crate::providers::anthropic::ChatMessage;
@@ -308,14 +304,12 @@ impl TuiRuntime {
             match rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
-                    ops.list_rx = None;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     events.push(UiEvent::Session(SessionUiEvent::ListFailed {
                         error: "Session list task failed".to_string(),
                     }));
-                    ops.list_rx = None;
                 }
             }
         }
@@ -325,14 +319,12 @@ impl TuiRuntime {
             match rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
-                    ops.load_rx = None;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     events.push(UiEvent::Session(SessionUiEvent::LoadFailed {
                         error: "Session load task failed".to_string(),
                     }));
-                    ops.load_rx = None;
                 }
             }
         }
@@ -342,12 +334,10 @@ impl TuiRuntime {
             match rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
-                    ops.preview_rx = None;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     events.push(UiEvent::Session(SessionUiEvent::PreviewFailed));
-                    ops.preview_rx = None;
                 }
             }
         }
@@ -357,14 +347,12 @@ impl TuiRuntime {
             match rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
-                    ops.create_rx = None;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     events.push(UiEvent::Session(SessionUiEvent::CreateFailed {
                         error: "Session create task failed".to_string(),
                     }));
-                    ops.create_rx = None;
                 }
             }
         }
@@ -374,14 +362,12 @@ impl TuiRuntime {
             match rx.try_recv() {
                 Ok(event) => {
                     events.push(event);
-                    ops.rename_rx = None;
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
                     events.push(UiEvent::Session(SessionUiEvent::RenameFailed {
                         error: "Session rename task failed".to_string(),
                     }));
-                    ops.rename_rx = None;
                 }
             }
         }
@@ -458,8 +444,8 @@ impl TuiRuntime {
             }
             UiEffect::RenameSession { session_id, title } => {
                 if self.state.tui.session_ops.rename_rx.is_none() {
-                    self.state.tui.session_ops.rename_rx =
-                        Some(handlers::spawn_session_rename(session_id, title));
+                    let event = handlers::spawn_session_rename(session_id, title);
+                    self.dispatch_event(event);
                 }
             }
             UiEffect::CreateNewSession => {
@@ -467,29 +453,29 @@ impl TuiRuntime {
                 if self.state.tui.session_ops.create_rx.is_none() {
                     let config = self.state.tui.config.clone();
                     let root = self.state.tui.agent_opts.root.clone();
-                    self.state.tui.session_ops.create_rx =
-                        Some(handlers::spawn_session_create(config, root));
+                    let event = handlers::spawn_session_create(config, root);
+                    self.dispatch_event(event);
                 }
             }
             UiEffect::OpenSessionPicker => {
                 // Only spawn if not already loading and no overlay is open
                 if self.state.tui.session_ops.list_rx.is_none() && self.state.overlay.is_none() {
                     let original_cells = self.state.tui.transcript.cells.clone();
-                    self.state.tui.session_ops.list_rx =
-                        Some(handlers::spawn_session_list_load(original_cells));
+                    let event = handlers::spawn_session_list_load(original_cells);
+                    self.dispatch_event(event);
                 }
             }
             UiEffect::LoadSession { session_id } => {
                 // Only spawn if not already loading
                 if self.state.tui.session_ops.load_rx.is_none() {
-                    self.state.tui.session_ops.load_rx =
-                        Some(handlers::spawn_session_load(session_id));
+                    let event = handlers::spawn_session_load(session_id);
+                    self.dispatch_event(event);
                 }
             }
             UiEffect::PreviewSession { session_id } => {
                 // Cancel any pending preview and start new one
-                self.state.tui.session_ops.preview_rx =
-                    Some(handlers::spawn_session_preview(session_id));
+                let event = handlers::spawn_session_preview(session_id);
+                self.dispatch_event(event);
             }
 
             // Handoff effects
@@ -519,39 +505,6 @@ impl TuiRuntime {
                 self.file_discovery_rx = Some(handlers::spawn_file_discovery(&root));
             }
 
-            // Overlay effects
-            UiEffect::OpenCommandPalette { command_mode } => {
-                if self.state.overlay.is_none() {
-                    let (state, effects) = CommandPaletteState::open(command_mode);
-                    self.set_overlay(Overlay::CommandPalette(state), effects);
-                }
-            }
-            UiEffect::OpenFilePicker { trigger_pos } => {
-                if self.state.overlay.is_none() {
-                    let (state, effects) = FilePickerState::open(trigger_pos);
-                    self.set_overlay(Overlay::FilePicker(state), effects);
-                }
-            }
-            UiEffect::OpenModelPicker => {
-                if self.state.overlay.is_none() {
-                    let (state, effects) = ModelPickerState::open(&self.state.tui.config.model);
-                    self.set_overlay(Overlay::ModelPicker(state), effects);
-                }
-            }
-            UiEffect::OpenThinkingPicker => {
-                if self.state.overlay.is_none() {
-                    let (state, effects) =
-                        ThinkingPickerState::open(self.state.tui.config.thinking_level);
-                    self.set_overlay(Overlay::ThinkingPicker(state), effects);
-                }
-            }
-            UiEffect::OpenLogin => {
-                if self.state.overlay.is_none() {
-                    let (state, effects) = LoginState::open();
-                    self.set_overlay(Overlay::Login(state), effects);
-                }
-            }
-
             // Clipboard effects
             UiEffect::CopyToClipboard { text } => {
                 use crate::modes::tui::shared::Clipboard;
@@ -559,15 +512,6 @@ impl TuiRuntime {
                     self.dispatch_event(UiEvent::ClipboardCopied);
                 }
             }
-        }
-    }
-}
-
-impl TuiRuntime {
-    fn set_overlay(&mut self, overlay: Overlay, effects: Vec<UiEffect>) {
-        self.state.overlay = Some(overlay);
-        if !effects.is_empty() {
-            self.execute_effects(effects);
         }
     }
 }

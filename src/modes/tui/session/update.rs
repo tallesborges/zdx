@@ -32,6 +32,11 @@ pub fn handle_session_event(
     let mut commands = Vec::new();
     let mut overlay_action = SessionOverlayAction::None;
     let effects = match event {
+        SessionUiEvent::ListStarted { .. }
+        | SessionUiEvent::LoadStarted { .. }
+        | SessionUiEvent::PreviewStarted { .. }
+        | SessionUiEvent::CreateStarted { .. }
+        | SessionUiEvent::RenameStarted { .. } => vec![],
         SessionUiEvent::ListLoaded {
             sessions,
             original_cells,

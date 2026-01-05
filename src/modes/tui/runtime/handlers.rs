@@ -23,7 +23,7 @@ use crate::modes::tui::transcript::{HistoryCell, build_transcript_from_events};
 /// Spawns async session list loading and returns the receiver.
 ///
 /// Returns events via channel for the runtime to collect and dispatch to reducer.
-pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
@@ -49,13 +49,13 @@ pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> mpsc::Receiv
         let _ = tx.send(event).await;
     });
 
-    rx
+    UiEvent::Session(SessionUiEvent::ListStarted { rx })
 }
 
 /// Spawns async session loading (full switch) and returns the receiver.
 ///
 /// Loads events, builds transcript cells, messages, and history.
-pub fn spawn_session_load(session_id: String) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_load(session_id: String) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
@@ -71,7 +71,7 @@ pub fn spawn_session_load(session_id: String) -> mpsc::Receiver<UiEvent> {
         let _ = tx.send(event).await;
     });
 
-    rx
+    UiEvent::Session(SessionUiEvent::LoadStarted { rx })
 }
 
 /// Synchronous session loading (runs in blocking task).
@@ -123,7 +123,7 @@ fn load_session_sync(session_id: &str) -> UiEvent {
 /// Spawns async session preview loading and returns the receiver.
 ///
 /// Preview only loads transcript cells (not full session data).
-pub fn spawn_session_preview(session_id: String) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_preview(session_id: String) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
@@ -145,14 +145,11 @@ pub fn spawn_session_preview(session_id: String) -> mpsc::Receiver<UiEvent> {
         let _ = tx.send(event).await;
     });
 
-    rx
+    UiEvent::Session(SessionUiEvent::PreviewStarted { rx })
 }
 
 /// Spawns async new session creation and returns the receiver.
-pub fn spawn_session_create(
-    config: crate::config::Config,
-    root: PathBuf,
-) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
@@ -191,11 +188,11 @@ pub fn spawn_session_create(
         let _ = tx.send(event).await;
     });
 
-    rx
+    UiEvent::Session(SessionUiEvent::CreateStarted { rx })
 }
 
 /// Spawns async session rename and returns the receiver.
-pub fn spawn_session_rename(session_id: String, title: Option<String>) -> mpsc::Receiver<UiEvent> {
+pub fn spawn_session_rename(session_id: String, title: Option<String>) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
@@ -221,7 +218,7 @@ pub fn spawn_session_rename(session_id: String, title: Option<String>) -> mpsc::
         let _ = tx.send(event).await;
     });
 
-    rx
+    UiEvent::Session(SessionUiEvent::RenameStarted { rx })
 }
 
 // ============================================================================

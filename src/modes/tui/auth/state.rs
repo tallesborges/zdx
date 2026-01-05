@@ -2,6 +2,8 @@
 //!
 //! Manages authentication type detection and login flow state.
 
+use crate::modes::tui::shared::internal::AuthCommand;
+
 /// Authentication type indicator for status line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AuthStatus {
@@ -61,5 +63,13 @@ impl AuthState {
     /// Refreshes the auth type by re-detecting it.
     pub fn refresh(&mut self) {
         self.auth_type = AuthStatus::detect();
+    }
+
+    /// Applies a cross-slice auth command.
+    pub fn apply(&mut self, command: AuthCommand) {
+        match command {
+            AuthCommand::RefreshStatus => self.refresh(),
+            AuthCommand::ClearLoginRx => self.login_rx = None,
+        }
     }
 }
