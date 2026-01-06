@@ -49,40 +49,40 @@ pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
     mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
 }
 
-/// Event sink wrapper that provides best-effort and reliable send modes.
+/// Event sender wrapper that provides best-effort and reliable send modes.
 ///
-/// Use `delta()` for high-volume events (TextDelta) that can be dropped
-/// if the consumer is slow. Use `important()` for events that must be
+/// Use `send_delta()` for high-volume events (TextDelta) that can be dropped
+/// if the consumer is slow. Use `send_important()` for events that must be
 /// delivered (ToolStarted, ToolFinished, Complete, Error, Interrupted).
 #[derive(Clone)]
-pub struct EventSink {
+pub struct EventSender {
     tx: AgentEventTx,
 }
 
-impl EventSink {
-    /// Creates a new EventSink wrapping the given channel sender.
+impl EventSender {
+    /// Creates a new EventSender wrapping the given channel sender.
     pub fn new(tx: AgentEventTx) -> Self {
         Self { tx }
     }
 
     /// Best-effort send: never awaits, drops if channel is full.
     /// Use for high-volume events like TextDelta that can afford loss.
-    pub fn delta(&self, ev: AgentEvent) {
+    pub fn send_delta(&self, ev: AgentEvent) {
         let _ = self.tx.try_send(Arc::new(ev));
     }
 
     /// Reliable send: awaits delivery.
     /// Use for important events (tool lifecycle, final, errors).
-    pub async fn important(&self, ev: AgentEvent) {
+    pub async fn send_important(&self, ev: AgentEvent) {
         let _ = self.tx.send(Arc::new(ev)).await;
     }
 }
 
-/// Spawns a fan-out task that distributes events to multiple consumers.
+/// Spawns a broadcast task that distributes events to multiple consumers.
 ///
 /// Uses `try_send` (best-effort) to prevent slow consumers from blocking
 /// others. Events are dropped if a consumer's channel is full. Closed
-/// sinks are automatically removed.
+/// channels are automatically removed.
 ///
 /// The task exits when the source channel closes.
 ///
@@ -93,20 +93,23 @@ impl EventSink {
 /// let (render_tx, render_rx) = create_event_channel();
 /// let (persist_tx, persist_rx) = create_event_channel();
 ///
-/// let fanout = spawn_fanout_task(agent_rx, vec![render_tx, persist_tx]);
+/// let broadcaster = spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
 ///
 /// // Agent sends to agent_tx
 /// // Renderer receives from render_rx
 /// // Persister receives from persist_rx
 /// ```
-pub fn spawn_fanout_task(mut rx: AgentEventRx, mut sinks: Vec<AgentEventTx>) -> JoinHandle<()> {
+pub fn spawn_broadcaster(
+    mut rx: AgentEventRx,
+    mut subscribers: Vec<AgentEventTx>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
-            sinks.retain(|sink| {
-                match sink.try_send(event.clone()) {
+            subscribers.retain(|tx| {
+                match tx.try_send(event.clone()) {
                     Ok(()) => true,
-                    Err(TrySendError::Full(_)) => true, // drop this event for this sink
-                    Err(TrySendError::Closed(_)) => false, // remove sink
+                    Err(TrySendError::Full(_)) => true, // drop this event, keep channel
+                    Err(TrySendError::Closed(_)) => false, // remove closed channel
                 }
             });
         }
@@ -153,7 +156,7 @@ impl ToolUseBuilder {
 
 /// Sends an error event via the async channel and returns the original error.
 /// This preserves the full error chain (including ProviderError details) for callers.
-async fn emit_error_async(err: anyhow::Error, sink: &EventSink) -> anyhow::Error {
+async fn emit_error_async(err: anyhow::Error, sender: &EventSender) -> anyhow::Error {
     let event = if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
         AgentEvent::Error {
             kind: provider_err.kind.clone().into(),
@@ -167,7 +170,7 @@ async fn emit_error_async(err: anyhow::Error, sink: &EventSink) -> anyhow::Error
             details: None,
         }
     };
-    sink.important(event).await;
+    sender.send_important(event).await;
     err
 }
 
@@ -185,9 +188,9 @@ pub async fn run_turn(
     config: &Config,
     options: &AgentOptions,
     system_prompt: Option<&str>,
-    sink: AgentEventTx,
+    tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
-    let sink = EventSink::new(sink);
+    let sender = EventSender::new(tx);
 
     // Translate ThinkingLevel to raw API values
     let thinking_enabled = config.thinking_level.is_enabled();
@@ -214,7 +217,7 @@ pub async fn run_turn(
     // Tool loop - keep going until we get a final response
     loop {
         if interrupt::is_interrupted() {
-            sink.important(AgentEvent::Interrupted).await;
+            sender.send_important(AgentEvent::Interrupted).await;
             return Err(InterruptedError.into());
         }
 
@@ -223,7 +226,7 @@ pub async fn run_turn(
         let stream_result = tokio::select! {
             biased;
             _ = interrupt::wait_for_interrupt() => {
-                sink.important(AgentEvent::Interrupted).await;
+                sender.send_important(AgentEvent::Interrupted).await;
                 return Err(InterruptedError.into());
             }
             result = client.send_messages_stream(&messages, &tools, system_prompt) => result,
@@ -232,7 +235,7 @@ pub async fn run_turn(
         let mut stream = match stream_result {
             Ok(s) => s,
             Err(e) => {
-                return Err(emit_error_async(e, &sink).await);
+                return Err(emit_error_async(e, &sender).await);
             }
         };
 
@@ -245,7 +248,7 @@ pub async fn run_turn(
         // Process stream events with periodic interrupt checking
         loop {
             if interrupt::is_interrupted() {
-                sink.important(AgentEvent::Interrupted).await;
+                sender.send_important(AgentEvent::Interrupted).await;
                 return Err(InterruptedError.into());
             }
 
@@ -260,7 +263,7 @@ pub async fn run_turn(
             let event = match event_result {
                 Ok(e) => e,
                 Err(e) => {
-                    return Err(emit_error_async(e, &sink).await);
+                    return Err(emit_error_async(e, &sender).await);
                 }
             };
 
@@ -269,7 +272,7 @@ pub async fn run_turn(
                     if !text.is_empty() {
                         // Push to full_text first, then move text into event (no clone)
                         full_text.push_str(&text);
-                        sink.delta(AgentEvent::AssistantDelta { text });
+                        sender.send_delta(AgentEvent::AssistantDelta { text });
                     }
                 }
                 StreamEvent::ContentBlockStart {
@@ -285,12 +288,13 @@ pub async fn run_turn(
                         // Emit ToolRequested immediately so UI shows the tool with a spinner
                         // while the JSON input is still streaming. This is especially important
                         // for tools like `write` where the content field can be very large.
-                        sink.important(AgentEvent::ToolRequested {
-                            id: tool_id.clone(),
-                            name: tool_name.clone(),
-                            input: serde_json::json!({}),
-                        })
-                        .await;
+                        sender
+                            .send_important(AgentEvent::ToolRequested {
+                                id: tool_id.clone(),
+                                name: tool_name.clone(),
+                                input: serde_json::json!({}),
+                            })
+                            .await;
 
                         tool_uses.push(ToolUseBuilder {
                             index,
@@ -317,7 +321,7 @@ pub async fn run_turn(
                 StreamEvent::ThinkingDelta { index, thinking } => {
                     if let Some(tb) = thinking_blocks.iter_mut().find(|t| t.index == index) {
                         tb.text.push_str(&thinking);
-                        sink.delta(AgentEvent::ThinkingDelta { text: thinking });
+                        sender.send_delta(AgentEvent::ThinkingDelta { text: thinking });
                     }
                 }
                 StreamEvent::SignatureDelta { index, signature } => {
@@ -328,11 +332,12 @@ pub async fn run_turn(
                 StreamEvent::ContentBlockStop { index } => {
                     // Check if this is a thinking block finishing
                     if let Some(tb) = thinking_blocks.iter().find(|t| t.index == index) {
-                        sink.important(AgentEvent::ThinkingComplete {
-                            text: tb.text.clone(),
-                            signature: tb.signature.clone(),
-                        })
-                        .await;
+                        sender
+                            .send_important(AgentEvent::ThinkingComplete {
+                                text: tb.text.clone(),
+                                signature: tb.signature.clone(),
+                            })
+                            .await;
                     }
 
                     // Check if this is a tool_use block finishing - emit ToolInputReady
@@ -342,12 +347,13 @@ pub async fn run_turn(
                         // (the full error will be handled later when finalizing)
                         let input: Value = serde_json::from_str(&tu.input_json)
                             .unwrap_or_else(|_| serde_json::json!({}));
-                        sink.important(AgentEvent::ToolInputReady {
-                            id: tu.id.clone(),
-                            name: tu.name.clone(),
-                            input,
-                        })
-                        .await;
+                        sender
+                            .send_important(AgentEvent::ToolInputReady {
+                                id: tu.id.clone(),
+                                name: tu.name.clone(),
+                                input,
+                            })
+                            .await;
                     }
                 }
                 StreamEvent::MessageDelta {
@@ -358,13 +364,14 @@ pub async fn run_turn(
                     // Emit final output token count (message_delta has the total)
                     // Only emit output_tokens here to avoid double-counting with message_start
                     if let Some(u) = usage {
-                        sink.important(AgentEvent::UsageUpdate {
-                            input_tokens: 0, // Already counted in message_start
-                            output_tokens: u.output_tokens,
-                            cache_read_input_tokens: 0, // Already counted in message_start
-                            cache_creation_input_tokens: 0, // Already counted in message_start
-                        })
-                        .await;
+                        sender
+                            .send_important(AgentEvent::UsageUpdate {
+                                input_tokens: 0, // Already counted in message_start
+                                output_tokens: u.output_tokens,
+                                cache_read_input_tokens: 0, // Already counted in message_start
+                                cache_creation_input_tokens: 0, // Already counted in message_start
+                            })
+                            .await;
                     }
                 }
                 StreamEvent::Error {
@@ -372,24 +379,26 @@ pub async fn run_turn(
                     message,
                 } => {
                     let provider_err = ProviderError::api_error(&error_type, &message);
-                    sink.important(AgentEvent::Error {
-                        kind: ErrorKind::ApiError,
-                        message: provider_err.message.clone(),
-                        details: provider_err.details.clone(),
-                    })
-                    .await;
+                    sender
+                        .send_important(AgentEvent::Error {
+                            kind: ErrorKind::ApiError,
+                            message: provider_err.message.clone(),
+                            details: provider_err.details.clone(),
+                        })
+                        .await;
                     return Err(anyhow::Error::new(provider_err));
                 }
                 StreamEvent::MessageStart { usage, .. } => {
                     // Emit initial usage: input tokens and cache info only
                     // Output tokens come from message_delta to avoid double-counting
-                    sink.important(AgentEvent::UsageUpdate {
-                        input_tokens: usage.input_tokens,
-                        output_tokens: 0, // Will be set by message_delta
-                        cache_read_input_tokens: usage.cache_read_input_tokens,
-                        cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                    })
-                    .await;
+                    sender
+                        .send_important(AgentEvent::UsageUpdate {
+                            input_tokens: usage.input_tokens,
+                            output_tokens: 0, // Will be set by message_delta
+                            cache_read_input_tokens: usage.cache_read_input_tokens,
+                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+                        })
+                        .await;
                 }
                 // Ignore other events (Ping, MessageStop)
                 _ => {}
@@ -405,12 +414,13 @@ pub async fn run_turn(
                     Ok(tool_use) => finalized.push(tool_use),
                     Err(e) => {
                         // Emit structured error for invalid JSON
-                        sink.important(AgentEvent::Error {
-                            kind: ErrorKind::Parse,
-                            message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
-                            details: Some(tu.input_json),
-                        })
-                        .await;
+                        sender
+                            .send_important(AgentEvent::Error {
+                                kind: ErrorKind::Parse,
+                                message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
+                                details: Some(tu.input_json),
+                            })
+                            .await;
                         bail!("Invalid tool input JSON for {}: {}", tu.name, e);
                     }
                 }
@@ -419,10 +429,11 @@ pub async fn run_turn(
             // Emit AssistantComplete to signal this message is complete
             // This allows the TUI to finalize the current streaming cell before tools
             if !full_text.is_empty() {
-                sink.important(AgentEvent::AssistantComplete {
-                    text: full_text.clone(),
-                })
-                .await;
+                sender
+                    .send_important(AgentEvent::AssistantComplete {
+                        text: full_text.clone(),
+                    })
+                    .await;
             }
 
             // Note: ToolRequested events are already emitted during streaming
@@ -433,19 +444,20 @@ pub async fn run_turn(
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results (may be partial on interrupt)
-            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sink).await;
+            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sender).await;
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Check if interrupted during tool execution
             if interrupt::is_interrupted() {
                 // Emit TurnComplete with partial messages before Interrupted
                 // This ensures the TUI has the complete conversation state
-                sink.important(AgentEvent::TurnComplete {
-                    final_text: full_text.clone(),
-                    messages: messages.clone(),
-                })
-                .await;
-                sink.important(AgentEvent::Interrupted).await;
+                sender
+                    .send_important(AgentEvent::TurnComplete {
+                        final_text: full_text.clone(),
+                        messages: messages.clone(),
+                    })
+                    .await;
+                sender.send_important(AgentEvent::Interrupted).await;
                 return Err(InterruptedError.into());
             }
 
@@ -455,10 +467,11 @@ pub async fn run_turn(
 
         // Emit final assistant text
         if !full_text.is_empty() {
-            sink.important(AgentEvent::AssistantComplete {
-                text: full_text.clone(),
-            })
-            .await;
+            sender
+                .send_important(AgentEvent::AssistantComplete {
+                    text: full_text.clone(),
+                })
+                .await;
         }
 
         // Build final assistant message with thinking + text blocks
@@ -468,11 +481,12 @@ pub async fn run_turn(
         }
 
         // Emit turn complete with final result
-        sink.important(AgentEvent::TurnComplete {
-            final_text: full_text.clone(),
-            messages: messages.clone(),
-        })
-        .await;
+        sender
+            .send_important(AgentEvent::TurnComplete {
+                final_text: full_text.clone(),
+                messages: messages.clone(),
+            })
+            .await;
 
         return Ok((full_text, messages));
     }
@@ -490,7 +504,7 @@ pub async fn run_turn(
 async fn execute_tools_async(
     tool_uses: &[ToolUse],
     ctx: &ToolContext,
-    sink: &EventSink,
+    sender: &EventSender,
 ) -> Vec<ToolResult> {
     let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
@@ -498,11 +512,12 @@ async fn execute_tools_async(
 
     // Emit ToolStarted sequentially, then spawn tasks
     for (i, tu) in tool_uses.iter().enumerate() {
-        sink.important(AgentEvent::ToolStarted {
-            id: tu.id.clone(),
-            name: tu.name.clone(),
-        })
-        .await;
+        sender
+            .send_important(AgentEvent::ToolStarted {
+                id: tu.id.clone(),
+                name: tu.name.clone(),
+            })
+            .await;
 
         // Clone for 'static requirement
         let tu = tu.clone();
@@ -528,7 +543,7 @@ async fn execute_tools_async(
                         && !completed.contains(&idx)
                     {
                         completed.insert(idx);
-                        sink.important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolFinished {
                             id,
                             result: output.clone(),
                         })
@@ -541,7 +556,7 @@ async fn execute_tools_async(
                 for (i, tu) in tool_uses.iter().enumerate() {
                     if !completed.contains(&i) {
                         let abort_output = ToolOutput::canceled("Interrupted by user");
-                        sink.important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolFinished {
                             id: tu.id.clone(),
                             result: abort_output.clone(),
                         })
@@ -558,7 +573,7 @@ async fn execute_tools_async(
                 match task_result {
                     Some(Ok((idx, id, output, result))) => {
                         completed.insert(idx);
-                        sink.important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolFinished {
                             id,
                             result: output.clone(),
                         })
@@ -642,30 +657,32 @@ mod tests {
         }];
 
         let (tx, mut rx) = create_event_channel();
-        let sink = EventSink::new(tx);
+        let sender = EventSender::new(tx);
 
         // Run in a task so we can collect events
         let handle =
-            tokio::spawn(async move { execute_tools_async(&tool_uses, &ctx, &sink).await });
+            tokio::spawn(async move { execute_tools_async(&tool_uses, &ctx, &sender).await });
 
         // Collect events with timeout to avoid hangs
-        let mut events = Vec::new();
+        let mut received = Vec::new();
         for _ in 0..2 {
             let ev = timeout(Duration::from_secs(5), rx.recv())
                 .await
                 .expect("timeout waiting for event")
                 .expect("channel closed unexpectedly");
-            events.push((*ev).clone());
+            received.push((*ev).clone());
         }
 
         let results = handle.await.unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(events.len(), 2); // ToolStarted, ToolFinished
+        assert_eq!(received.len(), 2); // ToolStarted, ToolFinished
 
-        assert!(matches!(&events[0], AgentEvent::ToolStarted { id, name }
+        assert!(matches!(&received[0], AgentEvent::ToolStarted { id, name }
             if id == "tool1" && name == "read"));
-        assert!(matches!(&events[1], AgentEvent::ToolFinished { id, result }
-            if id == "tool1" && result.is_ok()));
+        assert!(
+            matches!(&received[1], AgentEvent::ToolFinished { id, result }
+            if id == "tool1" && result.is_ok())
+        );
     }
 
     /// Verifies channel is properly closed when sender is dropped.
@@ -692,16 +709,16 @@ mod tests {
         assert!(rx.recv().await.is_none());
     }
 
-    /// Verifies EventSink delta() is best-effort (doesn't block on full channel).
+    /// Verifies EventSender send_delta() is best-effort (doesn't block on full channel).
     #[tokio::test]
-    async fn test_event_sink_delta_is_best_effort() {
+    async fn test_event_sender_send_delta_is_best_effort() {
         // Create a tiny channel that will fill up quickly
         let (tx, _rx) = tokio::sync::mpsc::channel(1);
-        let sink = EventSink::new(tx);
+        let sender = EventSender::new(tx);
 
         // This should not block even though channel is tiny
         for i in 0..100 {
-            sink.delta(AgentEvent::AssistantDelta {
+            sender.send_delta(AgentEvent::AssistantDelta {
                 text: format!("chunk {}", i),
             });
         }
@@ -722,17 +739,17 @@ mod tests {
         assert!(result.is_err());
     }
 
-    /// Verifies fanout removes closed sinks.
+    /// Verifies broadcaster removes closed channels.
     #[tokio::test]
-    async fn test_fanout_removes_closed_sinks() {
+    async fn test_broadcaster_removes_closed_channels() {
         let (source_tx, source_rx) = create_event_channel();
-        let (sink1_tx, mut sink1_rx) = create_event_channel();
-        let (sink2_tx, sink2_rx) = create_event_channel();
+        let (out1_tx, mut out1_rx) = create_event_channel();
+        let (out2_tx, out2_rx) = create_event_channel();
 
-        // Drop sink2's receiver immediately
-        drop(sink2_rx);
+        // Drop out2's receiver immediately
+        drop(out2_rx);
 
-        let _fanout = spawn_fanout_task(source_rx, vec![sink1_tx, sink2_tx]);
+        let _broadcaster = spawn_broadcaster(source_rx, vec![out1_tx, out2_tx]);
 
         // Send an event
         source_tx
@@ -742,8 +759,8 @@ mod tests {
             .await
             .unwrap();
 
-        // Sink1 should receive it
-        let ev = timeout(Duration::from_secs(1), sink1_rx.recv())
+        // out1 should receive it
+        let ev = timeout(Duration::from_secs(1), out1_rx.recv())
             .await
             .expect("timeout")
             .expect("should receive event");

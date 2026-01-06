@@ -247,10 +247,11 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     if let Some(sess) = tui.conversation.session.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
-        let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx, persist_tx]);
+        let _broadcaster =
+            crate::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
         let _persist = session::spawn_persist_task(sess, persist_rx);
     } else {
-        let _fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![tui_tx]);
+        let _broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
 
     // Spawn the agent task - it will send TurnComplete when done
