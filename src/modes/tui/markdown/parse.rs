@@ -3,6 +3,7 @@ use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, T
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::{WrapOptions, wrap_styled_spans};
+use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::{Style, StyledLine, StyledSpan};
 
 /// Renders markdown text into styled lines.
@@ -18,9 +19,12 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
         return vec![StyledLine { spans: vec![] }];
     }
 
+    // Sanitize text for display (strips ANSI escapes, expands tabs)
+    let text = sanitize_for_display(text);
+
     let mut options = Options::empty();
     options.insert(Options::ENABLE_TABLES);
-    let parser = Parser::new_ext(text, options);
+    let parser = Parser::new_ext(&text, options);
     let mut renderer = MarkdownRenderer::new(width);
 
     for event in parser {

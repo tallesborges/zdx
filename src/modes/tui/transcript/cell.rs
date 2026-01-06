@@ -7,6 +7,7 @@ use unicode_width::UnicodeWidthStr;
 use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
 use crate::core::events::ToolOutput;
+use crate::modes::tui::shared::sanitize_for_display;
 
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -553,17 +554,14 @@ impl HistoryCell {
                     // Show the last N lines (most recent output is usually most relevant)
                     let skip_count = all_lines.len().saturating_sub(max_preview_lines);
                     for line in all_lines.iter().skip(skip_count) {
-                        // Sanitize line: strip ANSI escape codes (\x1b) to prevent terminal corruption
-                        // when wrapping breaks a sequence, and to avoid counting hidden chars in width.
-                        // Ideally we'd parse/strip properly, but removing the escape char is a safe fallback
-                        // that leaves the rest as visible text (e.g. "[31m") rather than active codes.
-                        let safe_line = line.replace('\x1b', "");
+                        // Sanitize line for display (strips ANSI escapes, expands tabs)
+                        let safe_line = sanitize_for_display(line);
 
                         // Check if line needs wrapping
-                        let wrapped = if safe_line.width() > width {
+                        let wrapped: Vec<String> = if safe_line.width() > width {
                             wrap_chars(&safe_line, width)
                         } else {
-                            vec![safe_line]
+                            vec![safe_line.into_owned()]
                         };
 
                         for wrapped_line in wrapped {

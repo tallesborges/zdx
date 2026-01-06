@@ -11,15 +11,19 @@ use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{SessionCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
 /// Handles paste events for input.
+///
+/// Sanitizes pasted text by stripping ANSI escapes and expanding tabs to spaces.
 pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
+    let sanitized = sanitize_for_display(text);
     if let Some(Overlay::Login(LoginState::AwaitingCode { input, .. })) = overlay {
-        input.push_str(text);
+        input.push_str(&sanitized);
     } else {
-        input.textarea.insert_str(text);
+        input.textarea.insert_str(&sanitized);
     }
 }
 
@@ -155,6 +159,13 @@ pub fn handle_main_key(
             } else {
                 input.textarea.input(key);
             }
+            (vec![], vec![], None)
+        }
+        KeyCode::Tab => {
+            // Convert tabs to spaces for consistent width calculation.
+            // Tabs cause rendering issues because unicode_width treats them as 0-width,
+            // but terminals render them as variable-width (to next tab stop).
+            input.textarea.insert_str("    ");
             (vec![], vec![], None)
         }
         _ => {
