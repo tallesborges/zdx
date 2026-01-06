@@ -4,7 +4,7 @@
 //! outside their own slice. The main reducer applies them in order.
 
 use crate::config::ThinkingLevel;
-use crate::core::session::Session;
+use crate::core::session::{Session, Usage};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
@@ -58,11 +58,10 @@ pub enum SessionCommand {
     AppendMessage(ChatMessage),
     SetSession(Option<Session>),
     ResetUsage,
+    /// Restore usage from persisted session (cumulative + latest for context %)
     SetUsage {
-        input: u64,
-        output: u64,
-        cache_read: u64,
-        cache_write: u64,
+        cumulative: Usage,
+        latest: Usage,
     },
     UpdateUsage {
         input: u64,

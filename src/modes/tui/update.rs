@@ -44,21 +44,37 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             );
             apply_state_commands(&mut app.tui, commands);
 
-            // Save usage to session after turn completes
-            if matches!(
-                agent_event,
-                crate::core::events::AgentEvent::TurnComplete { .. }
-            ) && has_session
+            // Save usage to session after each request completes.
+            // A request is complete when we receive output tokens (MessageDelta with usage).
+            // This ensures tool-use turns with multiple requests save all usage, not just the last.
+            if let crate::core::events::AgentEvent::UsageUpdate { output_tokens, .. } = &agent_event
+                && *output_tokens > 0
+                && has_session
             {
-                let usage = &app.tui.conversation.usage;
+                // Save per-request delta values (not cumulative) for event-sourcing
+                let usage = app.tui.conversation.usage.turn_usage();
                 effects.push(UiEffect::SaveSession {
-                    event: crate::core::session::SessionEvent::usage(
-                        usage.input_tokens,
-                        usage.output_tokens,
-                        usage.cache_read_tokens,
-                        usage.cache_write_tokens,
-                    ),
+                    event: crate::core::session::SessionEvent::usage(usage),
                 });
+                // Mark as saved to prevent duplicate saves on TurnComplete/Interrupted
+                app.tui.conversation.usage.mark_saved();
+            }
+
+            // Also save any unsaved usage on turn completion or interruption.
+            // This handles the case where a request is interrupted before output tokens arrive -
+            // we still want to save the input tokens that were consumed.
+            if matches!(
+                &agent_event,
+                crate::core::events::AgentEvent::TurnComplete { .. }
+                    | crate::core::events::AgentEvent::Interrupted
+            ) && has_session
+                && app.tui.conversation.usage.has_unsaved_usage()
+            {
+                let usage = app.tui.conversation.usage.turn_usage();
+                effects.push(UiEffect::SaveSession {
+                    event: crate::core::session::SessionEvent::usage(usage),
+                });
+                app.tui.conversation.usage.mark_saved();
             }
 
             effects
