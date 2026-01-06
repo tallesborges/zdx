@@ -75,4 +75,11 @@ pub enum UiEffect {
         /// Text to copy.
         text: String,
     },
+
+    /// Create a new session from a truncated set of events.
+    ForkSession {
+        events: Vec<SessionEvent>,
+        user_input: Option<String>,
+        turn_number: usize,
+    },
 }

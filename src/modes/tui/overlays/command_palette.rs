@@ -145,6 +145,7 @@ fn execute_command(
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
         "sessions" => (None, vec![UiEffect::OpenSessionPicker], vec![]),
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
+        "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {
             let (effects, commands) = execute_handoff(tui);
             (None, effects, commands)

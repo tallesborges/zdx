@@ -230,6 +230,13 @@ impl ScrollState {
 
         self.cached_line_count = cumulative_offset;
     }
+
+    /// Returns the start line for a given cell index, if available.
+    pub fn cell_start_line(&self, cell_index: usize) -> Option<usize> {
+        self.cell_line_info
+            .get(cell_index)
+            .map(|info| info.start_line)
+    }
 }
 
 /// Accumulator for mouse scroll deltas.
@@ -339,6 +346,8 @@ impl TranscriptState {
             TranscriptCommand::ReplaceCells(cells) => self.cells = cells,
             TranscriptCommand::ResetScroll => self.scroll.reset(),
             TranscriptCommand::ClearWrapCache => self.wrap_cache.clear(),
+            TranscriptCommand::SetScrollOffset { offset } => self.set_scroll_offset(offset),
+            TranscriptCommand::SetScrollMode(mode) => self.set_scroll_mode(mode),
             TranscriptCommand::ScrollToTop => self.scroll_to_top(),
             TranscriptCommand::ScrollToBottom => self.scroll_to_bottom(),
             TranscriptCommand::PageUp => self.page_up(),
@@ -374,6 +383,16 @@ impl TranscriptState {
     /// Scrolls to the bottom of the transcript.
     pub fn scroll_to_bottom(&mut self) {
         self.scroll.scroll_to_bottom();
+    }
+
+    /// Sets scroll to an anchored offset.
+    pub fn set_scroll_offset(&mut self, offset: usize) {
+        self.scroll.mode = ScrollMode::Anchored { offset };
+    }
+
+    /// Restores scroll mode explicitly (anchored or follow-latest).
+    pub fn set_scroll_mode(&mut self, mode: ScrollMode) {
+        self.scroll.mode = mode;
     }
 
     /// Updates layout dimensions based on terminal size and input height.
