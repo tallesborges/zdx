@@ -8,6 +8,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use super::{OverlayAction, OverlayRequest};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::input::HandoffState;
+use crate::modes::tui::shared::clipboard::Clipboard;
 use crate::modes::tui::shared::commands::{COMMANDS, Command};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
@@ -128,6 +129,10 @@ fn execute_command(
 ) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateCommand>) {
     match cmd_name {
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
+        "copy-id" => {
+            let (effects, commands) = execute_copy_id(tui);
+            (None, effects, commands)
+        }
         "login" => (Some(OverlayRequest::Login), vec![], vec![]),
         "logout" => {
             let (effects, commands) = execute_logout();
@@ -181,6 +186,40 @@ fn execute_logout() -> (Vec<UiEffect>, Vec<StateCommand>) {
     }
 
     (vec![], commands)
+}
+
+fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+    match &tui.conversation.session {
+        Some(session) => {
+            let id = session.id.clone();
+            match Clipboard::copy(&id) {
+                Ok(()) => (
+                    vec![],
+                    vec![StateCommand::Transcript(
+                        TranscriptCommand::AppendSystemMessage(format!(
+                            "Session ID copied: {}",
+                            id
+                        )),
+                    )],
+                ),
+                Err(e) => (
+                    vec![],
+                    vec![StateCommand::Transcript(
+                        TranscriptCommand::AppendSystemMessage(format!(
+                            "Failed to copy session ID: {}",
+                            e
+                        )),
+                    )],
+                ),
+            }
+        }
+        None => (
+            vec![],
+            vec![StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage("No active session.".to_string()),
+            )],
+        ),
+    }
 }
 
 fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {

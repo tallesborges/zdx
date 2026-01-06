@@ -43,6 +43,11 @@ pub const COMMANDS: &[Command] = &[
         description: "Open config file in default editor",
     },
     Command {
+        name: "copy-id",
+        aliases: &["copyid"],
+        description: "Copy current session ID to clipboard",
+    },
+    Command {
         name: "handoff",
         aliases: &[],
         description: "Start new session with context from current",
@@ -117,6 +122,7 @@ mod tests {
     #[test]
     fn test_command_display_name() {
         assert_eq!(find_command("config").display_name(), "/config (settings)");
+        assert_eq!(find_command("copy-id").display_name(), "/copy-id (copyid)");
         assert_eq!(find_command("handoff").display_name(), "/handoff");
         assert_eq!(find_command("login").display_name(), "/login");
         assert_eq!(find_command("logout").display_name(), "/logout");
