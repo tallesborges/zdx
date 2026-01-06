@@ -279,6 +279,10 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 app.tui.session_ops.create_rx = Some(rx);
                 vec![]
             }
+            SessionUiEvent::ForkStarted { rx } => {
+                app.tui.session_ops.fork_rx = Some(rx);
+                vec![]
+            }
             SessionUiEvent::Created {
                 session,
                 context_paths,
@@ -305,10 +309,55 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
                 effects
             }
+            SessionUiEvent::ForkedLoaded {
+                session_id,
+                cells,
+                messages,
+                history,
+                session,
+                usage,
+                user_input,
+                turn_number,
+            } => {
+                app.tui.session_ops.fork_rx = None;
+                let (mut effects, commands, overlay_action) =
+                    session::handle_session_event(SessionUiEvent::ForkedLoaded {
+                        session_id,
+                        cells,
+                        messages,
+                        history,
+                        session,
+                        usage,
+                        user_input,
+                        turn_number,
+                    });
+                apply_state_commands(&mut app.tui, commands);
+
+                if let session::SessionOverlayAction::OpenSessionPicker {
+                    sessions,
+                    original_cells,
+                } = overlay_action
+                    && app.overlay.is_none()
+                {
+                    let (state, overlay_effects) =
+                        overlays::SessionPickerState::open(sessions, original_cells);
+                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                    effects.extend(overlay_effects);
+                }
+
+                effects
+            }
             SessionUiEvent::CreateFailed { error } => {
                 app.tui.session_ops.create_rx = None;
                 let (effects, commands, _) =
                     session::handle_session_event(SessionUiEvent::CreateFailed { error });
+                apply_state_commands(&mut app.tui, commands);
+                effects
+            }
+            SessionUiEvent::ForkFailed { error } => {
+                app.tui.session_ops.fork_rx = None;
+                let (effects, commands, _) =
+                    session::handle_session_event(SessionUiEvent::ForkFailed { error });
                 apply_state_commands(&mut app.tui, commands);
                 effects
             }
@@ -407,6 +456,16 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
         overlays::OverlayRequest::FilePicker { trigger_pos } => {
             let (state, effects) = overlays::FilePickerState::open(trigger_pos);
             app.overlay = Some(overlays::Overlay::FilePicker(state));
+            effects
+        }
+        overlays::OverlayRequest::Timeline => {
+            let (state, effects, commands) = overlays::TimelineState::open(
+                &app.tui.transcript.cells,
+                &app.tui.transcript.scroll,
+                app.tui.transcript.scroll.mode.clone(),
+            );
+            app.overlay = Some(overlays::Overlay::Timeline(state));
+            apply_state_commands(&mut app.tui, commands);
             effects
         }
     }

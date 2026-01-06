@@ -13,6 +13,7 @@ use std::sync::atomic::AtomicBool;
 
 use tokio::sync::{mpsc, oneshot};
 
+use crate::core::session::SessionEvent;
 use crate::core::{interrupt, session};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::events::{SessionUiEvent, UiEvent};
@@ -191,6 +192,78 @@ pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> UiE
     });
 
     UiEvent::Session(SessionUiEvent::CreateStarted { rx })
+}
+
+/// Spawns async forked session creation and returns the receiver.
+pub fn spawn_forked_session(
+    events: Vec<SessionEvent>,
+    user_input: Option<String>,
+    turn_number: usize,
+) -> UiEvent {
+    let (tx, rx) = mpsc::channel::<UiEvent>(1);
+
+    tokio::spawn(async move {
+        let event =
+            tokio::task::spawn_blocking(move || fork_session_sync(events, user_input, turn_number))
+                .await
+                .unwrap_or_else(|e| {
+                    UiEvent::Session(SessionUiEvent::ForkFailed {
+                        error: format!("Task failed: {}", e),
+                    })
+                });
+
+        let _ = tx.send(event).await;
+    });
+
+    UiEvent::Session(SessionUiEvent::ForkStarted { rx })
+}
+
+fn fork_session_sync(
+    events: Vec<SessionEvent>,
+    user_input: Option<String>,
+    turn_number: usize,
+) -> UiEvent {
+    let mut session = match session::Session::new() {
+        Ok(session) => session,
+        Err(e) => {
+            return UiEvent::Session(SessionUiEvent::ForkFailed {
+                error: format!("Failed to create session: {}", e),
+            });
+        }
+    };
+
+    for event in &events {
+        if let Err(e) = session.append(event) {
+            return UiEvent::Session(SessionUiEvent::ForkFailed {
+                error: format!("Failed to write session: {}", e),
+            });
+        }
+    }
+
+    let usage = session::extract_usage_from_events(&events);
+    let cells = build_transcript_from_events(&events);
+    let messages = session::events_to_messages(events);
+    let history: Vec<String> = cells
+        .iter()
+        .filter_map(|cell| {
+            if let HistoryCell::User { content, .. } = cell {
+                Some(content.clone())
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    UiEvent::Session(SessionUiEvent::ForkedLoaded {
+        session_id: session.id.clone(),
+        cells,
+        messages,
+        history,
+        session,
+        usage,
+        user_input,
+        turn_number,
+    })
 }
 
 /// Spawns async session rename and returns the receiver.

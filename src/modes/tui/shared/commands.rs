@@ -92,6 +92,11 @@ pub const COMMANDS: &[Command] = &[
         aliases: &[],
         description: "Change thinking level",
     },
+    Command {
+        name: "timeline",
+        aliases: &[],
+        description: "Jump to a conversation turn",
+    },
 ];
 
 #[cfg(test)]
@@ -131,5 +136,6 @@ mod tests {
         assert_eq!(find_command("new").display_name(), "/new (clear)");
         assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");
         assert_eq!(find_command("thinking").display_name(), "/thinking");
+        assert_eq!(find_command("timeline").display_name(), "/timeline");
     }
 }

@@ -26,6 +26,7 @@ pub mod model_picker;
 pub mod render_utils;
 pub mod session_picker;
 pub mod thinking_picker;
+pub mod timeline;
 mod update;
 
 pub use command_palette::CommandPaletteState;
@@ -37,6 +38,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use session_picker::SessionPickerState;
 pub use thinking_picker::ThinkingPickerState;
+pub use timeline::TimelineState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
 
@@ -56,6 +58,7 @@ pub enum OverlayRequest {
     ThinkingPicker,
     Login,
     FilePicker { trigger_pos: usize },
+    Timeline,
 }
 
 /// Action returned by overlay key handlers.
@@ -97,6 +100,7 @@ pub enum Overlay {
     SessionPicker(SessionPickerState),
     Login(LoginState),
     FilePicker(FilePickerState),
+    Timeline(TimelineState),
 }
 
 impl Overlay {
@@ -108,6 +112,7 @@ impl Overlay {
             Overlay::SessionPicker(p) => p.render(frame, area, input_y),
             Overlay::FilePicker(p) => p.render(frame, area, input_y),
             Overlay::Login(l) => l.render(frame, area, input_y),
+            Overlay::Timeline(t) => t.render(frame, area, input_y),
         }
     }
 
@@ -123,6 +128,7 @@ impl Overlay {
             Overlay::SessionPicker(p) => p.handle_key(tui, key),
             Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
             Overlay::Login(l) => l.handle_key(tui, key),
+            Overlay::Timeline(t) => t.handle_key(tui, key),
         }
     }
 
@@ -159,6 +165,8 @@ mod tests {
 
     #[test]
     fn test_overlay_is_some() {
+        use crate::modes::tui::transcript::ScrollMode;
+
         let none: Option<Overlay> = None;
         assert!(none.is_none());
 
@@ -179,6 +187,10 @@ mod tests {
 
         let (file_picker, _) = FilePickerState::open(0);
         let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
+        assert!(overlay.is_some());
+
+        let (timeline, _, _) = TimelineState::open(&[], &[], ScrollMode::FollowLatest);
+        let overlay: Option<Overlay> = Some(Overlay::Timeline(timeline));
         assert!(overlay.is_some());
     }
 }

@@ -36,6 +36,7 @@ pub fn handle_session_event(
         | SessionUiEvent::LoadStarted { .. }
         | SessionUiEvent::PreviewStarted { .. }
         | SessionUiEvent::CreateStarted { .. }
+        | SessionUiEvent::ForkStarted { .. }
         | SessionUiEvent::RenameStarted { .. } => vec![],
         SessionUiEvent::ListLoaded {
             sessions,
@@ -93,12 +94,40 @@ pub fn handle_session_event(
             handle_session_created(session, context_paths, &mut commands);
             vec![]
         }
+        SessionUiEvent::ForkedLoaded {
+            session_id: _,
+            cells,
+            messages,
+            history,
+            session,
+            usage,
+            user_input,
+            turn_number,
+        } => {
+            handle_session_forked(
+                session,
+                cells,
+                messages,
+                history,
+                usage,
+                user_input,
+                turn_number,
+                &mut commands,
+            );
+            vec![]
+        }
         SessionUiEvent::CreateFailed { error } => {
             commands.push(StateCommand::Transcript(
                 TranscriptCommand::AppendSystemMessage(error),
             ));
             commands.push(StateCommand::Transcript(
                 TranscriptCommand::AppendSystemMessage("Conversation cleared.".to_string()),
+            ));
+            vec![]
+        }
+        SessionUiEvent::ForkFailed { error } => {
+            commands.push(StateCommand::Transcript(
+                TranscriptCommand::AppendSystemMessage(error),
             ));
             vec![]
         }
@@ -189,6 +218,41 @@ fn handle_session_created(
             TranscriptCommand::AppendSystemMessage(message),
         ));
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn handle_session_forked(
+    session: Session,
+    cells: Vec<HistoryCell>,
+    messages: Vec<ChatMessage>,
+    history: Vec<String>,
+    usage: (Usage, Usage),
+    user_input: Option<String>,
+    turn_number: usize,
+    commands: &mut Vec<StateCommand>,
+) {
+    let (cumulative, latest) = usage;
+    commands.push(StateCommand::Transcript(TranscriptCommand::ReplaceCells(
+        cells,
+    )));
+    commands.push(StateCommand::Transcript(TranscriptCommand::ResetScroll));
+    commands.push(StateCommand::Transcript(TranscriptCommand::ClearWrapCache));
+    commands.push(StateCommand::Session(SessionCommand::SetMessages(messages)));
+    commands.push(StateCommand::Session(SessionCommand::SetSession(Some(
+        session,
+    ))));
+    commands.push(StateCommand::Session(SessionCommand::SetUsage {
+        cumulative,
+        latest,
+    }));
+    commands.push(StateCommand::Input(InputCommand::SetHistory(history)));
+    commands.push(StateCommand::Input(InputCommand::Clear));
+    if let Some(text) = user_input {
+        commands.push(StateCommand::Input(InputCommand::SetText(text)));
+    }
+    commands.push(StateCommand::Transcript(
+        TranscriptCommand::AppendSystemMessage(format!("Forked from turn {}.", turn_number)),
+    ));
 }
 
 /// Handles session rename success.

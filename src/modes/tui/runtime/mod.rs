@@ -361,6 +361,21 @@ impl TuiRuntime {
             }
         }
 
+        // Session fork
+        if let Some(rx) = &mut ops.fork_rx {
+            match rx.try_recv() {
+                Ok(event) => {
+                    events.push(event);
+                }
+                Err(mpsc::error::TryRecvError::Empty) => {}
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    events.push(UiEvent::Session(SessionUiEvent::ForkFailed {
+                        error: "Session fork task failed".to_string(),
+                    }));
+                }
+            }
+        }
+
         // Session rename
         if let Some(rx) = &mut ops.rename_rx {
             match rx.try_recv() {
@@ -458,6 +473,16 @@ impl TuiRuntime {
                     let config = self.state.tui.config.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let event = handlers::spawn_session_create(config, root);
+                    self.dispatch_event(event);
+                }
+            }
+            UiEffect::ForkSession {
+                events,
+                user_input,
+                turn_number,
+            } => {
+                if self.state.tui.session_ops.fork_rx.is_none() {
+                    let event = handlers::spawn_forked_session(events, user_input, turn_number);
                     self.dispatch_event(event);
                 }
             }

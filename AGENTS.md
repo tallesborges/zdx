@@ -68,6 +68,7 @@
       - `src/modes/tui/overlays/command_palette.rs`: command palette overlay
       - `src/modes/tui/overlays/model_picker.rs`: model picker overlay
       - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
+      - `src/modes/tui/overlays/timeline.rs`: timeline overlay (jump/fork from turn)
       - `src/modes/tui/overlays/session_picker.rs`: session picker overlay (state + key handling; rendering delegated to session feature)
       - `src/modes/tui/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
       - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay (state + key handling; rendering delegated to auth feature)

@@ -60,14 +60,33 @@ pub enum SessionUiEvent {
     /// Session creation started; reducer should store the receiver.
     CreateStarted { rx: mpsc::Receiver<UiEvent> },
 
+    /// Session fork started; reducer should store the receiver.
+    ForkStarted { rx: mpsc::Receiver<UiEvent> },
+
     /// New session created successfully.
     Created {
         session: Session,
         context_paths: Vec<PathBuf>,
     },
 
+    /// Forked session created successfully.
+    ForkedLoaded {
+        session_id: String,
+        cells: Vec<HistoryCell>,
+        messages: Vec<ChatMessage>,
+        history: Vec<String>,
+        session: Session,
+        /// Restored token usage: (cumulative, latest)
+        usage: (Usage, Usage),
+        user_input: Option<String>,
+        turn_number: usize,
+    },
+
     /// New session creation failed.
     CreateFailed { error: String },
+
+    /// Session fork failed.
+    ForkFailed { error: String },
 
     /// Session rename started; reducer should store the receiver.
     RenameStarted { rx: mpsc::Receiver<UiEvent> },

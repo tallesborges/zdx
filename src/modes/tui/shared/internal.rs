@@ -6,7 +6,7 @@
 use crate::config::ThinkingLevel;
 use crate::core::session::{Session, Usage};
 use crate::modes::tui::input::HandoffState;
-use crate::modes::tui::transcript::HistoryCell;
+use crate::modes::tui::transcript::{HistoryCell, ScrollMode};
 use crate::providers::anthropic::ChatMessage;
 
 /// Commands for cross-slice state mutations.
@@ -28,6 +28,8 @@ pub enum TranscriptCommand {
     ReplaceCells(Vec<HistoryCell>),
     ResetScroll,
     ClearWrapCache,
+    SetScrollOffset { offset: usize },
+    SetScrollMode(ScrollMode),
     ScrollToTop,
     ScrollToBottom,
     PageUp,
