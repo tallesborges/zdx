@@ -86,7 +86,7 @@ pub fn render_thinking_picker(
     area: Rect,
     input_top_y: u16,
 ) {
-    use super::view::{
+    use super::render_utils::{
         InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
     };
 
