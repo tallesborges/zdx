@@ -2,7 +2,7 @@
 //!
 //! Manages the text area, command history, and history navigation.
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::oneshot;
 
 use crate::modes::tui::shared::internal::InputCommand;
 
@@ -25,10 +25,10 @@ pub enum HandoffState {
     Generating {
         /// The goal text (preserved for retry on failure).
         goal: String,
-        /// Receiver for the generation result.
-        rx: mpsc::Receiver<Result<String, String>>,
-        /// Sender to cancel the background operation.
-        cancel_tx: oneshot::Sender<()>,
+        /// Receiver for the generation result (single value).
+        rx: oneshot::Receiver<Result<String, String>>,
+        /// Handle to cancel the background operation (send or drop to cancel).
+        cancel: oneshot::Sender<()>,
     },
 
     /// Generated prompt is in textarea, ready for user to review and submit.
@@ -58,8 +58,8 @@ impl HandoffState {
 
     /// Cancels any in-progress generation and resets to Idle.
     pub fn cancel(&mut self) {
-        if let HandoffState::Generating { cancel_tx, .. } = std::mem::take(self) {
-            let _ = cancel_tx.send(()); // Signal the spawned task to abort
+        if let HandoffState::Generating { cancel, .. } = std::mem::take(self) {
+            let _ = cancel.send(()); // Signal the spawned task to abort
         }
         *self = HandoffState::Idle;
     }

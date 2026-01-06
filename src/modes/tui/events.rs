@@ -118,10 +118,11 @@ pub enum UiEvent {
     HandoffResult(Result<String, String>),
 
     /// Handoff generation spawned; reducer should set handoff generating state.
+    /// Handoff generation spawned; reducer should set handoff generating state.
     HandoffGenerationStarted {
         goal: String,
-        rx: mpsc::Receiver<Result<String, String>>,
-        cancel_tx: oneshot::Sender<()>,
+        rx: oneshot::Receiver<Result<String, String>>,
+        cancel: oneshot::Sender<()>,
     },
 
     /// Handoff session creation succeeded.

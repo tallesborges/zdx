@@ -2,7 +2,12 @@
 //!
 //! Handles spawning a subagent to generate handoff prompts from session context.
 
-use tokio::sync::{mpsc, oneshot};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use std::time::Duration;
+
+use tokio::process::Command;
+use tokio::sync::oneshot;
 
 use crate::core::session::{self, Session, SessionEvent};
 use crate::modes::tui::events::UiEvent;
@@ -39,6 +44,91 @@ written as if the user is starting a fresh conversation with a new agent."#
     )
 }
 
+/// Loads and validates session content for handoff.
+fn load_session_content(session_id: &str) -> Result<String, String> {
+    let events = session::load_session(session_id)
+        .map_err(|e| format!("Handoff failed: Could not load session: {}", e))?;
+
+    if events.is_empty() {
+        return Err(format!("Handoff failed: Session '{}' is empty", session_id));
+    }
+
+    Ok(session::format_transcript(&events))
+}
+
+/// Processes subagent output into a Result.
+fn process_subagent_output(output: std::process::Output) -> Result<String, String> {
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Handoff generation failed: {}", stderr.trim()));
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if stdout.is_empty() {
+        return Err("Handoff generation returned empty output".to_string());
+    }
+
+    Ok(stdout)
+}
+
+/// Runs the subagent process with timeout and cancellation support.
+async fn run_subagent(
+    tx: oneshot::Sender<Result<String, String>>,
+    cancel: oneshot::Receiver<()>,
+    generation_prompt: String,
+    root: PathBuf,
+) {
+    let exe = match std::env::current_exe() {
+        Ok(e) => e,
+        Err(e) => {
+            let _ = tx.send(Err(format!("Failed to get executable: {}", e)));
+            return;
+        }
+    };
+
+    let child = match Command::new(exe)
+        .args([
+            "--no-save",
+            "exec",
+            "-m",
+            HANDOFF_MODEL,
+            "-t",
+            HANDOFF_THINKING,
+            "-p",
+            &generation_prompt,
+        ])
+        .current_dir(&root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()
+    {
+        Ok(c) => c,
+        Err(e) => {
+            let _ = tx.send(Err(format!("Failed to spawn subagent: {}", e)));
+            return;
+        }
+    };
+
+    // Cancel fires on explicit send(()) OR when cancel handle is dropped
+    let result = tokio::select! {
+        cancelled = cancel => match cancelled {
+            Ok(()) | Err(_) => Err("Handoff cancelled".to_string()),
+        },
+        output = tokio::time::timeout(
+            Duration::from_secs(HANDOFF_TIMEOUT_SECS),
+            child.wait_with_output()
+        ) => {
+            output
+                .map_err(|_| format!("Handoff generation timed out after {} seconds", HANDOFF_TIMEOUT_SECS))
+                .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {}", e)))
+                .and_then(process_subagent_output)
+        }
+    };
+
+    let _ = tx.send(result);
+}
+
 /// Executes a handoff submit: creates a new session and persists the prompt.
 ///
 /// Returns the new session for the reducer to store, or an error string.
@@ -53,35 +143,18 @@ pub fn execute_handoff_submit(prompt: &str) -> Result<Session, String> {
 }
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
-pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &std::path::Path) -> UiEvent {
-    use tokio::process::Command;
+pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &Path) -> UiEvent {
+    let (tx, rx) = oneshot::channel::<Result<String, String>>();
+    let (cancel, cancel_recv) = oneshot::channel::<()>();
 
-    let (tx, rx) = mpsc::channel::<Result<String, String>>(1);
-    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
-
-    // Load session content upfront to avoid tool call in subagent
-    let session_content = match session::load_session(session_id) {
-        Ok(events) if !events.is_empty() => session::format_transcript(&events),
-        Ok(_) => {
-            let _ = tx.try_send(Err(format!(
-                "Handoff failed: Session '{}' is empty",
-                session_id
-            )));
-            return UiEvent::HandoffGenerationStarted {
-                goal: goal.to_string(),
-                rx,
-                cancel_tx,
-            };
-        }
+    let session_content = match load_session_content(session_id) {
+        Ok(content) => content,
         Err(e) => {
-            let _ = tx.try_send(Err(format!(
-                "Handoff failed: Could not load session: {}",
-                e
-            )));
+            let _ = tx.send(Err(e));
             return UiEvent::HandoffGenerationStarted {
                 goal: goal.to_string(),
                 rx,
-                cancel_tx,
+                cancel,
             };
         }
     };
@@ -89,89 +162,11 @@ pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &std::path::
     let generation_prompt = build_handoff_prompt(&session_content, goal);
     let root = root.to_path_buf();
 
-    tokio::spawn(async move {
-        // Get the current executable path
-        let exe = match std::env::current_exe() {
-            Ok(e) => e,
-            Err(e) => {
-                let _ = tx
-                    .send(Err(format!("Failed to get executable: {}", e)))
-                    .await;
-                return;
-            }
-        };
-
-        // Spawn the subagent process (async)
-        // Args order: --no-save exec -m <model> -t <thinking> -p <prompt>
-        let child = match Command::new(exe)
-            .args([
-                "--no-save",
-                "exec",
-                "-m",
-                HANDOFF_MODEL,
-                "-t",
-                HANDOFF_THINKING,
-                "-p",
-                &generation_prompt,
-            ])
-            .current_dir(&root)
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .kill_on_drop(true) // Kill child if task is dropped/cancelled
-            .spawn()
-        {
-            Ok(c) => c,
-            Err(e) => {
-                let _ = tx
-                    .send(Err(format!("Failed to spawn subagent: {}", e)))
-                    .await;
-                return;
-            }
-        };
-
-        // Wait for output with timeout and cancellation support
-        let result = tokio::select! {
-            // Cancellation signal (user pressed Esc)
-            _ = cancel_rx => {
-                // kill_on_drop will handle cleanup when child is dropped
-                Err("Handoff cancelled".to_string())
-            }
-            // Timeout
-            output_result = async {
-                tokio::time::timeout(
-                    std::time::Duration::from_secs(HANDOFF_TIMEOUT_SECS),
-                    child.wait_with_output()
-                ).await
-            } => {
-                match output_result {
-                    Ok(Ok(output)) => {
-                        if output.status.success() {
-                            let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-                            if stdout.is_empty() {
-                                Err("Handoff generation returned empty output".to_string())
-                            } else {
-                                Ok(stdout)
-                            }
-                        } else {
-                            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-                            Err(format!("Handoff generation failed: {}", stderr.trim()))
-                        }
-                    }
-                    Ok(Err(e)) => Err(format!("Failed to get subagent output: {}", e)),
-                    Err(_) => {
-                        // Timeout elapsed - child will be killed on drop
-                        Err(format!("Handoff generation timed out after {} seconds", HANDOFF_TIMEOUT_SECS))
-                    }
-                }
-            }
-        };
-
-        let _ = tx.send(result).await;
-    });
+    tokio::spawn(run_subagent(tx, cancel_recv, generation_prompt, root));
 
     UiEvent::HandoffGenerationStarted {
         goal: goal.to_string(),
         rx,
-        cancel_tx,
+        cancel,
     }
 }

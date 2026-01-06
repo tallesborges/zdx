@@ -18,7 +18,7 @@ use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::core::interrupt;
@@ -264,8 +264,8 @@ impl TuiRuntime {
             Ok(result) => {
                 events.push(UiEvent::HandoffResult(result));
             }
-            Err(mpsc::error::TryRecvError::Empty) => {}
-            Err(mpsc::error::TryRecvError::Disconnected) => {
+            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Closed) => {
                 events.push(UiEvent::HandoffResult(Err(
                     "Handoff generation task failed".to_string(),
                 )));
