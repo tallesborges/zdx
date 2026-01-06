@@ -4,10 +4,9 @@
 //! which causes the thumb size to fluctuate with scroll position. This custom
 //! implementation computes a fixed thumb length and positions it manually.
 
-use ratatui::Frame;
+use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
-use ratatui::text::Line;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::Widget;
 
 /// Symbol for the thumb (scrollable indicator).
 const THUMB_SYMBOL: &str = "█";
@@ -19,6 +18,8 @@ const TRACK_SYMBOL: &str = "│";
 /// Unlike ratatui's Scrollbar, this implementation:
 /// - Computes thumb length once (no size fluctuation during scrolling)
 /// - Positions thumb so it reaches exactly the bottom at max scroll
+///
+/// Implements the `Widget` trait for use with `frame.render_widget()`.
 #[derive(Debug, Clone)]
 pub struct Scrollbar {
     /// Total number of lines in content.
@@ -47,12 +48,13 @@ impl Scrollbar {
     /// Returns true if the scrollbar should be displayed.
     ///
     /// Only shows when there's content to scroll.
-    pub fn should_display(&self) -> bool {
+    fn should_display(&self) -> bool {
         self.total_lines > self.viewport_height
     }
+}
 
-    /// Renders the scrollbar to the right edge of the given area.
-    pub fn render(&self, frame: &mut Frame, area: Rect) {
+impl Widget for Scrollbar {
+    fn render(self, area: Rect, buf: &mut Buffer) {
         if !self.should_display() {
             return;
         }
@@ -85,27 +87,16 @@ impl Scrollbar {
         let thumb_start =
             ((self.scroll_offset as u64 * available as u64) / max_scroll as u64) as usize;
 
-        // Build the scrollbar lines
-        let lines: Vec<Line<'static>> = (0..track_len)
-            .map(|idx| {
-                let symbol = if idx >= thumb_start && idx < thumb_start + thumb_len {
-                    THUMB_SYMBOL
-                } else {
-                    TRACK_SYMBOL
-                };
-                Line::from(symbol)
-            })
-            .collect();
-
-        let scrollbar_widget = Paragraph::new(lines);
-        let scrollbar_area = Rect {
-            x: area.x + area.width.saturating_sub(1),
-            y: area.y,
-            width: 1,
-            height: area.height,
-        };
-
-        frame.render_widget(scrollbar_widget, scrollbar_area);
+        // Render scrollbar on the right edge of the area
+        let x = area.x + area.width.saturating_sub(1);
+        for (idx, y) in (area.y..area.y + area.height).enumerate() {
+            let symbol = if idx >= thumb_start && idx < thumb_start + thumb_len {
+                THUMB_SYMBOL
+            } else {
+                TRACK_SYMBOL
+            };
+            buf.set_string(x, y, symbol, ratatui::style::Style::default());
+        }
     }
 }
 

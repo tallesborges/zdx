@@ -118,7 +118,10 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Render scrollbar if there's content to scroll
     let scroll_offset = state.transcript.scroll.get_offset(transcript_height);
-    Scrollbar::new(total_lines, transcript_height, scroll_offset).render(frame, chunks[0]);
+    frame.render_widget(
+        Scrollbar::new(total_lines, transcript_height, scroll_offset),
+        chunks[0],
+    );
 
     // Input area with model on top-left border and path on bottom-right
     input::render_input(state, frame, chunks[1]);
