@@ -17,6 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
 use crate::modes::tui::input;
 use crate::modes::tui::overlays::OverlayExt;
+use crate::modes::tui::shared::Scrollbar;
 use crate::modes::tui::transcript::{self, CellId};
 
 /// Height of status line below input.
@@ -114,6 +115,10 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         height: chunks[0].height,
     };
     frame.render_widget(transcript, transcript_area);
+
+    // Render scrollbar if there's content to scroll
+    let scroll_offset = state.transcript.scroll.get_offset(transcript_height);
+    Scrollbar::new(total_lines, transcript_height, scroll_offset).render(frame, chunks[0]);
 
     // Input area with model on top-left border and path on bottom-right
     input::render_input(state, frame, chunks[1]);
