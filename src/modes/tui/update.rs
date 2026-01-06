@@ -117,16 +117,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             apply_state_commands(&mut app.tui, commands);
             vec![]
         }
-        UiEvent::HandoffGenerationStarted {
-            goal,
-            rx,
-            cancel_tx,
-        } => {
-            app.tui.input.handoff = HandoffState::Generating {
-                goal,
-                rx,
-                cancel_tx,
-            };
+        UiEvent::HandoffGenerationStarted { goal, rx, cancel } => {
+            app.tui.input.handoff = HandoffState::Generating { goal, rx, cancel };
             vec![]
         }
         UiEvent::HandoffSessionCreated { session } => {
