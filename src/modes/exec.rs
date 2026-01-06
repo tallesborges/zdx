@@ -79,7 +79,7 @@ pub async fn run_exec(
     let messages = vec![ChatMessage::user(prompt)];
     let agent_opts = AgentOptions::from(options);
 
-    // Create channels for fan-out
+    // Create channels for broadcast
     let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
     let (render_tx, render_rx) = crate::core::agent::create_event_channel();
 
@@ -89,13 +89,14 @@ pub async fn run_exec(
     // Spawn persist task if session exists
     let persist_handle = if let Some(sess) = session.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
-        let fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![render_tx, persist_tx]);
+        let broadcaster =
+            crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
         let persist = session::spawn_persist_task(sess, persist_rx);
-        Some((fanout, persist))
+        Some((broadcaster, persist))
     } else {
-        // No session - just fan out to renderer
-        let fanout = crate::core::agent::spawn_fanout_task(agent_rx, vec![render_tx]);
-        Some((fanout, tokio::spawn(async {}))) // Dummy persist task
+        // No session - just broadcast to renderer
+        let broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
+        Some((broadcaster, tokio::spawn(async {}))) // Dummy persist task
     };
 
     // Run the agent turn
@@ -109,8 +110,8 @@ pub async fn run_exec(
     .await;
 
     // Wait for all tasks to complete (even on error, to flush error events)
-    if let Some((fanout, persist)) = persist_handle {
-        let _ = fanout.await;
+    if let Some((broadcaster, persist)) = persist_handle {
+        let _ = broadcaster.await;
         let _ = persist.await;
     }
     let _ = renderer_handle.await;
