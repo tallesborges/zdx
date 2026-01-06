@@ -27,6 +27,84 @@ use tokio::task::JoinHandle;
 use super::agent::AgentEventRx;
 use crate::config::paths::sessions_dir;
 
+/// Token usage data for a single API request.
+///
+/// Used for both persistence (in session files) and runtime tracking.
+/// Supports event-sourcing: each request saves its own Usage, and cumulative
+/// totals are derived by summing all events.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Usage {
+    /// Input tokens (non-cached) for this request
+    pub input: u64,
+    /// Output tokens for this request
+    pub output: u64,
+    /// Tokens read from cache for this request
+    pub cache_read: u64,
+    /// Tokens written to cache for this request
+    pub cache_write: u64,
+}
+
+impl Usage {
+    /// Creates a new Usage with all fields set.
+    pub fn new(input: u64, output: u64, cache_read: u64, cache_write: u64) -> Self {
+        Self {
+            input,
+            output,
+            cache_read,
+            cache_write,
+        }
+    }
+
+    /// Returns true if all fields are zero.
+    #[allow(dead_code)]
+    pub fn is_empty(&self) -> bool {
+        self.input == 0 && self.output == 0 && self.cache_read == 0 && self.cache_write == 0
+    }
+
+    /// Total tokens for this request (for context window calculation).
+    #[allow(dead_code)]
+    pub fn total(&self) -> u64 {
+        self.input + self.output + self.cache_read + self.cache_write
+    }
+
+    /// Context tokens (input side) for context window percentage.
+    pub fn context_input(&self) -> u64 {
+        self.input + self.cache_read + self.cache_write
+    }
+
+    /// Adds another Usage to this one (for accumulation).
+    pub fn add(&mut self, other: &Usage) {
+        self.input += other.input;
+        self.output += other.output;
+        self.cache_read += other.cache_read;
+        self.cache_write += other.cache_write;
+    }
+
+    /// Returns a new Usage that is the sum of self and other.
+    pub fn plus(&self, other: &Usage) -> Usage {
+        Usage {
+            input: self.input + other.input,
+            output: self.output + other.output,
+            cache_read: self.cache_read + other.cache_read,
+            cache_write: self.cache_write + other.cache_write,
+        }
+    }
+}
+
+impl std::ops::Add for Usage {
+    type Output = Usage;
+
+    fn add(self, other: Usage) -> Usage {
+        self.plus(&other)
+    }
+}
+
+impl std::ops::AddAssign for Usage {
+    fn add_assign(&mut self, other: Usage) {
+        self.add(&other);
+    }
+}
+
 /// Current schema version for new sessions.
 pub const SCHEMA_VERSION: u32 = 1;
 
@@ -163,17 +241,12 @@ impl SessionEvent {
     }
 
     /// Creates a new usage event.
-    pub fn usage(
-        input_tokens: u64,
-        output_tokens: u64,
-        cache_read_tokens: u64,
-        cache_write_tokens: u64,
-    ) -> Self {
+    pub fn usage(usage: Usage) -> Self {
         Self::Usage {
-            input_tokens,
-            output_tokens,
-            cache_read_tokens,
-            cache_write_tokens,
+            input_tokens: usage.input,
+            output_tokens: usage.output,
+            cache_read_tokens: usage.cache_read,
+            cache_write_tokens: usage.cache_write,
             ts: chrono_timestamp(),
         }
     }
@@ -779,15 +852,16 @@ pub fn events_to_messages(
     messages
 }
 
-/// Extracts cumulative usage from session events.
+/// Extracts usage from session events for session restore.
 ///
-/// Sums all Usage events to reconstruct the total token usage for the session.
-/// Returns (input_tokens, output_tokens, cache_read_tokens, cache_write_tokens).
-pub fn extract_usage_from_events(events: &[SessionEvent]) -> (u64, u64, u64, u64) {
-    let mut input = 0u64;
-    let mut output = 0u64;
-    let mut cache_read = 0u64;
-    let mut cache_write = 0u64;
+/// With per-request delta storage (event sourcing), we:
+/// - Sum all Usage events → cumulative totals (for cost display)
+/// - Take last Usage event → latest request (for context % display)
+///
+/// Returns (cumulative, latest) as Usage structs.
+pub fn extract_usage_from_events(events: &[SessionEvent]) -> (Usage, Usage) {
+    let mut cumulative = Usage::default();
+    let mut latest = Usage::default();
 
     for event in events {
         if let SessionEvent::Usage {
@@ -798,14 +872,22 @@ pub fn extract_usage_from_events(events: &[SessionEvent]) -> (u64, u64, u64, u64
             ..
         } = event
         {
-            input += input_tokens;
-            output += output_tokens;
-            cache_read += cache_read_tokens;
-            cache_write += cache_write_tokens;
+            let usage = Usage::new(
+                *input_tokens,
+                *output_tokens,
+                *cache_read_tokens,
+                *cache_write_tokens,
+            );
+
+            // Sum for cumulative
+            cumulative += usage;
+
+            // Track latest (will be overwritten each time, ending with last)
+            latest = usage;
         }
     }
 
-    (input, output, cache_read, cache_write)
+    (cumulative, latest)
 }
 
 /// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
@@ -1329,7 +1411,7 @@ mod tests {
 
     #[test]
     fn test_usage_event_serialization() {
-        let usage = SessionEvent::usage(1000, 500, 2000, 100);
+        let usage = SessionEvent::usage(Usage::new(1000, 500, 2000, 100));
         let json = serde_json::to_string(&usage).unwrap();
         assert!(json.contains("\"type\":\"usage\""));
         assert!(json.contains("\"input_tokens\":1000"));
@@ -1361,20 +1443,22 @@ mod tests {
 
     #[test]
     fn test_extract_usage_from_events() {
+        // Usage events are per-request deltas (event sourcing)
+        // Cumulative = sum of all events, Latest = last event
         let events = vec![
             SessionEvent::user_message("hello"),
             SessionEvent::assistant_message("hi"),
-            SessionEvent::usage(100, 50, 200, 25),
+            SessionEvent::usage(Usage::new(100, 50, 200, 25)), // Request 1
             SessionEvent::user_message("bye"),
             SessionEvent::assistant_message("goodbye"),
-            SessionEvent::usage(150, 75, 300, 30),
+            SessionEvent::usage(Usage::new(150, 75, 300, 30)), // Request 2
         ];
 
-        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
-        assert_eq!(input, 250); // 100 + 150
-        assert_eq!(output, 125); // 50 + 75
-        assert_eq!(cache_read, 500); // 200 + 300
-        assert_eq!(cache_write, 55); // 25 + 30
+        let (cumulative, latest) = extract_usage_from_events(&events);
+        // Cumulative = sum of all usage events
+        assert_eq!(cumulative, Usage::new(250, 125, 500, 55));
+        // Latest = last usage event (for context %)
+        assert_eq!(latest, Usage::new(150, 75, 300, 30));
     }
 
     #[test]
@@ -1384,11 +1468,9 @@ mod tests {
             SessionEvent::assistant_message("hi"),
         ];
 
-        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
-        assert_eq!(input, 0);
-        assert_eq!(output, 0);
-        assert_eq!(cache_read, 0);
-        assert_eq!(cache_write, 0);
+        let (cumulative, latest) = extract_usage_from_events(&events);
+        assert_eq!(cumulative, Usage::default());
+        assert_eq!(latest, Usage::default());
     }
 
     #[test]
@@ -1403,17 +1485,41 @@ mod tests {
             .append(&SessionEvent::assistant_message("hi"))
             .unwrap();
         session
-            .append(&SessionEvent::usage(1000, 500, 2000, 100))
+            .append(&SessionEvent::usage(Usage::new(1000, 500, 2000, 100)))
             .unwrap();
 
         let events = session.read_events().unwrap();
         // meta + user + assistant + usage = 4 events
         assert_eq!(events.len(), 4);
 
-        let (input, output, cache_read, cache_write) = extract_usage_from_events(&events);
-        assert_eq!(input, 1000);
-        assert_eq!(output, 500);
-        assert_eq!(cache_read, 2000);
-        assert_eq!(cache_write, 100);
+        let (cumulative, latest) = extract_usage_from_events(&events);
+        // Single event: cumulative = latest
+        assert_eq!(cumulative, Usage::new(1000, 500, 2000, 100));
+        assert_eq!(latest, Usage::new(1000, 500, 2000, 100));
+    }
+
+    #[test]
+    fn test_usage_struct_operations() {
+        let u1 = Usage::new(100, 50, 200, 25);
+        let u2 = Usage::new(150, 75, 300, 30);
+
+        // Test add
+        let sum = u1 + u2;
+        assert_eq!(sum, Usage::new(250, 125, 500, 55));
+
+        // Test add_assign
+        let mut u3 = u1;
+        u3 += u2;
+        assert_eq!(u3, Usage::new(250, 125, 500, 55));
+
+        // Test total
+        assert_eq!(u1.total(), 375);
+
+        // Test context_input
+        assert_eq!(u1.context_input(), 325);
+
+        // Test is_empty
+        assert!(!u1.is_empty());
+        assert!(Usage::default().is_empty());
     }
 }

@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use crate::core::session::{Session, SessionSummary, short_session_id};
+use crate::core::session::{Session, SessionSummary, Usage, short_session_id};
 use crate::modes::tui::events::SessionUiEvent;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
@@ -125,9 +125,10 @@ fn handle_session_loaded(
     cells: Vec<HistoryCell>,
     messages: Vec<ChatMessage>,
     history: Vec<String>,
-    usage: (u64, u64, u64, u64),
+    usage: (Usage, Usage),
     commands: &mut Vec<StateCommand>,
 ) {
+    let (cumulative, latest) = usage;
     commands.push(StateCommand::Transcript(TranscriptCommand::ReplaceCells(
         cells,
     )));
@@ -136,10 +137,8 @@ fn handle_session_loaded(
     commands.push(StateCommand::Session(SessionCommand::SetMessages(messages)));
     commands.push(StateCommand::Session(SessionCommand::SetSession(session)));
     commands.push(StateCommand::Session(SessionCommand::SetUsage {
-        input: usage.0,
-        output: usage.1,
-        cache_read: usage.2,
-        cache_write: usage.3,
+        cumulative,
+        latest,
     }));
     commands.push(StateCommand::Input(InputCommand::SetHistory(history)));
 
