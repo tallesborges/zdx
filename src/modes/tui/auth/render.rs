@@ -12,7 +12,9 @@ use crate::modes::tui::overlays::LoginState;
 
 /// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
-    use crate::modes::tui::overlays::view::{calculate_overlay_area, render_overlay_container};
+    use crate::modes::tui::overlays::render_utils::{
+        calculate_overlay_area, render_overlay_container,
+    };
 
     let popup_width = 60;
     let popup_height = 9;

@@ -23,10 +23,10 @@ pub mod command_palette;
 pub mod file_picker;
 pub mod login;
 pub mod model_picker;
+pub mod render_utils;
 pub mod session_picker;
 pub mod thinking_picker;
 mod update;
-pub mod view;
 
 pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;
