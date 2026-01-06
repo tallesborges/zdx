@@ -44,6 +44,7 @@
       - `src/modes/tui/shared/commands.rs`: command definitions for command palette
       - `src/modes/tui/shared/internal.rs`: StateCommand + cross-slice mutation enums (applied via slice `apply()`)
       - `src/modes/tui/shared/clipboard.rs`: clipboard I/O (OSC 52 + arboard fallback)
+      - `src/modes/tui/shared/text.rs`: text utilities (tab expansion, display sanitization)
     - `src/modes/tui/auth/`: auth feature slice (authentication state, login handling)
       - `src/modes/tui/auth/mod.rs`: module exports
       - `src/modes/tui/auth/state.rs`: AuthStatus + AuthState (auth type detection, login flow state)

@@ -242,6 +242,11 @@ pub(crate) fn wrap_text(text: &str, width: usize) -> Vec<String> {
 /// word boundaries.
 ///
 /// Breaks at character boundaries, respecting display width.
+///
+/// Note: Callers should expand tabs to spaces before calling this function.
+/// Tab characters have variable terminal width (to next tab stop), but
+/// `unicode_width` returns `None` (0) for them. Pre-expanding ensures
+/// consistent width calculation.
 pub(crate) fn wrap_chars(text: &str, width: usize) -> Vec<String> {
     use unicode_width::UnicodeWidthChar;
 

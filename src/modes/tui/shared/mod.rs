@@ -10,8 +10,10 @@ pub mod clipboard;
 pub mod commands;
 pub mod effects;
 pub mod internal;
+pub mod text;
 
 pub use clipboard::Clipboard;
+pub use text::sanitize_for_display;
 #[allow(unused_imports)]
 pub use internal::{
     AuthCommand, ConfigCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
