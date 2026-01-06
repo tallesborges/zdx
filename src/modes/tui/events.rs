@@ -12,7 +12,7 @@ use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::core::events::AgentEvent;
-use crate::core::session::{Session, SessionSummary};
+use crate::core::session::{Session, SessionSummary, Usage};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
@@ -41,8 +41,8 @@ pub enum SessionUiEvent {
         messages: Vec<ChatMessage>,
         history: Vec<String>,
         session: Option<Session>,
-        /// Restored token usage from session.
-        usage: (u64, u64, u64, u64),
+        /// Restored token usage: (cumulative, latest)
+        usage: (Usage, Usage),
     },
 
     /// Session load failed.
