@@ -419,7 +419,7 @@ pub trait OverlayExt {
 
 ---
 
-## Slice 9: StateCommand Infrastructure
+## Slice 9: StateCommand Infrastructure ✅
 
 **Goal:** Create `StateCommand` enum and dispatcher for cross-slice mutations.
 
@@ -432,14 +432,16 @@ as data that the main dispatcher applies.
 - `shared/internal.rs` - StateCommand enum with feature-grouped variants
 
 **Tasks:**
-- [ ] Create `shared/internal.rs` with `StateCommand` enum
-- [ ] Add feature-specific command enums: `TranscriptCommand`, `InputCommand`, `SessionCommand`
-- [ ] Update `shared/mod.rs` to export internal module
-- [ ] Add `apply_state_commands()` function to root `reducer.rs`
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): add StateCommand infrastructure for cross-slice mutations`
+- [x] Create `shared/internal.rs` with `StateCommand` enum
+- [x] Add feature-specific command enums: `TranscriptCommand`, `InputCommand`, `SessionCommand`
+- [x] Update `shared/mod.rs` to export internal module
+- [x] Add `apply_state_commands()` function to root `reducer.rs`
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): add StateCommand infrastructure for cross-slice mutations`
+
+**Completed:** 2025-01-05
 
 **StateCommand Design:**
 ```rust
@@ -505,7 +507,7 @@ fn apply_state_commands(tui: &mut TuiState, commands: Vec<StateCommand>) {
 
 ---
 
-## Slice 10: Overlay StateCommand Refactor
+## Slice 10: Overlay StateCommand Refactor ✅
 
 **Goal:** Refactor overlay handlers to return `StateCommand` instead of mutating `TuiState`.
 
@@ -522,16 +524,18 @@ coupling. By returning `StateCommand`, overlays become pure functions.
 - `reducer.rs` - Update to apply returned StateCommands
 
 **Tasks:**
-- [ ] Update `OverlayExt::handle_key` signature to return `(Option<Vec<UiEffect>>, Vec<StateCommand>)`
-- [ ] Refactor `SessionPickerState::handle_key` - return commands instead of mutating
-- [ ] Refactor `CommandPaletteState::handle_key` - return commands instead of mutating
-- [ ] Refactor `ModelPickerState::handle_key` - return commands instead of mutating
-- [ ] Refactor `FilePickerState::handle_key` - return commands instead of mutating
-- [ ] Update main reducer to apply StateCommands after overlay handling
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): overlay handlers return StateCommand instead of mutating TuiState`
+- [x] Update `OverlayExt::handle_key` signature to return `(Option<Vec<UiEffect>>, Vec<StateCommand>)`
+- [x] Refactor `SessionPickerState::handle_key` - return commands instead of mutating
+- [x] Refactor `CommandPaletteState::handle_key` - return commands instead of mutating
+- [x] Refactor `ModelPickerState::handle_key` - return commands instead of mutating
+- [x] Refactor `FilePickerState::handle_key` - return commands instead of mutating
+- [x] Update main reducer to apply StateCommands after overlay handling
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): overlay handlers return StateCommand instead of mutating TuiState`
+
+**Completed:** 2025-01-05
 
 **Before:**
 ```rust
@@ -562,7 +566,7 @@ impl SessionPickerState {
 
 ---
 
-## Slice 11: Runtime UiEvent Refactor
+## Slice 11: Runtime UiEvent Refactor ✅
 
 **Goal:** Refactor runtime handlers to emit `UiEvent` instead of mutating state directly.
 
@@ -578,16 +582,18 @@ the reducer.
 - `events.rs` (or `core/events.rs`) - Add new event variants if needed
 
 **Tasks:**
-- [ ] Audit all direct state mutations in `runtime/handlers.rs`
-- [ ] Audit all direct state mutations in `runtime/handoff.rs`
-- [ ] Add new `UiEvent` variants for runtime operations (e.g., `UiEvent::AgentSpawned`, `UiEvent::HandoffStarted`)
-- [ ] Refactor `spawn_agent_turn` to return/emit event instead of mutating
-- [ ] Refactor `spawn_handoff_generation` to return/emit event instead of mutating
-- [ ] Update runtime event loop to dispatch returned events through reducer
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): runtime emits UiEvent instead of direct state mutations`
+- [x] Audit all direct state mutations in `runtime/handlers.rs`
+- [x] Audit all direct state mutations in `runtime/handoff.rs`
+- [x] Add new `UiEvent` variants for runtime operations (e.g., `UiEvent::AgentSpawned`, `UiEvent::HandoffStarted`)
+- [x] Refactor `spawn_agent_turn` to return/emit event instead of mutating
+- [x] Refactor `spawn_handoff_generation` to return/emit event instead of mutating
+- [x] Update runtime event loop to dispatch returned events through reducer
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): runtime emits UiEvent instead of direct state mutations`
+
+**Completed:** 2025-01-05
 
 **New Event Variants:**
 ```rust
@@ -606,7 +612,7 @@ pub enum UiEvent {
 
 ---
 
-## Slice 12: Strict Isolation Refactor
+## Slice 12: Strict Isolation Refactor ✅
 
 **Goal:** Refactor all feature reducers to take only their slice and return `StateCommand`.
 
@@ -616,37 +622,39 @@ cross-slice mutations.
 
 **Sub-slices (one commit each):**
 
-### 12a: Auth Isolation (~30 min)
-- [ ] Refactor `auth/reducer.rs` to take `&mut AuthState` only
-- [ ] Return `Vec<StateCommand>` for transcript updates
-- [ ] Update main reducer to pass only auth state
-- [ ] Run validation suite
-- [ ] Commit: `refactor(tui): auth reducer strict isolation`
+### 12a: Auth Isolation (~30 min) ✅
+- [x] Refactor `auth/reducer.rs` to take `&mut AuthState` only
+- [x] Return `Vec<StateCommand>` for transcript updates
+- [x] Update main reducer to pass only auth state
+- [x] Run validation suite
+- [x] Commit: `refactor(tui): auth reducer strict isolation`
 
-### 12b: Transcript Isolation (~1 hour)
-- [ ] Refactor `transcript/update.rs` handlers to take `&mut TranscriptState` only
-- [ ] Pass `&AgentState` as read-only dependency where needed
-- [ ] Return `Vec<StateCommand>` for any session/input updates
-- [ ] Move layout helpers to `transcript/layout.rs` (feature-local)
-- [ ] Update main reducer delegation
-- [ ] Run validation suite
-- [ ] Commit: `refactor(tui): transcript reducer strict isolation`
+### 12b: Transcript Isolation (~1 hour) ✅
+- [x] Refactor `transcript/update.rs` handlers to take `&mut TranscriptState` only
+- [x] Pass `&AgentState` as read-only dependency where needed
+- [x] Return `Vec<StateCommand>` for any session/input updates
+- [x] Move layout helpers to `transcript/layout.rs` (feature-local)
+- [x] Update main reducer delegation
+- [x] Run validation suite
+- [x] Commit: `refactor(tui): transcript reducer strict isolation`
 
-### 12c: Session Isolation (~1.5 hours)
-- [ ] Refactor `session/reducer.rs` to take `&mut SessionState` only
-- [ ] Return `Vec<StateCommand>` for transcript/input updates
-- [ ] Remove direct `overlays` imports (use StateCommand instead)
-- [ ] Update main reducer delegation
-- [ ] Run validation suite
-- [ ] Commit: `refactor(tui): session reducer strict isolation`
+### 12c: Session Isolation (~1.5 hours) ✅
+- [x] Refactor `session/reducer.rs` to take `&mut SessionState` only
+- [x] Return `Vec<StateCommand>` for transcript/input updates
+- [x] Remove direct `overlays` imports (use StateCommand instead)
+- [x] Update main reducer delegation
+- [x] Run validation suite
+- [x] Commit: `refactor(tui): session reducer strict isolation`
 
-### 12d: Input Isolation (~2 hours) - LARGEST
-- [ ] Refactor `input/reducer.rs` to take `&mut InputState` only
-- [ ] Return `Vec<StateCommand>` for transcript/session/overlay updates
-- [ ] Handle overlay interactions via StateCommand
-- [ ] Update main reducer delegation
-- [ ] Run validation suite
-- [ ] Commit: `refactor(tui): input reducer strict isolation`
+### 12d: Input Isolation (~2 hours) - LARGEST ✅
+- [x] Refactor `input/reducer.rs` to take `&mut InputState` only
+- [x] Return `Vec<StateCommand>` for transcript/session/overlay updates
+- [x] Handle overlay interactions via StateCommand
+- [x] Update main reducer delegation
+- [x] Run validation suite
+- [x] Commit: `refactor(tui): input reducer strict isolation`
+
+**Completed:** 2025-01-05
 
 **Handler Signature After:**
 ```rust
@@ -663,7 +671,7 @@ pub fn handle_main_key(
 
 ---
 
-## Slice 13: Delete core/, Merge events.rs
+## Slice 13: Delete core/, Merge events.rs ✅
 
 **Goal:** Flatten structure by removing `core/` directory and consolidating events.
 
@@ -672,15 +680,17 @@ pub fn handle_main_key(
 `events.rs` re-export shim.
 
 **Tasks:**
-- [ ] Audit all imports of `crate::modes::tui::core::events`
-- [ ] Move `core/events.rs` content to root `events.rs` (merge with shim)
-- [ ] Update all imports to use `crate::modes::tui::events`
-- [ ] Delete `core/mod.rs`
-- [ ] Delete `core/` directory
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): flatten structure, delete core/ directory`
+- [x] Audit all imports of `crate::modes::tui::core::events`
+- [x] Move `core/events.rs` content to root `events.rs` (merge with shim)
+- [x] Update all imports to use `crate::modes::tui::events`
+- [x] Delete `core/mod.rs`
+- [x] Delete `core/` directory
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): flatten structure, delete core/ directory`
+
+**Completed:** 2025-01-05
 
 **Import Changes:**
 ```rust
@@ -696,7 +706,7 @@ use crate::modes::tui::events::{UiEvent, SessionUiEvent};
 
 ---
 
-## Slice 14: Rename reducer.rs/view.rs
+## Slice 14: Rename reducer.rs/view.rs ✅
 
 **Goal:** Standardize naming to `update.rs`/`render.rs` across all modules.
 
@@ -714,20 +724,22 @@ use crate::modes::tui::events::{UiEvent, SessionUiEvent};
 - `auth/view.rs` → `auth/render.rs`
 
 **Tasks:**
-- [ ] Rename root `reducer.rs` → `update.rs`
-- [ ] Rename root `view.rs` → `render.rs`
-- [ ] Rename `input/reducer.rs` → `input/update.rs`
-- [ ] Rename `input/view.rs` → `input/render.rs`
-- [ ] Rename `session/reducer.rs` → `session/update.rs`
-- [ ] Rename `session/view.rs` → `session/render.rs`
-- [ ] Rename `auth/reducer.rs` → `auth/update.rs`
-- [ ] Rename `auth/view.rs` → `auth/render.rs`
-- [ ] Update all `mod.rs` declarations
-- [ ] Update all internal imports
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): rename reducer/view to update/render for Elm consistency`
+- [x] Rename root `reducer.rs` → `update.rs`
+- [x] Rename root `view.rs` → `render.rs`
+- [x] Rename `input/reducer.rs` → `input/update.rs`
+- [x] Rename `input/view.rs` → `input/render.rs`
+- [x] Rename `session/reducer.rs` → `session/update.rs`
+- [x] Rename `session/view.rs` → `session/render.rs`
+- [x] Rename `auth/reducer.rs` → `auth/update.rs`
+- [x] Rename `auth/view.rs` → `auth/render.rs`
+- [x] Update all `mod.rs` declarations
+- [x] Update all internal imports
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): rename reducer/view to update/render for Elm consistency`
+
+**Completed:** 2025-01-05
 
 **Note:** `transcript/update.rs`, `transcript/render.rs`, `overlays/update.rs` already
 follow this convention - no changes needed.
@@ -737,7 +749,7 @@ follow this convention - no changes needed.
 
 ---
 
-## Slice 15: Delete state/ Shims, Relocate Tests
+## Slice 15: Delete state/ Shims, Relocate Tests ✅
 
 **Goal:** Remove backward-compatibility shims and move tests to feature modules.
 
@@ -745,21 +757,23 @@ follow this convention - no changes needed.
 feature modules. These add indirection. Tests in `state/mod.rs` need relocation.
 
 **Tasks:**
-- [ ] Audit tests in `state/mod.rs` - identify what they test
-- [ ] Move scroll/selection tests to `transcript/state.rs` or `transcript/selection.rs`
-- [ ] Move any input tests to `input/state.rs`
-- [ ] Move any session tests to `session/state.rs`
-- [ ] Update all imports from `crate::modes::tui::state::X` to feature modules
-- [ ] Delete `state/auth.rs` shim
-- [ ] Delete `state/input.rs` shim
-- [ ] Delete `state/session.rs` shim
-- [ ] Delete `state/transcript.rs` shim
-- [ ] Delete `state/mod.rs`
-- [ ] Delete `state/` directory
-- [ ] Run `cargo check` - no warnings
-- [ ] Run `cargo test` - all tests pass
-- [ ] Run `cargo clippy` - no warnings
-- [ ] Commit: `refactor(tui): remove state/ shims, relocate tests to features`
+- [x] Audit tests in `state/mod.rs` - identify what they test
+- [x] Move scroll/selection tests to `transcript/state.rs` or `transcript/selection.rs`
+- [x] Move any input tests to `input/state.rs`
+- [x] Move any session tests to `session/state.rs`
+- [x] Update all imports from `crate::modes::tui::state::X` to feature modules
+- [x] Delete `state/auth.rs` shim
+- [x] Delete `state/input.rs` shim
+- [x] Delete `state/session.rs` shim
+- [x] Delete `state/transcript.rs` shim
+- [x] Delete `state/mod.rs`
+- [x] Delete `state/` directory
+- [x] Run `cargo check` - no warnings
+- [x] Run `cargo test` - all tests pass
+- [x] Run `cargo clippy` - no warnings
+- [x] Commit: `refactor(tui): remove state/ shims, relocate tests to features`
+
+**Completed:** 2025-01-05
 
 **Import Changes:**
 ```rust
@@ -776,22 +790,24 @@ use crate::modes::tui::transcript::TranscriptState;
 
 ---
 
-## Slice 16: Documentation Updates
+## Slice 16: Documentation Updates ✅
 
 **Goal:** Update all documentation to reflect new architecture.
 
 **Tasks:**
-- [ ] Update `AGENTS.md` "Where things are" section with new file structure
-- [ ] Update `docs/ARCHITECTURE.md` with:
-  - [ ] New module layout diagram
-  - [ ] StateCommand pattern documentation
-  - [ ] Updated Elm architecture description
-  - [ ] Cross-slice communication flow
-- [ ] Add Feature Slice Contract section to ARCHITECTURE.md
-- [ ] Update code comments in key files
-- [ ] Run full test suite
-- [ ] Manual smoke test: `cargo run -- chat`
-- [ ] Commit: `docs(tui): update architecture documentation for feature slices`
+- [x] Update `AGENTS.md` "Where things are" section with new file structure
+- [x] Update `docs/ARCHITECTURE.md` with:
+  - [x] New module layout diagram
+  - [x] StateCommand pattern documentation
+  - [x] Updated Elm architecture description
+  - [x] Cross-slice communication flow
+- [x] Add Feature Slice Contract section to ARCHITECTURE.md
+- [x] Update code comments in key files
+- [x] Run full test suite
+- [x] Manual smoke test: `cargo run -- chat`
+- [x] Commit: `docs(tui): update architecture documentation for feature slices`
+
+**Completed:** 2025-01-06
 
 **Feature Slice Contract (for ARCHITECTURE.md):**
 ```rust
@@ -819,22 +835,7 @@ use crate::modes::tui::transcript::TranscriptState;
 ## Migration Order Summary (Revised)
 
 ```
-Slice 0-8: Previous work                    ✅ DONE
-─────────────────────────────────────────────────────
-Slice 9:  StateCommand Infrastructure       [~1 hour]   ████
-Slice 10: Overlay StateCommand Refactor     [~2 hours]  ████████
-Slice 11: Runtime UiEvent Refactor          [~2.5 hours]██████████
-Slice 12: Strict Isolation Refactor         [~5 hours]  ████████████████████
-          ├─ 12a: Auth                      [~30 min]
-          ├─ 12b: Transcript                [~1 hour]
-          ├─ 12c: Session                   [~1.5 hours]
-          └─ 12d: Input                     [~2 hours]
-Slice 13: Delete core/, Merge events        [~30 min]   ██
-Slice 14: Rename reducer/view               [~45 min]   ███
-Slice 15: Delete state/ Shims               [~1 hour]   ████
-Slice 16: Documentation                     [~1 hour]   ████
-                                            ───────────
-                                            ~14 hours total
+Slice 0-16: All work completed              ✅ DONE
 ```
 
 ---
