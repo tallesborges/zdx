@@ -33,6 +33,7 @@ Also a way to learn TUI development, contribute to open source, and build an AI 
 - **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume or switch between previous conversations
+- **Timeline overlay** — jump to turns and fork from any message
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
 
 ## Inspiration
