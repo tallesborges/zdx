@@ -47,7 +47,7 @@ use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::StateMutation;
 
 // ============================================================================
-// OverlayRequest / OverlayAction
+// OverlayRequest / OverlayTransition / OverlayUpdate
 // ============================================================================
 
 /// Requests to open a new overlay.
@@ -61,30 +61,51 @@ pub enum OverlayRequest {
     Timeline,
 }
 
-/// Action returned by overlay key handlers.
-///
-/// - `None` = continue with overlay open, no effects
-/// - `Some(Close(effects))` = close overlay, execute effects
-/// - `Some(Effects(effects))` = stay open but run effects
-/// - `Some(Open(request))` = replace overlay with a new one
+/// Transition returned by overlay key handlers.
 #[derive(Debug)]
-pub enum OverlayAction {
-    Close(Vec<UiEffect>),
-    Effects(Vec<UiEffect>),
+pub enum OverlayTransition {
+    Stay,
+    Close,
     Open(OverlayRequest),
 }
 
-impl OverlayAction {
-    pub fn close() -> Self {
-        OverlayAction::Close(vec![])
+/// Update returned by overlay key handlers.
+#[derive(Debug)]
+pub struct OverlayUpdate {
+    pub transition: OverlayTransition,
+    pub mutations: Vec<StateMutation>,
+    pub effects: Vec<UiEffect>,
+}
+
+impl OverlayUpdate {
+    fn new(transition: OverlayTransition) -> Self {
+        Self {
+            transition,
+            mutations: Vec::new(),
+            effects: Vec::new(),
+        }
     }
 
-    pub fn close_with(effects: Vec<UiEffect>) -> Self {
-        OverlayAction::Close(effects)
+    pub fn stay() -> Self {
+        Self::new(OverlayTransition::Stay)
+    }
+
+    pub fn close() -> Self {
+        Self::new(OverlayTransition::Close)
     }
 
     pub fn open(request: OverlayRequest) -> Self {
-        OverlayAction::Open(request)
+        Self::new(OverlayTransition::Open(request))
+    }
+
+    pub fn with_mutations(mut self, mutations: Vec<StateMutation>) -> Self {
+        self.mutations = mutations;
+        self
+    }
+
+    pub fn with_effects(mut self, effects: Vec<UiEffect>) -> Self {
+        self.effects = effects;
+        self
     }
 }
 
@@ -116,11 +137,7 @@ impl Overlay {
         }
     }
 
-    pub fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         match self {
             Overlay::CommandPalette(p) => p.handle_key(tui, key),
             Overlay::ModelPicker(p) => p.handle_key(tui, key),

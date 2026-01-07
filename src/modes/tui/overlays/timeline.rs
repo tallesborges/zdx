@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use serde_json::json;
 
-use super::OverlayAction;
+use super::OverlayUpdate;
 use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -86,107 +86,86 @@ impl TimelineState {
         render_timeline(frame, self, area, input_y)
     }
 
-    pub fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        let (action, commands) = match key.code {
-            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
-                Some(OverlayAction::close()),
-                vec![StateMutation::Transcript(
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                OverlayUpdate::close().with_mutations(vec![StateMutation::Transcript(
                     TranscriptMutation::SetScrollMode(self.initial_scroll.clone()),
-                )],
-            ),
+                )])
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_selection(-1);
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 self.move_selection(1);
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::PageUp => {
                 let delta = -(self.visible_height() as isize).max(1);
                 self.move_selection(delta);
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::PageDown => {
                 let delta = (self.visible_height() as isize).max(1);
                 self.move_selection(delta);
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::Home => {
                 if !self.entries.is_empty() {
                     self.selected = 0;
                     self.offset = 0;
                 }
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::End => {
                 if !self.entries.is_empty() {
                     self.selected = self.entries.len().saturating_sub(1);
                     self.ensure_visible();
                 }
-                (None, self.preview_scroll_command(tui))
+                OverlayUpdate::stay().with_mutations(self.preview_scroll_command(tui))
             }
             KeyCode::Enter | KeyCode::Right => {
                 if tui.agent_state.is_running() {
-                    return (
-                        None,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(
-                                "Stop the current task first.".to_string(),
-                            ),
-                        )],
-                    );
+                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Stop the current task first.".to_string(),
+                        ),
+                    )]);
                 }
 
                 match self.jump_command(tui) {
-                    Some(command) => (
-                        Some(OverlayAction::close()),
-                        vec![StateMutation::Transcript(command)],
-                    ),
-                    None => (
-                        None,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(
-                                "No timeline entry selected.".to_string(),
-                            ),
-                        )],
-                    ),
+                    Some(command) => OverlayUpdate::close()
+                        .with_mutations(vec![StateMutation::Transcript(command)]),
+                    None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "No timeline entry selected.".to_string(),
+                        ),
+                    )]),
                 }
             }
             KeyCode::Char('f') => {
                 if tui.agent_state.is_running() {
-                    return (
-                        None,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(
-                                "Stop the current task first.".to_string(),
-                            ),
-                        )],
-                    );
+                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Stop the current task first.".to_string(),
+                        ),
+                    )]);
                 }
 
                 match self.fork_effect(tui) {
-                    Some(effect) => (Some(OverlayAction::close_with(vec![effect])), vec![]),
-                    None => (
-                        None,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(
-                                "No timeline entry selected.".to_string(),
-                            ),
-                        )],
-                    ),
+                    Some(effect) => OverlayUpdate::close().with_effects(vec![effect]),
+                    None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "No timeline entry selected.".to_string(),
+                        ),
+                    )]),
                 }
             }
-            _ => (None, vec![]),
-        };
-
-        (action, commands)
+            _ => OverlayUpdate::stay(),
+        }
     }
 
     fn visible_height(&self) -> usize {

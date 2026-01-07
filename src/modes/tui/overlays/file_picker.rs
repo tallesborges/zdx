@@ -10,7 +10,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use tokio::sync::oneshot;
 
-use super::OverlayAction;
+use super::OverlayUpdate;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{InputMutation, StateMutation};
@@ -62,23 +62,19 @@ impl FilePickerState {
         render_file_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(
-        &mut self,
-        input: &InputState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, input: &InputState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        let (action, commands) = match key.code {
+        match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                (Some(OverlayAction::close()), vec![])
+                OverlayUpdate::close()
             }
             KeyCode::Enter | KeyCode::Tab => {
                 let mut commands = Vec::new();
                 if let Some(command) = self.select_file_and_insert(input) {
                     commands.push(StateMutation::Input(command));
                 }
-                (Some(OverlayAction::close()), commands)
+                OverlayUpdate::close().with_mutations(commands)
             }
             KeyCode::Up => {
                 if self.selected > 0 {
@@ -87,7 +83,7 @@ impl FilePickerState {
                         self.offset = self.selected;
                     }
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Down => {
                 if self.selected < self.filtered.len().saturating_sub(1) {
@@ -96,7 +92,7 @@ impl FilePickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Char('p') if ctrl => {
                 if self.selected > 0 {
@@ -105,7 +101,7 @@ impl FilePickerState {
                         self.offset = self.selected;
                     }
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Char('n') if ctrl => {
                 if self.selected < self.filtered.len().saturating_sub(1) {
@@ -114,12 +110,10 @@ impl FilePickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
-            _ => (None, vec![]),
-        };
-
-        (action, commands)
+            _ => OverlayUpdate::stay(),
+        }
     }
 
     pub fn selected_file(&self) -> Option<&PathBuf> {
@@ -430,6 +424,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     use super::*;
+    use crate::modes::tui::overlays::OverlayTransition;
 
     fn make_key_event(code: KeyCode) -> KeyEvent {
         KeyEvent {
@@ -487,9 +482,9 @@ mod tests {
             PathBuf::from("src/lib.rs"),
         ]);
 
-        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
-        assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for mutation in commands {
+        let update = picker.handle_key(&input, make_key_event(KeyCode::Enter));
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        for mutation in update.mutations {
             if let StateMutation::Input(mutation) = mutation {
                 apply_input_mutation(&mut input, mutation);
             }
@@ -512,9 +507,9 @@ mod tests {
         ]);
         picker.apply_filter("lib");
 
-        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
-        assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for mutation in commands {
+        let update = picker.handle_key(&input, make_key_event(KeyCode::Enter));
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        for mutation in update.mutations {
             if let StateMutation::Input(mutation) = mutation {
                 apply_input_mutation(&mut input, mutation);
             }
@@ -536,9 +531,9 @@ mod tests {
         let (mut picker, _) = FilePickerState::open(6);
         picker.set_files(vec![PathBuf::from("src/main.rs")]);
 
-        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Tab));
-        assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for mutation in commands {
+        let update = picker.handle_key(&input, make_key_event(KeyCode::Tab));
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        for mutation in update.mutations {
             if let StateMutation::Input(mutation) = mutation {
                 apply_input_mutation(&mut input, mutation);
             }
@@ -557,9 +552,9 @@ mod tests {
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![]);
 
-        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
-        assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for mutation in commands {
+        let update = picker.handle_key(&input, make_key_event(KeyCode::Enter));
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        for mutation in update.mutations {
             if let StateMutation::Input(mutation) = mutation {
                 apply_input_mutation(&mut input, mutation);
             }
@@ -585,9 +580,9 @@ mod tests {
         let _ = picker.handle_key(&input, make_key_event(KeyCode::Down));
         let _ = picker.handle_key(&input, make_key_event(KeyCode::Down));
 
-        let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
-        assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for mutation in commands {
+        let update = picker.handle_key(&input, make_key_event(KeyCode::Enter));
+        assert!(matches!(update.transition, OverlayTransition::Close));
+        for mutation in update.mutations {
             if let StateMutation::Input(mutation) = mutation {
                 apply_input_mutation(&mut input, mutation);
             }

@@ -47,7 +47,8 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Get terminal size for transcript rendering (account for margins and scrollbar)
     let transcript_width =
-        area.width.saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
+        area.width
+            .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
 
     // Calculate transcript pane height (no header now)
     let transcript_height = area.height.saturating_sub(input_height + STATUS_HEIGHT) as usize;

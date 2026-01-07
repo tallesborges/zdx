@@ -474,15 +474,18 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
     }
 }
 
-fn apply_overlay_action(app: &mut AppState, action: overlays::OverlayAction) -> Vec<UiEffect> {
-    match action {
-        overlays::OverlayAction::Close(effects) => {
+fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> Vec<UiEffect> {
+    let mut effects = update.effects;
+    match update.transition {
+        overlays::OverlayTransition::Stay => {}
+        overlays::OverlayTransition::Close => {
             app.overlay = None;
-            effects
         }
-        overlays::OverlayAction::Effects(effects) => effects,
-        overlays::OverlayAction::Open(request) => open_overlay_request(app, request),
+        overlays::OverlayTransition::Open(request) => {
+            effects.extend(open_overlay_request(app, request));
+        }
     }
+    effects
 }
 
 fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -> Vec<UiEffect> {
@@ -591,15 +594,9 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     }
 
     // Try to dispatch to the active overlay
-    let (action, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
-    apply_mutations(&mut app.tui, commands);
-    if let Some(action) = action {
-        return apply_overlay_action(app, action);
-    }
-
-    // If overlay is active but returned no action, it still consumed the key
-    if app.overlay.is_some() {
-        return vec![];
+    if let Some(mut update) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key) {
+        apply_mutations(&mut app.tui, std::mem::take(&mut update.mutations));
+        return apply_overlay_update(app, update);
     }
 
     // No overlay active - delegate to input feature module

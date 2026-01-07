@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use super::OverlayAction;
+use super::OverlayUpdate;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -99,11 +99,7 @@ impl LoginState {
         render_login_overlay(frame, self, area)
     }
 
-    pub fn handle_key(
-        &mut self,
-        _tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
@@ -115,20 +111,19 @@ impl LoginState {
                 error,
                 ..
             } => match key.code {
-                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
-                    Some(OverlayAction::close()),
-                    vec![
+                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                    OverlayUpdate::close().with_mutations(vec![
                         StateMutation::Auth(AuthMutation::ClearLoginRx),
                         StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
-                    ],
-                ),
+                    ])
+                }
                 KeyCode::Enter => {
                     let provider = *provider;
                     let pkce_verifier = pkce_verifier.clone();
                     let oauth_state = oauth_state.clone();
                     let code = input.trim();
                     if code.is_empty() {
-                        return (None, vec![]);
+                        return OverlayUpdate::stay();
                     }
 
                     let code = match provider {
@@ -143,14 +138,14 @@ impl LoginState {
                                 && provided != expected
                             {
                                 *error = Some("State mismatch.".to_string());
-                                return (None, vec![]);
+                                return OverlayUpdate::stay();
                             }
                             match parsed_code {
                                 Some(value) => value,
                                 None => {
                                     *error =
                                         Some("Authorization code cannot be empty.".to_string());
-                                    return (None, vec![]);
+                                    return OverlayUpdate::stay();
                                 }
                             }
                         }
@@ -158,36 +153,34 @@ impl LoginState {
 
                     *self = LoginState::Exchanging { provider };
 
-                    (
-                        Some(OverlayAction::Effects(vec![UiEffect::SpawnTokenExchange {
+                    OverlayUpdate::stay()
+                        .with_effects(vec![UiEffect::SpawnTokenExchange {
                             provider,
                             code,
                             verifier: pkce_verifier,
-                        }])),
-                        vec![StateMutation::Auth(AuthMutation::ClearLoginCallbackRx)],
-                    )
+                        }])
+                        .with_mutations(vec![StateMutation::Auth(
+                            AuthMutation::ClearLoginCallbackRx,
+                        )])
                 }
                 KeyCode::Backspace => {
                     input.pop();
-                    (None, vec![])
+                    OverlayUpdate::stay()
                 }
                 KeyCode::Char(c) if !ctrl => {
                     input.push(c);
-                    (None, vec![])
+                    OverlayUpdate::stay()
                 }
-                _ => (None, vec![]),
+                _ => OverlayUpdate::stay(),
             },
             LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                    (
-                        Some(OverlayAction::close()),
-                        vec![
-                            StateMutation::Auth(AuthMutation::ClearLoginRx),
-                            StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
-                        ],
-                    )
+                    OverlayUpdate::close().with_mutations(vec![
+                        StateMutation::Auth(AuthMutation::ClearLoginRx),
+                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
+                    ])
                 } else {
-                    (None, vec![])
+                    OverlayUpdate::stay()
                 }
             }
         }
