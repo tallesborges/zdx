@@ -8,13 +8,13 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
-        .stdout(predicate::str::contains("sessions"));
+        .stdout(predicate::str::contains("threads"));
 }
 
 #[test]
-fn test_sessions_help_shows_subcommands() {
+fn test_threads_help_shows_subcommands() {
     cargo_bin_cmd!("zdx")
-        .args(["sessions", "--help"])
+        .args(["threads", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("list"))

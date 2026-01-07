@@ -2,7 +2,7 @@
 //!
 //! This module defines the top-level state hierarchy for the TUI:
 //! - `AppState` - combined state (TuiState + overlay)
-//! - `TuiState` - non-overlay UI state (input, transcript, session, auth, agent)
+//! - `TuiState` - non-overlay UI state (input, transcript, thread, auth, agent)
 //! - `AgentState` - agent execution state (idle, waiting, streaming)
 //!
 //! ## State Hierarchy
@@ -12,8 +12,8 @@
 //! ├── tui: TuiState
 //! │   ├── input: InputState      (user input, command history)
 //! │   ├── transcript: TranscriptState (cells, scroll, layout)
-//! │   ├── conversation: SessionState (messages, usage)
-//! │   ├── session_ops: SessionOpsState (async operations)
+//! │   ├── thread: ThreadState (messages, usage)
+//! │   ├── thread_ops: ThreadOpsState (async operations)
 //! │   ├── auth: AuthState        (authentication status)
 //! │   └── agent_state: AgentState (execution state)
 //! └── overlay: Option<Overlay>   (modal overlays)
@@ -36,12 +36,12 @@ use tokio::sync::mpsc;
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::events::AgentEvent;
-use crate::core::session::Session;
+use crate::core::thread_log::ThreadLog;
 // Feature state imports
 use crate::modes::tui::auth::AuthState;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::overlays::Overlay;
-use crate::modes::tui::session::{SessionOpsState, SessionState};
+use crate::modes::tui::thread::{ThreadOpsState, ThreadState};
 use crate::modes::tui::transcript::{CellId, HistoryCell, TranscriptState};
 use crate::providers::anthropic::{ChatContentBlock, ChatMessage};
 
@@ -65,23 +65,23 @@ impl AppState {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
     ) -> Self {
-        Self::with_history(config, root, system_prompt, session, Vec::new())
+        Self::with_history(config, root, system_prompt, thread_log, Vec::new())
     }
 
     /// Creates an AppState with pre-loaded message history.
     ///
-    /// Used for resuming previous sessions.
+    /// Used for resuming previous threads.
     pub fn with_history(
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
         history: Vec<ChatMessage>,
     ) -> Self {
         Self {
-            tui: TuiState::with_history(config, root, system_prompt, session, history),
+            tui: TuiState::with_history(config, root, system_prompt, thread_log, history),
             overlay: None,
         }
     }
@@ -138,10 +138,10 @@ pub struct TuiState {
     pub input: InputState,
     /// Transcript display state (cells, scroll, layout, cache).
     pub transcript: TranscriptState,
-    /// Session and conversation state (session, messages, usage).
-    pub conversation: SessionState,
-    /// Session async operations state (loading, creating, previewing).
-    pub session_ops: SessionOpsState,
+    /// Thread and thread state (thread log, messages, usage).
+    pub thread: ThreadState,
+    /// Thread async operations state (loading, creating, previewing).
+    pub thread_ops: ThreadOpsState,
     /// Authentication state (auth type, login flow).
     pub auth: AuthState,
     /// Agent configuration.
@@ -163,12 +163,12 @@ pub struct TuiState {
 impl TuiState {
     /// Creates a TuiState with pre-loaded message history.
     ///
-    /// Used for resuming previous sessions.
+    /// Used for resuming previous threads.
     pub fn with_history(
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
         history: Vec<ChatMessage>,
     ) -> Self {
         let agent_opts = AgentOptions { root };
@@ -200,8 +200,8 @@ impl TuiState {
         let mut input = InputState::new();
         input.history = command_history;
 
-        // Create session state with history
-        let conversation = SessionState::with_session(session, history);
+        // Create thread state with history
+        let thread = ThreadState::with_thread(thread_log, history);
 
         // Create auth state
         let auth = AuthState::new();
@@ -210,8 +210,8 @@ impl TuiState {
             should_quit: false,
             input,
             transcript,
-            conversation,
-            session_ops: SessionOpsState::new(),
+            thread,
+            thread_ops: ThreadOpsState::new(),
             auth,
             config,
             agent_opts,

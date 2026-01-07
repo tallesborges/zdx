@@ -6,11 +6,11 @@
 use crossterm::event::{KeyCode, KeyModifiers};
 
 use super::state::{HandoffState, InputState};
-use crate::core::session::SessionEvent;
+use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{SessionCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{StateMutation, ThreadMutation, TranscriptMutation};
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
@@ -31,9 +31,9 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 pub fn handle_main_key(
     input: &mut InputState,
     agent_state: &AgentState,
-    session_id: Option<String>,
+    thread_id: Option<String>,
     key: crossterm::event::KeyEvent,
-) -> (Vec<UiEffect>, Vec<StateCommand>, Option<OverlayRequest>) {
+) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
@@ -96,7 +96,7 @@ pub fn handle_main_key(
             }
         }
         KeyCode::Enter if !shift && !alt => {
-            return submit_input(input, agent_state, session_id);
+            return submit_input(input, agent_state, thread_id);
         }
         KeyCode::Char('j') if ctrl => {
             input.textarea.insert_newline();
@@ -117,22 +117,24 @@ pub fn handle_main_key(
         }
         KeyCode::PageUp => (
             vec![],
-            vec![StateCommand::Transcript(TranscriptCommand::PageUp)],
+            vec![StateMutation::Transcript(TranscriptMutation::PageUp)],
             None,
         ),
         KeyCode::PageDown => (
             vec![],
-            vec![StateCommand::Transcript(TranscriptCommand::PageDown)],
+            vec![StateMutation::Transcript(TranscriptMutation::PageDown)],
             None,
         ),
         KeyCode::Home if ctrl => (
             vec![],
-            vec![StateCommand::Transcript(TranscriptCommand::ScrollToTop)],
+            vec![StateMutation::Transcript(TranscriptMutation::ScrollToTop)],
             None,
         ),
         KeyCode::End if ctrl => (
             vec![],
-            vec![StateCommand::Transcript(TranscriptCommand::ScrollToBottom)],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::ScrollToBottom,
+            )],
             None,
         ),
         KeyCode::Up if alt && !ctrl && !shift => {
@@ -211,8 +213,8 @@ pub fn handle_main_key(
 fn submit_input(
     input: &mut InputState,
     agent_state: &AgentState,
-    session_id: Option<String>,
-) -> (Vec<UiEffect>, Vec<StateCommand>, Option<OverlayRequest>) {
+    thread_id: Option<String>,
+) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
     if !matches!(agent_state, AgentState::Idle) {
         return (vec![], vec![], None);
     }
@@ -221,8 +223,8 @@ fn submit_input(
     if input.handoff.is_generating() {
         return (
             vec![],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
                     "Handoff generation in progress. Press Esc to cancel.".to_string(),
                 ),
             )],
@@ -240,17 +242,17 @@ fn submit_input(
             input.clear();
             return (
                 vec![],
-                vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage("Usage: /rename <title>".to_string()),
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage("Usage: /rename <title>".to_string()),
                 )],
                 None,
             );
         }
-        if let Some(session_id) = session_id {
+        if let Some(thread_id) = thread_id {
             input.clear();
             return (
-                vec![UiEffect::RenameSession {
-                    session_id,
+                vec![UiEffect::RenameThread {
+                    thread_id,
                     title: Some(title.to_string()),
                 }],
                 vec![],
@@ -260,9 +262,9 @@ fn submit_input(
             input.clear();
             return (
                 vec![],
-                vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(
-                        "No active session to rename.".to_string(),
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "No active thread to rename.".to_string(),
                     ),
                 )],
                 None,
@@ -277,8 +279,8 @@ fn submit_input(
             // Show error for empty goal (spec requirement)
             return (
                 vec![],
-                vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
                         "Handoff goal cannot be empty.".to_string(),
                     ),
                 )],
@@ -289,8 +291,8 @@ fn submit_input(
 
         return (
             vec![UiEffect::StartHandoff { goal: text.clone() }],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(format!(
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!(
                     "Generating handoff for goal: \"{}\"...",
                     text
                 )),
@@ -299,14 +301,14 @@ fn submit_input(
         );
     }
 
-    // Check if we're submitting the generated handoff prompt (to create new session)
+    // Check if we're submitting the generated handoff prompt (to create new thread)
     if input.handoff.is_ready() {
         if text.trim().is_empty() {
             // Edge case: user cleared the generated prompt
             return (
                 vec![],
-                vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
                         "Handoff prompt cannot be empty.".to_string(),
                     ),
                 )],
@@ -323,11 +325,11 @@ fn submit_input(
                 prompt: text.clone(),
             }],
             vec![
-                StateCommand::Transcript(TranscriptCommand::Clear),
-                StateCommand::Session(SessionCommand::ClearMessages),
-                StateCommand::Session(SessionCommand::ResetUsage),
-                StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
-                StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
+                StateMutation::Transcript(TranscriptMutation::Clear),
+                StateMutation::Thread(ThreadMutation::ClearMessages),
+                StateMutation::Thread(ThreadMutation::ResetUsage),
+                StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
+                StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
             ],
             None,
         );
@@ -341,10 +343,10 @@ fn submit_input(
     input.history.push(text.clone());
     input.reset_navigation();
 
-    let effects = if session_id.is_some() {
+    let effects = if thread_id.is_some() {
         vec![
-            UiEffect::SaveSession {
-                event: SessionEvent::user_message(&text),
+            UiEffect::SaveThread {
+                event: ThreadEvent::user_message(&text),
             },
             UiEffect::StartAgentTurn,
         ]
@@ -356,8 +358,8 @@ fn submit_input(
     (
         effects,
         vec![
-            StateCommand::Transcript(TranscriptCommand::AppendCell(HistoryCell::user(&text))),
-            StateCommand::Session(SessionCommand::AppendMessage(ChatMessage::user(&text))),
+            StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
+            StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
         ],
         None,
     )
@@ -367,7 +369,7 @@ fn submit_input(
 pub fn handle_handoff_result(
     input: &mut InputState,
     result: Result<String, String>,
-) -> Vec<StateCommand> {
+) -> Vec<StateMutation> {
     // Extract goal from Generating state before transitioning
     let goal = if let HandoffState::Generating { goal, .. } = &input.handoff {
         Some(goal.clone())
@@ -383,16 +385,16 @@ pub fn handle_handoff_result(
             // Transition to Ready state
             input.handoff = HandoffState::Ready;
 
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(
-                    "Handoff ready. Edit and press Enter to start new session, or Esc to cancel."
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Handoff ready. Edit and press Enter to start new thread, or Esc to cancel."
                         .to_string(),
                 ),
             )]
         }
         Err(error) => {
-            let mut commands = vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(format!(
+            let mut commands = vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!(
                     "Handoff generation failed: {}",
                     error
                 )),
@@ -402,8 +404,8 @@ pub fn handle_handoff_result(
             if let Some(goal) = goal {
                 input.set_text(&goal);
                 input.handoff = HandoffState::Pending;
-                commands.push(StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(
+                commands.push(StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
                         "Press Enter to retry, or Esc to cancel.".to_string(),
                     ),
                 ));

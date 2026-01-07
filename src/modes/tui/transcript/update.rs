@@ -9,10 +9,10 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 
 use crate::core::events::AgentEvent;
 use crate::core::interrupt;
-use crate::core::session::SessionEvent;
+use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::AgentState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{SessionCommand, StateCommand};
+use crate::modes::tui::shared::internal::{StateMutation, ThreadMutation};
 use crate::modes::tui::transcript::{HistoryCell, ToolState, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
@@ -29,9 +29,9 @@ const MOUSE_SCROLL_LINES: usize = 3;
 pub fn handle_agent_event(
     transcript: &mut TranscriptState,
     agent_state: &mut AgentState,
-    has_session: bool,
+    has_thread: bool,
     event: &AgentEvent,
-) -> (Vec<UiEffect>, Vec<StateCommand>) {
+) -> (Vec<UiEffect>, Vec<StateMutation>) {
     let mut commands = Vec::new();
     let effects =
         match event {
@@ -100,15 +100,15 @@ pub fn handle_agent_event(
                 // received or didn't have a chance to apply the delta.
                 apply_pending_delta(transcript, agent_state);
 
-                commands.push(StateCommand::Session(SessionCommand::SetMessages(
+                commands.push(StateMutation::Thread(ThreadMutation::SetMessages(
                     messages.clone(),
                 )));
                 *agent_state = AgentState::Idle;
 
-                // Save assistant message to session if enabled
-                if !final_text.is_empty() && has_session {
-                    vec![UiEffect::SaveSession {
-                        event: SessionEvent::assistant_message(final_text),
+                // Save assistant message to thread if enabled
+                if !final_text.is_empty() && has_thread {
+                    vec![UiEffect::SaveThread {
+                        event: ThreadEvent::assistant_message(final_text),
                     }]
                 } else {
                     vec![]
@@ -140,7 +140,7 @@ pub fn handle_agent_event(
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
             } => {
-                commands.push(StateCommand::Session(SessionCommand::UpdateUsage {
+                commands.push(StateMutation::Thread(ThreadMutation::UpdateUsage {
                     input: *input_tokens,
                     output: *output_tokens,
                     cache_read: *cache_read_input_tokens,

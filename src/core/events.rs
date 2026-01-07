@@ -37,7 +37,7 @@ pub enum AgentEvent {
         input: Value,
     },
 
-    /// Tool input JSON is fully received (for session persistence).
+    /// Tool input JSON is fully received (for thread persistence).
     /// Emitted after ToolRequested once all input JSON has been streamed.
     ToolInputReady {
         id: String,
@@ -79,7 +79,7 @@ pub enum AgentEvent {
     /// Token usage update from the provider.
     ///
     /// Emitted at message_start (initial) and message_delta (final output tokens).
-    /// The TUI accumulates these for session-wide tracking.
+    /// The TUI accumulates these for thread-wide tracking.
     UsageUpdate {
         /// Input tokens (non-cached)
         input_tokens: u64,

@@ -1,67 +1,67 @@
-//! Session and conversation state.
+//! Thread state.
 //!
-//! Manages the active session, message history, and token usage tracking.
+//! Manages the active thread, message history, and token usage tracking.
 
 use tokio::sync::mpsc;
 
-use crate::core::session::{Session, Usage};
+use crate::core::thread_log::{ThreadLog, Usage};
 use crate::models::ModelPricing;
 use crate::modes::tui::events::UiEvent;
-use crate::modes::tui::shared::internal::SessionCommand;
+use crate::modes::tui::shared::internal::ThreadMutation;
 use crate::providers::anthropic::ChatMessage;
 
-/// Session and conversation state.
+/// Thread state.
 ///
-/// Encapsulates the active session, message history, and usage tracking.
-pub struct SessionState {
-    /// Active session for persistence (if enabled).
-    pub session: Option<Session>,
+/// Encapsulates the active thread, message history, and usage tracking.
+pub struct ThreadState {
+    /// Active thread for persistence (if enabled).
+    pub thread_log: Option<ThreadLog>,
 
-    /// Conversation messages (API format).
+    /// Thread messages (API format).
     pub messages: Vec<ChatMessage>,
 
-    /// Cumulative token usage for this session.
-    pub usage: SessionUsage,
+    /// Cumulative token usage for this thread.
+    pub usage: ThreadUsage,
 }
 
-impl Default for SessionState {
+impl Default for ThreadState {
     fn default() -> Self {
         Self::new()
     }
 }
 
-impl SessionState {
-    /// Creates a new SessionState with no active session.
+impl ThreadState {
+    /// Creates a new ThreadState with no active thread.
     pub fn new() -> Self {
         Self {
-            session: None,
+            thread_log: None,
             messages: Vec::new(),
-            usage: SessionUsage::new(),
+            usage: ThreadUsage::new(),
         }
     }
 
-    /// Creates a SessionState with an active session and message history.
-    pub fn with_session(session: Option<Session>, messages: Vec<ChatMessage>) -> Self {
+    /// Creates a ThreadState with an active thread and message history.
+    pub fn with_thread(thread_log: Option<ThreadLog>, messages: Vec<ChatMessage>) -> Self {
         Self {
-            session,
+            thread_log,
             messages,
-            usage: SessionUsage::new(),
+            usage: ThreadUsage::new(),
         }
     }
 
-    /// Applies a cross-slice session command.
-    pub fn apply(&mut self, command: SessionCommand) {
-        match command {
-            SessionCommand::ClearMessages => self.messages.clear(),
-            SessionCommand::SetMessages(messages) => self.messages = messages,
-            SessionCommand::AppendMessage(message) => self.messages.push(message),
-            SessionCommand::SetSession(session_handle) => self.session = session_handle,
-            SessionCommand::ResetUsage => self.usage = SessionUsage::new(),
-            SessionCommand::SetUsage { cumulative, latest } => {
-                self.usage = SessionUsage::new();
+    /// Applies a cross-slice thread mutation.
+    pub fn apply(&mut self, mutation: ThreadMutation) {
+        match mutation {
+            ThreadMutation::ClearMessages => self.messages.clear(),
+            ThreadMutation::SetMessages(messages) => self.messages = messages,
+            ThreadMutation::AppendMessage(message) => self.messages.push(message),
+            ThreadMutation::SetThread(thread_log) => self.thread_log = thread_log,
+            ThreadMutation::ResetUsage => self.usage = ThreadUsage::new(),
+            ThreadMutation::SetUsage { cumulative, latest } => {
+                self.usage = ThreadUsage::new();
                 self.usage.restore(cumulative, latest);
             }
-            SessionCommand::UpdateUsage {
+            ThreadMutation::UpdateUsage {
                 input,
                 output,
                 cache_read,
@@ -72,37 +72,37 @@ impl SessionState {
 }
 
 // ============================================================================
-// Session Operations State (async workflow tracking)
+// Thread Operations State (async workflow tracking)
 // ============================================================================
 
-/// Tracks async session operations (loading, creating, previewing).
+/// Tracks async thread operations (loading, creating, previewing).
 ///
-/// This is separate from `SessionState` because it tracks in-flight operations,
-/// not the current session data. Follows the same pattern as `AuthState.login_rx`
+/// This is separate from `ThreadState` because it tracks in-flight operations,
+/// not the current thread data. Follows the same pattern as `AuthState.login_rx`
 /// and `HandoffState::Generating { rx }`.
 #[derive(Default)]
-pub struct SessionOpsState {
-    /// Receiver for async session list loading (for session picker).
+pub struct ThreadOpsState {
+    /// Receiver for async thread list loading (for thread picker).
     pub list_rx: Option<mpsc::Receiver<UiEvent>>,
 
-    /// Receiver for async session loading (full switch).
+    /// Receiver for async thread loading (full switch).
     pub load_rx: Option<mpsc::Receiver<UiEvent>>,
 
-    /// Receiver for async session preview loading.
+    /// Receiver for async thread preview loading.
     pub preview_rx: Option<mpsc::Receiver<UiEvent>>,
 
-    /// Receiver for async session creation.
+    /// Receiver for async thread creation.
     pub create_rx: Option<mpsc::Receiver<UiEvent>>,
 
-    /// Receiver for async session fork.
+    /// Receiver for async thread fork.
     pub fork_rx: Option<mpsc::Receiver<UiEvent>>,
 
-    /// Receiver for async session rename.
+    /// Receiver for async thread rename.
     pub rename_rx: Option<mpsc::Receiver<UiEvent>>,
 }
 
-impl SessionOpsState {
-    /// Creates a new empty SessionOpsState.
+impl ThreadOpsState {
+    /// Creates a new empty ThreadOpsState.
     pub fn new() -> Self {
         Self::default()
     }
@@ -118,16 +118,16 @@ impl SessionOpsState {
     }
 }
 
-/// Token usage for the current session.
+/// Token usage for the current thread.
 ///
 /// Tracks both cumulative tokens (for cost calculation) and latest request
 /// tokens (for context window percentage).
 ///
 /// The distinction matters because each API request's `input_tokens` already
-/// includes all previous conversation history. Summing across requests would
+/// includes all previous thread history. Summing across requests would
 /// double-count, but we need cumulative totals for accurate cost calculation.
 #[derive(Debug, Clone, Default)]
-pub struct SessionUsage {
+pub struct ThreadUsage {
     // ========================================================================
     // Cumulative totals (for cost calculation and token breakdown display)
     // ========================================================================
@@ -169,8 +169,8 @@ pub struct SessionUsage {
     request_saved: bool,
 }
 
-impl SessionUsage {
-    /// Creates a new empty SessionUsage.
+impl ThreadUsage {
+    /// Creates a new empty ThreadUsage.
     pub fn new() -> Self {
         Self::default()
     }
@@ -248,9 +248,9 @@ impl SessionUsage {
         !self.request_saved && self.turn_usage().total() > 0
     }
 
-    /// Restores usage state from persisted session data.
+    /// Restores usage state from persisted thread data.
     ///
-    /// Called when loading a session. Sets both cumulative totals (for cost display)
+    /// Called when loading a thread. Sets both cumulative totals (for cost display)
     /// and latest values (for context % display).
     pub fn restore(&mut self, cumulative: Usage, latest: Usage) {
         // Set cumulative totals
@@ -277,7 +277,7 @@ impl SessionUsage {
     /// > context window, the system will return a validation error"
     ///
     /// This applies to a single request, not cumulative across turns.
-    /// Each request's `input_tokens` already includes all previous conversation
+    /// Each request's `input_tokens` already includes all previous thread
     /// history, so we only need the latest request's tokens.
     ///
     /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
@@ -302,7 +302,7 @@ impl SessionUsage {
         (self.context_tokens() as f64 / context_limit as f64) * 100.0
     }
 
-    /// Calculates the total cost for this session in USD.
+    /// Calculates the total cost for this thread in USD.
     ///
     /// Uses the pricing from the model (prices are per million tokens).
     pub fn calculate_cost(&self, pricing: &ModelPricing) -> f64 {
@@ -368,8 +368,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_usage_default() {
-        let usage = SessionUsage::new();
+    fn test_thread_usage_default() {
+        let usage = ThreadUsage::new();
         assert_eq!(usage.input_tokens, 0);
         assert_eq!(usage.output_tokens, 0);
         assert_eq!(usage.cache_read_tokens, 0);
@@ -378,8 +378,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_add() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_add() {
+        let mut usage = ThreadUsage::new();
         // Simulate split update: MessageStart first (input, cache, no output)
         usage.add(100, 0, 200, 25);
         // Cumulative values (partial)
@@ -414,16 +414,16 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_total_tokens() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_total_tokens() {
+        let mut usage = ThreadUsage::new();
         usage.add(1000, 500, 2000, 100);
         // total_tokens = cumulative sum (for cost display)
         assert_eq!(usage.total_tokens(), 3600);
     }
 
     #[test]
-    fn test_session_usage_context_tokens_uses_latest() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_context_tokens_uses_latest() {
+        let mut usage = ThreadUsage::new();
 
         // Turn 1: system=1000 (cache_write), user=100 (input)
         // Simulate MessageStart
@@ -456,8 +456,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_context_percentage() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_context_percentage() {
+        let mut usage = ThreadUsage::new();
         // Latest request: input=10000, cache_read=4000, cache_write=1000, output=5000
         // Context = 10000 + 4000 + 1000 + 5000 = 20000
         usage.add(10000, 5000, 4000, 1000);
@@ -467,13 +467,13 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_context_percentage_zero_limit() {
-        let usage = SessionUsage::new();
+    fn test_thread_usage_context_percentage_zero_limit() {
+        let usage = ThreadUsage::new();
         assert_eq!(usage.context_percentage(0), 0.0);
     }
 
     #[test]
-    fn test_session_usage_calculate_cost() {
+    fn test_thread_usage_calculate_cost() {
         use crate::models::ModelPricing;
         let pricing = ModelPricing {
             input: 3.0,        // $3 per million
@@ -482,7 +482,7 @@ mod tests {
             cache_write: 3.75, // $3.75 per million
         };
 
-        let mut usage = SessionUsage::new();
+        let mut usage = ThreadUsage::new();
         // 1 million tokens of each type
         usage.add(1_000_000, 1_000_000, 1_000_000, 1_000_000);
 
@@ -492,7 +492,7 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_cache_savings() {
+    fn test_thread_usage_cache_savings() {
         use crate::models::ModelPricing;
         let pricing = ModelPricing {
             input: 3.0,
@@ -501,7 +501,7 @@ mod tests {
             cache_write: 3.75,
         };
 
-        let mut usage = SessionUsage::new();
+        let mut usage = ThreadUsage::new();
         // 1 million cache_read tokens
         usage.add(0, 0, 1_000_000, 0);
 
@@ -511,30 +511,30 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_format_tokens() {
-        assert_eq!(SessionUsage::format_tokens(500), "500");
-        assert_eq!(SessionUsage::format_tokens(1500), "1.5k");
-        assert_eq!(SessionUsage::format_tokens(1_500_000), "1.5M");
+    fn test_thread_usage_format_tokens() {
+        assert_eq!(ThreadUsage::format_tokens(500), "500");
+        assert_eq!(ThreadUsage::format_tokens(1500), "1.5k");
+        assert_eq!(ThreadUsage::format_tokens(1_500_000), "1.5M");
     }
 
     #[test]
-    fn test_session_usage_format_context_limit() {
-        assert_eq!(SessionUsage::format_context_limit(500), "500");
-        assert_eq!(SessionUsage::format_context_limit(200_000), "200k");
-        assert_eq!(SessionUsage::format_context_limit(1_000_000), "1M");
+    fn test_thread_usage_format_context_limit() {
+        assert_eq!(ThreadUsage::format_context_limit(500), "500");
+        assert_eq!(ThreadUsage::format_context_limit(200_000), "200k");
+        assert_eq!(ThreadUsage::format_context_limit(1_000_000), "1M");
     }
 
     #[test]
-    fn test_session_usage_format_cost() {
-        assert_eq!(SessionUsage::format_cost(0.0001), "$0.0001");
-        assert_eq!(SessionUsage::format_cost(0.008), "$0.008");
-        assert_eq!(SessionUsage::format_cost(0.15), "$0.15");
-        assert_eq!(SessionUsage::format_cost(1.50), "$1.50");
+    fn test_thread_usage_format_cost() {
+        assert_eq!(ThreadUsage::format_cost(0.0001), "$0.0001");
+        assert_eq!(ThreadUsage::format_cost(0.008), "$0.008");
+        assert_eq!(ThreadUsage::format_cost(0.15), "$0.15");
+        assert_eq!(ThreadUsage::format_cost(1.50), "$1.50");
     }
 
     #[test]
-    fn test_session_usage_has_unsaved_usage_after_input() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_has_unsaved_usage_after_input() {
+        let mut usage = ThreadUsage::new();
         // Initially no unsaved usage
         assert!(!usage.has_unsaved_usage());
 
@@ -548,8 +548,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_mark_saved_clears_unsaved() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_mark_saved_clears_unsaved() {
+        let mut usage = ThreadUsage::new();
         usage.add(1000, 0, 500, 100);
         assert!(usage.has_unsaved_usage());
 
@@ -563,8 +563,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_new_request_resets_saved_flag() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_new_request_resets_saved_flag() {
+        let mut usage = ThreadUsage::new();
 
         // First request: receive input, mark saved
         usage.add(1000, 0, 0, 0);
@@ -578,8 +578,8 @@ mod tests {
     }
 
     #[test]
-    fn test_session_usage_interrupted_request_has_unsaved_input() {
-        let mut usage = SessionUsage::new();
+    fn test_thread_usage_interrupted_request_has_unsaved_input() {
+        let mut usage = ThreadUsage::new();
 
         // Simulate interrupted request: input arrives but no output
         usage.add(50000, 0, 10000, 5000);

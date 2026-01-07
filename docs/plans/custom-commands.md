@@ -65,7 +65,7 @@
 
 ## Effect system
 - **What exists:** `UiEffect::ExecuteCommand { name }` dispatched from palette, handled in runtime
-- **✅ Demo:** Select `/new` from palette, conversation clears
+- **✅ Demo:** Select `/new` from palette, thread clears
 - **Gaps:** Need new effect type for custom command content insertion
 
 ## Config paths

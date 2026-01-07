@@ -1,6 +1,6 @@
-//! Session feature view.
+//! Thread feature view.
 //!
-//! Rendering functions for the session picker overlay.
+//! Rendering functions for the thread picker overlay.
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -9,15 +9,15 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-use crate::core::session::{self, short_session_id};
-use crate::modes::tui::overlays::SessionPickerState;
+use crate::core::thread_log::{self, short_thread_id};
+use crate::modes::tui::overlays::ThreadPickerState;
 
-const MAX_VISIBLE_SESSIONS: usize = 10;
+const MAX_VISIBLE_THREADS: usize = 10;
 
-/// Renders the session picker overlay.
-pub fn render_session_picker(
+/// Renders the thread picker overlay.
+pub fn render_thread_picker(
     frame: &mut Frame,
-    picker: &SessionPickerState,
+    picker: &ThreadPickerState,
     area: Rect,
     input_top_y: u16,
 ) {
@@ -25,8 +25,8 @@ pub fn render_session_picker(
         InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
     };
 
-    let session_count = picker.sessions.len();
-    let visible_count = session_count.min(MAX_VISIBLE_SESSIONS);
+    let thread_count = picker.threads.len();
+    let visible_count = thread_count.min(MAX_VISIBLE_THREADS);
 
     let picker_width = 60;
     let picker_height = (visible_count as u16 + 5).max(7);
@@ -35,7 +35,7 @@ pub fn render_session_picker(
     render_overlay_container(
         frame,
         picker_area,
-        &format!("Sessions ({})", session_count),
+        &format!("Threads ({})", thread_count),
         Color::Blue,
     );
 
@@ -46,8 +46,8 @@ pub fn render_session_picker(
         picker_area.height.saturating_sub(2),
     );
 
-    if picker.sessions.is_empty() {
-        let empty_msg = Paragraph::new("No sessions found")
+    if picker.threads.is_empty() {
+        let empty_msg = Paragraph::new("No threads found")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
         frame.render_widget(empty_msg, inner_area);
@@ -64,21 +64,21 @@ pub fn render_session_picker(
     );
 
     let items: Vec<ListItem> = picker
-        .sessions
+        .threads
         .iter()
         .skip(picker.offset)
         .take(list_height)
-        .map(|session| {
-            let timestamp = session
+        .map(|thread| {
+            let timestamp = thread
                 .modified
-                .and_then(session::format_timestamp)
+                .and_then(thread_log::format_timestamp)
                 .unwrap_or_else(|| "unknown".to_string());
 
             let display_title = truncate_with_ellipsis(
-                &session.display_title(),
+                &thread.display_title(),
                 (inner_area.width as usize).saturating_sub(20),
             );
-            let short_id = short_session_id(&session.id);
+            let short_id = short_thread_id(&thread.id);
 
             let line = Line::from(vec![
                 Span::styled(short_id, Style::default().fg(Color::Cyan)),

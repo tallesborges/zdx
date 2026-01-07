@@ -1,27 +1,27 @@
-//! Cross-slice state commands.
+//! Cross-slice state mutations.
 //!
-//! Feature reducers and overlays return these commands to request mutations
+//! Feature reducers and overlays return these mutations to request changes
 //! outside their own slice. The main reducer applies them in order.
 
 use crate::config::ThinkingLevel;
-use crate::core::session::{Session, Usage};
+use crate::core::thread_log::{ThreadLog, Usage};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::transcript::{HistoryCell, ScrollMode};
 use crate::providers::anthropic::ChatMessage;
 
-/// Commands for cross-slice state mutations.
+/// Mutations for cross-slice state changes.
 #[derive(Debug)]
-pub enum StateCommand {
-    Transcript(TranscriptCommand),
-    Input(InputCommand),
-    Session(SessionCommand),
-    Auth(AuthCommand),
-    Config(ConfigCommand),
+pub enum StateMutation {
+    Transcript(TranscriptMutation),
+    Input(InputMutation),
+    Thread(ThreadMutation),
+    Auth(AuthMutation),
+    Config(ConfigMutation),
 }
 
 /// Transcript slice mutations requested by other slices.
 #[derive(Debug)]
-pub enum TranscriptCommand {
+pub enum TranscriptMutation {
     AppendCell(HistoryCell),
     AppendSystemMessage(String),
     Clear,
@@ -38,7 +38,7 @@ pub enum TranscriptCommand {
 
 /// Input slice mutations requested by other slices.
 #[derive(Debug)]
-pub enum InputCommand {
+pub enum InputMutation {
     Clear,
     SetText(String),
     InsertChar(char),
@@ -52,15 +52,15 @@ pub enum InputCommand {
     SetHandoffState(HandoffState),
 }
 
-/// Session slice mutations requested by other slices.
+/// Thread slice mutations requested by other slices.
 #[derive(Debug)]
-pub enum SessionCommand {
+pub enum ThreadMutation {
     ClearMessages,
     SetMessages(Vec<ChatMessage>),
     AppendMessage(ChatMessage),
-    SetSession(Option<Session>),
+    SetThread(Option<ThreadLog>),
     ResetUsage,
-    /// Restore usage from persisted session (cumulative + latest for context %)
+    /// Restore usage from persisted thread (cumulative + latest for context %)
     SetUsage {
         cumulative: Usage,
         latest: Usage,
@@ -75,7 +75,7 @@ pub enum SessionCommand {
 
 /// Auth slice mutations requested by other slices.
 #[derive(Debug)]
-pub enum AuthCommand {
+pub enum AuthMutation {
     RefreshStatus,
     ClearLoginRx,
     ClearLoginCallbackRx,
@@ -83,7 +83,7 @@ pub enum AuthCommand {
 
 /// Config mutations requested by overlays.
 #[derive(Debug)]
-pub enum ConfigCommand {
+pub enum ConfigMutation {
     SetModel(String),
     SetThinkingLevel(ThinkingLevel),
 }

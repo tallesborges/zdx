@@ -11,7 +11,7 @@
 2. Users can press `Ctrl+P` to open the command popup (command palette)
 3. Popup shows available commands with fuzzy filtering
 4. Commands execute immediately on selection
-5. `/new` starts a new conversation (creates new session)
+5. `/new` starts a new thread (creates new session)
 6. `/quit` exits the TUI cleanly
 
 ---
@@ -177,7 +177,7 @@
 - [x] `/quit` during streaming: interrupt first, then quit
 
 **✅ Demo:** 
-1. Have a conversation, type `/new` → transcript empty, new session ID shown
+1. Have a thread, type `/new` → transcript empty, new session ID shown
 2. Type `/quit` → TUI exits cleanly
 
 **Failure modes:**
@@ -314,7 +314,7 @@
 - **Inline execution:** Type `/quit` + Enter without popup
 - **Tab completion:** Complete command inline without popup
 - **Command palette:** Ctrl+Shift+P style (separate from `/`)
-- **Confirmation dialogs:** "/new" confirm before clearing long conversation
+- **Confirmation dialogs:** "/new" confirm before clearing long thread
 
 ---
 

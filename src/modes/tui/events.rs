@@ -12,92 +12,92 @@ use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::core::events::AgentEvent;
-use crate::core::session::{Session, SessionSummary, Usage};
+use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
-/// Session event enum for async session operations.
+/// Thread event enum for async thread operations.
 #[derive(Debug)]
-pub enum SessionUiEvent {
-    /// Session list load started; reducer should store the receiver.
+pub enum ThreadUiEvent {
+    /// Thread list load started; reducer should store the receiver.
     ListStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// Session list loaded for picker.
+    /// Thread list loaded for picker.
     ListLoaded {
-        sessions: Vec<SessionSummary>,
+        threads: Vec<ThreadSummary>,
         original_cells: Vec<HistoryCell>,
     },
 
-    /// Session list load failed.
+    /// Thread list load failed.
     ListFailed { error: String },
 
-    /// Session load started; reducer should store the receiver.
+    /// Thread load started; reducer should store the receiver.
     LoadStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// Session loaded successfully (for switching to a session).
+    /// Thread loaded successfully (for switching to a thread).
     Loaded {
-        session_id: String,
+        thread_id: String,
         cells: Vec<HistoryCell>,
         messages: Vec<ChatMessage>,
         history: Vec<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
     },
 
-    /// Session load failed.
+    /// Thread load failed.
     LoadFailed { error: String },
 
-    /// Session preview load started; reducer should store the receiver.
+    /// Thread preview load started; reducer should store the receiver.
     PreviewStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// Session preview loaded (for session picker navigation).
+    /// Thread preview loaded (for thread picker navigation).
     PreviewLoaded { cells: Vec<HistoryCell> },
 
-    /// Session preview load failed (silent - just don't update).
+    /// Thread preview load failed (silent - just don't update).
     PreviewFailed,
 
-    /// Session creation started; reducer should store the receiver.
+    /// Thread creation started; reducer should store the receiver.
     CreateStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// Session fork started; reducer should store the receiver.
+    /// Thread fork started; reducer should store the receiver.
     ForkStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// New session created successfully.
+    /// New thread created successfully.
     Created {
-        session: Session,
+        thread_log: ThreadLog,
         context_paths: Vec<PathBuf>,
     },
 
-    /// Forked session created successfully.
+    /// Forked thread created successfully.
     ForkedLoaded {
-        session_id: String,
+        thread_id: String,
         cells: Vec<HistoryCell>,
         messages: Vec<ChatMessage>,
         history: Vec<String>,
-        session: Session,
+        thread_log: ThreadLog,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
         user_input: Option<String>,
         turn_number: usize,
     },
 
-    /// New session creation failed.
+    /// New thread creation failed.
     CreateFailed { error: String },
 
-    /// Session fork failed.
+    /// Thread fork failed.
     ForkFailed { error: String },
 
-    /// Session rename started; reducer should store the receiver.
+    /// Thread rename started; reducer should store the receiver.
     RenameStarted { rx: mpsc::Receiver<UiEvent> },
 
-    /// Session rename succeeded.
+    /// Thread rename succeeded.
     Renamed {
-        session_id: String,
+        thread_id: String,
         title: Option<String>,
     },
 
-    /// Session rename failed.
+    /// Thread rename failed.
     RenameFailed { error: String },
 }
 
@@ -150,11 +150,11 @@ pub enum UiEvent {
         cancel: oneshot::Sender<()>,
     },
 
-    /// Handoff session creation succeeded.
-    HandoffSessionCreated { session: Session },
+    /// Handoff thread creation succeeded.
+    HandoffThreadCreated { thread_log: ThreadLog },
 
-    /// Handoff session creation failed.
-    HandoffSessionCreateFailed { error: String },
+    /// Handoff thread creation failed.
+    HandoffThreadCreateFailed { error: String },
 
     /// File discovery started.
     FileDiscoveryStarted {
@@ -168,6 +168,6 @@ pub enum UiEvent {
     /// Clipboard copy completed successfully.
     ClipboardCopied,
 
-    /// Session async I/O results.
-    Session(SessionUiEvent),
+    /// Thread async I/O results.
+    Thread(ThreadUiEvent),
 }

@@ -11,7 +11,7 @@
   - `src/cli/commands/mod.rs`: command module exports
   - `src/cli/commands/chat.rs`: chat command handler (includes piped stdin fallback)
   - `src/cli/commands/exec.rs`: exec command handler
-  - `src/cli/commands/sessions.rs`: list/show/resume sessions
+  - `src/cli/commands/threads.rs`: list/show/resume threads
   - `src/cli/commands/config.rs`: config path/init handlers
   - `src/cli/commands/auth.rs`: login/logout flows
 - `src/config.rs`: config loading + paths
@@ -24,7 +24,7 @@
   - `src/core/context.rs`: project context loading (AGENTS.md files)
   - `src/core/interrupt.rs`: signal handling
   - `src/core/agent.rs`: agent loop + event channels
-  - `src/core/session.rs`: session persistence
+  - `src/core/thread_log.rs`: thread persistence
 - `src/modes/`: runtime execution modes
   - `src/modes/mod.rs`: mode module exports
   - `src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
@@ -32,7 +32,7 @@
     - `src/modes/tui/mod.rs`: entry points (run_interactive_chat) + module declarations
     - `src/modes/tui/app.rs`: AppState + TuiState + AgentState (state composition, hierarchy)
     - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
-    - `src/modes/tui/runtime/handlers.rs`: effect handlers (session ops, agent spawn, auth)
+    - `src/modes/tui/runtime/handlers.rs`: effect handlers (thread ops, agent spawn, auth)
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
     - `src/modes/tui/update.rs`: reducer - orchestrates state mutations, delegates to feature slices
     - `src/modes/tui/render.rs`: pure render functions (no mutations), delegates transcript rendering
@@ -56,11 +56,11 @@
       - `src/modes/tui/input/state.rs`: InputState + HandoffState
       - `src/modes/tui/input/update.rs`: key handling, input submission, handoff result handling
       - `src/modes/tui/input/render.rs`: input area rendering (normal + handoff modes)
-    - `src/modes/tui/session/`: session feature slice (session state, session operations)
-      - `src/modes/tui/session/mod.rs`: module exports
-      - `src/modes/tui/session/state.rs`: SessionState, SessionOpsState, SessionUsage
-      - `src/modes/tui/session/update.rs`: session event handlers (loading, switching, creating, renaming)
-      - `src/modes/tui/session/render.rs`: session picker overlay rendering
+    - `src/modes/tui/thread/`: thread feature slice (thread state, thread operations)
+      - `src/modes/tui/thread/mod.rs`: module exports
+      - `src/modes/tui/thread/state.rs`: ThreadState, ThreadOpsState, ThreadUsage
+      - `src/modes/tui/thread/update.rs`: thread event handlers (loading, switching, creating, renaming)
+      - `src/modes/tui/thread/render.rs`: thread picker overlay rendering
     - `src/modes/tui/overlays/`: overlay feature slice (modal UI components)
       - `src/modes/tui/overlays/mod.rs`: `Overlay` enum, `OverlayAction`, `OverlayRequest`, `OverlayExt` render helpers
       - `src/modes/tui/overlays/update.rs`: overlay key handling and update logic
@@ -69,7 +69,7 @@
       - `src/modes/tui/overlays/model_picker.rs`: model picker overlay
       - `src/modes/tui/overlays/thinking_picker.rs`: thinking level picker overlay
       - `src/modes/tui/overlays/timeline.rs`: timeline overlay (jump/fork from turn)
-      - `src/modes/tui/overlays/session_picker.rs`: session picker overlay (state + key handling; rendering delegated to session feature)
+      - `src/modes/tui/overlays/thread_picker.rs`: thread picker overlay (state + key handling; rendering delegated to thread feature)
       - `src/modes/tui/overlays/file_picker.rs`: file picker overlay (triggered by `@`, async file discovery, fuzzy filtering)
       - `src/modes/tui/overlays/login.rs`: OAuth login flow overlay (state + key handling; rendering delegated to auth feature)
     - `src/modes/tui/markdown/`: markdown parsing and wrapping
@@ -81,7 +81,7 @@
       - `src/modes/tui/transcript/mod.rs`: module exports
       - `src/modes/tui/transcript/state.rs`: TranscriptState, ScrollState, SelectionState management
       - `src/modes/tui/transcript/selection.rs`: text selection and copy (grapheme-based, OSC 52 + system clipboard)
-      - `src/modes/tui/transcript/build.rs`: pure helper to build transcript cells from session events
+      - `src/modes/tui/transcript/build.rs`: pure helper to build transcript cells from thread events
       - `src/modes/tui/transcript/update.rs`: agent event handlers, mouse handling, delta coalescing
       - `src/modes/tui/transcript/render.rs`: transcript rendering (full and lazy), style conversion
       - `src/modes/tui/transcript/cell.rs`: HistoryCell + rendering
@@ -150,7 +150,7 @@ When a task is complex or would pollute the current context, delegate to a fresh
 
 ```bash
 # If zdx is in PATH:
-zdx --no-save exec -p "your task description"
+zdx --no-thread exec -p "your task description"
 ```
 
 This runs in an isolated process with its own context window. Use for:
@@ -159,14 +159,14 @@ This runs in an isolated process with its own context window. Use for:
 - Research tasks that generate lots of intermediate output
 - Any task where you only need the final result
 
-The `--no-save` flag prevents session file creation. Output is returned directly.
+The `--no-thread` flag prevents thread file creation. Output is returned directly.
 
-**Reading previous sessions:**
+**Reading previous threads:**
 ```bash
-zdx sessions show <session_id>
+zdx threads show <thread_id>
 ```
 
-Use this to fetch context from a previous conversation when needed.
+Use this to fetch context from a previous thread when needed.
 
 ## ⚠️ IMPORTANT: Keep this file up to date
 

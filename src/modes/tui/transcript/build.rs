@@ -1,31 +1,31 @@
-//! Transcript building from session events.
+//! Transcript building from thread events.
 //!
-//! Pure helper function to convert session events into UI transcript cells.
+//! Pure helper function to convert thread events into UI transcript cells.
 
 use std::collections::HashMap;
 
 use super::HistoryCell;
 use crate::core::events::ToolOutput;
-use crate::core::session::SessionEvent;
+use crate::core::thread_log::ThreadEvent;
 
-/// Builds transcript cells from session events.
+/// Builds transcript cells from thread events.
 ///
-/// Maps session events to display cells:
+/// Maps thread events to display cells:
 /// - `Message` → `User` or `Assistant` cells
 /// - `ToolUse` + `ToolResult` → `Tool` cells (paired by ID)
 /// - `Thinking` → `Thinking` cells
 /// - Skips `Meta` and `Interrupted` events
-pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell> {
+pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> {
     let mut cells = Vec::new();
     // Track tool cells by ID for pairing with results
     let mut tool_cells: HashMap<String, usize> = HashMap::new();
 
     for event in events {
         match event {
-            SessionEvent::Meta { .. } => {
+            ThreadEvent::Meta { .. } => {
                 // Skip meta events
             }
-            SessionEvent::Message { role, text, .. } => {
+            ThreadEvent::Message { role, text, .. } => {
                 let cell = match role.as_str() {
                     "user" => HistoryCell::user(text),
                     "assistant" => HistoryCell::assistant(text),
@@ -33,7 +33,7 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
                 };
                 cells.push(cell);
             }
-            SessionEvent::Thinking {
+            ThreadEvent::Thinking {
                 content, signature, ..
             } => {
                 // Create a finalized thinking cell
@@ -43,7 +43,7 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
                 }
                 cells.push(cell);
             }
-            SessionEvent::ToolUse {
+            ThreadEvent::ToolUse {
                 id, name, input, ..
             } => {
                 // Create a running tool cell (will be updated by result)
@@ -52,7 +52,7 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
                 tool_cells.insert(id.clone(), idx);
                 cells.push(cell);
             }
-            SessionEvent::ToolResult {
+            ThreadEvent::ToolResult {
                 tool_use_id,
                 output,
                 ..
@@ -62,7 +62,7 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
                     && let Some(cell) = cells.get_mut(idx)
                 {
                     // Deserialize the stored JSON back to ToolOutput
-                    // (it was serialized via serde_json::to_value in SessionEvent::from_agent)
+                    // (it was serialized via serde_json::to_value in ThreadEvent::from_agent)
                     let tool_output: ToolOutput = serde_json::from_value(output.clone())
                         .unwrap_or_else(|_| {
                             ToolOutput::failure("parse_error", "Failed to parse tool result")
@@ -71,10 +71,10 @@ pub fn build_transcript_from_events(events: &[SessionEvent]) -> Vec<HistoryCell>
                 }
                 // If no matching tool cell found, skip (incomplete pair)
             }
-            SessionEvent::Interrupted { .. } => {
+            ThreadEvent::Interrupted { .. } => {
                 // Skip interrupted events when loading
             }
-            SessionEvent::Usage { .. } => {
+            ThreadEvent::Usage { .. } => {
                 // Skip usage events when building transcript (they're for tracking only)
             }
         }
@@ -92,7 +92,7 @@ mod tests {
 
     #[test]
     fn test_build_transcript_from_events_empty() {
-        let events: Vec<SessionEvent> = vec![];
+        let events: Vec<ThreadEvent> = vec![];
         let cells = build_transcript_from_events(&events);
         assert!(cells.is_empty());
     }
@@ -100,17 +100,17 @@ mod tests {
     #[test]
     fn test_build_transcript_from_events_messages() {
         let events = vec![
-            SessionEvent::Meta {
+            ThreadEvent::Meta {
                 schema_version: 1,
                 title: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
-            SessionEvent::Message {
+            ThreadEvent::Message {
                 role: "user".to_string(),
                 text: "Hello".to_string(),
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
-            SessionEvent::Message {
+            ThreadEvent::Message {
                 role: "assistant".to_string(),
                 text: "Hi there!".to_string(),
                 ts: "2024-01-01T00:00:02Z".to_string(),
@@ -140,15 +140,15 @@ mod tests {
     #[test]
     fn test_build_transcript_from_events_tool_use() {
         let events = vec![
-            SessionEvent::ToolUse {
+            ThreadEvent::ToolUse {
                 id: "tool-1".to_string(),
                 name: "read".to_string(),
                 input: json!({"path": "test.txt"}),
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
-            SessionEvent::ToolResult {
+            ThreadEvent::ToolResult {
                 tool_use_id: "tool-1".to_string(),
-                // output is a serialized ToolOutput (from SessionEvent::from_agent)
+                // output is a serialized ToolOutput (from ThreadEvent::from_agent)
                 output: json!({"ok": true, "data": {"content": "file data"}}),
                 ok: true,
                 ts: "2024-01-01T00:00:02Z".to_string(),
@@ -176,7 +176,7 @@ mod tests {
 
     #[test]
     fn test_build_transcript_from_events_thinking() {
-        let events = vec![SessionEvent::Thinking {
+        let events = vec![ThreadEvent::Thinking {
             content: "Let me analyze this...".to_string(),
             signature: Some("sig123".to_string()),
             ts: "2024-01-01T00:00:01Z".to_string(),
@@ -204,40 +204,40 @@ mod tests {
     #[test]
     fn test_build_transcript_from_events_mixed() {
         let events = vec![
-            SessionEvent::Meta {
+            ThreadEvent::Meta {
                 schema_version: 1,
                 title: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
-            SessionEvent::Message {
+            ThreadEvent::Message {
                 role: "user".to_string(),
                 text: "Read the file".to_string(),
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
-            SessionEvent::Thinking {
+            ThreadEvent::Thinking {
                 content: "Analyzing...".to_string(),
                 signature: Some("sig".to_string()),
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
-            SessionEvent::ToolUse {
+            ThreadEvent::ToolUse {
                 id: "t1".to_string(),
                 name: "read".to_string(),
                 input: json!({"path": "file.txt"}),
                 ts: "2024-01-01T00:00:03Z".to_string(),
             },
-            SessionEvent::ToolResult {
+            ThreadEvent::ToolResult {
                 tool_use_id: "t1".to_string(),
-                // output is a serialized ToolOutput (from SessionEvent::from_agent)
+                // output is a serialized ToolOutput (from ThreadEvent::from_agent)
                 output: json!({"ok": true, "data": {"content": "data"}}),
                 ok: true,
                 ts: "2024-01-01T00:00:04Z".to_string(),
             },
-            SessionEvent::Message {
+            ThreadEvent::Message {
                 role: "assistant".to_string(),
                 text: "Done!".to_string(),
                 ts: "2024-01-01T00:00:05Z".to_string(),
             },
-            SessionEvent::Interrupted {
+            ThreadEvent::Interrupted {
                 role: "system".to_string(),
                 text: "Interrupted".to_string(),
                 ts: "2024-01-01T00:00:06Z".to_string(),

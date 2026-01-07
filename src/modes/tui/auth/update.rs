@@ -3,7 +3,7 @@
 //! Handles login flow state transitions and result processing.
 
 use crate::modes::tui::auth::AuthState;
-use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
 
 /// Handles the login result from OAuth token exchange.
 ///
@@ -18,7 +18,7 @@ pub fn handle_login_result(
     auth: &mut AuthState,
     result: Result<(), String>,
     provider: crate::providers::ProviderKind,
-) -> (Vec<StateCommand>, LoginOverlayAction) {
+) -> (Vec<StateMutation>, LoginOverlayAction) {
     auth.login_rx = None;
     auth.login_callback_rx = None;
     match result {
@@ -29,8 +29,8 @@ pub fn handle_login_result(
                 crate::providers::ProviderKind::OpenAICodex => "Logged in with OpenAI Codex OAuth.",
             };
             (
-                vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(message.to_string()),
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(message.to_string()),
                 )],
                 LoginOverlayAction::Close,
             )

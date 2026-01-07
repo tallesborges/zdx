@@ -12,7 +12,7 @@ use crate::modes::tui::shared::clipboard::Clipboard;
 use crate::modes::tui::shared::commands::{COMMANDS, Command};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
-    AuthCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
+    AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
 
 #[derive(Debug, Clone)]
@@ -48,14 +48,14 @@ impl CommandPaletteState {
         &mut self,
         tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
             KeyCode::Esc => {
                 let mut commands = Vec::new();
                 if self.insert_slash_on_escape {
-                    commands.push(StateCommand::Input(InputCommand::InsertChar('/')));
+                    commands.push(StateMutation::Input(InputMutation::InsertChar('/')));
                 }
                 (Some(OverlayAction::close()), commands)
             }
@@ -131,7 +131,7 @@ impl CommandPaletteState {
 fn execute_command(
     tui: &TuiState,
     cmd_name: &str,
-) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateCommand>) {
+) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateMutation>) {
     match cmd_name {
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "copy-id" => {
@@ -148,7 +148,7 @@ fn execute_command(
             (None, effects, commands)
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
-        "sessions" => (None, vec![UiEffect::OpenSessionPicker], vec![]),
+        "threads" => (None, vec![UiEffect::OpenThreadPicker], vec![]),
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {
@@ -164,7 +164,7 @@ fn execute_command(
     }
 }
 
-fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     use crate::providers::oauth::{anthropic, openai_codex};
     use crate::providers::provider_for_model;
 
@@ -181,21 +181,24 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
 
     match result {
         Ok((true, label)) => {
-            commands.push(StateCommand::Auth(AuthCommand::RefreshStatus));
-            commands.push(StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(format!("Logged out from {} OAuth.", label)),
+            commands.push(StateMutation::Auth(AuthMutation::RefreshStatus));
+            commands.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!(
+                    "Logged out from {} OAuth.",
+                    label
+                )),
             ));
         }
         Ok((false, _)) => {
-            commands.push(StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(
+            commands.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
                     "No OAuth credentials to clear.".to_string(),
                 ),
             ));
         }
         Err(e) => {
-            commands.push(StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(format!("Logout failed: {}", e)),
+            commands.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!("Logout failed: {}", e)),
             ));
         }
     }
@@ -203,25 +206,25 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     (vec![], commands)
 }
 
-fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
-    match &tui.conversation.session {
-        Some(session) => {
-            let id = session.id.clone();
+fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    match &tui.thread.thread_log {
+        Some(thread_log) => {
+            let id = thread_log.id.clone();
             match Clipboard::copy(&id) {
                 Ok(()) => (
                     vec![],
-                    vec![StateCommand::Transcript(
-                        TranscriptCommand::AppendSystemMessage(format!(
-                            "Session ID copied: {}",
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!(
+                            "Thread ID copied: {}",
                             id
                         )),
                     )],
                 ),
                 Err(e) => (
                     vec![],
-                    vec![StateCommand::Transcript(
-                        TranscriptCommand::AppendSystemMessage(format!(
-                            "Failed to copy session ID: {}",
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!(
+                            "Failed to copy thread ID: {}",
                             e
                         )),
                     )],
@@ -230,38 +233,38 @@ fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
         }
         None => (
             vec![],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage("No active session.".to_string()),
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage("No active thread.".to_string()),
             )],
         ),
     }
 }
 
-fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
-    if tui.conversation.session.is_none() {
+fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    if tui.thread.thread_log.is_none() {
         (
             vec![],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage("No active session to rename.".to_string()),
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage("No active thread to rename.".to_string()),
             )],
         )
     } else {
         (
             vec![],
-            vec![StateCommand::Input(InputCommand::SetText(
+            vec![StateMutation::Input(InputMutation::SetText(
                 "/rename ".to_string(),
             ))],
         )
     }
 }
 
-fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
-    if tui.conversation.session.is_none() {
+fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    if tui.thread.thread_log.is_none() {
         return (
             vec![],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(
-                    "Handoff requires an active session.".to_string(),
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Handoff requires an active thread.".to_string(),
                 ),
             )],
         );
@@ -270,34 +273,36 @@ fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
     (
         vec![],
         vec![
-            StateCommand::Input(InputCommand::SetHandoffState(HandoffState::Pending)),
-            StateCommand::Input(InputCommand::Clear),
+            StateMutation::Input(InputMutation::SetHandoffState(HandoffState::Pending)),
+            StateMutation::Input(InputMutation::Clear),
         ],
     )
 }
 
-fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     if tui.agent_state.is_running() {
         return (
             vec![],
-            vec![StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage("Cannot clear while streaming.".to_string()),
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Cannot clear while streaming.".to_string(),
+                ),
             )],
         );
     }
 
     let mut commands = vec![
-        StateCommand::Transcript(TranscriptCommand::Clear),
-        StateCommand::Session(SessionCommand::ClearMessages),
-        StateCommand::Session(SessionCommand::ResetUsage),
-        StateCommand::Input(InputCommand::ClearHistory),
+        StateMutation::Transcript(TranscriptMutation::Clear),
+        StateMutation::Thread(ThreadMutation::ClearMessages),
+        StateMutation::Thread(ThreadMutation::ResetUsage),
+        StateMutation::Input(InputMutation::ClearHistory),
     ];
 
-    if tui.conversation.session.is_some() {
-        (vec![UiEffect::CreateNewSession], commands)
+    if tui.thread.thread_log.is_some() {
+        (vec![UiEffect::CreateNewThread], commands)
     } else {
-        commands.push(StateCommand::Transcript(
-            TranscriptCommand::AppendSystemMessage("Conversation cleared.".to_string()),
+        commands.push(StateMutation::Transcript(
+            TranscriptMutation::AppendSystemMessage("Thread cleared.".to_string()),
         ));
         (vec![], commands)
     }
@@ -448,8 +453,10 @@ mod tests {
             CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), 1);
-        assert_eq!(filtered[0].name, "new");
+        assert_eq!(filtered.len(), 2);
+        let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
+        assert!(names.contains(&"new"));
+        assert!(names.contains(&"timeline"));
     }
 
     #[test]
@@ -465,7 +472,7 @@ mod tests {
     fn test_palette_state_clamp_selection() {
         let (mut state, _) =
             CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
-        state.selected = 10;
+        state.selected = COMMANDS.len() + 10;
         state.clamp_selection();
         assert_eq!(state.selected, COMMANDS.len() - 1);
     }

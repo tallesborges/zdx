@@ -20,7 +20,7 @@
 - User can enable thinking via config option
 - Thinking blocks stream to TUI with distinct visual treatment
 - Thinking blocks persist in sessions and replay correctly
-- Thinking signature preserved for API continuity (required for conversation history)
+- Thinking signature preserved for API continuity (required for thread history)
 
 ## Non-goals
 
@@ -255,11 +255,11 @@ cargo run
 ```bash
 cargo run
 # Send thinking prompt → see thinking + response
-# Ctrl-C mid-conversation
+# Ctrl-C mid-thread
 zdx sessions list
 zdx sessions resume <id>
 # Transcript shows thinking blocks
-# Send follow-up → conversation continues without API error
+# Send follow-up → thread continues without API error
 ```
 
 **Risks / failure modes:**

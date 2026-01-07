@@ -13,8 +13,14 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
 
+/// Creates a temp ZDX_HOME directory for test isolation.
+fn temp_zdx_home() -> TempDir {
+    TempDir::new().expect("create temp zdx home")
+}
+
 #[tokio::test]
 async fn test_bash_executes_command() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let mock_server = MockServer::start().await;
 
@@ -47,12 +53,13 @@ async fn test_bash_executes_command() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Run echo hello",
@@ -82,6 +89,7 @@ async fn test_bash_executes_command() {
 
 #[tokio::test]
 async fn test_bash_runs_in_root_directory() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("marker.txt"), "marker content").unwrap();
 
@@ -112,12 +120,13 @@ async fn test_bash_runs_in_root_directory() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "List files",
@@ -176,7 +185,7 @@ async fn test_bash_times_out_when_configured() {
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Run a slow command",

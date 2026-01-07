@@ -5,10 +5,10 @@
 //! - `context`: Project context loading (AGENTS.md files)
 //! - `interrupt`: Signal handling for graceful interruption
 //! - `agent`: Agent loop and event channels
-//! - `session`: Session persistence
+//! - `thread_log`: Thread persistence
 
 pub mod agent;
 pub mod context;
 pub mod events;
 pub mod interrupt;
-pub mod session;
+pub mod thread_log;

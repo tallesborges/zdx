@@ -495,7 +495,7 @@ fn apply_state_commands(tui: &mut TuiState, commands: Vec<StateCommand>) {
         match cmd {
             StateCommand::Transcript(tc) => apply_transcript_command(&mut tui.transcript, tc),
             StateCommand::Input(ic) => apply_input_command(&mut tui.input, ic),
-            StateCommand::Session(sc) => apply_session_command(&mut tui.conversation, sc),
+            StateCommand::Session(sc) => apply_session_command(&mut tui.thread, sc),
             StateCommand::Auth(ac) => apply_auth_command(&mut tui.auth, ac),
         }
     }
@@ -541,7 +541,7 @@ coupling. By returning `StateCommand`, overlays become pure functions.
 ```rust
 impl SessionPickerState {
     pub fn handle_key(&mut self, tui: &mut TuiState, key: KeyEvent) -> Option<Vec<UiEffect>> {
-        // Directly mutates tui.transcript, tui.conversation
+        // Directly mutates tui.transcript, tui.thread
         tui.transcript.cells = self.original_cells.clone();
         // ...
     }

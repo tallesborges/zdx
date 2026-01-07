@@ -5,7 +5,7 @@
 - Session ops follow the same Elm-clean pattern as Agent/Login/Handoff
 - Command application moved into each slice (`state.apply(cmd)`)
 - Reducer owns all overlay transitions (effects reserved for I/O/spawning only)
-- Clearer naming: `StateCommand` → `StateMutation`, `core::session` → `core::thread_log`, `SessionState` → `ConversationState`
+- Clearer naming: `StateCommand` → `StateMutation`, `core::session` → `core::thread_log`, `SessionState` → `ThreadState`
 - No observable behavior changes for users
 
 ## Non-goals
@@ -85,7 +85,7 @@
   match cmd {
       StateCommand::Transcript(c) => tui.transcript.apply(c),
       StateCommand::Input(c) => tui.input.apply(c),
-      StateCommand::Session(c) => tui.conversation.apply(c),
+      StateCommand::Session(c) => tui.thread.apply(c),
       StateCommand::Auth(c) => tui.auth.apply(c),
       StateCommand::Config(c) => apply_config_command(tui, c),
   }
@@ -175,14 +175,14 @@
 
 ---
 
-## Phase 4c: Rename TUI `SessionState` → `ConversationState`
+## Phase 4c: Rename TUI `SessionState` → `ThreadState`
 
-**Goal**: TUI state describes the conversation, persistence handle uses "thread" terminology.
+**Goal**: TUI state describes the thread, persistence handle uses "thread" terminology.
 
-- [ ] Rename `SessionState` → `ConversationState` in `src/modes/tui/session/state.rs`
+- [ ] Rename `SessionState` → `ThreadState` in `src/modes/tui/session/state.rs`
 - [ ] Rename field `session: Option<Session>` → `thread_log: Option<ThreadLog>`
-- [ ] Update `TuiState.conversation` type annotation
-- [ ] Rename `SessionMutation` → `ConversationMutation` (from Phase 4a)
+- [ ] Update `TuiState.thread` type annotation
+- [ ] Rename `SessionMutation` → `ThreadMutation` (from Phase 4a)
 - [ ] Rename `SessionUiEvent` → `ThreadUiEvent`
 - [ ] Rename `SessionOpsState` → `ThreadOpsState`
 - [ ] Update all imports and references across codebase
@@ -230,4 +230,4 @@
 | Release | Phases | Scope | Status |
 |---------|--------|-------|--------|
 | **Release 1** | MVP 1-5, Phase 2, Phase 3 | Architectural cleanup (event-driven receivers, slice apply, reducer owns overlays) | ✅ **COMPLETE** |
-| **Release 2** | Phase 4a, 4b, 4c | Naming cleanup (StateMutation, thread_log, ConversationState) | ❌ Not started |
+| **Release 2** | Phase 4a, 4b, 4c | Naming cleanup (StateMutation, thread_log, ThreadState) | ❌ Not started |

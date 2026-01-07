@@ -31,7 +31,7 @@ ZDX solves this with a boring, reliable core:
 - transcript as the source of truth
 - UI-agnostic agent (events)
 - deterministic tools
-- append-only session log
+- append-only thread log
 
 ---
 
@@ -39,9 +39,9 @@ ZDX solves this with a boring, reliable core:
 
 ### Primary: `zdx` (interactive)
 
-- Full-screen terminal chat UI that stays stable under resizes, overlays, long sessions, and continuous streaming.
+- Full-screen terminal chat UI that stays stable under resizes, overlays, long threads, and continuous streaming.
 - Transcript UX: scroll, select, copy.
-- Sessions persist and replay deterministically.
+- Threads persist and replay deterministically.
 
 ### Secondary: `zdx exec ...` (non-interactive)
 
@@ -77,7 +77,7 @@ ZDX solves this with a boring, reliable core:
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
-- `zdx sessions list|show <ID>|resume [ID]`
+- `zdx threads list|show <ID>|resume [ID]`
 - `zdx config init|path`
 
 **Exit codes:** `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.
@@ -98,14 +98,14 @@ ZDX solves this with a boring, reliable core:
 
 ---
 
-## 8) Sessions
+## 8) Threads
 
-Sessions are append-only **JSONL** event logs (conversation events are never modified or deleted).
+Threads are append-only **JSONL** event logs (thread events are never modified or deleted).
 
 ### Storage
 
 - Base dir: `$ZDX_HOME` (preferred) else `$XDG_CONFIG_HOME/zdx` else `~/.config/zdx`
-- Sessions dir: `<base>/sessions/`
+- Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 
 ### Format
@@ -113,11 +113,11 @@ Sessions are append-only **JSONL** event logs (conversation events are never mod
 - First line is `meta` with `schema_version` and optional `title`.
 - Timestamps are RFC3339 UTC.
 - Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `thinking`.
-- Sessions remain readable even if interrupted mid-stream.
+- Threads remain readable even if interrupted mid-stream.
 
 ### Metadata Updates
 
-The `meta` line (first line only) may be rewritten atomically to update session metadata (e.g., `title`). This uses write-to-temp-then-rename for safety. Conversation events after the meta line are never modified.
+The `meta` line (first line only) may be rewritten atomically to update thread metadata (e.g., `title`). This uses write-to-temp-then-rename for safety. Thread events after the meta line are never modified.
 
 ---
 

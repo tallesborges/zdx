@@ -16,38 +16,38 @@ use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
-use crate::core::session::SessionEvent;
-use crate::core::{interrupt, session};
+use crate::core::thread_log::ThreadEvent;
+use crate::core::{interrupt, thread_log};
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::transcript::{HistoryCell, build_transcript_from_events};
 
 // ============================================================================
-// Session Handlers (Async - return receivers for runtime to poll)
+// Thread Handlers (Async - return receivers for runtime to poll)
 // ============================================================================
 
-/// Spawns async session list loading and returns the receiver.
+/// Spawns async thread list loading and returns the receiver.
 ///
 /// Returns events via channel for the runtime to collect and dispatch to reducer.
-pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
+pub fn spawn_thread_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
-        let event = tokio::task::spawn_blocking(move || match session::list_sessions() {
-            Ok(sessions) if sessions.is_empty() => UiEvent::Session(SessionUiEvent::ListFailed {
-                error: "No sessions found.".to_string(),
+        let event = tokio::task::spawn_blocking(move || match thread_log::list_threads() {
+            Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
+                error: "No threads found.".to_string(),
             }),
-            Ok(sessions) => UiEvent::Session(SessionUiEvent::ListLoaded {
-                sessions,
+            Ok(threads) => UiEvent::Thread(ThreadUiEvent::ListLoaded {
+                threads,
                 original_cells,
             }),
-            Err(e) => UiEvent::Session(SessionUiEvent::ListFailed {
-                error: format!("Failed to load sessions: {}", e),
+            Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
+                error: format!("Failed to load threads: {}", e),
             }),
         })
         .await
         .unwrap_or_else(|e| {
-            UiEvent::Session(SessionUiEvent::ListFailed {
+            UiEvent::Thread(ThreadUiEvent::ListFailed {
                 error: format!("Task failed: {}", e),
             })
         });
@@ -55,21 +55,21 @@ pub fn spawn_session_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::ListStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::ListStarted { rx })
 }
 
-/// Spawns async session loading (full switch) and returns the receiver.
+/// Spawns async thread loading (full switch) and returns the receiver.
 ///
 /// Loads events, builds transcript cells, messages, and history.
-pub fn spawn_session_load(session_id: String) -> UiEvent {
+pub fn spawn_thread_load(thread_id: String) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
-        let id = session_id.clone();
-        let event = tokio::task::spawn_blocking(move || load_session_sync(&id))
+        let id = thread_id.clone();
+        let event = tokio::task::spawn_blocking(move || load_thread_sync(&id))
             .await
             .unwrap_or_else(|e| {
-                UiEvent::Session(SessionUiEvent::LoadFailed {
+                UiEvent::Thread(ThreadUiEvent::LoadFailed {
                     error: format!("Task failed: {}", e),
                 })
             });
@@ -77,29 +77,29 @@ pub fn spawn_session_load(session_id: String) -> UiEvent {
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::LoadStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::LoadStarted { rx })
 }
 
-/// Synchronous session loading (runs in blocking task).
-fn load_session_sync(session_id: &str) -> UiEvent {
-    // Load session events (I/O)
-    let events = match session::load_session(session_id) {
+/// Synchronous thread loading (runs in blocking task).
+fn load_thread_sync(thread_id: &str) -> UiEvent {
+    // Load thread events (I/O)
+    let events = match thread_log::load_thread_events(thread_id) {
         Ok(events) => events,
         Err(e) => {
-            return UiEvent::Session(SessionUiEvent::LoadFailed {
-                error: format!("Failed to load session: {}", e),
+            return UiEvent::Thread(ThreadUiEvent::LoadFailed {
+                error: format!("Failed to load thread: {}", e),
             });
         }
     };
 
     // Extract usage from events before consuming them
-    let usage = session::extract_usage_from_events(&events);
+    let usage = thread_log::extract_usage_from_thread_events(&events);
 
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
 
-    // Build API messages for conversation context
-    let messages = session::events_to_messages(events);
+    // Build API messages for thread context
+    let messages = thread_log::thread_events_to_messages(events);
 
     // Build input history from user messages in transcript
     let history: Vec<String> = cells
@@ -113,59 +113,59 @@ fn load_session_sync(session_id: &str) -> UiEvent {
         })
         .collect();
 
-    // Create or get the session handle for future appends
-    let session = session::Session::with_id(session_id.to_string()).ok();
+    // Create or get the thread handle for future appends
+    let thread_log_handle = thread_log::ThreadLog::with_id(thread_id.to_string()).ok();
 
-    UiEvent::Session(SessionUiEvent::Loaded {
-        session_id: session_id.to_string(),
+    UiEvent::Thread(ThreadUiEvent::Loaded {
+        thread_id: thread_id.to_string(),
         cells,
         messages,
         history,
-        session,
+        thread_log: thread_log_handle,
         usage,
     })
 }
 
-/// Spawns async session preview loading and returns the receiver.
+/// Spawns async thread preview loading and returns the receiver.
 ///
-/// Preview only loads transcript cells (not full session data).
-pub fn spawn_session_preview(session_id: String) -> UiEvent {
+/// Preview only loads transcript cells (not full thread data).
+pub fn spawn_thread_preview(thread_id: String) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
         let event = tokio::task::spawn_blocking(move || {
-            match session::load_session(&session_id) {
+            match thread_log::load_thread_events(&thread_id) {
                 Ok(events) => {
                     let cells = build_transcript_from_events(&events);
-                    UiEvent::Session(SessionUiEvent::PreviewLoaded { cells })
+                    UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
                 }
                 Err(_) => {
                     // Silent failure for preview - errors shown on actual load
-                    UiEvent::Session(SessionUiEvent::PreviewFailed)
+                    UiEvent::Thread(ThreadUiEvent::PreviewFailed)
                 }
             }
         })
         .await
-        .unwrap_or(UiEvent::Session(SessionUiEvent::PreviewFailed));
+        .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed));
 
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::PreviewStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::PreviewStarted { rx })
 }
 
-/// Spawns async new session creation and returns the receiver.
-pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> UiEvent {
+/// Spawns async new thread creation and returns the receiver.
+pub fn spawn_thread_create(config: crate::config::Config, root: PathBuf) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
         let event =
             tokio::task::spawn_blocking(move || {
-                let session = match session::Session::new() {
-                    Ok(s) => s,
+                let thread_log_handle = match thread_log::ThreadLog::new() {
+                    Ok(thread_log_handle) => thread_log_handle,
                     Err(e) => {
-                        return UiEvent::Session(SessionUiEvent::CreateFailed {
-                            error: format!("Failed to create session: {}", e),
+                        return UiEvent::Thread(ThreadUiEvent::CreateFailed {
+                            error: format!("Failed to create thread: {}", e),
                         });
                     }
                 };
@@ -176,17 +176,17 @@ pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> UiE
                         &config, &root,
                     ) {
                         Ok(effective) => effective.loaded_agents_paths,
-                        Err(_) => Vec::new(), // Context loading failed, but session was created
+                        Err(_) => Vec::new(), // Context loading failed, but thread was created
                     };
 
-                UiEvent::Session(SessionUiEvent::Created {
-                    session,
+                UiEvent::Thread(ThreadUiEvent::Created {
+                    thread_log: thread_log_handle,
                     context_paths,
                 })
             })
             .await
             .unwrap_or_else(|e| {
-                UiEvent::Session(SessionUiEvent::CreateFailed {
+                UiEvent::Thread(ThreadUiEvent::CreateFailed {
                     error: format!("Task failed: {}", e),
                 })
             });
@@ -194,12 +194,12 @@ pub fn spawn_session_create(config: crate::config::Config, root: PathBuf) -> UiE
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::CreateStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::CreateStarted { rx })
 }
 
-/// Spawns async forked session creation and returns the receiver.
-pub fn spawn_forked_session(
-    events: Vec<SessionEvent>,
+/// Spawns async forked thread creation and returns the receiver.
+pub fn spawn_forked_thread(
+    events: Vec<ThreadEvent>,
     user_input: Option<String>,
     turn_number: usize,
 ) -> UiEvent {
@@ -207,10 +207,10 @@ pub fn spawn_forked_session(
 
     tokio::spawn(async move {
         let event =
-            tokio::task::spawn_blocking(move || fork_session_sync(events, user_input, turn_number))
+            tokio::task::spawn_blocking(move || fork_thread_sync(events, user_input, turn_number))
                 .await
                 .unwrap_or_else(|e| {
-                    UiEvent::Session(SessionUiEvent::ForkFailed {
+                    UiEvent::Thread(ThreadUiEvent::ForkFailed {
                         error: format!("Task failed: {}", e),
                     })
                 });
@@ -218,34 +218,34 @@ pub fn spawn_forked_session(
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::ForkStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::ForkStarted { rx })
 }
 
-fn fork_session_sync(
-    events: Vec<SessionEvent>,
+fn fork_thread_sync(
+    events: Vec<ThreadEvent>,
     user_input: Option<String>,
     turn_number: usize,
 ) -> UiEvent {
-    let mut session = match session::Session::new() {
-        Ok(session) => session,
+    let mut thread_log_handle = match thread_log::ThreadLog::new() {
+        Ok(thread_log_handle) => thread_log_handle,
         Err(e) => {
-            return UiEvent::Session(SessionUiEvent::ForkFailed {
-                error: format!("Failed to create session: {}", e),
+            return UiEvent::Thread(ThreadUiEvent::ForkFailed {
+                error: format!("Failed to create thread: {}", e),
             });
         }
     };
 
     for event in &events {
-        if let Err(e) = session.append(event) {
-            return UiEvent::Session(SessionUiEvent::ForkFailed {
-                error: format!("Failed to write session: {}", e),
+        if let Err(e) = thread_log_handle.append(event) {
+            return UiEvent::Thread(ThreadUiEvent::ForkFailed {
+                error: format!("Failed to write thread: {}", e),
             });
         }
     }
 
-    let usage = session::extract_usage_from_events(&events);
+    let usage = thread_log::extract_usage_from_thread_events(&events);
     let cells = build_transcript_from_events(&events);
-    let messages = session::events_to_messages(events);
+    let messages = thread_log::thread_events_to_messages(events);
     let history: Vec<String> = cells
         .iter()
         .filter_map(|cell| {
@@ -257,38 +257,38 @@ fn fork_session_sync(
         })
         .collect();
 
-    UiEvent::Session(SessionUiEvent::ForkedLoaded {
-        session_id: session.id.clone(),
+    UiEvent::Thread(ThreadUiEvent::ForkedLoaded {
+        thread_id: thread_log_handle.id.clone(),
         cells,
         messages,
         history,
-        session,
+        thread_log: thread_log_handle,
         usage,
         user_input,
         turn_number,
     })
 }
 
-/// Spawns async session rename and returns the receiver.
-pub fn spawn_session_rename(session_id: String, title: Option<String>) -> UiEvent {
+/// Spawns async thread rename and returns the receiver.
+pub fn spawn_thread_rename(thread_id: String, title: Option<String>) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
-        let id = session_id.clone();
+        let id = thread_id.clone();
         let event = tokio::task::spawn_blocking(move || {
-            match session::set_session_title(&id, title.clone()) {
-                Ok(new_title) => UiEvent::Session(SessionUiEvent::Renamed {
-                    session_id: id,
+            match thread_log::set_thread_title(&id, title.clone()) {
+                Ok(new_title) => UiEvent::Thread(ThreadUiEvent::Renamed {
+                    thread_id: id,
                     title: new_title,
                 }),
-                Err(e) => UiEvent::Session(SessionUiEvent::RenameFailed {
-                    error: format!("Failed to rename session: {}", e),
+                Err(e) => UiEvent::Thread(ThreadUiEvent::RenameFailed {
+                    error: format!("Failed to rename thread: {}", e),
                 }),
             }
         })
         .await
         .unwrap_or_else(|e| {
-            UiEvent::Session(SessionUiEvent::RenameFailed {
+            UiEvent::Thread(ThreadUiEvent::RenameFailed {
                 error: format!("Task failed: {}", e),
             })
         });
@@ -296,7 +296,7 @@ pub fn spawn_session_rename(session_id: String, title: Option<String>) -> UiEven
         let _ = tx.send(event).await;
     });
 
-    UiEvent::Session(SessionUiEvent::RenameStarted { rx })
+    UiEvent::Thread(ThreadUiEvent::RenameStarted { rx })
 }
 
 // ============================================================================
@@ -314,18 +314,18 @@ pub fn interrupt_agent(tui: &TuiState) {
 pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
 
-    let messages = tui.conversation.messages.clone();
+    let messages = tui.thread.messages.clone();
     let config = tui.config.clone();
     let agent_opts = tui.agent_opts.clone();
     let system_prompt = tui.system_prompt.clone();
 
     let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
-    if let Some(sess) = tui.conversation.session.clone() {
+    if let Some(thread_log_handle) = tui.thread.thread_log.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
         let _broadcaster =
             crate::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-        let _persist = session::spawn_persist_task(sess, persist_rx);
+        let _persist = thread_log::spawn_thread_persist_task(thread_log_handle, persist_rx);
     } else {
         let _broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }

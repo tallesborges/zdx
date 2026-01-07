@@ -5,19 +5,19 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 
 use super::OverlayAction;
-use crate::core::session::SessionSummary;
+use crate::core::thread_log::ThreadSummary;
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::session::render_session_picker;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
+use crate::modes::tui::thread::render_thread_picker;
 use crate::modes::tui::transcript::HistoryCell;
 
-const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_SESSIONS - 2
+const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_THREADS - 2
 const COPIED_FEEDBACK_DURATION_MS: u128 = 300;
 
 #[derive(Debug, Clone)]
-pub struct SessionPickerState {
-    pub sessions: Vec<SessionSummary>,
+pub struct ThreadPickerState {
+    pub threads: Vec<ThreadSummary>,
     pub selected: usize,
     pub offset: usize,
     pub original_cells: Vec<HistoryCell>,
@@ -25,23 +25,23 @@ pub struct SessionPickerState {
     pub copied_at: Option<Instant>,
 }
 
-impl SessionPickerState {
+impl ThreadPickerState {
     pub fn open(
-        sessions: Vec<SessionSummary>,
+        threads: Vec<ThreadSummary>,
         original_cells: Vec<HistoryCell>,
     ) -> (Self, Vec<UiEffect>) {
         let state = Self {
-            sessions,
+            threads,
             selected: 0,
             offset: 0,
             original_cells,
             copied_at: None,
         };
         let effects = state
-            .selected_session()
-            .map(|session| {
-                vec![UiEffect::PreviewSession {
-                    session_id: session.id.clone(),
+            .selected_thread()
+            .map(|thread| {
+                vec![UiEffect::PreviewThread {
+                    thread_id: thread.id.clone(),
                 }]
             })
             .unwrap_or_default();
@@ -49,26 +49,26 @@ impl SessionPickerState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        // Delegate to session feature view
-        render_session_picker(frame, self, area, input_y)
+        // Delegate to thread feature view
+        render_thread_picker(frame, self, area, input_y)
     }
 
     pub fn handle_key(
         &mut self,
         tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
                 Some(OverlayAction::close()),
                 vec![
-                    StateCommand::Transcript(TranscriptCommand::ReplaceCells(
+                    StateMutation::Transcript(TranscriptMutation::ReplaceCells(
                         self.original_cells.clone(),
                     )),
-                    StateCommand::Transcript(TranscriptCommand::ResetScroll),
-                    StateCommand::Transcript(TranscriptCommand::ClearWrapCache),
+                    StateMutation::Transcript(TranscriptMutation::ResetScroll),
+                    StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
                 ],
             ),
             KeyCode::Up | KeyCode::Char('k') => {
@@ -79,25 +79,25 @@ impl SessionPickerState {
                     }
                 }
                 (
-                    self.selected_session().map(|session| {
-                        OverlayAction::Effects(vec![UiEffect::PreviewSession {
-                            session_id: session.id.clone(),
+                    self.selected_thread().map(|thread| {
+                        OverlayAction::Effects(vec![UiEffect::PreviewThread {
+                            thread_id: thread.id.clone(),
                         }])
                     }),
                     vec![],
                 )
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                if self.selected < self.sessions.len().saturating_sub(1) {
+                if self.selected < self.threads.len().saturating_sub(1) {
                     self.selected += 1;
                     if self.selected >= self.offset + VISIBLE_HEIGHT {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
                 (
-                    self.selected_session().map(|session| {
-                        OverlayAction::Effects(vec![UiEffect::PreviewSession {
-                            session_id: session.id.clone(),
+                    self.selected_thread().map(|thread| {
+                        OverlayAction::Effects(vec![UiEffect::PreviewThread {
+                            thread_id: thread.id.clone(),
                         }])
                     }),
                     vec![],
@@ -107,18 +107,18 @@ impl SessionPickerState {
                 if tui.agent_state.is_running() {
                     return (
                         None,
-                        vec![StateCommand::Transcript(
-                            TranscriptCommand::AppendSystemMessage(
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(
                                 "Stop the current task first.".to_string(),
                             ),
                         )],
                     );
                 }
 
-                if let Some(session) = self.selected_session() {
+                if let Some(thread) = self.selected_thread() {
                     (
-                        Some(OverlayAction::close_with(vec![UiEffect::LoadSession {
-                            session_id: session.id.clone(),
+                        Some(OverlayAction::close_with(vec![UiEffect::LoadThread {
+                            thread_id: thread.id.clone(),
                         }])),
                         vec![],
                     )
@@ -127,10 +127,10 @@ impl SessionPickerState {
                 }
             }
             KeyCode::Char('y') => {
-                if let Some(session) = self.selected_session() {
+                if let Some(thread) = self.selected_thread() {
                     (
                         Some(OverlayAction::Effects(vec![UiEffect::CopyToClipboard {
-                            text: session.id.clone(),
+                            text: thread.id.clone(),
                         }])),
                         vec![],
                     )
@@ -144,8 +144,8 @@ impl SessionPickerState {
         (action, commands)
     }
 
-    pub fn selected_session(&self) -> Option<&SessionSummary> {
-        self.sessions.get(self.selected)
+    pub fn selected_thread(&self) -> Option<&ThreadSummary> {
+        self.threads.get(self.selected)
     }
 
     /// Returns true if the "Copied!" feedback should be shown.
@@ -161,38 +161,38 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_session_picker_state_new_empty() {
-        let (state, _) = SessionPickerState::open(vec![], vec![]);
+    fn test_thread_picker_state_new_empty() {
+        let (state, _) = ThreadPickerState::open(vec![], vec![]);
         assert_eq!(state.selected, 0);
         assert_eq!(state.offset, 0);
-        assert!(state.sessions.is_empty());
+        assert!(state.threads.is_empty());
         assert!(state.original_cells.is_empty());
-        assert!(state.selected_session().is_none());
+        assert!(state.selected_thread().is_none());
     }
 
     #[test]
-    fn test_session_picker_state_new_with_sessions() {
-        let sessions = vec![
-            SessionSummary {
-                id: "session-1".to_string(),
+    fn test_thread_picker_state_new_with_threads() {
+        let threads = vec![
+            ThreadSummary {
+                id: "thread-1".to_string(),
                 title: None,
                 modified: None,
             },
-            SessionSummary {
-                id: "session-2".to_string(),
+            ThreadSummary {
+                id: "thread-2".to_string(),
                 title: None,
                 modified: None,
             },
         ];
-        let (state, _) = SessionPickerState::open(sessions, vec![]);
+        let (state, _) = ThreadPickerState::open(threads, vec![]);
         assert_eq!(state.selected, 0);
-        assert_eq!(state.sessions.len(), 2);
-        assert_eq!(state.selected_session().unwrap().id, "session-1");
+        assert_eq!(state.threads.len(), 2);
+        assert_eq!(state.selected_thread().unwrap().id, "thread-1");
     }
 
     #[test]
-    fn test_session_picker_stores_original_cells() {
-        let sessions = vec![SessionSummary {
+    fn test_thread_picker_stores_original_cells() {
+        let threads = vec![ThreadSummary {
             id: "s1".to_string(),
             title: None,
             modified: None,
@@ -201,30 +201,30 @@ mod tests {
             HistoryCell::user("test message"),
             HistoryCell::assistant("response"),
         ];
-        let (state, _) = SessionPickerState::open(sessions, original_cells.clone());
+        let (state, _) = ThreadPickerState::open(threads, original_cells.clone());
         assert_eq!(state.original_cells.len(), 2);
     }
 
     #[test]
     fn test_navigation_bounds() {
-        let sessions = vec![
-            SessionSummary {
+        let threads = vec![
+            ThreadSummary {
                 id: "s1".to_string(),
                 title: None,
                 modified: None,
             },
-            SessionSummary {
+            ThreadSummary {
                 id: "s2".to_string(),
                 title: None,
                 modified: None,
             },
-            SessionSummary {
+            ThreadSummary {
                 id: "s3".to_string(),
                 title: None,
                 modified: None,
             },
         ];
-        let (mut state, _) = SessionPickerState::open(sessions, vec![]);
+        let (mut state, _) = ThreadPickerState::open(threads, vec![]);
 
         assert_eq!(state.selected, 0);
 
@@ -237,10 +237,10 @@ mod tests {
 
     #[test]
     fn test_scroll_offset_down() {
-        let (mut picker, _) = SessionPickerState::open(
+        let (mut picker, _) = ThreadPickerState::open(
             (0..15)
-                .map(|i| SessionSummary {
-                    id: format!("session-{}", i),
+                .map(|i| ThreadSummary {
+                    id: format!("thread-{}", i),
                     title: None,
                     modified: None,
                 })
@@ -264,10 +264,10 @@ mod tests {
 
     #[test]
     fn test_scroll_offset_up() {
-        let (mut picker, _) = SessionPickerState::open(
+        let (mut picker, _) = ThreadPickerState::open(
             (0..15)
-                .map(|i| SessionSummary {
-                    id: format!("session-{}", i),
+                .map(|i| ThreadSummary {
+                    id: format!("thread-{}", i),
                     title: None,
                     modified: None,
                 })

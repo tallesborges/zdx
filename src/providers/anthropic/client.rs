@@ -67,7 +67,7 @@ impl AnthropicClient {
         }
     }
 
-    /// Sends a conversation and returns an async stream of events.
+    /// Sends a thread and returns an async stream of events.
     ///
     /// This enables chunk-by-chunk token streaming from the API.
     pub async fn send_messages_stream(
@@ -171,7 +171,7 @@ impl AnthropicClient {
     /// Always includes the Claude Code identification prompt.
     /// Cache control placement:
     /// - Last system block: caches system prompt (often large with AGENTS.md)
-    /// - Last user message: caches conversation history (set in send_messages_stream)
+    /// - Last user message: caches thread history (set in send_messages_stream)
     ///
     /// This uses 2 of 4 allowed breakpoints. The minimum cache threshold is
     /// 1,024 tokens, so caching the system prompt separately ensures it gets

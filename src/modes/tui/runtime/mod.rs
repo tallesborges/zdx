@@ -22,9 +22,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::core::interrupt;
-use crate::core::session::Session;
+use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::app::{AgentState, AppState};
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -55,9 +55,9 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
     ) -> Result<Self> {
-        Self::with_history(config, root, system_prompt, session, Vec::new())
+        Self::with_history(config, root, system_prompt, thread_log, Vec::new())
     }
 
     /// Creates a TUI runtime with pre-loaded message history.
@@ -65,7 +65,7 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        session: Option<Session>,
+        thread_log: Option<ThreadLog>,
         history: Vec<ChatMessage>,
     ) -> Result<Self> {
         // Set up panic hook BEFORE entering alternate screen
@@ -78,7 +78,7 @@ impl TuiRuntime {
         let terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
 
         // Create state
-        let state = AppState::with_history(config, root, system_prompt, session, history);
+        let state = AppState::with_history(config, root, system_prompt, thread_log, history);
 
         Ok(Self { terminal, state })
     }
@@ -182,8 +182,8 @@ impl TuiRuntime {
         // Poll for file discovery result
         self.collect_file_discovery_result(&mut events);
 
-        // Poll for session async operation results
-        self.collect_session_results(&mut events);
+        // Poll for thread async operation results
+        self.collect_thread_results(&mut events);
 
         // Determine poll timeout based on activity level.
         // Use fast polling (60fps) when:
@@ -200,7 +200,7 @@ impl TuiRuntime {
             || self.state.tui.auth.login_rx.is_some()
             || self.state.tui.input.handoff.is_generating()
             || file_discovery_pending
-            || self.state.tui.session_ops.is_loading();
+            || self.state.tui.thread_ops.is_loading();
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
@@ -318,11 +318,11 @@ impl TuiRuntime {
         }
     }
 
-    /// Collects session async operation results if available.
-    fn collect_session_results(&mut self, events: &mut Vec<UiEvent>) {
-        let ops = &mut self.state.tui.session_ops;
+    /// Collects thread async operation results if available.
+    fn collect_thread_results(&mut self, events: &mut Vec<UiEvent>) {
+        let ops = &mut self.state.tui.thread_ops;
 
-        // Session list loading
+        // Thread list loading
         if let Some(rx) = &mut ops.list_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -330,14 +330,14 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::ListFailed {
-                        error: "Session list task failed".to_string(),
+                    events.push(UiEvent::Thread(ThreadUiEvent::ListFailed {
+                        error: "Thread list task failed".to_string(),
                     }));
                 }
             }
         }
 
-        // Session loading (full switch)
+        // Thread loading (full switch)
         if let Some(rx) = &mut ops.load_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -345,14 +345,14 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::LoadFailed {
-                        error: "Session load task failed".to_string(),
+                    events.push(UiEvent::Thread(ThreadUiEvent::LoadFailed {
+                        error: "Thread load task failed".to_string(),
                     }));
                 }
             }
         }
 
-        // Session preview loading
+        // Thread preview loading
         if let Some(rx) = &mut ops.preview_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -360,12 +360,12 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::PreviewFailed));
+                    events.push(UiEvent::Thread(ThreadUiEvent::PreviewFailed));
                 }
             }
         }
 
-        // Session creation
+        // Thread creation
         if let Some(rx) = &mut ops.create_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -373,14 +373,14 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::CreateFailed {
-                        error: "Session create task failed".to_string(),
+                    events.push(UiEvent::Thread(ThreadUiEvent::CreateFailed {
+                        error: "Thread create task failed".to_string(),
                     }));
                 }
             }
         }
 
-        // Session fork
+        // Thread fork
         if let Some(rx) = &mut ops.fork_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -388,14 +388,14 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::ForkFailed {
-                        error: "Session fork task failed".to_string(),
+                    events.push(UiEvent::Thread(ThreadUiEvent::ForkFailed {
+                        error: "Thread fork task failed".to_string(),
                     }));
                 }
             }
         }
 
-        // Session rename
+        // Thread rename
         if let Some(rx) = &mut ops.rename_rx {
             match rx.try_recv() {
                 Ok(event) => {
@@ -403,8 +403,8 @@ impl TuiRuntime {
                 }
                 Err(mpsc::error::TryRecvError::Empty) => {}
                 Err(mpsc::error::TryRecvError::Disconnected) => {
-                    events.push(UiEvent::Session(SessionUiEvent::RenameFailed {
-                        error: "Session rename task failed".to_string(),
+                    events.push(UiEvent::Thread(ThreadUiEvent::RenameFailed {
+                        error: "Thread rename task failed".to_string(),
                     }));
                 }
             }
@@ -481,77 +481,77 @@ impl TuiRuntime {
                 // Errors are silently ignored - level is already set in state
             }
 
-            // Session effects (async - spawn tasks and store receivers in state)
-            UiEffect::SaveSession { event } => {
-                if let Some(ref mut s) = self.state.tui.conversation.session {
+            // Thread effects (async - spawn tasks and store receivers in state)
+            UiEffect::SaveThread { event } => {
+                if let Some(ref mut s) = self.state.tui.thread.thread_log {
                     let _ = s.append(&event);
-                    // Errors are silently ignored for session persistence
+                    // Errors are silently ignored for thread persistence
                 }
             }
-            UiEffect::RenameSession { session_id, title } => {
-                if self.state.tui.session_ops.rename_rx.is_none() {
-                    let event = handlers::spawn_session_rename(session_id, title);
+            UiEffect::RenameThread { thread_id, title } => {
+                if self.state.tui.thread_ops.rename_rx.is_none() {
+                    let event = handlers::spawn_thread_rename(thread_id, title);
                     self.dispatch_event(event);
                 }
             }
-            UiEffect::CreateNewSession => {
+            UiEffect::CreateNewThread => {
                 // Only spawn if not already loading
-                if self.state.tui.session_ops.create_rx.is_none() {
+                if self.state.tui.thread_ops.create_rx.is_none() {
                     let config = self.state.tui.config.clone();
                     let root = self.state.tui.agent_opts.root.clone();
-                    let event = handlers::spawn_session_create(config, root);
+                    let event = handlers::spawn_thread_create(config, root);
                     self.dispatch_event(event);
                 }
             }
-            UiEffect::ForkSession {
+            UiEffect::ForkThread {
                 events,
                 user_input,
                 turn_number,
             } => {
-                if self.state.tui.session_ops.fork_rx.is_none() {
-                    let event = handlers::spawn_forked_session(events, user_input, turn_number);
+                if self.state.tui.thread_ops.fork_rx.is_none() {
+                    let event = handlers::spawn_forked_thread(events, user_input, turn_number);
                     self.dispatch_event(event);
                 }
             }
-            UiEffect::OpenSessionPicker => {
+            UiEffect::OpenThreadPicker => {
                 // Only spawn if not already loading and no overlay is open
-                if self.state.tui.session_ops.list_rx.is_none() && self.state.overlay.is_none() {
+                if self.state.tui.thread_ops.list_rx.is_none() && self.state.overlay.is_none() {
                     let original_cells = self.state.tui.transcript.cells.clone();
-                    let event = handlers::spawn_session_list_load(original_cells);
+                    let event = handlers::spawn_thread_list_load(original_cells);
                     self.dispatch_event(event);
                 }
             }
-            UiEffect::LoadSession { session_id } => {
+            UiEffect::LoadThread { thread_id } => {
                 // Only spawn if not already loading
-                if self.state.tui.session_ops.load_rx.is_none() {
-                    let event = handlers::spawn_session_load(session_id);
+                if self.state.tui.thread_ops.load_rx.is_none() {
+                    let event = handlers::spawn_thread_load(thread_id);
                     self.dispatch_event(event);
                 }
             }
-            UiEffect::PreviewSession { session_id } => {
+            UiEffect::PreviewThread { thread_id } => {
                 // Cancel any pending preview and start new one
-                let event = handlers::spawn_session_preview(session_id);
+                let event = handlers::spawn_thread_preview(thread_id);
                 self.dispatch_event(event);
             }
 
             // Handoff effects
             UiEffect::StartHandoff { goal } => {
-                if let Some(ref session) = self.state.tui.conversation.session {
-                    let session_id = session.id.clone();
+                if let Some(ref thread_log) = self.state.tui.thread.thread_log {
+                    let thread_id = thread_log.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let event =
-                        handoff::spawn_handoff_generation(&session_id, &goal, root.as_path());
+                        handoff::spawn_handoff_generation(&thread_id, &goal, root.as_path());
                     self.dispatch_event(event);
                 } else {
                     self.dispatch_event(UiEvent::HandoffResult(Err(
-                        "Handoff requires an active session.".to_string(),
+                        "Handoff requires an active thread.".to_string(),
                     )));
                 }
             }
             UiEffect::HandoffSubmit { prompt } => match handoff::execute_handoff_submit(&prompt) {
-                Ok(session) => self.dispatch_event(UiEvent::HandoffSessionCreated { session }),
+                Ok(thread_log) => self.dispatch_event(UiEvent::HandoffThreadCreated { thread_log }),
                 Err(error) => {
-                    self.dispatch_event(UiEvent::HandoffSessionCreateFailed { error });
+                    self.dispatch_event(UiEvent::HandoffThreadCreateFailed { error });
                 }
             },
 

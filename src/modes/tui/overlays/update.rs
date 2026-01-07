@@ -9,7 +9,7 @@ use crossterm::event::KeyEvent;
 
 use super::{Overlay, OverlayAction};
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::shared::internal::StateCommand;
+use crate::modes::tui::shared::internal::StateMutation;
 
 /// Handles a key event for the active overlay.
 ///
@@ -25,7 +25,7 @@ use crate::modes::tui::shared::internal::StateCommand;
 ///
 /// ```ignore
 /// let (action, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
-/// apply_state_commands(&mut app.tui, commands);
+/// apply_mutations(&mut app.tui, mutations);
 /// if let Some(action) = action {
 ///     return apply_overlay_action(app, action);
 /// }
@@ -35,7 +35,7 @@ pub fn handle_overlay_key(
     tui: &TuiState,
     overlay: &mut Option<Overlay>,
     key: KeyEvent,
-) -> (Option<OverlayAction>, Vec<StateCommand>) {
+) -> (Option<OverlayAction>, Vec<StateMutation>) {
     let Some(overlay) = overlay.as_mut() else {
         return (None, vec![]);
     };

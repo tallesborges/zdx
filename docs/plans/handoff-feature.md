@@ -6,7 +6,7 @@ Handoff allows users to start a new session with an AI-generated prompt that cap
 
 ## User Journey
 
-1. User has an ongoing session with conversation history
+1. User has an ongoing session with thread history
 2. User opens command palette and selects `/handoff`
 3. User enters goal text (e.g., "implement caching")
 4. System shows "Generating handoff..." status
@@ -83,7 +83,7 @@ Include:
 - The specific goal/direction
 
 Output ONLY the handoff prompt text, nothing else. The prompt should be 
-written as if the user is starting a fresh conversation with a new agent.
+written as if the user is starting a fresh thread with a new agent.
 ```
 
 ## Subprocess Spawning

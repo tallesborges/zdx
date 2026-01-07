@@ -4,7 +4,7 @@
 
 use tokio::sync::oneshot;
 
-use crate::modes::tui::shared::internal::InputCommand;
+use crate::modes::tui::shared::internal::InputMutation;
 
 /// Handoff feature state machine.
 ///
@@ -134,15 +134,15 @@ impl InputState {
         self.textarea.insert_str(text);
     }
 
-    /// Applies a cross-slice input command.
-    pub fn apply(&mut self, command: InputCommand) {
-        match command {
-            InputCommand::Clear => self.clear(),
-            InputCommand::SetText(text) => self.set_text(&text),
-            InputCommand::InsertChar(ch) => {
+    /// Applies a cross-slice input mutation.
+    pub fn apply(&mut self, mutation: InputMutation) {
+        match mutation {
+            InputMutation::Clear => self.clear(),
+            InputMutation::SetText(text) => self.set_text(&text),
+            InputMutation::InsertChar(ch) => {
                 self.textarea.insert_char(ch);
             }
-            InputCommand::SetTextAndCursor {
+            InputMutation::SetTextAndCursor {
                 text,
                 cursor_row,
                 cursor_col,
@@ -159,12 +159,12 @@ impl InputState {
                     self.textarea.move_cursor(CursorMove::Forward);
                 }
             }
-            InputCommand::SetHistory(history) => {
+            InputMutation::SetHistory(history) => {
                 self.history = history;
                 self.reset_navigation();
             }
-            InputCommand::ClearHistory => self.clear_history(),
-            InputCommand::SetHandoffState(state) => {
+            InputMutation::ClearHistory => self.clear_history(),
+            InputMutation::SetHandoffState(state) => {
                 self.handoff.cancel();
                 self.handoff = state;
             }

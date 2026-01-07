@@ -111,9 +111,9 @@ pub mod paths {
         zdx_home().join("config.toml")
     }
 
-    /// Returns the path to the sessions directory.
-    pub fn sessions_dir() -> PathBuf {
-        zdx_home().join("sessions")
+    /// Returns the path to the threads directory.
+    pub fn threads_dir() -> PathBuf {
+        zdx_home().join("threads")
     }
 }
 

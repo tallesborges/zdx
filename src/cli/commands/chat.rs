@@ -6,12 +6,12 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use super::exec;
-use crate::core::session::SessionPersistenceOptions;
+use crate::core::thread_log::ThreadPersistenceOptions;
 use crate::{config, modes};
 
 pub async fn run(
     root: &str,
-    session_opts: &SessionPersistenceOptions,
+    thread_opts: &ThreadPersistenceOptions,
     config: &config::Config,
 ) -> Result<()> {
     // If stdin is piped, run exec mode instead
@@ -22,13 +22,13 @@ pub async fn run(
         if prompt.is_empty() {
             anyhow::bail!("No input provided via pipe");
         }
-        return exec::run(root, session_opts, prompt, config, None, None).await;
+        return exec::run(root, thread_opts, prompt, config, None, None).await;
     }
 
-    let session = session_opts.resolve().context("resolve session")?;
+    let thread = thread_opts.resolve().context("resolve thread")?;
 
     let root_path = PathBuf::from(root);
-    modes::run_interactive_chat(config, session, root_path)
+    modes::run_interactive_chat(config, thread, root_path)
         .await
         .context("interactive chat failed")?;
 

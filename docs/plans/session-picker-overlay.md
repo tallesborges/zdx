@@ -86,7 +86,7 @@
 
 ### Slice 3: Selection (Enter to switch with full state reset) ✅
 
-**Goal**: User can select a session and the conversation switches to it with full fidelity
+**Goal**: User can select a session and the thread switches to it with full fidelity
 
 **Scope checklist**:
 - [x] Add `build_transcript_from_events()` helper (in `mod.rs` module-level function)

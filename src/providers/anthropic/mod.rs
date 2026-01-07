@@ -8,12 +8,12 @@
 //!
 //! We use 2 breakpoints:
 //! - **BP1 (last system block)**: Caches system prompt + AGENTS.md context.
-//!   Reused across sessions with the same config.
-//! - **BP2 (last user message)**: Caches conversation history.
-//!   Reused within the same session for subsequent turns.
+//!   Reused across threads with the same config.
+//! - **BP2 (last user message)**: Caches thread history.
+//!   Reused within the same thread for subsequent turns.
 //!
 //! This ensures the large system prompt is cached even for short conversations,
-//! and provides cross-session cache hits when starting new conversations.
+//! and provides cross-thread cache hits when starting new conversations.
 
 mod auth;
 mod client;

@@ -36,22 +36,22 @@ The interactive mode (`src/modes/tui/`) strictly follows The Elm Architecture (M
 
 ### 1. Model (`AppState`)
 State is a plain struct containing:
-- `tui`: Core application state (input, transcript, conversation, config).
+- `tui`: Core application state (input, transcript, thread, config).
 - `overlay`: `Option<Overlay>` for modal UIs (command palette, file picker, etc.).
 
-State is organized into **feature slices** (auth, input, session, transcript), each exposing `state`, `update`, and `render` modules.
+State is organized into **feature slices** (auth, input, thread, transcript), each exposing `state`, `update`, and `render` modules.
 
 ### 2. Update (The Reducer)
 The `update` function is the single source of truth for state transitions. It handles `UiEvent`s and returns `Vec<UiEffect>`. It never performs I/O directly.
 
-**StateCommands:** Feature slices return `StateCommand` enums to request mutations on other slices (e.g., Input slice requesting a Transcript scroll). The reducer routes each command to the owning slice’s `apply()` method.
+**StateMutations:** Feature slices return `StateMutation` enums to request changes on other slices (e.g., Input slice requesting a Transcript scroll). The reducer routes each mutation to the owning slice’s `apply()` method.
 
 ### 3. View
 Pure functions render `&AppState` to a Ratatui frame.
 *   **Interior Mutability:** `RefCell` is used *only* for render-time caches (markdown wrapping, selection mapping) to avoid expensive re-computations without mutating logical state.
 
 ### 4. Effects & Runtime
-`UiEffect` describes I/O and task spawning only (e.g., `Quit`, `OpenBrowser`, `SaveSession`).
+`UiEffect` describes I/O and task spawning only (e.g., `Quit`, `OpenBrowser`, `SaveThread`).
 The `TuiRuntime`:
 1.  Collects events (User input, Agent messages, Async channels).
 2.  Feeds them to `update`.
@@ -66,7 +66,7 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
 - **Input Priority:** Active overlay intercepts keys before the main app.
 - **Lifecycle:**
     - **Open:** Set directly by the reducer (often from input or overlay actions). File picker opening returns `DiscoverFiles` for I/O.
-    - **Update:** Internal mutations + `StateCommand`s for global changes.
+    - **Update:** Internal mutations + `StateMutation`s for global changes.
     - **Close:** Returns effects to run after dismissal (e.g., `LoadSession`).
 
 ### Async & Concurrency
