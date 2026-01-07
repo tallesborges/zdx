@@ -65,7 +65,7 @@ async fn test_tool_use_loop_reads_file() {
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Read test.txt",
@@ -81,6 +81,7 @@ async fn test_tool_use_loop_reads_file() {
 
 #[tokio::test]
 async fn test_tool_use_loop_second_request_has_tool_result() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("data.txt");
     fs::write(&test_file, "secret data").unwrap();
@@ -111,12 +112,13 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Read data.txt",
@@ -144,6 +146,7 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
 
 #[tokio::test]
 async fn test_tool_read_outside_root_allowed() {
+    let zdx_home = temp_zdx_home();
     let root_dir = TempDir::new().unwrap();
     let outside_dir = TempDir::new().unwrap();
     let outside_file = outside_dir.path().join("outside.txt");
@@ -177,12 +180,13 @@ async fn test_tool_read_outside_root_allowed() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             root_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Read outside file",
@@ -206,6 +210,7 @@ async fn test_tool_read_outside_root_allowed() {
 
 #[tokio::test]
 async fn test_tool_shows_activity_indicator() {
+    let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
     let first_response = tool_use_sse("toolu_indicator", "read", r#"{"path": "nonexistent.txt"}"#);
     let second_response = text_sse("Done.");
@@ -228,9 +233,10 @@ async fn test_tool_shows_activity_indicator() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-save", "exec", "-p", "Show indicator"])
+        .args(["--no-thread", "exec", "-p", "Show indicator"])
         .assert()
         .success()
         .stderr(predicate::str::contains("⚙ Running read... Done."));
@@ -238,6 +244,7 @@ async fn test_tool_shows_activity_indicator() {
 
 #[tokio::test]
 async fn test_tool_use_loop_writes_file() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
 
     let mock_server = MockServer::start().await;
@@ -270,12 +277,13 @@ async fn test_tool_use_loop_writes_file() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Write output.txt with greeting",
@@ -314,6 +322,7 @@ async fn test_tool_use_loop_writes_file() {
 
 #[tokio::test]
 async fn test_tool_use_loop_edits_file() {
+    let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("target.txt");
     fs::write(&test_file, "Hello world! This is a test.").unwrap();
@@ -348,12 +357,13 @@ async fn test_tool_use_loop_edits_file() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
         .args([
             "--root",
             temp_dir.path().to_str().unwrap(),
-            "--no-save",
+            "--no-thread",
             "exec",
             "-p",
             "Edit target.txt: replace world with Rust",
@@ -395,6 +405,7 @@ async fn test_tool_use_loop_edits_file() {
 
 #[tokio::test]
 async fn test_bash_tool_shows_debug_lines() {
+    let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
     let first_response = tool_use_sse("toolu_bash", "bash", r#"{"command": "echo hello"}"#);
     let second_response = text_sse("Command executed.");
@@ -417,9 +428,10 @@ async fn test_bash_tool_shows_debug_lines() {
         .await;
 
     cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
         .env("ANTHROPIC_API_KEY", "test-api-key")
         .env("ANTHROPIC_BASE_URL", mock_server.uri())
-        .args(["--no-save", "exec", "-p", "Run bash"])
+        .args(["--no-thread", "exec", "-p", "Run bash"])
         .assert()
         .success()
         .stderr(predicate::str::contains(

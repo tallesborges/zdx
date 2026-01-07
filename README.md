@@ -7,7 +7,7 @@ A fast, beautiful agentic coding assistant.
 ## What it is
 
 - **4 tools only:** `bash`, `read` (files + images), `edit`, `write` — everything else can be handled through bash
-- **Handoff** — AMP-style context-aware prompt generation to start fresh sessions ([learn more](https://ampcode.com/news/handoff))
+- **Handoff** — AMP-style context-aware prompt generation to start fresh threads ([learn more](https://ampcode.com/news/handoff))
 - **No MCP support** — if you need it, check out [mcporter](https://github.com/steipete/mcporter)
 
 Good enough to build itself — I use zdx to develop zdx.
@@ -32,7 +32,7 @@ Also a way to learn TUI development, contribute to open source, and build an AI 
 - **File picker** — type `@` to browse and insert project files (respects .gitignore)
 - **Text selection** — click and drag to select, auto-copies to clipboard
 - **Token usage** display with pricing
-- **Session persistence** — resume or switch between previous conversations
+- **Session persistence** — resume or switch between previous threads
 - **Timeline overlay** — jump to turns and fork from any message
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
 

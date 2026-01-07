@@ -5,7 +5,7 @@ use clap::Parser;
 
 use crate::config;
 use crate::core::interrupt;
-use crate::core::session::SessionPersistenceOptions;
+use crate::core::thread_log::ThreadPersistenceOptions;
 
 mod commands;
 
@@ -27,25 +27,25 @@ struct Cli {
     system_prompt: Option<String>,
 
     #[command(flatten)]
-    session_args: SessionArgs,
+    thread_args: ThreadArgs,
 }
 
-/// Common session arguments for commands that support session persistence.
+/// Common thread arguments for commands that support thread persistence.
 #[derive(clap::Args, Debug, Clone, Default)]
-struct SessionArgs {
-    /// Append to an existing session by ID
+struct ThreadArgs {
+    /// Append to an existing thread by ID
     #[arg(long, value_name = "ID")]
-    session: Option<String>,
+    thread: Option<String>,
 
-    /// Do not save the session
-    #[arg(long)]
+    /// Do not save the thread
+    #[arg(long = "no-thread")]
     no_save: bool,
 }
 
-impl From<&SessionArgs> for SessionPersistenceOptions {
-    fn from(args: &SessionArgs) -> Self {
-        SessionPersistenceOptions {
-            session_id: args.session.clone(),
+impl From<&ThreadArgs> for ThreadPersistenceOptions {
+    fn from(args: &ThreadArgs) -> Self {
+        ThreadPersistenceOptions {
+            thread_id: args.thread.clone(),
             no_save: args.no_save,
         }
     }
@@ -68,10 +68,10 @@ enum Commands {
         thinking: Option<String>,
     },
 
-    /// Manage saved sessions
-    Sessions {
+    /// Manage saved threads
+    Threads {
         #[command(subcommand)]
-        command: SessionCommands,
+        command: ThreadCommands,
     },
     /// Manage configuration
     Config {
@@ -101,27 +101,27 @@ enum Commands {
 }
 
 #[derive(clap::Subcommand)]
-enum SessionCommands {
-    /// Lists saved sessions
+enum ThreadCommands {
+    /// Lists saved threads
     List,
-    /// Shows a specific session
+    /// Shows a specific thread
     Show {
-        /// The ID of the session to show
-        #[arg(value_name = "SESSION_ID")]
+        /// The ID of the thread to show
+        #[arg(value_name = "THREAD_ID")]
         id: String,
     },
-    /// Resume a previous session
+    /// Resume a previous thread
     Resume {
-        /// The ID of the session to resume (uses latest if not provided)
-        #[arg(value_name = "SESSION_ID")]
+        /// The ID of the thread to resume (uses latest if not provided)
+        #[arg(value_name = "THREAD_ID")]
         id: Option<String>,
     },
-    /// Rename a session
+    /// Rename a thread
     Rename {
-        /// The ID of the session to rename
-        #[arg(value_name = "SESSION_ID")]
+        /// The ID of the thread to rename
+        #[arg(value_name = "THREAD_ID")]
         id: String,
-        /// New title for the session
+        /// New title for the thread
         #[arg(value_name = "TITLE")]
         title: String,
     },
@@ -162,8 +162,8 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
     // default to chat mode
     let Some(command) = cli.command else {
-        let session_opts: SessionPersistenceOptions = (&cli.session_args).into();
-        return commands::chat::run(&cli.root, &session_opts, &config).await;
+        let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
+        return commands::chat::run(&cli.root, &thread_opts, &config).await;
     };
 
     match command {
@@ -172,10 +172,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
             model,
             thinking,
         } => {
-            let session_opts: SessionPersistenceOptions = (&cli.session_args).into();
+            let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
             commands::exec::run(
                 &cli.root,
-                &session_opts,
+                &thread_opts,
                 &prompt,
                 &config,
                 model.as_deref(),
@@ -184,11 +184,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
             .await
         }
 
-        Commands::Sessions { command } => match command {
-            SessionCommands::List => commands::sessions::list(),
-            SessionCommands::Show { id } => commands::sessions::show(&id),
-            SessionCommands::Resume { id } => commands::sessions::resume(id, &config).await,
-            SessionCommands::Rename { id, title } => commands::sessions::rename(&id, &title),
+        Commands::Threads { command } => match command {
+            ThreadCommands::List => commands::threads::list(),
+            ThreadCommands::Show { id } => commands::threads::show(&id),
+            ThreadCommands::Resume { id } => commands::threads::resume(id, &config).await,
+            ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         },
 
         Commands::Config { command } => match command {

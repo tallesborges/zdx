@@ -17,8 +17,8 @@ pub mod app;
 // Feature slices (see docs/ARCHITECTURE.md for Elm-like architecture)
 pub mod auth;
 pub mod input;
-pub mod session;
 pub mod shared;
+pub mod thread;
 
 // Core modules
 pub mod events;
@@ -38,23 +38,23 @@ use anyhow::Result;
 pub use runtime::TuiRuntime;
 
 use crate::config::Config;
-use crate::core::session::Session;
+use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(
     config: &Config,
-    session: Option<Session>,
+    thread_log: Option<ThreadLog>,
     root: PathBuf,
 ) -> Result<()> {
-    run_interactive_chat_with_history(config, session, Vec::new(), root).await
+    run_interactive_chat_with_history(config, thread_log, Vec::new(), root).await
 }
 
 /// Runs the interactive chat loop with pre-loaded history.
 pub async fn run_interactive_chat_with_history(
     config: &Config,
-    session: Option<Session>,
+    thread_log: Option<ThreadLog>,
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
@@ -72,8 +72,8 @@ pub async fn run_interactive_chat_with_history(
     let mut err = stderr();
     writeln!(err, "ZDX Chat")?;
     writeln!(err, "Model: {}", config.model)?;
-    if let Some(ref s) = session {
-        writeln!(err, "Session: {}", s.id)?;
+    if let Some(ref s) = thread_log {
+        writeln!(err, "Thread: {}", s.id)?;
     }
     if !history.is_empty() {
         writeln!(err, "Loaded {} previous messages", history.len())?;
@@ -89,20 +89,20 @@ pub async fn run_interactive_chat_with_history(
 
     // Create and run the TUI
     let mut runtime = if history.is_empty() {
-        TuiRuntime::new(config.clone(), root, effective.prompt, session)?
+        TuiRuntime::new(config.clone(), root, effective.prompt, thread_log)?
     } else {
-        TuiRuntime::with_history(config.clone(), root, effective.prompt, session, history)?
+        TuiRuntime::with_history(config.clone(), root, effective.prompt, thread_log, history)?
     };
 
-    // Add system message for session path
-    if let Some(ref s) = runtime.state.tui.conversation.session {
-        let session_path_msg = format!("Session path: {}", s.path().display());
+    // Add system message for thread path
+    if let Some(ref s) = runtime.state.tui.thread.thread_log {
+        let thread_path_msg = format!("Thread path: {}", s.path().display());
         runtime
             .state
             .tui
             .transcript
             .cells
-            .push(HistoryCell::system(session_path_msg));
+            .push(HistoryCell::system(thread_path_msg));
     }
 
     // Add system message for loaded AGENTS.md files to transcript

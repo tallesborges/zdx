@@ -9,7 +9,7 @@ use super::OverlayAction;
 use crate::config::ThinkingLevel;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{ConfigMutation, StateMutation, TranscriptMutation};
 
 #[derive(Debug, Clone)]
 pub struct ThinkingPickerState {
@@ -33,7 +33,7 @@ impl ThinkingPickerState {
         &mut self,
         _tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
@@ -68,8 +68,8 @@ impl ThinkingPickerState {
                         level,
                     }])),
                     vec![
-                        StateCommand::Config(ConfigCommand::SetThinkingLevel(level)),
-                        StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(message)),
+                        StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
+                        StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
                     ],
                 )
             }

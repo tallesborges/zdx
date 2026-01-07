@@ -6,7 +6,7 @@ use super::OverlayAction;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{AuthCommand, StateCommand};
+use crate::modes::tui::shared::internal::{AuthMutation, StateMutation};
 use crate::providers::{ProviderKind, provider_for_model};
 
 #[derive(Debug, Clone)]
@@ -103,7 +103,7 @@ impl LoginState {
         &mut self,
         _tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
@@ -118,8 +118,8 @@ impl LoginState {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
                     Some(OverlayAction::close()),
                     vec![
-                        StateCommand::Auth(AuthCommand::ClearLoginRx),
-                        StateCommand::Auth(AuthCommand::ClearLoginCallbackRx),
+                        StateMutation::Auth(AuthMutation::ClearLoginRx),
+                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
                     ],
                 ),
                 KeyCode::Enter => {
@@ -164,7 +164,7 @@ impl LoginState {
                             code,
                             verifier: pkce_verifier,
                         }])),
-                        vec![StateCommand::Auth(AuthCommand::ClearLoginCallbackRx)],
+                        vec![StateMutation::Auth(AuthMutation::ClearLoginCallbackRx)],
                     )
                 }
                 KeyCode::Backspace => {
@@ -182,8 +182,8 @@ impl LoginState {
                     (
                         Some(OverlayAction::close()),
                         vec![
-                            StateCommand::Auth(AuthCommand::ClearLoginRx),
-                            StateCommand::Auth(AuthCommand::ClearLoginCallbackRx),
+                            StateMutation::Auth(AuthMutation::ClearLoginRx),
+                            StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
                         ],
                     )
                 } else {

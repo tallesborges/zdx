@@ -1,6 +1,6 @@
 //! Shared leaf types for TUI features.
 //!
-//! Contains types with no feature dependencies (effects, commands, clipboard).
+//! Contains types with no feature dependencies (effects, mutations, clipboard).
 //! These types are shared across all feature modules.
 //!
 //! IMPORTANT: This module must NOT import UiEvent or feature-specific state
@@ -16,7 +16,7 @@ pub mod text;
 pub use clipboard::Clipboard;
 #[allow(unused_imports)]
 pub use internal::{
-    AuthCommand, ConfigCommand, InputCommand, SessionCommand, StateCommand, TranscriptCommand,
+    AuthMutation, ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
 pub use scrollbar::Scrollbar;
 pub use text::sanitize_for_display;

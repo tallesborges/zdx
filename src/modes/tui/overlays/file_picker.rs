@@ -13,7 +13,7 @@ use tokio::sync::oneshot;
 use super::OverlayAction;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{InputCommand, StateCommand};
+use crate::modes::tui::shared::internal::{InputMutation, StateMutation};
 
 const MAX_VISIBLE_FILES: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
@@ -66,7 +66,7 @@ impl FilePickerState {
         &mut self,
         input: &InputState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
@@ -76,7 +76,7 @@ impl FilePickerState {
             KeyCode::Enter | KeyCode::Tab => {
                 let mut commands = Vec::new();
                 if let Some(command) = self.select_file_and_insert(input) {
-                    commands.push(StateCommand::Input(command));
+                    commands.push(StateMutation::Input(command));
                 }
                 (Some(OverlayAction::close()), commands)
             }
@@ -212,7 +212,7 @@ impl FilePickerState {
         cursor_pos <= trigger_pos
     }
 
-    fn select_file_and_insert(&self, input: &InputState) -> Option<InputCommand> {
+    fn select_file_and_insert(&self, input: &InputState) -> Option<InputMutation> {
         let selected_path = self.selected_file().cloned()?;
 
         let trigger_pos = self.trigger_pos;
@@ -253,7 +253,7 @@ impl FilePickerState {
             target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
         }
 
-        Some(InputCommand::SetTextAndCursor {
+        Some(InputMutation::SetTextAndCursor {
             text: new_text,
             cursor_row: target_row,
             cursor_col: target_col,
@@ -444,11 +444,11 @@ mod tests {
         InputState::new()
     }
 
-    fn apply_input_command(input: &mut InputState, command: InputCommand) {
+    fn apply_input_mutation(input: &mut InputState, mutation: InputMutation) {
         use tui_textarea::CursorMove;
 
-        match command {
-            InputCommand::SetTextAndCursor {
+        match mutation {
+            InputMutation::SetTextAndCursor {
                 text,
                 cursor_row,
                 cursor_col,
@@ -463,15 +463,15 @@ mod tests {
                     input.textarea.move_cursor(CursorMove::Forward);
                 }
             }
-            InputCommand::SetHistory(history) => {
+            InputMutation::SetHistory(history) => {
                 input.history = history;
                 input.reset_navigation();
             }
-            InputCommand::Clear => input.clear(),
-            InputCommand::SetText(text) => input.set_text(&text),
-            InputCommand::InsertChar(ch) => input.textarea.insert_char(ch),
-            InputCommand::ClearHistory => input.clear_history(),
-            InputCommand::SetHandoffState(state) => input.handoff = state,
+            InputMutation::Clear => input.clear(),
+            InputMutation::SetText(text) => input.set_text(&text),
+            InputMutation::InsertChar(ch) => input.textarea.insert_char(ch),
+            InputMutation::ClearHistory => input.clear_history(),
+            InputMutation::SetHandoffState(state) => input.handoff = state,
         }
     }
 
@@ -489,9 +489,9 @@ mod tests {
 
         let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for command in commands {
-            if let StateCommand::Input(command) = command {
-                apply_input_command(&mut input, command);
+        for mutation in commands {
+            if let StateMutation::Input(mutation) = mutation {
+                apply_input_mutation(&mut input, mutation);
             }
         }
 
@@ -514,9 +514,9 @@ mod tests {
 
         let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for command in commands {
-            if let StateCommand::Input(command) = command {
-                apply_input_command(&mut input, command);
+        for mutation in commands {
+            if let StateMutation::Input(mutation) = mutation {
+                apply_input_mutation(&mut input, mutation);
             }
         }
 
@@ -538,9 +538,9 @@ mod tests {
 
         let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Tab));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for command in commands {
-            if let StateCommand::Input(command) = command {
-                apply_input_command(&mut input, command);
+        for mutation in commands {
+            if let StateMutation::Input(mutation) = mutation {
+                apply_input_mutation(&mut input, mutation);
             }
         }
 
@@ -559,9 +559,9 @@ mod tests {
 
         let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for command in commands {
-            if let StateCommand::Input(command) = command {
-                apply_input_command(&mut input, command);
+        for mutation in commands {
+            if let StateMutation::Input(mutation) = mutation {
+                apply_input_mutation(&mut input, mutation);
             }
         }
 
@@ -587,9 +587,9 @@ mod tests {
 
         let (action, commands) = picker.handle_key(&input, make_key_event(KeyCode::Enter));
         assert!(matches!(action, Some(OverlayAction::Close(_))));
-        for command in commands {
-            if let StateCommand::Input(command) = command {
-                apply_input_command(&mut input, command);
+        for mutation in commands {
+            if let StateMutation::Input(mutation) = mutation {
+                apply_input_mutation(&mut input, mutation);
             }
         }
 

@@ -13,7 +13,7 @@ use crate::config::ThinkingLevel;
 use crate::models::ModelOption;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::AuthStatus;
-use crate::modes::tui::session::SessionUsage;
+use crate::modes::tui::thread::ThreadUsage;
 
 /// Minimum height of the input area (lines, including borders).
 const INPUT_HEIGHT_MIN: u16 = 5;
@@ -184,10 +184,10 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
 
     // Build top-right title: AMP-style usage display
     // Format: "{percentage}% of {context} · ${cost} (cached: ${savings})"
-    let usage_spans = build_usage_display(&state.conversation.usage, &state.config.model);
+    let usage_spans = build_usage_display(&state.thread.usage, &state.config.model);
 
     // Build bottom-left title: detailed token breakdown
-    let token_spans = build_token_breakdown(&state.conversation.usage);
+    let token_spans = build_token_breakdown(&state.thread.usage);
 
     // Build bottom-right title: path and git branch
     let bottom_title = if let Some(ref branch) = state.git_branch {
@@ -281,7 +281,7 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
     } else {
         // Waiting for goal input (Pending)
         (
-            " handoff (enter goal for new session, Esc to cancel) ",
+            " handoff (enter goal for new thread, Esc to cancel) ",
             Color::Yellow,
         )
     };
@@ -347,7 +347,7 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
 ///
 /// Format: "{percentage}% of {context} · ${cost} (cached)"
 /// Example: "11% of 200k · $0.008 (cached)"
-fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static>> {
+fn build_usage_display(usage: &ThreadUsage, model_id: &str) -> Vec<Span<'static>> {
     let usage_style = Style::default().fg(Color::DarkGray);
     let percentage_style = Style::default().fg(Color::Cyan);
     let cost_style = Style::default().fg(Color::Green);
@@ -369,17 +369,17 @@ fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static
                 Span::styled(
                     format!(
                         " of {} · ",
-                        SessionUsage::format_context_limit(m.context_limit)
+                        ThreadUsage::format_context_limit(m.context_limit)
                     ),
                     usage_style,
                 ),
-                Span::styled(SessionUsage::format_cost(cost), cost_style),
+                Span::styled(ThreadUsage::format_cost(cost), cost_style),
             ];
 
             // Show cache savings indicator if there are cache hits
             if savings > 0.001 {
                 spans.push(Span::styled(
-                    format!(" (saved {})", SessionUsage::format_cost(savings)),
+                    format!(" (saved {})", ThreadUsage::format_cost(savings)),
                     cached_style,
                 ));
             } else if usage.cache_read_tokens > 0 {
@@ -393,7 +393,7 @@ fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static
             // Fallback: show raw token counts if model not found
             let total = usage.total_tokens();
             vec![
-                Span::styled(SessionUsage::format_tokens(total), usage_style),
+                Span::styled(ThreadUsage::format_tokens(total), usage_style),
                 Span::styled(" tokens ", usage_style),
             ]
         }
@@ -403,7 +403,7 @@ fn build_usage_display(usage: &SessionUsage, model_id: &str) -> Vec<Span<'static
 /// Builds the detailed token breakdown for bottom-left display.
 ///
 /// Format: "↑{input} ↓{output} R{cache_read} W{cache_write}"
-fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
+fn build_token_breakdown(usage: &ThreadUsage) -> Vec<Span<'static>> {
     let label_style = Style::default().fg(Color::DarkGray);
     let input_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
     let output_style = Style::default()
@@ -418,20 +418,17 @@ fn build_token_breakdown(usage: &SessionUsage) -> Vec<Span<'static>> {
 
     vec![
         Span::styled(" ↑", input_style),
-        Span::styled(SessionUsage::format_tokens(usage.input_tokens), label_style),
+        Span::styled(ThreadUsage::format_tokens(usage.input_tokens), label_style),
         Span::styled(" ↓", output_style),
-        Span::styled(
-            SessionUsage::format_tokens(usage.output_tokens),
-            label_style,
-        ),
+        Span::styled(ThreadUsage::format_tokens(usage.output_tokens), label_style),
         Span::styled(" R", cache_read_style),
         Span::styled(
-            SessionUsage::format_tokens(usage.cache_read_tokens),
+            ThreadUsage::format_tokens(usage.cache_read_tokens),
             label_style,
         ),
         Span::styled(" W", cache_write_style),
         Span::styled(
-            format!("{} ", SessionUsage::format_tokens(usage.cache_write_tokens)),
+            format!("{} ", ThreadUsage::format_tokens(usage.cache_write_tokens)),
             label_style,
         ),
     ]

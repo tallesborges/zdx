@@ -45,12 +45,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "copy-id",
         aliases: &["copyid"],
-        description: "Copy current session ID to clipboard",
+        description: "Copy current thread ID to clipboard",
     },
     Command {
         name: "handoff",
         aliases: &[],
-        description: "Start new session with context from current",
+        description: "Start new thread with context from current",
     },
     Command {
         name: "login",
@@ -65,7 +65,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "rename",
         aliases: &[],
-        description: "Rename the current session",
+        description: "Rename the current thread",
     },
     Command {
         name: "model",
@@ -75,7 +75,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "new",
         aliases: &["clear"],
-        description: "Start a new conversation",
+        description: "Start a new thread",
     },
     Command {
         name: "quit",
@@ -83,9 +83,9 @@ pub const COMMANDS: &[Command] = &[
         description: "Exit ZDX",
     },
     Command {
-        name: "sessions",
+        name: "threads",
         aliases: &["history"],
-        description: "Browse and switch sessions",
+        description: "Browse and switch threads",
     },
     Command {
         name: "thinking",
@@ -95,7 +95,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "timeline",
         aliases: &[],
-        description: "Jump to a conversation turn",
+        description: "Jump to a thread turn",
     },
 ];
 
@@ -135,6 +135,7 @@ mod tests {
         assert_eq!(find_command("model").display_name(), "/model");
         assert_eq!(find_command("new").display_name(), "/new (clear)");
         assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");
+        assert_eq!(find_command("threads").display_name(), "/threads (history)");
         assert_eq!(find_command("thinking").display_name(), "/thinking");
         assert_eq!(find_command("timeline").display_name(), "/timeline");
     }

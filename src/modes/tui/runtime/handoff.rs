@@ -1,6 +1,6 @@
 //! Handoff generation handlers.
 //!
-//! Handles spawning a subagent to generate handoff prompts from session context.
+//! Handles spawning a subagent to generate handoff prompts from thread context.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
-use crate::core::session::{self, Session, SessionEvent};
+use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
 use crate::modes::tui::events::UiEvent;
 
 /// Model to use for handoff generation (fast, cheap).
@@ -22,13 +22,13 @@ const HANDOFF_THINKING: &str = "minimal";
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
 /// Builds the prompt for handoff generation.
-fn build_handoff_prompt(session_content: &str, goal: &str) -> String {
+fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
     format!(
-        r#"Based on the following session transcript, generate a focused handoff prompt for the given goal.
+        r#"Based on the following thread transcript, generate a focused handoff prompt for the given goal.
 
-<session>
-{session_content}
-</session>
+<thread>
+{thread_content}
+</thread>
 
 <goal>
 {goal}
@@ -40,20 +40,20 @@ Include:
 - The specific goal/direction
 
 Output ONLY the handoff prompt text, nothing else. The prompt should be
-written as if the user is starting a fresh conversation with a new agent."#
+written as if the user is starting a fresh thread with a new agent."#
     )
 }
 
-/// Loads and validates session content for handoff.
-fn load_session_content(session_id: &str) -> Result<String, String> {
-    let events = session::load_session(session_id)
-        .map_err(|e| format!("Handoff failed: Could not load session: {}", e))?;
+/// Loads and validates thread content for handoff.
+fn load_thread_content(thread_id: &str) -> Result<String, String> {
+    let events = thread_log::load_thread_events(thread_id)
+        .map_err(|e| format!("Handoff failed: Could not load thread: {}", e))?;
 
     if events.is_empty() {
-        return Err(format!("Handoff failed: Session '{}' is empty", session_id));
+        return Err(format!("Handoff failed: Thread '{}' is empty", thread_id));
     }
 
-    Ok(session::format_transcript(&events))
+    Ok(thread_log::format_transcript(&events))
 }
 
 /// Processes subagent output into a Result.
@@ -88,7 +88,7 @@ async fn run_subagent(
 
     let child = match Command::new(exe)
         .args([
-            "--no-save",
+            "--no-thread",
             "exec",
             "-m",
             HANDOFF_MODEL,
@@ -129,25 +129,25 @@ async fn run_subagent(
     let _ = tx.send(result);
 }
 
-/// Executes a handoff submit: creates a new session and persists the prompt.
+/// Executes a handoff submit: creates a new thread and persists the prompt.
 ///
-/// Returns the new session for the reducer to store, or an error string.
-pub fn execute_handoff_submit(prompt: &str) -> Result<Session, String> {
-    let mut session = session::Session::new().map_err(|e| e.to_string())?;
+/// Returns the new thread for the reducer to store, or an error string.
+pub fn execute_handoff_submit(prompt: &str) -> Result<ThreadLog, String> {
+    let mut thread_log_handle = thread_log::ThreadLog::new().map_err(|e| e.to_string())?;
 
-    if let Err(_err) = session.append(&SessionEvent::user_message(prompt)) {
-        // Errors are silently ignored for session persistence
+    if let Err(_err) = thread_log_handle.append(&ThreadEvent::user_message(prompt)) {
+        // Errors are silently ignored for thread persistence
     }
 
-    Ok(session)
+    Ok(thread_log_handle)
 }
 
 /// Spawns an async task to generate a handoff prompt using a subagent.
-pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &Path) -> UiEvent {
+pub fn spawn_handoff_generation(thread_id: &str, goal: &str, root: &Path) -> UiEvent {
     let (tx, rx) = oneshot::channel::<Result<String, String>>();
     let (cancel, cancel_recv) = oneshot::channel::<()>();
 
-    let session_content = match load_session_content(session_id) {
+    let thread_content = match load_thread_content(thread_id) {
         Ok(content) => content,
         Err(e) => {
             let _ = tx.send(Err(e));
@@ -159,7 +159,7 @@ pub fn spawn_handoff_generation(session_id: &str, goal: &str, root: &Path) -> Ui
         }
     };
 
-    let generation_prompt = build_handoff_prompt(&session_content, goal);
+    let generation_prompt = build_handoff_prompt(&thread_content, goal);
     let root = root.to_path_buf();
 
     tokio::spawn(run_subagent(tx, cancel_recv, generation_prompt, root));

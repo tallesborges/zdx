@@ -7,7 +7,7 @@
 //! never performs I/O or spawns tasks directly.
 
 use crate::config::ThinkingLevel;
-use crate::core::session::SessionEvent;
+use crate::core::thread_log::ThreadEvent;
 use crate::providers::ProviderKind;
 
 /// Effects returned by the reducer for the runtime to execute.
@@ -41,12 +41,12 @@ pub enum UiEffect {
     /// Open a URL in the system browser.
     OpenBrowser { url: String },
 
-    /// Append an event to the session log.
-    SaveSession { event: SessionEvent },
+    /// Append an event to the thread log.
+    SaveThread { event: ThreadEvent },
 
-    /// Rename the current session.
-    RenameSession {
-        session_id: String,
+    /// Rename the current thread.
+    RenameThread {
+        thread_id: String,
         title: Option<String>,
     },
 
@@ -56,8 +56,8 @@ pub enum UiEffect {
     /// Persist the thinking level preference to config.
     PersistThinking { level: ThinkingLevel },
 
-    /// Create a new session (for /new command).
-    CreateNewSession,
+    /// Create a new thread (for /new command).
+    CreateNewThread,
 
     /// Open config file in default system editor/app.
     OpenConfig,
@@ -65,18 +65,18 @@ pub enum UiEffect {
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
 
-    /// Submit handoff prompt: create new session and send prompt as first message.
+    /// Submit handoff prompt: create new thread and send prompt as first message.
     HandoffSubmit { prompt: String },
 
-    /// Open the session picker overlay (loads session list via I/O).
-    OpenSessionPicker,
+    /// Open the thread picker overlay (loads thread list via I/O).
+    OpenThreadPicker,
 
-    /// Load a session by ID (switch to that session).
-    LoadSession { session_id: String },
+    /// Load a thread by ID (switch to that thread).
+    LoadThread { thread_id: String },
 
-    /// Preview a session (show transcript without full switch).
-    /// Used during session picker navigation.
-    PreviewSession { session_id: String },
+    /// Preview a thread (show transcript without full switch).
+    /// Used during thread picker navigation.
+    PreviewThread { thread_id: String },
 
     /// Discover project files for the file picker.
     DiscoverFiles,
@@ -87,9 +87,9 @@ pub enum UiEffect {
         text: String,
     },
 
-    /// Create a new session from a truncated set of events.
-    ForkSession {
-        events: Vec<SessionEvent>,
+    /// Create a new thread from a truncated set of events.
+    ForkThread {
+        events: Vec<ThreadEvent>,
         user_input: Option<String>,
         turn_number: usize,
     },

@@ -76,7 +76,7 @@ In raw mode, Ctrl+C arrives as a key event (`KeyCode::Char('c')` + control modif
 
 ### Streaming events with stable IDs
 Each streaming cell gets a stable ID for reducer determinism:
-- `turn_id` — the conversation turn
+- `turn_id` — the thread turn
 - `cell_id` — specific cell being streamed
 - `tool_call_id` — if tool output appears inline
 

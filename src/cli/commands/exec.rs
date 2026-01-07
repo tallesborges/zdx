@@ -5,18 +5,18 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 
 use crate::config::{self, ThinkingLevel};
-use crate::core::session::SessionPersistenceOptions;
+use crate::core::thread_log::ThreadPersistenceOptions;
 use crate::modes;
 
 pub async fn run(
     root: &str,
-    session_opts: &SessionPersistenceOptions,
+    thread_opts: &ThreadPersistenceOptions,
     prompt: &str,
     config: &config::Config,
     model_override: Option<&str>,
     thinking_override: Option<&str>,
 ) -> Result<()> {
-    let session = session_opts.resolve().context("resolve session")?;
+    let thread = thread_opts.resolve().context("resolve thread")?;
 
     // Apply overrides if provided
     let config = {
@@ -35,7 +35,7 @@ pub async fn run(
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    modes::exec::run_exec(prompt, &config, session, &exec_opts)
+    modes::exec::run_exec(prompt, &config, thread, &exec_opts)
         .await
         .context("execute prompt")?;
 

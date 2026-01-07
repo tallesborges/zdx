@@ -1,6 +1,6 @@
 # Plan: Timeline Overlay for Transcript Navigation
 
-**Project/feature:** Add a timeline overlay that lists conversation turns (user + assistant) with truncated content, supports arrow-key navigation to jump the transcript to a selected message, and offers fork action from any turn.
+**Project/feature:** Add a timeline overlay that lists thread turns (user + assistant) with truncated content, supports arrow-key navigation to jump the transcript to a selected message, and offers fork action from any turn.
 
 **Existing state:**
 - Overlays are registered via the `Overlay` enum and handled in `src/modes/tui/overlays/mod.rs` + `src/modes/tui/overlays/update.rs`.

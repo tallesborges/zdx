@@ -1,6 +1,6 @@
 # Plan: Lazy Transcript Rendering
 
-**Project/feature:** Optimize transcript rendering for long sessions by only rendering visible cells instead of the entire conversation history, achieving O(viewport) instead of O(n) complexity per frame.
+**Project/feature:** Optimize transcript rendering for long sessions by only rendering visible cells instead of the entire thread history, achieving O(viewport) instead of O(n) complexity per frame.
 
 **Existing state:**
 - `render_transcript()` in `src/ui/chat/view.rs` iterates ALL cells and renders ALL lines

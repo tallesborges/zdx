@@ -9,7 +9,7 @@ use super::OverlayAction;
 use crate::models::available_models;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{ConfigMutation, StateMutation, TranscriptMutation};
 
 #[derive(Debug, Clone)]
 pub struct ModelPickerState {
@@ -33,7 +33,7 @@ impl ModelPickerState {
         &mut self,
         _tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
@@ -65,11 +65,10 @@ impl ModelPickerState {
                         model: model_id.clone(),
                     }])),
                     vec![
-                        StateCommand::Config(ConfigCommand::SetModel(model_id)),
-                        StateCommand::Transcript(TranscriptCommand::AppendSystemMessage(format!(
-                            "Switched to {}",
-                            display_name
-                        ))),
+                        StateMutation::Config(ConfigMutation::SetModel(model_id)),
+                        StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
+                            format!("Switched to {}", display_name),
+                        )),
                     ],
                 )
             }

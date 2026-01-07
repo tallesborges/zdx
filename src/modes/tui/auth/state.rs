@@ -4,7 +4,7 @@
 
 use tokio::sync::mpsc;
 
-use crate::modes::tui::shared::internal::AuthCommand;
+use crate::modes::tui::shared::internal::AuthMutation;
 
 /// Authentication type indicator for status line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -74,12 +74,12 @@ impl AuthState {
         self.auth_type = AuthStatus::detect();
     }
 
-    /// Applies a cross-slice auth command.
-    pub fn apply(&mut self, command: AuthCommand) {
-        match command {
-            AuthCommand::RefreshStatus => self.refresh(),
-            AuthCommand::ClearLoginRx => self.login_rx = None,
-            AuthCommand::ClearLoginCallbackRx => self.login_callback_rx = None,
+    /// Applies a cross-slice auth mutation.
+    pub fn apply(&mut self, mutation: AuthMutation) {
+        match mutation {
+            AuthMutation::RefreshStatus => self.refresh(),
+            AuthMutation::ClearLoginRx => self.login_rx = None,
+            AuthMutation::ClearLoginCallbackRx => self.login_callback_rx = None,
         }
     }
 }

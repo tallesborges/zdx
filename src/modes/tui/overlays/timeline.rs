@@ -7,10 +7,10 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use serde_json::json;
 
 use super::OverlayAction;
-use crate::core::session::SessionEvent;
+use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{StateCommand, TranscriptCommand};
+use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::{HistoryCell, ScrollMode, ScrollState};
 
@@ -59,15 +59,15 @@ impl TimelineState {
         cells: &[HistoryCell],
         scroll: &ScrollState,
         initial_scroll: ScrollMode,
-    ) -> (Self, Vec<UiEffect>, Vec<StateCommand>) {
+    ) -> (Self, Vec<UiEffect>, Vec<StateMutation>) {
         let entries = build_entries(cells);
         let initial_offset = entries
             .first()
             .and_then(|entry| scroll.cell_start_line(entry.cell_index));
         let mut commands = Vec::new();
         if let Some(offset) = initial_offset {
-            commands.push(StateCommand::Transcript(
-                TranscriptCommand::SetScrollOffset { offset },
+            commands.push(StateMutation::Transcript(
+                TranscriptMutation::SetScrollOffset { offset },
             ));
         }
         (
@@ -90,15 +90,15 @@ impl TimelineState {
         &mut self,
         tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         let (action, commands) = match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
                 Some(OverlayAction::close()),
-                vec![StateCommand::Transcript(TranscriptCommand::SetScrollMode(
-                    self.initial_scroll.clone(),
-                ))],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::SetScrollMode(self.initial_scroll.clone()),
+                )],
             ),
             KeyCode::Up | KeyCode::Char('k') => {
                 self.move_selection(-1);
@@ -136,8 +136,8 @@ impl TimelineState {
                 if tui.agent_state.is_running() {
                     return (
                         None,
-                        vec![StateCommand::Transcript(
-                            TranscriptCommand::AppendSystemMessage(
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(
                                 "Stop the current task first.".to_string(),
                             ),
                         )],
@@ -147,12 +147,12 @@ impl TimelineState {
                 match self.jump_command(tui) {
                     Some(command) => (
                         Some(OverlayAction::close()),
-                        vec![StateCommand::Transcript(command)],
+                        vec![StateMutation::Transcript(command)],
                     ),
                     None => (
                         None,
-                        vec![StateCommand::Transcript(
-                            TranscriptCommand::AppendSystemMessage(
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(
                                 "No timeline entry selected.".to_string(),
                             ),
                         )],
@@ -163,8 +163,8 @@ impl TimelineState {
                 if tui.agent_state.is_running() {
                     return (
                         None,
-                        vec![StateCommand::Transcript(
-                            TranscriptCommand::AppendSystemMessage(
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(
                                 "Stop the current task first.".to_string(),
                             ),
                         )],
@@ -175,8 +175,8 @@ impl TimelineState {
                     Some(effect) => (Some(OverlayAction::close_with(vec![effect])), vec![]),
                     None => (
                         None,
-                        vec![StateCommand::Transcript(
-                            TranscriptCommand::AppendSystemMessage(
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(
                                 "No timeline entry selected.".to_string(),
                             ),
                         )],
@@ -226,16 +226,16 @@ impl TimelineState {
         self.entries.get(self.selected)
     }
 
-    fn preview_scroll_command(&self, tui: &TuiState) -> Vec<StateCommand> {
+    fn preview_scroll_command(&self, tui: &TuiState) -> Vec<StateMutation> {
         self.jump_command(tui)
-            .map(|command| vec![StateCommand::Transcript(command)])
+            .map(|command| vec![StateMutation::Transcript(command)])
             .unwrap_or_default()
     }
 
-    fn jump_command(&self, tui: &TuiState) -> Option<TranscriptCommand> {
+    fn jump_command(&self, tui: &TuiState) -> Option<TranscriptMutation> {
         let entry = self.selected_entry()?;
         let info = tui.transcript.scroll.cell_line_info.get(entry.cell_index)?;
-        Some(TranscriptCommand::SetScrollOffset {
+        Some(TranscriptMutation::SetScrollOffset {
             offset: info.start_line,
         })
     }
@@ -253,7 +253,7 @@ impl TimelineState {
             _ => None,
         };
 
-        Some(UiEffect::ForkSession {
+        Some(UiEffect::ForkThread {
             events,
             user_input,
             turn_number: self.selected + 1,
@@ -282,21 +282,21 @@ fn build_entries(cells: &[HistoryCell]) -> Vec<TimelineEntry> {
         .collect()
 }
 
-fn cells_to_events(cells: &[HistoryCell]) -> Vec<SessionEvent> {
+fn cells_to_events(cells: &[HistoryCell]) -> Vec<ThreadEvent> {
     let mut events = Vec::new();
 
     for cell in cells {
         match cell {
             HistoryCell::User { content, .. } => {
-                events.push(SessionEvent::user_message(content));
+                events.push(ThreadEvent::user_message(content));
             }
             HistoryCell::Assistant { content, .. } => {
-                events.push(SessionEvent::assistant_message(content));
+                events.push(ThreadEvent::assistant_message(content));
             }
             HistoryCell::Thinking {
                 content, signature, ..
             } => {
-                events.push(SessionEvent::thinking(content, signature.clone()));
+                events.push(ThreadEvent::thinking(content, signature.clone()));
             }
             HistoryCell::Tool {
                 tool_use_id,
@@ -305,7 +305,7 @@ fn cells_to_events(cells: &[HistoryCell]) -> Vec<SessionEvent> {
                 result,
                 ..
             } => {
-                events.push(SessionEvent::tool_use(
+                events.push(ThreadEvent::tool_use(
                     tool_use_id.clone(),
                     name.clone(),
                     input.clone(),
@@ -313,7 +313,7 @@ fn cells_to_events(cells: &[HistoryCell]) -> Vec<SessionEvent> {
                 if let Some(output) = result {
                     let value = serde_json::to_value(output)
                         .unwrap_or_else(|_| json!({"ok": false, "error": "serialize_failed"}));
-                    events.push(SessionEvent::tool_result(
+                    events.push(ThreadEvent::tool_result(
                         tool_use_id.clone(),
                         value,
                         output.is_ok(),

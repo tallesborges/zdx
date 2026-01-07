@@ -8,7 +8,7 @@
 //! - `command_palette.rs`: Command palette for slash commands
 //! - `model_picker.rs`: Model selection picker
 //! - `thinking_picker.rs`: Thinking level selection picker
-//! - `session_picker.rs`: Session history picker
+//! - `thread_picker.rs`: Thread history picker
 //! - `login.rs`: OAuth login flow overlay
 //! - `file_picker.rs`: File picker triggered by `@`
 //! - `view.rs`: Shared rendering utilities for overlays
@@ -24,8 +24,8 @@ pub mod file_picker;
 pub mod login;
 pub mod model_picker;
 pub mod render_utils;
-pub mod session_picker;
 pub mod thinking_picker;
+pub mod thread_picker;
 pub mod timeline;
 mod update;
 
@@ -36,15 +36,15 @@ pub use login::LoginState;
 pub use model_picker::ModelPickerState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
-pub use session_picker::SessionPickerState;
 pub use thinking_picker::ThinkingPickerState;
+pub use thread_picker::ThreadPickerState;
 pub use timeline::TimelineState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
 
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::StateCommand;
+use crate::modes::tui::shared::internal::StateMutation;
 
 // ============================================================================
 // OverlayRequest / OverlayAction
@@ -97,7 +97,7 @@ pub enum Overlay {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
     ThinkingPicker(ThinkingPickerState),
-    SessionPicker(SessionPickerState),
+    ThreadPicker(ThreadPickerState),
     Login(LoginState),
     FilePicker(FilePickerState),
     Timeline(TimelineState),
@@ -109,7 +109,7 @@ impl Overlay {
             Overlay::CommandPalette(p) => p.render(frame, area, input_y),
             Overlay::ModelPicker(p) => p.render(frame, area, input_y),
             Overlay::ThinkingPicker(p) => p.render(frame, area, input_y),
-            Overlay::SessionPicker(p) => p.render(frame, area, input_y),
+            Overlay::ThreadPicker(p) => p.render(frame, area, input_y),
             Overlay::FilePicker(p) => p.render(frame, area, input_y),
             Overlay::Login(l) => l.render(frame, area, input_y),
             Overlay::Timeline(t) => t.render(frame, area, input_y),
@@ -120,12 +120,12 @@ impl Overlay {
         &mut self,
         tui: &TuiState,
         key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateCommand>) {
+    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
         match self {
             Overlay::CommandPalette(p) => p.handle_key(tui, key),
             Overlay::ModelPicker(p) => p.handle_key(tui, key),
             Overlay::ThinkingPicker(p) => p.handle_key(tui, key),
-            Overlay::SessionPicker(p) => p.handle_key(tui, key),
+            Overlay::ThreadPicker(p) => p.handle_key(tui, key),
             Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
             Overlay::Login(l) => l.handle_key(tui, key),
             Overlay::Timeline(t) => t.handle_key(tui, key),
@@ -192,7 +192,8 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
         assert!(overlay.is_some());
 
-        let (timeline, _, _) = TimelineState::open(&[], &[], ScrollMode::FollowLatest);
+        let scroll = crate::modes::tui::transcript::ScrollState::default();
+        let (timeline, _, _) = TimelineState::open(&[], &scroll, ScrollMode::FollowLatest);
         let overlay: Option<Overlay> = Some(Overlay::Timeline(timeline));
         assert!(overlay.is_some());
     }

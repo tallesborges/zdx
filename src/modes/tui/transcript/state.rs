@@ -7,7 +7,7 @@ use std::ops::Range;
 
 use super::CellId;
 use super::selection::{PositionMap, SelectionState};
-use crate::modes::tui::shared::internal::TranscriptCommand;
+use crate::modes::tui::shared::internal::TranscriptMutation;
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -335,23 +335,23 @@ impl TranscriptState {
         self.wrap_cache.clear();
     }
 
-    /// Applies a cross-slice transcript command.
-    pub fn apply(&mut self, command: TranscriptCommand) {
-        match command {
-            TranscriptCommand::AppendCell(cell) => self.cells.push(cell),
-            TranscriptCommand::AppendSystemMessage(message) => {
+    /// Applies a cross-slice transcript mutation.
+    pub fn apply(&mut self, mutation: TranscriptMutation) {
+        match mutation {
+            TranscriptMutation::AppendCell(cell) => self.cells.push(cell),
+            TranscriptMutation::AppendSystemMessage(message) => {
                 self.cells.push(super::HistoryCell::system(message));
             }
-            TranscriptCommand::Clear => self.reset(),
-            TranscriptCommand::ReplaceCells(cells) => self.cells = cells,
-            TranscriptCommand::ResetScroll => self.scroll.reset(),
-            TranscriptCommand::ClearWrapCache => self.wrap_cache.clear(),
-            TranscriptCommand::SetScrollOffset { offset } => self.set_scroll_offset(offset),
-            TranscriptCommand::SetScrollMode(mode) => self.set_scroll_mode(mode),
-            TranscriptCommand::ScrollToTop => self.scroll_to_top(),
-            TranscriptCommand::ScrollToBottom => self.scroll_to_bottom(),
-            TranscriptCommand::PageUp => self.page_up(),
-            TranscriptCommand::PageDown => self.page_down(),
+            TranscriptMutation::Clear => self.reset(),
+            TranscriptMutation::ReplaceCells(cells) => self.cells = cells,
+            TranscriptMutation::ResetScroll => self.scroll.reset(),
+            TranscriptMutation::ClearWrapCache => self.wrap_cache.clear(),
+            TranscriptMutation::SetScrollOffset { offset } => self.set_scroll_offset(offset),
+            TranscriptMutation::SetScrollMode(mode) => self.set_scroll_mode(mode),
+            TranscriptMutation::ScrollToTop => self.scroll_to_top(),
+            TranscriptMutation::ScrollToBottom => self.scroll_to_bottom(),
+            TranscriptMutation::PageUp => self.page_up(),
+            TranscriptMutation::PageDown => self.page_down(),
         }
     }
 

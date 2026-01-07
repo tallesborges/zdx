@@ -8,13 +8,13 @@
 use crossterm::event::Event;
 
 use crate::modes::tui::app::{AgentState, AppState, TuiState};
-use crate::modes::tui::events::{SessionUiEvent, UiEvent};
+use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::{self, FilePickerState, Overlay};
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand};
+use crate::modes::tui::shared::internal::{ConfigMutation, StateMutation};
 use crate::modes::tui::transcript::HistoryCell;
-use crate::modes::tui::{auth, input, render, session, transcript};
+use crate::modes::tui::{auth, input, render, thread, transcript};
 
 /// The main reducer function.
 ///
@@ -35,29 +35,29 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => {
-            let has_session = app.tui.conversation.session.is_some();
+            let has_thread = app.tui.thread.thread_log.is_some();
             let (mut effects, commands) = transcript::handle_agent_event(
                 &mut app.tui.transcript,
                 &mut app.tui.agent_state,
-                has_session,
+                has_thread,
                 &agent_event,
             );
-            apply_state_commands(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, commands);
 
-            // Save usage to session after each request completes.
+            // Save usage to thread after each request completes.
             // A request is complete when we receive output tokens (MessageDelta with usage).
             // This ensures tool-use turns with multiple requests save all usage, not just the last.
             if let crate::core::events::AgentEvent::UsageUpdate { output_tokens, .. } = &agent_event
                 && *output_tokens > 0
-                && has_session
+                && has_thread
             {
                 // Save per-request delta values (not cumulative) for event-sourcing
-                let usage = app.tui.conversation.usage.turn_usage();
-                effects.push(UiEffect::SaveSession {
-                    event: crate::core::session::SessionEvent::usage(usage),
+                let usage = app.tui.thread.usage.turn_usage();
+                effects.push(UiEffect::SaveThread {
+                    event: crate::core::thread_log::ThreadEvent::usage(usage),
                 });
                 // Mark as saved to prevent duplicate saves on TurnComplete/Interrupted
-                app.tui.conversation.usage.mark_saved();
+                app.tui.thread.usage.mark_saved();
             }
 
             // Also save any unsaved usage on turn completion or interruption.
@@ -67,14 +67,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 &agent_event,
                 crate::core::events::AgentEvent::TurnComplete { .. }
                     | crate::core::events::AgentEvent::Interrupted
-            ) && has_session
-                && app.tui.conversation.usage.has_unsaved_usage()
+            ) && has_thread
+                && app.tui.thread.usage.has_unsaved_usage()
             {
-                let usage = app.tui.conversation.usage.turn_usage();
-                effects.push(UiEffect::SaveSession {
-                    event: crate::core::session::SessionEvent::usage(usage),
+                let usage = app.tui.thread.usage.turn_usage();
+                effects.push(UiEffect::SaveThread {
+                    event: crate::core::thread_log::ThreadEvent::usage(usage),
                 });
-                app.tui.conversation.usage.mark_saved();
+                app.tui.thread.usage.mark_saved();
             }
 
             effects
@@ -96,7 +96,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             };
             let (commands, overlay_action) =
                 auth::handle_login_result(&mut app.tui.auth, result, provider);
-            apply_state_commands(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, commands);
 
             match overlay_action {
                 auth::LoginOverlayAction::Close => {
@@ -151,25 +151,25 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::HandoffResult(result) => {
             let commands = input::handle_handoff_result(&mut app.tui.input, result);
-            apply_state_commands(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, commands);
             vec![]
         }
         UiEvent::HandoffGenerationStarted { goal, rx, cancel } => {
             app.tui.input.handoff = HandoffState::Generating { goal, rx, cancel };
             vec![]
         }
-        UiEvent::HandoffSessionCreated { session } => {
-            let session_path = session.path().display().to_string();
-            app.tui.conversation.session = Some(session);
-            app.tui.transcript.cells.push(HistoryCell::system(format!(
-                "Session path: {}",
-                session_path
-            )));
+        UiEvent::HandoffThreadCreated { thread_log } => {
+            let thread_path = thread_log.path().display().to_string();
+            app.tui.thread.thread_log = Some(thread_log);
+            app.tui
+                .transcript
+                .cells
+                .push(HistoryCell::system(format!("Thread path: {}", thread_path)));
             vec![UiEffect::StartAgentTurn]
         }
-        UiEvent::HandoffSessionCreateFailed { error } => {
+        UiEvent::HandoffThreadCreateFailed { error } => {
             app.tui.transcript.cells.push(HistoryCell::system(format!(
-                "Warning: Failed to create session: {}",
+                "Warning: Failed to create thread: {}",
                 error
             )));
             vec![UiEffect::StartAgentTurn]
@@ -189,244 +189,244 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
 
-        // Clipboard copy succeeded - show brief feedback in session picker
+        // Clipboard copy succeeded - show brief feedback in thread picker
         UiEvent::ClipboardCopied => {
-            if let Some(overlays::Overlay::SessionPicker(picker)) = &mut app.overlay {
+            if let Some(overlays::Overlay::ThreadPicker(picker)) = &mut app.overlay {
                 picker.copied_at = Some(std::time::Instant::now());
             }
             vec![]
         }
 
-        // Session async result events - delegate to session feature
-        UiEvent::Session(session_event) => match session_event {
-            SessionUiEvent::ListStarted { rx } => {
-                app.tui.session_ops.list_rx = Some(rx);
+        // Thread async result events - delegate to thread feature
+        UiEvent::Thread(thread_event) => match thread_event {
+            ThreadUiEvent::ListStarted { rx } => {
+                app.tui.thread_ops.list_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::ListLoaded {
-                sessions,
+            ThreadUiEvent::ListLoaded {
+                threads,
                 original_cells,
             } => {
-                app.tui.session_ops.list_rx = None;
+                app.tui.thread_ops.list_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::ListLoaded {
-                        sessions,
+                    thread::handle_thread_event(ThreadUiEvent::ListLoaded {
+                        threads,
                         original_cells,
                     });
-                apply_state_commands(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::ListFailed { error } => {
-                app.tui.session_ops.list_rx = None;
+            ThreadUiEvent::ListFailed { error } => {
+                app.tui.thread_ops.list_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::ListFailed { error });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
-            SessionUiEvent::LoadStarted { rx } => {
-                app.tui.session_ops.load_rx = Some(rx);
+            ThreadUiEvent::LoadStarted { rx } => {
+                app.tui.thread_ops.load_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::Loaded {
-                session_id,
+            ThreadUiEvent::Loaded {
+                thread_id,
                 cells,
                 messages,
                 history,
-                session,
+                thread_log,
                 usage,
             } => {
-                app.tui.session_ops.load_rx = None;
+                app.tui.thread_ops.load_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::Loaded {
-                        session_id,
+                    thread::handle_thread_event(ThreadUiEvent::Loaded {
+                        thread_id,
                         cells,
                         messages,
                         history,
-                        session,
+                        thread_log,
                         usage,
                     });
-                apply_state_commands(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::LoadFailed { error } => {
-                app.tui.session_ops.load_rx = None;
+            ThreadUiEvent::LoadFailed { error } => {
+                app.tui.thread_ops.load_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::LoadFailed { error });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::LoadFailed { error });
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
-            SessionUiEvent::PreviewStarted { rx } => {
-                app.tui.session_ops.preview_rx = Some(rx);
+            ThreadUiEvent::PreviewStarted { rx } => {
+                app.tui.thread_ops.preview_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::PreviewLoaded { cells } => {
-                app.tui.session_ops.preview_rx = None;
+            ThreadUiEvent::PreviewLoaded { cells } => {
+                app.tui.thread_ops.preview_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::PreviewLoaded { cells });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::PreviewFailed => {
-                app.tui.session_ops.preview_rx = None;
+            ThreadUiEvent::PreviewFailed => {
+                app.tui.thread_ops.preview_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::PreviewFailed);
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
-            SessionUiEvent::CreateStarted { rx } => {
-                app.tui.session_ops.create_rx = Some(rx);
+            ThreadUiEvent::CreateStarted { rx } => {
+                app.tui.thread_ops.create_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::ForkStarted { rx } => {
-                app.tui.session_ops.fork_rx = Some(rx);
+            ThreadUiEvent::ForkStarted { rx } => {
+                app.tui.thread_ops.fork_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::Created {
-                session,
+            ThreadUiEvent::Created {
+                thread_log,
                 context_paths,
             } => {
-                app.tui.session_ops.create_rx = None;
+                app.tui.thread_ops.create_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::Created {
-                        session,
+                    thread::handle_thread_event(ThreadUiEvent::Created {
+                        thread_log,
                         context_paths,
                     });
-                apply_state_commands(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::ForkedLoaded {
-                session_id,
+            ThreadUiEvent::ForkedLoaded {
+                thread_id,
                 cells,
                 messages,
                 history,
-                session,
+                thread_log,
                 usage,
                 user_input,
                 turn_number,
             } => {
-                app.tui.session_ops.fork_rx = None;
+                app.tui.thread_ops.fork_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::ForkedLoaded {
-                        session_id,
+                    thread::handle_thread_event(ThreadUiEvent::ForkedLoaded {
+                        thread_id,
                         cells,
                         messages,
                         history,
-                        session,
+                        thread_log,
                         usage,
                         user_input,
                         turn_number,
                     });
-                apply_state_commands(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::CreateFailed { error } => {
-                app.tui.session_ops.create_rx = None;
+            ThreadUiEvent::CreateFailed { error } => {
+                app.tui.thread_ops.create_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::CreateFailed { error });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::CreateFailed { error });
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
-            SessionUiEvent::ForkFailed { error } => {
-                app.tui.session_ops.fork_rx = None;
+            ThreadUiEvent::ForkFailed { error } => {
+                app.tui.thread_ops.fork_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::ForkFailed { error });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
-            SessionUiEvent::RenameStarted { rx } => {
-                app.tui.session_ops.rename_rx = Some(rx);
+            ThreadUiEvent::RenameStarted { rx } => {
+                app.tui.thread_ops.rename_rx = Some(rx);
                 vec![]
             }
-            SessionUiEvent::Renamed { session_id, title } => {
-                app.tui.session_ops.rename_rx = None;
+            ThreadUiEvent::Renamed { thread_id, title } => {
+                app.tui.thread_ops.rename_rx = None;
                 let (mut effects, commands, overlay_action) =
-                    session::handle_session_event(SessionUiEvent::Renamed { session_id, title });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::Renamed { thread_id, title });
+                apply_mutations(&mut app.tui, commands);
 
-                if let session::SessionOverlayAction::OpenSessionPicker {
-                    sessions,
+                if let thread::ThreadOverlayAction::OpenThreadPicker {
+                    threads,
                     original_cells,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
                     let (state, overlay_effects) =
-                        overlays::SessionPickerState::open(sessions, original_cells);
-                    app.overlay = Some(overlays::Overlay::SessionPicker(state));
+                        overlays::ThreadPickerState::open(threads, original_cells);
+                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
 
                 effects
             }
-            SessionUiEvent::RenameFailed { error } => {
-                app.tui.session_ops.rename_rx = None;
+            ThreadUiEvent::RenameFailed { error } => {
+                app.tui.thread_ops.rename_rx = None;
                 let (effects, commands, _) =
-                    session::handle_session_event(SessionUiEvent::RenameFailed { error });
-                apply_state_commands(&mut app.tui, commands);
+                    thread::handle_thread_event(ThreadUiEvent::RenameFailed { error });
+                apply_mutations(&mut app.tui, commands);
                 effects
             }
         },
@@ -434,25 +434,25 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 }
 
 // ============================================================================
-// StateCommand Dispatcher
+// StateMutation Dispatcher
 // ============================================================================
 
-fn apply_state_commands(tui: &mut TuiState, commands: Vec<StateCommand>) {
-    for command in commands {
-        match command {
-            StateCommand::Transcript(command) => tui.transcript.apply(command),
-            StateCommand::Input(command) => tui.input.apply(command),
-            StateCommand::Session(command) => tui.conversation.apply(command),
-            StateCommand::Auth(command) => tui.auth.apply(command),
-            StateCommand::Config(command) => apply_config_command(tui, command),
+fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
+    for mutation in mutations {
+        match mutation {
+            StateMutation::Transcript(mutation) => tui.transcript.apply(mutation),
+            StateMutation::Input(mutation) => tui.input.apply(mutation),
+            StateMutation::Thread(mutation) => tui.thread.apply(mutation),
+            StateMutation::Auth(mutation) => tui.auth.apply(mutation),
+            StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
         }
     }
 }
 
-fn apply_config_command(tui: &mut TuiState, command: ConfigCommand) {
-    match command {
-        ConfigCommand::SetModel(model) => tui.config.model = model,
-        ConfigCommand::SetThinkingLevel(level) => tui.config.thinking_level = level,
+fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
+    match mutation {
+        ConfigMutation::SetModel(model) => tui.config.model = model,
+        ConfigMutation::SetThinkingLevel(level) => tui.config.thinking_level = level,
     }
 }
 
@@ -503,7 +503,7 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
                 app.tui.transcript.scroll.mode.clone(),
             );
             app.overlay = Some(overlays::Overlay::Timeline(state));
-            apply_state_commands(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, commands);
             effects
         }
     }
@@ -574,7 +574,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 
     // Try to dispatch to the active overlay
     let (action, commands) = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
-    apply_state_commands(&mut app.tui, commands);
+    apply_mutations(&mut app.tui, commands);
     if let Some(action) = action {
         return apply_overlay_action(app, action);
     }
@@ -585,15 +585,15 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     }
 
     // No overlay active - delegate to input feature module
-    let session_id = app
+    let thread_id = app
         .tui
-        .conversation
-        .session
+        .thread
+        .thread_log
         .as_ref()
-        .map(|session| session.id.clone());
+        .map(|thread_log| thread_log.id.clone());
     let (effects, commands, overlay_request) =
-        input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, session_id, key);
-    apply_state_commands(&mut app.tui, commands);
+        input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, thread_id, key);
+    apply_mutations(&mut app.tui, commands);
     if let Some(request) = overlay_request
         && app.overlay.is_none()
     {

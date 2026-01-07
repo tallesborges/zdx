@@ -35,7 +35,7 @@ pub struct AgentOptions {
 
 /// Channel-based event sender (async, bounded).
 ///
-/// Used with `run_turn` for concurrent rendering and session persistence.
+/// Used with `run_turn` for concurrent rendering and thread persistence.
 /// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
 pub type AgentEventTx = mpsc::Sender<Arc<AgentEvent>>;
 
@@ -206,7 +206,7 @@ const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 /// Runs a single turn of the agent using async channels.
 ///
 /// Events are sent via a bounded `mpsc` channel for concurrent rendering
-/// and session persistence.
+/// and thread persistence.
 ///
 /// Returns the final assistant text and the updated message history.
 pub async fn run_turn(
@@ -382,7 +382,7 @@ pub async fn run_turn(
                     }
 
                     // Check if this is a tool_use block finishing - emit ToolInputReady
-                    // with the complete input for session persistence.
+                    // with the complete input for thread persistence.
                     if let Some(tu) = tool_uses.iter().find(|t| t.index == index) {
                         // Try to parse the input JSON; if it fails, use empty object
                         // (the full error will be handled later when finalizing)
@@ -491,7 +491,7 @@ pub async fn run_turn(
             // Check if interrupted during tool execution
             if interrupt::is_interrupted() {
                 // Emit TurnComplete with partial messages before Interrupted
-                // This ensures the TUI has the complete conversation state
+                // This ensures the TUI has the complete thread state
                 sender
                     .send_important(AgentEvent::TurnComplete {
                         final_text: full_text.clone(),

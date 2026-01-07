@@ -15,7 +15,7 @@ use tokio::task::JoinHandle;
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::events::{AgentEvent, ToolOutput};
-use crate::core::session::{self, Session, SessionEvent};
+use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
 use crate::providers::anthropic::ChatMessage;
 
 /// Options for exec execution.
@@ -35,7 +35,7 @@ impl From<&ExecOptions> for AgentOptions {
 
 /// Sends a prompt to the LLM and streams text response to stdout.
 ///
-/// If a session is provided, logs the user prompt and final assistant response,
+/// If a thread is provided, logs the user prompt and final assistant response,
 /// plus tool_use and tool_result events for full history.
 /// Implements tool loop - if the model requests tools, executes them and continues.
 /// Returns the complete response text.
@@ -44,7 +44,7 @@ impl From<&ExecOptions> for AgentOptions {
 pub async fn run_exec(
     prompt: &str,
     config: &Config,
-    mut session: Option<Session>,
+    mut thread: Option<ThreadLog>,
     options: &ExecOptions,
 ) -> Result<String> {
     let effective =
@@ -71,9 +71,9 @@ pub async fn run_exec(
         );
     }
 
-    // Log user message to session (ensures meta is written for new sessions)
-    if let Some(ref mut s) = session {
-        s.append(&SessionEvent::user_message(prompt))?;
+    // Log user message to thread (ensures meta is written for new threads)
+    if let Some(ref mut s) = thread {
+        s.append(&ThreadEvent::user_message(prompt))?;
     }
 
     let messages = vec![ChatMessage::user(prompt)];
@@ -86,15 +86,15 @@ pub async fn run_exec(
     // Spawn renderer task
     let renderer_handle = spawn_exec_renderer_task(render_rx);
 
-    // Spawn persist task if session exists
-    let persist_handle = if let Some(sess) = session.clone() {
+    // Spawn persist task if thread exists
+    let persist_handle = if let Some(thread_log_handle) = thread.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
         let broadcaster =
             crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
-        let persist = session::spawn_persist_task(sess, persist_rx);
+        let persist = thread_log::spawn_thread_persist_task(thread_log_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
-        // No session - just broadcast to renderer
+        // No thread - just broadcast to renderer
         let broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
         Some((broadcaster, tokio::spawn(async {}))) // Dummy persist task
     };
@@ -119,9 +119,9 @@ pub async fn run_exec(
     // Propagate error after tasks complete
     let (final_text, _messages) = result?;
 
-    // Log assistant response to session
-    if let Some(ref mut s) = session {
-        s.append(&SessionEvent::assistant_message(&final_text))?;
+    // Log assistant response to thread
+    if let Some(ref mut s) = thread {
+        s.append(&ThreadEvent::assistant_message(&final_text))?;
     }
 
     Ok(final_text)
