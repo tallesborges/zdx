@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use super::OverlayAction;
+use super::OverlayUpdate;
 use crate::core::thread_log::ThreadSummary;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -71,33 +71,25 @@ impl ThreadPickerState {
         render_thread_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        let (action, commands) = match key.code {
+        match key.code {
             KeyCode::Char('t') if ctrl => {
                 self.scope = self.scope.toggle();
                 self.selected = 0;
                 self.offset = 0;
-                (
-                    Some(OverlayAction::Effects(self.preview_selected_effects())),
-                    vec![],
-                )
+                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
             }
-            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
-                Some(OverlayAction::close()),
-                vec![
+            KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                OverlayUpdate::close().with_mutations(vec![
                     StateMutation::Transcript(TranscriptMutation::ReplaceCells(
                         self.original_cells.clone(),
                     )),
                     StateMutation::Transcript(TranscriptMutation::ResetScroll),
                     StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
-                ],
-            ),
+                ])
+            }
             KeyCode::Up | KeyCode::Char('k') => {
                 let total = self.visible_threads().len();
                 if self.selected > 0 {
@@ -107,10 +99,7 @@ impl ThreadPickerState {
                     }
                 }
                 self.selected = self.selected.min(total.saturating_sub(1));
-                (
-                    Some(OverlayAction::Effects(self.preview_selected_effects())),
-                    vec![],
-                )
+                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let total = self.visible_threads().len();
@@ -120,50 +109,36 @@ impl ThreadPickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                (
-                    Some(OverlayAction::Effects(self.preview_selected_effects())),
-                    vec![],
-                )
+                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
             }
             KeyCode::Enter => {
                 if tui.agent_state.is_running() {
-                    return (
-                        None,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(
-                                "Stop the current task first.".to_string(),
-                            ),
-                        )],
-                    );
+                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Stop the current task first.".to_string(),
+                        ),
+                    )]);
                 }
 
                 if let Some(thread) = self.selected_thread() {
-                    (
-                        Some(OverlayAction::close_with(vec![UiEffect::LoadThread {
-                            thread_id: thread.id.clone(),
-                        }])),
-                        vec![],
-                    )
+                    OverlayUpdate::close().with_effects(vec![UiEffect::LoadThread {
+                        thread_id: thread.id.clone(),
+                    }])
                 } else {
-                    (Some(OverlayAction::close()), vec![])
+                    OverlayUpdate::close()
                 }
             }
             KeyCode::Char('y') => {
                 if let Some(thread) = self.selected_thread() {
-                    (
-                        Some(OverlayAction::Effects(vec![UiEffect::CopyToClipboard {
-                            text: thread.id.clone(),
-                        }])),
-                        vec![],
-                    )
+                    OverlayUpdate::stay().with_effects(vec![UiEffect::CopyToClipboard {
+                        text: thread.id.clone(),
+                    }])
                 } else {
-                    (None, vec![])
+                    OverlayUpdate::stay()
                 }
             }
-            _ => (None, vec![]),
-        };
-
-        (action, commands)
+            _ => OverlayUpdate::stay(),
+        }
     }
 
     pub fn selected_thread(&self) -> Option<&ThreadSummary> {

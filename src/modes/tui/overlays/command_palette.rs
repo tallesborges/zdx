@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
-use super::{OverlayAction, OverlayRequest};
+use super::{OverlayRequest, OverlayUpdate};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::shared::clipboard::Clipboard;
@@ -44,62 +44,56 @@ impl CommandPaletteState {
         render_command_palette(frame, self, area, input_y)
     }
 
-    pub fn handle_key(
-        &mut self,
-        tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        let (action, commands) = match key.code {
+        match key.code {
             KeyCode::Esc => {
                 let mut commands = Vec::new();
                 if self.insert_slash_on_escape {
                     commands.push(StateMutation::Input(InputMutation::InsertChar('/')));
                 }
-                (Some(OverlayAction::close()), commands)
+                OverlayUpdate::close().with_mutations(commands)
             }
-            KeyCode::Char('c') if ctrl => (Some(OverlayAction::close()), vec![]),
+            KeyCode::Char('c') if ctrl => OverlayUpdate::close(),
             KeyCode::Up => {
                 let count = self.filtered_commands().len();
                 if count > 0 && self.selected > 0 {
                     self.selected -= 1;
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Down => {
                 let count = self.filtered_commands().len();
                 if count > 0 && self.selected < count - 1 {
                     self.selected += 1;
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(cmd_name) = self.get_selected_command_name() {
                     let (open_overlay, effects, commands) = execute_command(tui, cmd_name);
-                    let action = match open_overlay {
-                        Some(request) => Some(OverlayAction::open(request)),
-                        None => Some(OverlayAction::close_with(effects)),
+                    let update = match open_overlay {
+                        Some(request) => OverlayUpdate::open(request),
+                        None => OverlayUpdate::close(),
                     };
-                    (action, commands)
+                    update.with_effects(effects).with_mutations(commands)
                 } else {
-                    (Some(OverlayAction::close()), vec![])
+                    OverlayUpdate::close()
                 }
             }
             KeyCode::Backspace => {
                 self.filter.pop();
                 self.clamp_selection();
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Char(c) if !ctrl => {
                 self.filter.push(c);
                 self.clamp_selection();
-                (None, vec![])
+                OverlayUpdate::stay()
             }
-            _ => (None, vec![]),
-        };
-
-        (action, commands)
+            _ => OverlayUpdate::stay(),
+        }
     }
 
     pub fn filtered_commands(&self) -> Vec<&'static Command> {

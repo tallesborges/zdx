@@ -5,7 +5,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
-use super::OverlayAction;
+use super::OverlayUpdate;
 use crate::models::available_models;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -29,53 +29,46 @@ impl ModelPickerState {
         render_model_picker(frame, self, area, input_y)
     }
 
-    pub fn handle_key(
-        &mut self,
-        _tui: &TuiState,
-        key: KeyEvent,
-    ) -> (Option<OverlayAction>, Vec<StateMutation>) {
+    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
-        let (action, commands) = match key.code {
+        match key.code {
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                (Some(OverlayAction::close()), vec![])
+                OverlayUpdate::close()
             }
             KeyCode::Up => {
                 if self.selected > 0 {
                     self.selected -= 1;
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Down => {
                 if self.selected < available_models().len().saturating_sub(1) {
                     self.selected += 1;
                 }
-                (None, vec![])
+                OverlayUpdate::stay()
             }
             KeyCode::Enter => {
                 let Some(model) = available_models().get(self.selected) else {
-                    return (Some(OverlayAction::close()), vec![]);
+                    return OverlayUpdate::close();
                 };
 
                 let model_id = model.id.to_string();
                 let display_name = model.display_name;
 
-                (
-                    Some(OverlayAction::close_with(vec![UiEffect::PersistModel {
+                OverlayUpdate::close()
+                    .with_effects(vec![UiEffect::PersistModel {
                         model: model_id.clone(),
-                    }])),
-                    vec![
+                    }])
+                    .with_mutations(vec![
                         StateMutation::Config(ConfigMutation::SetModel(model_id)),
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
                             format!("Switched to {}", display_name),
                         )),
-                    ],
-                )
+                    ])
             }
-            _ => (None, vec![]),
-        };
-
-        (action, commands)
+            _ => OverlayUpdate::stay(),
+        }
     }
 }
 
