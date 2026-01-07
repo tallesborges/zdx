@@ -544,3 +544,37 @@ pub fn spawn_file_discovery(root: &std::path::Path) -> UiEvent {
 
     UiEvent::FileDiscoveryStarted { rx, cancel }
 }
+
+// ============================================================================
+// Direct Bash Execution Handlers
+// ============================================================================
+
+/// Spawns async direct bash command execution (for `!` shortcut).
+pub fn spawn_bash_execution(id: String, command: String, root: PathBuf) -> UiEvent {
+    use crate::core::events::ToolOutput;
+    use crate::tools::{ToolContext, bash};
+
+    let (tx, rx) = oneshot::channel::<ToolOutput>();
+    let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+    let cmd = command.clone();
+
+    tokio::spawn(async move {
+        let ctx = ToolContext::with_timeout(root, None);
+        let run_fut = bash::run(&cmd, &ctx, None);
+        tokio::select! {
+            result = run_fut => {
+                let _ = tx.send(result);
+            }
+            _ = &mut cancel_rx => {
+                let _ = tx.send(ToolOutput::canceled("Interrupted by user"));
+            }
+        }
+    });
+
+    UiEvent::BashExecutionStarted {
+        id,
+        command,
+        rx,
+        cancel: cancel_tx,
+    }
+}

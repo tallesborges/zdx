@@ -25,6 +25,9 @@ pub enum UiEffect {
     /// Interrupt the running agent task.
     InterruptAgent,
 
+    /// Interrupt the running direct bash command.
+    InterruptBash,
+
     /// Spawn async token exchange for login.
     SpawnTokenExchange {
         provider: ProviderKind,
@@ -93,4 +96,7 @@ pub enum UiEffect {
         user_input: Option<String>,
         turn_number: usize,
     },
+
+    /// Execute a bash command directly (user `!` shortcut).
+    ExecuteBash { command: String },
 }

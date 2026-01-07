@@ -147,35 +147,47 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
         (state.spinner_frame / transcript::SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len();
     let spinner = SPINNER_FRAMES[spinner_idx];
 
-    let spans: Vec<Span> = match &state.agent_state {
-        AgentState::Idle => {
-            // Show helpful shortcuts when idle
-            vec![
-                Span::styled("Ctrl+P", Style::default().fg(Color::DarkGray)),
-                Span::raw(" commands  "),
-                Span::styled("Ctrl+C", Style::default().fg(Color::DarkGray)),
-                Span::raw(" quit"),
-            ]
-        }
-        AgentState::Waiting { .. } => {
-            vec![
-                Span::styled(spinner, Style::default().fg(Color::Yellow)),
-                Span::raw(" "),
-                Span::styled("Waiting...", Style::default().fg(Color::Yellow)),
-                Span::raw("  "),
-                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
-                Span::raw(" to cancel"),
-            ]
-        }
-        AgentState::Streaming { .. } => {
-            vec![
-                Span::styled(spinner, Style::default().fg(Color::Cyan)),
-                Span::raw(" "),
-                Span::styled("Streaming...", Style::default().fg(Color::Cyan)),
-                Span::raw("  "),
-                Span::styled("Esc", Style::default().fg(Color::DarkGray)),
-                Span::raw(" to cancel"),
-            ]
+    // Check for bash execution first (takes priority over idle state)
+    let spans: Vec<Span> = if state.bash_rx.is_some() {
+        vec![
+            Span::styled(spinner, Style::default().fg(Color::Green)),
+            Span::raw(" "),
+            Span::styled("Running bash...", Style::default().fg(Color::Green)),
+            Span::raw("  "),
+            Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+            Span::raw(" to cancel"),
+        ]
+    } else {
+        match &state.agent_state {
+            AgentState::Idle => {
+                // Show helpful shortcuts when idle
+                vec![
+                    Span::styled("Ctrl+P", Style::default().fg(Color::DarkGray)),
+                    Span::raw(" commands  "),
+                    Span::styled("Ctrl+C", Style::default().fg(Color::DarkGray)),
+                    Span::raw(" quit"),
+                ]
+            }
+            AgentState::Waiting { .. } => {
+                vec![
+                    Span::styled(spinner, Style::default().fg(Color::Yellow)),
+                    Span::raw(" "),
+                    Span::styled("Waiting...", Style::default().fg(Color::Yellow)),
+                    Span::raw("  "),
+                    Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                    Span::raw(" to cancel"),
+                ]
+            }
+            AgentState::Streaming { .. } => {
+                vec![
+                    Span::styled(spinner, Style::default().fg(Color::Cyan)),
+                    Span::raw(" "),
+                    Span::styled("Streaming...", Style::default().fg(Color::Cyan)),
+                    Span::raw("  "),
+                    Span::styled("Esc", Style::default().fg(Color::DarkGray)),
+                    Span::raw(" to cancel"),
+                ]
+            }
         }
     };
 
