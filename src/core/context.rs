@@ -237,14 +237,21 @@ pub fn build_effective_system_prompt_with_paths(
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use std::sync::{Mutex, MutexGuard};
 
     use tempfile::tempdir;
 
     use super::*;
 
+    /// Mutex to serialize tests that modify ZDX_HOME environment variable.
+    /// This prevents race conditions when tests run in parallel.
+    static ZDX_HOME_MUTEX: Mutex<()> = Mutex::new(());
+
     struct EnvGuard {
         key: &'static str,
         old: Option<String>,
+        #[allow(dead_code)]
+        lock: MutexGuard<'static, ()>,
     }
 
     impl Drop for EnvGuard {
@@ -258,15 +265,17 @@ mod tests {
                     std::env::remove_var(self.key);
                 }
             }
+            // lock is dropped here, releasing the mutex
         }
     }
 
     fn set_env_path(key: &'static str, value: &std::path::Path) -> EnvGuard {
+        let lock = ZDX_HOME_MUTEX.lock().unwrap();
         let old = std::env::var(key).ok();
         unsafe {
             std::env::set_var(key, value);
         }
-        EnvGuard { key, old }
+        EnvGuard { key, old, lock }
     }
 
     #[test]
@@ -299,6 +308,10 @@ mod tests {
 
     #[test]
     fn test_collect_agents_paths_deduplicates() {
+        // Set ZDX_HOME to a temp directory to avoid interference from parallel tests
+        let dir = tempdir().unwrap();
+        let _guard = set_env_path("ZDX_HOME", dir.path());
+
         // If root is ZDX_HOME, should not have duplicates
         let zdx_home = paths::zdx_home();
         let paths = collect_agents_paths(&zdx_home);
@@ -389,6 +402,10 @@ mod tests {
     #[test]
     fn test_collect_agents_paths_order_under_home() {
         // Test that paths are collected in correct order when under home
+        // Set ZDX_HOME to a temp directory to avoid interference from parallel tests
+        let zdx_dir = tempdir().unwrap();
+        let _guard = set_env_path("ZDX_HOME", zdx_dir.path());
+
         if let Some(home) = dirs::home_dir() {
             // Create a path that's conceptually under home
             // (we just verify the function produces ordered paths)
