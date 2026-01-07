@@ -26,14 +26,13 @@ use anyhow::{Context, Result};
 use crossterm::event;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
 
 use crate::config::Config;
 use crate::core::interrupt;
 use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::app::{AgentState, AppState};
 use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
-use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
@@ -206,10 +205,7 @@ impl TuiRuntime {
         // Agent streaming is kept separate for now - could be unified later
         self.collect_agent_events(&mut events);
 
-        // Poll for handoff generation result (still uses oneshot)
-        self.collect_handoff_result(&mut events);
-
-        // Drain inbox - all other async results arrive here
+        // Drain inbox - all async results arrive here
         self.collect_inbox_events(&mut events);
 
         // Determine poll timeout based on activity level.
@@ -263,28 +259,6 @@ impl TuiRuntime {
             };
 
             events.push(UiEvent::Agent((*event).clone()));
-        }
-    }
-
-    /// Collects handoff generation result if available.
-    ///
-    /// Handoff still uses oneshot because it has a cancel mechanism that
-    /// needs to be stored in state.
-    fn collect_handoff_result(&mut self, events: &mut Vec<UiEvent>) {
-        let HandoffState::Generating { rx, .. } = &mut self.state.tui.input.handoff else {
-            return;
-        };
-
-        match rx.try_recv() {
-            Ok(result) => {
-                events.push(UiEvent::HandoffResult(result));
-            }
-            Err(oneshot::error::TryRecvError::Empty) => {}
-            Err(oneshot::error::TryRecvError::Closed) => {
-                events.push(UiEvent::HandoffResult(Err(
-                    "Handoff generation task failed".to_string(),
-                )));
-            }
         }
     }
 
@@ -479,14 +453,14 @@ impl TuiRuntime {
                 );
             }
 
-            // Handoff effects (still uses oneshot for cancel mechanism)
+            // Handoff effects (returns started event + future for cancel support)
             UiEffect::StartHandoff { goal } => {
                 if let Some(ref thread_log) = self.state.tui.thread.thread_log {
                     let thread_id = thread_log.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
-                    let event =
-                        handoff::spawn_handoff_generation(&thread_id, &goal, root.as_path());
-                    self.dispatch_event(event);
+                    let (started, fut) =
+                        handoff::handoff_generation(&thread_id, &goal, root.as_path());
+                    self.spawn_effect_pair(started, fut);
                 } else {
                     self.dispatch_event(UiEvent::HandoffResult(Err(
                         "Handoff requires an active thread.".to_string(),

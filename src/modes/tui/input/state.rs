@@ -25,8 +25,6 @@ pub enum HandoffState {
     Generating {
         /// The goal text (preserved for retry on failure).
         goal: String,
-        /// Receiver for the generation result (single value).
-        rx: oneshot::Receiver<Result<String, String>>,
         /// Handle to cancel the background operation (send or drop to cancel).
         cancel: oneshot::Sender<()>,
     },

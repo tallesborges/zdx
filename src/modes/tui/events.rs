@@ -152,7 +152,6 @@ pub enum UiEvent {
     /// Handoff generation spawned; reducer should set handoff generating state.
     HandoffGenerationStarted {
         goal: String,
-        rx: oneshot::Receiver<Result<String, String>>,
         cancel: oneshot::Sender<()>,
     },
 

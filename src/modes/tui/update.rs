@@ -151,8 +151,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             apply_mutations(&mut app.tui, commands);
             vec![]
         }
-        UiEvent::HandoffGenerationStarted { goal, rx, cancel } => {
-            app.tui.input.handoff = HandoffState::Generating { goal, rx, cancel };
+        UiEvent::HandoffGenerationStarted { goal, cancel } => {
+            app.tui.input.handoff = HandoffState::Generating { goal, cancel };
             vec![]
         }
         UiEvent::HandoffThreadCreated { thread_log } => {
