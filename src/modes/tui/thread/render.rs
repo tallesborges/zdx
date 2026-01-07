@@ -10,7 +10,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::core::thread_log::{self, short_thread_id};
-use crate::modes::tui::overlays::ThreadPickerState;
+use crate::modes::tui::overlays::{ThreadPickerState, ThreadScope};
 
 const MAX_VISIBLE_THREADS: usize = 10;
 
@@ -25,19 +25,22 @@ pub fn render_thread_picker(
         InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
     };
 
-    let thread_count = picker.threads.len();
-    let visible_count = thread_count.min(MAX_VISIBLE_THREADS);
+    let visible_threads = picker.visible_threads();
+    let visible_count = visible_threads.len().min(MAX_VISIBLE_THREADS);
+    let thread_count = match picker.scope {
+        ThreadScope::All => visible_threads.len(),
+        ThreadScope::Current => picker.all_threads.len(),
+    };
 
     let picker_width = 60;
     let picker_height = (visible_count as u16 + 5).max(7);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
-    render_overlay_container(
-        frame,
-        picker_area,
-        &format!("Threads ({})", thread_count),
-        Color::Blue,
-    );
+    let title = match picker.scope {
+        ThreadScope::All => format!("Threads ({})", thread_count),
+        ThreadScope::Current => format!("Threads ({}/{})", visible_threads.len(), thread_count),
+    };
+    render_overlay_container(frame, picker_area, &title, Color::Blue);
 
     let inner_area = Rect::new(
         picker_area.x + 1,
@@ -46,10 +49,13 @@ pub fn render_thread_picker(
         picker_area.height.saturating_sub(2),
     );
 
-    if picker.threads.is_empty() {
-        let empty_msg = Paragraph::new("No threads found")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
+    if visible_threads.is_empty() {
+        let empty_msg = Paragraph::new(match picker.scope {
+            ThreadScope::Current => "No threads in this workspace",
+            ThreadScope::All => "No threads found",
+        })
+        .style(Style::default().fg(Color::DarkGray))
+        .alignment(Alignment::Center);
         frame.render_widget(empty_msg, inner_area);
         return;
     }
@@ -63,12 +69,12 @@ pub fn render_thread_picker(
         list_height as u16,
     );
 
-    let items: Vec<ListItem> = picker
-        .threads
+    let items: Vec<ListItem> = visible_threads
         .iter()
         .skip(picker.offset)
         .take(list_height)
         .map(|thread| {
+            let thread = *thread;
             let timestamp = thread
                 .modified
                 .and_then(thread_log::format_timestamp)
@@ -120,6 +126,13 @@ pub fn render_thread_picker(
             InputHint::new("↑↓", "navigate"),
             InputHint::new("Enter", "select"),
             copy_hint,
+            InputHint::new(
+                "Ctrl+T",
+                match picker.scope {
+                    ThreadScope::Current => "all",
+                    ThreadScope::All => "current",
+                },
+            ),
             InputHint::new("Esc", "cancel"),
         ],
         Color::Blue,

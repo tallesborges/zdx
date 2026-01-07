@@ -242,9 +242,37 @@ mod tests {
 
     use super::*;
 
+    struct EnvGuard {
+        key: &'static str,
+        old: Option<String>,
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old {
+                unsafe {
+                    std::env::set_var(self.key, value);
+                }
+            } else {
+                unsafe {
+                    std::env::remove_var(self.key);
+                }
+            }
+        }
+    }
+
+    fn set_env_path(key: &'static str, value: &std::path::Path) -> EnvGuard {
+        let old = std::env::var(key).ok();
+        unsafe {
+            std::env::set_var(key, value);
+        }
+        EnvGuard { key, old }
+    }
+
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
         let dir = tempdir().unwrap();
+        let _guard = set_env_path("ZDX_HOME", dir.path());
         let paths = collect_agents_paths(dir.path());
 
         // Should include ZDX_HOME/AGENTS.md

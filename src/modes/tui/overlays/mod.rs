@@ -37,7 +37,7 @@ pub use model_picker::ModelPickerState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use thinking_picker::ThinkingPickerState;
-pub use thread_picker::ThreadPickerState;
+pub use thread_picker::{ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
