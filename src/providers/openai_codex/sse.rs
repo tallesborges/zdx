@@ -59,10 +59,10 @@ impl<S> CodexSseParser<S> {
             return Some(Ok(event));
         }
 
-        let pos = find_double_newline(&self.buffer)?;
+        let (pos, delim_len) = find_double_newline(&self.buffer)?;
 
         let chunk = self.buffer.drain(..pos).collect::<Vec<u8>>();
-        self.buffer.drain(..2); // remove "\n\n"
+        self.buffer.drain(..delim_len); // remove "\n\n" or "\r\n\r\n"
 
         let chunk_text = String::from_utf8_lossy(&chunk);
         let data = match parse_sse_data(&chunk_text) {
@@ -279,8 +279,26 @@ where
     }
 }
 
-fn find_double_newline(buffer: &[u8]) -> Option<usize> {
-    buffer.windows(2).position(|w| w == b"\n\n")
+/// Finds the position of a double newline in the buffer.
+/// Handles both LF (\n\n) and CRLF (\r\n\r\n) line endings.
+/// Returns the position and the length of the delimiter (2 or 4 bytes).
+fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
+    let crlf_pos = buffer.windows(4).position(|w| w == b"\r\n\r\n");
+    let lf_pos = buffer.windows(2).position(|w| w == b"\n\n");
+
+    match (crlf_pos, lf_pos) {
+        (Some(c), Some(l)) => {
+            // Return whichever comes first
+            if l <= c {
+                Some((l, 2))
+            } else {
+                Some((c, 4))
+            }
+        }
+        (Some(c), None) => Some((c, 4)),
+        (None, Some(l)) => Some((l, 2)),
+        (None, None) => None,
+    }
 }
 
 fn parse_sse_data(chunk: &str) -> Result<Option<Value>> {

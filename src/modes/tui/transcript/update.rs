@@ -70,7 +70,20 @@ pub fn handle_agent_event(
             }
             AgentEvent::ToolRequested { id, name, input } => {
                 let tool_cell = HistoryCell::tool_running(id, name, input.clone());
+                let cell_id = tool_cell.id();
                 transcript.cells.push(tool_cell);
+
+                // Transition from Waiting to Streaming so UI shows activity
+                if let AgentState::Waiting { .. } = agent_state {
+                    let old_state = std::mem::replace(agent_state, AgentState::Idle);
+                    if let AgentState::Waiting { rx } = old_state {
+                        *agent_state = AgentState::Streaming {
+                            rx,
+                            cell_id,
+                            pending_delta: String::new(),
+                        };
+                    }
+                }
                 vec![]
             }
             AgentEvent::ToolInputReady { id, input, .. } => {

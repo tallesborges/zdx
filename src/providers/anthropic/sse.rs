@@ -123,12 +123,12 @@ impl<S> SseParser<S> {
     /// Returns None if no complete event is available yet.
     fn try_parse_event(&mut self) -> Option<Result<StreamEvent>> {
         // SSE events are separated by double newlines
-        // Find \n\n in the byte buffer
-        let event_end = self.buffer.windows(2).position(|w| w == b"\n\n")?;
+        // Handle both LF (\n\n) and CRLF (\r\n\r\n) line endings
+        let (event_end, delim_len) = find_double_newline(&self.buffer)?;
 
         // Extract the event bytes and remove from buffer
         let event_bytes: Vec<u8> = self.buffer.drain(..event_end).collect();
-        self.buffer.drain(..2); // remove the \n\n delimiter
+        self.buffer.drain(..delim_len); // remove the delimiter
 
         // Decode UTF-8 only after we have the complete event
         let event_text = match std::str::from_utf8(&event_bytes) {
@@ -333,6 +333,28 @@ struct SseErrorInfo {
     #[serde(rename = "type")]
     error_type: String,
     message: String,
+}
+
+/// Finds the position of a double newline in the buffer.
+/// Handles both LF (\n\n) and CRLF (\r\n\r\n) line endings.
+/// Returns the position and the length of the delimiter (2 or 4 bytes).
+fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
+    let crlf_pos = buffer.windows(4).position(|w| w == b"\r\n\r\n");
+    let lf_pos = buffer.windows(2).position(|w| w == b"\n\n");
+
+    match (crlf_pos, lf_pos) {
+        (Some(c), Some(l)) => {
+            // Return whichever comes first
+            if l <= c {
+                Some((l, 2))
+            } else {
+                Some((c, 4))
+            }
+        }
+        (Some(c), None) => Some((c, 4)),
+        (None, Some(l)) => Some((l, 2)),
+        (None, None) => None,
+    }
 }
 
 #[cfg(test)]
@@ -571,6 +593,40 @@ data: {"type":"message_stop"}
             .map(|c| Ok(bytes::Bytes::copy_from_slice(c)))
             .collect();
         let stream = futures_util::stream::iter(chunks);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], StreamEvent::Ping);
+        assert_eq!(events[1], StreamEvent::MessageStop);
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_handles_crlf_line_endings() {
+        // Simulate HTTP response with CRLF line endings (Windows-style / HTTP standard)
+        let data = "event: ping\r\ndata: {\"type\":\"ping\"}\r\n\r\nevent: message_stop\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n";
+        let stream = mock_byte_stream(data);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], StreamEvent::Ping);
+        assert_eq!(events[1], StreamEvent::MessageStop);
+    }
+
+    #[tokio::test]
+    async fn test_sse_parser_handles_mixed_line_endings() {
+        // First event uses LF, second uses CRLF - parser should find earliest delimiter
+        let data = "event: ping\ndata: {\"type\":\"ping\"}\n\nevent: message_stop\r\ndata: {\"type\":\"message_stop\"}\r\n\r\n";
+        let stream = mock_byte_stream(data);
         let mut parser = SseParser::new(stream);
 
         let mut events = Vec::new();
