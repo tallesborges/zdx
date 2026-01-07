@@ -6,11 +6,9 @@ A fast, beautiful agentic coding assistant.
 
 ## What it is
 
-- **4 tools only:** `bash`, `read` (files + images), `edit`, `write` — everything else can be handled through bash
+- **Just 4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
 - **Handoff** — AMP-style context-aware prompt generation to start fresh threads ([learn more](https://ampcode.com/news/handoff))
 - **No MCP support** — if you need it, check out [mcporter](https://github.com/steipete/mcporter)
-
-Good enough to build itself — I use zdx to develop zdx.
 
 ## Why it exists
 
@@ -18,8 +16,6 @@ Built because I needed something:
 - **Productive** — shortcuts, command palette, everything at my fingertips
 - **Fast and lightweight** — can spawn multiple instances when needed
 - **Pleasant to use** — beautiful and elegant, for all-day use
-
-Also a way to learn TUI development, contribute to open source, and build an AI product using AI.
 
 ## Features
 
