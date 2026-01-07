@@ -7,31 +7,92 @@ use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{AuthCommand, StateCommand};
+use crate::providers::{ProviderKind, provider_for_model};
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
     AwaitingCode {
+        provider: ProviderKind,
         url: String,
         pkce_verifier: String,
+        oauth_state: Option<String>,
         input: String,
         error: Option<String>,
     },
-    Exchanging,
+    Exchanging {
+        provider: ProviderKind,
+    },
 }
 
 impl LoginState {
-    pub fn open() -> (Self, Vec<UiEffect>) {
-        use crate::providers::oauth::anthropic;
+    pub fn open(tui: &TuiState) -> (Self, Vec<UiEffect>) {
+        let provider = provider_for_model(&tui.config.model);
+        Self::open_with_provider(provider, None, true)
+    }
 
-        let pkce = anthropic::generate_pkce();
-        let url = anthropic::build_auth_url(&pkce);
-        let state = LoginState::AwaitingCode {
-            url: url.clone(),
-            pkce_verifier: pkce.verifier,
-            input: String::new(),
-            error: None,
-        };
-        (state, vec![UiEffect::OpenBrowser { url }])
+    pub fn reopen(provider: ProviderKind, error: String) -> Self {
+        let (state, _) = Self::open_with_provider(provider, Some(error), false);
+        state
+    }
+
+    fn open_with_provider(
+        provider: ProviderKind,
+        error: Option<String>,
+        open_browser: bool,
+    ) -> (Self, Vec<UiEffect>) {
+        match provider {
+            ProviderKind::Anthropic => {
+                use crate::providers::oauth::anthropic;
+
+                let pkce = anthropic::generate_pkce();
+                let url = anthropic::build_auth_url(&pkce);
+                let state = LoginState::AwaitingCode {
+                    provider,
+                    url: url.clone(),
+                    pkce_verifier: pkce.verifier,
+                    oauth_state: None,
+                    input: String::new(),
+                    error,
+                };
+                let effects = if open_browser {
+                    vec![UiEffect::OpenBrowser { url }]
+                } else {
+                    vec![]
+                };
+                (state, effects)
+            }
+            ProviderKind::OpenAICodex => {
+                use crate::providers::oauth::openai_codex;
+
+                let pkce = openai_codex::generate_pkce();
+                let oauth_state = uuid::Uuid::new_v4().to_string();
+                let url = openai_codex::build_auth_url(&pkce, &oauth_state);
+                let oauth_state_copy = oauth_state.clone();
+                let state = LoginState::AwaitingCode {
+                    provider,
+                    url: url.clone(),
+                    pkce_verifier: pkce.verifier,
+                    oauth_state: Some(oauth_state),
+                    input: String::new(),
+                    error,
+                };
+                let mut effects = vec![UiEffect::StartLocalAuthCallback {
+                    provider,
+                    state: Some(oauth_state_copy),
+                }];
+                if open_browser {
+                    effects.push(UiEffect::OpenBrowser { url });
+                }
+                (state, effects)
+            }
+        }
+    }
+
+    pub fn provider(&self) -> ProviderKind {
+        match self {
+            LoginState::AwaitingCode { provider, .. } => *provider,
+            LoginState::Exchanging { provider } => *provider,
+        }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
@@ -46,30 +107,64 @@ impl LoginState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
-            LoginState::AwaitingCode { input, .. } => match key.code {
+            LoginState::AwaitingCode {
+                provider,
+                input,
+                pkce_verifier,
+                oauth_state,
+                error,
+                ..
+            } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => (
                     Some(OverlayAction::close()),
-                    vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
+                    vec![
+                        StateCommand::Auth(AuthCommand::ClearLoginRx),
+                        StateCommand::Auth(AuthCommand::ClearLoginCallbackRx),
+                    ],
                 ),
                 KeyCode::Enter => {
-                    let code = input.trim().to_string();
+                    let provider = *provider;
+                    let pkce_verifier = pkce_verifier.clone();
+                    let oauth_state = oauth_state.clone();
+                    let code = input.trim();
                     if code.is_empty() {
                         return (None, vec![]);
                     }
 
-                    let verifier = match self {
-                        LoginState::AwaitingCode { pkce_verifier, .. } => pkce_verifier.clone(),
-                        _ => return (None, vec![]),
+                    let code = match provider {
+                        ProviderKind::Anthropic => code.to_string(),
+                        ProviderKind::OpenAICodex => {
+                            use crate::providers::oauth::openai_codex;
+
+                            let (parsed_code, provided_state) =
+                                openai_codex::parse_authorization_input(code);
+                            if let Some(expected) = oauth_state
+                                && let Some(provided) = provided_state
+                                && provided != expected
+                            {
+                                *error = Some("State mismatch.".to_string());
+                                return (None, vec![]);
+                            }
+                            match parsed_code {
+                                Some(value) => value,
+                                None => {
+                                    *error =
+                                        Some("Authorization code cannot be empty.".to_string());
+                                    return (None, vec![]);
+                                }
+                            }
+                        }
                     };
 
-                    *self = LoginState::Exchanging;
+                    *self = LoginState::Exchanging { provider };
 
                     (
                         Some(OverlayAction::Effects(vec![UiEffect::SpawnTokenExchange {
+                            provider,
                             code,
-                            verifier,
+                            verifier: pkce_verifier,
                         }])),
-                        vec![],
+                        vec![StateCommand::Auth(AuthCommand::ClearLoginCallbackRx)],
                     )
                 }
                 KeyCode::Backspace => {
@@ -82,11 +177,14 @@ impl LoginState {
                 }
                 _ => (None, vec![]),
             },
-            LoginState::Exchanging => {
+            LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
                     (
                         Some(OverlayAction::close()),
-                        vec![StateCommand::Auth(AuthCommand::ClearLoginRx)],
+                        vec![
+                            StateCommand::Auth(AuthCommand::ClearLoginRx),
+                            StateCommand::Auth(AuthCommand::ClearLoginCallbackRx),
+                        ],
                     )
                 } else {
                     (None, vec![])

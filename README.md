@@ -24,6 +24,7 @@ Also a way to learn TUI development, contribute to open source, and build an AI 
 ## Features
 
 - **Anthropic provider** with API key or OAuth authentication
+- **Open AI (Codex) provider** with OAuth authentication
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display

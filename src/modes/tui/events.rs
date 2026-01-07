@@ -133,6 +133,12 @@ pub enum UiEvent {
         rx: mpsc::Receiver<Result<(), String>>,
     },
 
+    /// Local OAuth callback listener spawned.
+    LoginCallbackStarted { rx: mpsc::Receiver<Option<String>> },
+
+    /// Local OAuth callback returned with an optional code.
+    LoginCallbackResult(Option<String>),
+
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
     HandoffResult(Result<String, String>),
 

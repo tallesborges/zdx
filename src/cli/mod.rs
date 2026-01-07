@@ -84,6 +84,9 @@ enum Commands {
         /// Provider to log in to
         #[arg(long)]
         anthropic: bool,
+        /// Provider to log in to
+        #[arg(long = "openai-codex")]
+        openai_codex: bool,
     },
 
     /// Log out from a provider (clear cached token)
@@ -91,6 +94,9 @@ enum Commands {
         /// Provider to log out from
         #[arg(long)]
         anthropic: bool,
+        /// Provider to log out from
+        #[arg(long = "openai-codex")]
+        openai_codex: bool,
     },
 }
 
@@ -190,18 +196,22 @@ async fn dispatch(cli: Cli) -> Result<()> {
             ConfigCommands::Init => commands::config::init(),
         },
 
-        Commands::Login { anthropic } => {
-            if !anthropic {
-                anyhow::bail!("Please specify a provider: --anthropic");
-            }
-            commands::auth::login_anthropic().await
-        }
+        Commands::Login {
+            anthropic,
+            openai_codex,
+        } => match (anthropic, openai_codex) {
+            (true, false) => commands::auth::login_anthropic().await,
+            (false, true) => commands::auth::login_openai_codex().await,
+            _ => anyhow::bail!("Please specify a provider: --anthropic or --openai-codex"),
+        },
 
-        Commands::Logout { anthropic } => {
-            if !anthropic {
-                anyhow::bail!("Please specify a provider: --anthropic");
-            }
-            commands::auth::logout_anthropic()
-        }
+        Commands::Logout {
+            anthropic,
+            openai_codex,
+        } => match (anthropic, openai_codex) {
+            (true, false) => commands::auth::logout_anthropic(),
+            (false, true) => commands::auth::logout_openai_codex(),
+            _ => anyhow::bail!("Please specify a provider: --anthropic or --openai-codex"),
+        },
     }
 }

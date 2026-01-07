@@ -20,7 +20,11 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     let popup_height = 9;
     let popup_area = calculate_overlay_area(area, area.height, popup_width, popup_height);
 
-    render_overlay_container(frame, popup_area, "Anthropic Login", Color::Cyan);
+    let title = match login_state.provider() {
+        crate::providers::ProviderKind::Anthropic => "Anthropic Login",
+        crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
+    };
+    render_overlay_container(frame, popup_area, title, Color::Cyan);
 
     let inner = Rect::new(
         popup_area.x + 2,
@@ -31,7 +35,11 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
 
     let lines: Vec<Line> = match login_state {
         LoginState::AwaitingCode {
-            url, input, error, ..
+            provider,
+            url,
+            input,
+            error,
+            ..
         } => {
             let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
 
@@ -57,7 +65,10 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    "Paste auth code:",
+                    match provider {
+                        crate::providers::ProviderKind::Anthropic => "Paste auth code:",
+                        crate::providers::ProviderKind::OpenAICodex => "Paste auth code or URL:",
+                    },
                     Style::default().fg(Color::White),
                 )),
                 Line::from(Span::styled(
@@ -79,7 +90,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             )));
             l
         }
-        LoginState::Exchanging => vec![
+        LoginState::Exchanging { .. } => vec![
             Line::from(""),
             Line::from(Span::styled(
                 "Exchanging code...",

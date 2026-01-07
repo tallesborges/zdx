@@ -19,16 +19,21 @@ use crate::modes::tui::shared::internal::{
 pub struct CommandPaletteState {
     pub filter: String,
     pub selected: usize,
+    pub provider: crate::providers::ProviderKind,
     /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
     pub insert_slash_on_escape: bool,
 }
 
 impl CommandPaletteState {
-    pub fn open(insert_slash_on_escape: bool) -> (Self, Vec<UiEffect>) {
+    pub fn open(
+        insert_slash_on_escape: bool,
+        provider: crate::providers::ProviderKind,
+    ) -> (Self, Vec<UiEffect>) {
         (
             Self {
                 filter: String::new(),
                 selected: 0,
+                provider,
                 insert_slash_on_escape,
             },
             vec![],
@@ -135,7 +140,7 @@ fn execute_command(
         }
         "login" => (Some(OverlayRequest::Login), vec![], vec![]),
         "logout" => {
-            let (effects, commands) = execute_logout();
+            let (effects, commands) = execute_logout(tui);
             (None, effects, commands)
         }
         "rename" => {
@@ -159,20 +164,29 @@ fn execute_command(
     }
 }
 
-fn execute_logout() -> (Vec<UiEffect>, Vec<StateCommand>) {
-    use crate::providers::oauth::anthropic;
+fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateCommand>) {
+    use crate::providers::oauth::{anthropic, openai_codex};
+    use crate::providers::provider_for_model;
 
     let mut commands = Vec::new();
-    match anthropic::clear_credentials() {
-        Ok(true) => {
+    let provider = provider_for_model(&tui.config.model);
+    let result = match provider {
+        crate::providers::ProviderKind::Anthropic => {
+            anthropic::clear_credentials().map(|had| (had, "Anthropic"))
+        }
+        crate::providers::ProviderKind::OpenAICodex => {
+            openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))
+        }
+    };
+
+    match result {
+        Ok((true, label)) => {
             commands.push(StateCommand::Auth(AuthCommand::RefreshStatus));
             commands.push(StateCommand::Transcript(
-                TranscriptCommand::AppendSystemMessage(
-                    "Logged out from Anthropic OAuth.".to_string(),
-                ),
+                TranscriptCommand::AppendSystemMessage(format!("Logged out from {} OAuth.", label)),
             ));
         }
-        Ok(false) => {
+        Ok((false, _)) => {
             commands.push(StateCommand::Transcript(
                 TranscriptCommand::AppendSystemMessage(
                     "No OAuth credentials to clear.".to_string(),
@@ -360,7 +374,21 @@ pub fn render_command_palette(
             .iter()
             .map(|cmd| {
                 let name = cmd.display_name();
-                let desc = cmd.description;
+                let desc = match cmd.name {
+                    "login" => match palette.provider {
+                        crate::providers::ProviderKind::Anthropic => "Login with Anthropic OAuth",
+                        crate::providers::ProviderKind::OpenAICodex => {
+                            "Login with OpenAI Codex OAuth"
+                        }
+                    },
+                    "logout" => match palette.provider {
+                        crate::providers::ProviderKind::Anthropic => "Logout from Anthropic OAuth",
+                        crate::providers::ProviderKind::OpenAICodex => {
+                            "Logout from OpenAI Codex OAuth"
+                        }
+                    },
+                    _ => cmd.description,
+                };
                 let line = Line::from(vec![
                     Span::styled(
                         format!("{:<16}", name),
@@ -409,14 +437,15 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
-        let (state, _) = CommandPaletteState::open(true);
+        let (state, _) = CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), COMMANDS.len());
     }
 
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
-        let (mut state, _) = CommandPaletteState::open(true);
+        let (mut state, _) =
+            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 1);
@@ -425,7 +454,8 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
-        let (mut state, _) = CommandPaletteState::open(true);
+        let (mut state, _) =
+            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
@@ -433,7 +463,8 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection() {
-        let (mut state, _) = CommandPaletteState::open(true);
+        let (mut state, _) =
+            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         state.selected = 10;
         state.clamp_selection();
         assert_eq!(state.selected, COMMANDS.len() - 1);
@@ -441,7 +472,8 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
-        let (mut state, _) = CommandPaletteState::open(true);
+        let (mut state, _) =
+            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         state.filter = "xyz".to_string();
         state.selected = 5;
         state.clamp_selection();

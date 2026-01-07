@@ -8,6 +8,7 @@
 
 use crate::config::ThinkingLevel;
 use crate::core::session::SessionEvent;
+use crate::providers::ProviderKind;
 
 /// Effects returned by the reducer for the runtime to execute.
 ///
@@ -25,7 +26,17 @@ pub enum UiEffect {
     InterruptAgent,
 
     /// Spawn async token exchange for login.
-    SpawnTokenExchange { code: String, verifier: String },
+    SpawnTokenExchange {
+        provider: ProviderKind,
+        code: String,
+        verifier: String,
+    },
+
+    /// Start a local OAuth callback listener (if supported).
+    StartLocalAuthCallback {
+        provider: ProviderKind,
+        state: Option<String>,
+    },
 
     /// Open a URL in the system browser.
     OpenBrowser { url: String },

@@ -147,11 +147,12 @@ Error:
 
 ## 10) Providers
 
-**Shipped:** Anthropic Claude (streaming + tool loop).
+**Shipped:** Anthropic Claude (streaming + tool loop), OpenAI Codex (Responses API + tool loop).
 
 - API keys are env-only: `ANTHROPIC_API_KEY` (never stored in config).
 - OAuth tokens may be cached in `<base>/oauth.json`.
 - Auth precedence: `oauth.json` > `ANTHROPIC_API_KEY`.
+- OpenAI Codex uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --openai-codex`).
 
 ---
 

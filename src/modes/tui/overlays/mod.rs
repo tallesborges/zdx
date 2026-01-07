@@ -170,7 +170,8 @@ mod tests {
         let none: Option<Overlay> = None;
         assert!(none.is_none());
 
-        let (palette, _) = CommandPaletteState::open(true);
+        let (palette, _) =
+            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
         let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 
@@ -182,7 +183,9 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::ThinkingPicker(thinking));
         assert!(overlay.is_some());
 
-        let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging));
+        let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging {
+            provider: crate::providers::ProviderKind::Anthropic,
+        }));
         assert!(overlay.is_some());
 
         let (file_picker, _) = FilePickerState::open(0);

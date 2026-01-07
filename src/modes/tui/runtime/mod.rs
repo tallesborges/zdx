@@ -174,6 +174,7 @@ impl TuiRuntime {
 
         // Poll for login exchange result
         self.collect_login_result(&mut events);
+        self.collect_login_callback_result(&mut events);
 
         // Poll for handoff generation result
         self.collect_handoff_result(&mut events);
@@ -250,6 +251,24 @@ impl TuiRuntime {
                 events.push(UiEvent::LoginResult(
                     Err("Exchange task failed".to_string()),
                 ));
+            }
+        }
+    }
+
+    /// Collects local OAuth callback result if available.
+    fn collect_login_callback_result(&mut self, events: &mut Vec<UiEvent>) {
+        let Some(rx) = &mut self.state.tui.auth.login_callback_rx else {
+            return;
+        };
+        match rx.try_recv() {
+            Ok(code) => {
+                self.state.tui.auth.login_callback_rx = None;
+                events.push(UiEvent::LoginCallbackResult(code));
+            }
+            Err(mpsc::error::TryRecvError::Empty) => {}
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                self.state.tui.auth.login_callback_rx = None;
+                events.push(UiEvent::LoginCallbackResult(None));
             }
         }
     }
@@ -431,8 +450,16 @@ impl TuiRuntime {
             }
 
             // Auth effects
-            UiEffect::SpawnTokenExchange { code, verifier } => {
-                let event = handlers::spawn_token_exchange(&code, &verifier);
+            UiEffect::SpawnTokenExchange {
+                provider,
+                code,
+                verifier,
+            } => {
+                let event = handlers::spawn_token_exchange(provider, &code, &verifier);
+                self.dispatch_event(event);
+            }
+            UiEffect::StartLocalAuthCallback { provider, state } => {
+                let event = handlers::spawn_local_auth_callback(provider, state);
                 self.dispatch_event(event);
             }
 
