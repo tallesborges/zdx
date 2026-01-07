@@ -148,7 +148,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let spinner = SPINNER_FRAMES[spinner_idx];
 
     // Check for bash execution first (takes priority over idle state)
-    let spans: Vec<Span> = if state.bash_rx.is_some() {
+    let spans: Vec<Span> = if state.bash_running.is_some() {
         vec![
             Span::styled(spinner, Style::default().fg(Color::Green)),
             Span::raw(" "),

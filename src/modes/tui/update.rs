@@ -84,6 +84,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::LoginResult(result) => {
+            // Clear in-progress flag
+            app.tui.auth.login_in_progress = false;
+
             let provider = match &app.overlay {
                 Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
                     *provider
@@ -110,15 +113,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             vec![]
         }
-        UiEvent::LoginExchangeStarted { rx } => {
-            app.tui.auth.login_rx = Some(rx);
-            vec![]
-        }
-        UiEvent::LoginCallbackStarted { rx } => {
-            app.tui.auth.login_callback_rx = Some(rx);
-            vec![]
-        }
         UiEvent::LoginCallbackResult(code) => {
+            // Clear in-progress flag
+            app.tui.auth.callback_in_progress = false;
             let mut effects = Vec::new();
             if let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay {
                 match login_state {
@@ -174,16 +171,15 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             )));
             vec![UiEffect::StartAgentTurn]
         }
-        UiEvent::FileDiscoveryStarted { rx, cancel } => {
+        UiEvent::FileDiscoveryStarted { cancel } => {
             if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
-                picker.discovery_rx = Some(rx);
                 picker.discovery_cancel = Some(cancel);
             }
             vec![]
         }
         UiEvent::FilesDiscovered(files) => {
             if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
-                picker.discovery_rx = None;
+                picker.discovery_cancel = None;
             }
             overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
@@ -201,10 +197,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::BashExecutionStarted {
             id,
             command,
-            rx,
             cancel,
         } => {
-            app.tui.bash_rx = Some((id.clone(), command.clone(), rx));
+            app.tui.bash_running = Some((id.clone(), command.clone()));
             app.tui.bash_cancel = Some(cancel);
 
             // Create a running tool cell immediately (shows spinner)
@@ -217,9 +212,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::BashExecuted { id, result } => {
-            // Get command from bash_rx before clearing
-            let command = app.tui.bash_rx.as_ref().map(|(_, cmd, _)| cmd.clone());
-            app.tui.bash_rx = None;
+            // Get command from bash_running before clearing
+            let command = app.tui.bash_running.as_ref().map(|(_, cmd)| cmd.clone());
+            app.tui.bash_running = None;
             app.tui.bash_cancel = None;
 
             // Find the existing tool cell and set the result
@@ -263,15 +258,15 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
         // Thread async result events - delegate to thread feature
         UiEvent::Thread(thread_event) => match thread_event {
-            ThreadUiEvent::ListStarted { rx } => {
-                app.tui.thread_ops.list_rx = Some(rx);
+            ThreadUiEvent::ListStarted => {
+                app.tui.thread_ops.list_loading = true;
                 vec![]
             }
             ThreadUiEvent::ListLoaded {
                 threads,
                 original_cells,
             } => {
-                app.tui.thread_ops.list_rx = None;
+                app.tui.thread_ops.list_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ListLoaded {
                         threads,
@@ -297,14 +292,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::ListFailed { error } => {
-                app.tui.thread_ops.list_rx = None;
+                app.tui.thread_ops.list_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
-            ThreadUiEvent::LoadStarted { rx } => {
-                app.tui.thread_ops.load_rx = Some(rx);
+            ThreadUiEvent::LoadStarted => {
+                app.tui.thread_ops.load_loading = true;
                 vec![]
             }
             ThreadUiEvent::Loaded {
@@ -315,7 +310,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 thread_log,
                 usage,
             } => {
-                app.tui.thread_ops.load_rx = None;
+                app.tui.thread_ops.load_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Loaded {
                         thread_id,
@@ -345,18 +340,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::LoadFailed { error } => {
-                app.tui.thread_ops.load_rx = None;
+                app.tui.thread_ops.load_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::LoadFailed { error });
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
-            ThreadUiEvent::PreviewStarted { rx } => {
-                app.tui.thread_ops.preview_rx = Some(rx);
+            ThreadUiEvent::PreviewStarted => {
+                app.tui.thread_ops.preview_loading = true;
                 vec![]
             }
             ThreadUiEvent::PreviewLoaded { cells } => {
-                app.tui.thread_ops.preview_rx = None;
+                app.tui.thread_ops.preview_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
                 apply_mutations(&mut app.tui, commands);
@@ -379,25 +374,25 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::PreviewFailed => {
-                app.tui.thread_ops.preview_rx = None;
+                app.tui.thread_ops.preview_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
-            ThreadUiEvent::CreateStarted { rx } => {
-                app.tui.thread_ops.create_rx = Some(rx);
+            ThreadUiEvent::CreateStarted => {
+                app.tui.thread_ops.create_loading = true;
                 vec![]
             }
-            ThreadUiEvent::ForkStarted { rx } => {
-                app.tui.thread_ops.fork_rx = Some(rx);
+            ThreadUiEvent::ForkStarted => {
+                app.tui.thread_ops.fork_loading = true;
                 vec![]
             }
             ThreadUiEvent::Created {
                 thread_log,
                 context_paths,
             } => {
-                app.tui.thread_ops.create_rx = None;
+                app.tui.thread_ops.create_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Created {
                         thread_log,
@@ -432,7 +427,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 user_input,
                 turn_number,
             } => {
-                app.tui.thread_ops.fork_rx = None;
+                app.tui.thread_ops.fork_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ForkedLoaded {
                         thread_id,
@@ -464,25 +459,25 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::CreateFailed { error } => {
-                app.tui.thread_ops.create_rx = None;
+                app.tui.thread_ops.create_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::CreateFailed { error });
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
             ThreadUiEvent::ForkFailed { error } => {
-                app.tui.thread_ops.fork_rx = None;
+                app.tui.thread_ops.fork_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
-            ThreadUiEvent::RenameStarted { rx } => {
-                app.tui.thread_ops.rename_rx = Some(rx);
+            ThreadUiEvent::RenameStarted => {
+                app.tui.thread_ops.rename_loading = true;
                 vec![]
             }
             ThreadUiEvent::Renamed { thread_id, title } => {
-                app.tui.thread_ops.rename_rx = None;
+                app.tui.thread_ops.rename_loading = false;
                 let (mut effects, commands, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Renamed { thread_id, title });
                 apply_mutations(&mut app.tui, commands);
@@ -505,7 +500,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::RenameFailed { error } => {
-                app.tui.thread_ops.rename_rx = None;
+                app.tui.thread_ops.rename_loading = false;
                 let (effects, commands, _) =
                     thread::handle_thread_event(ThreadUiEvent::RenameFailed { error });
                 apply_mutations(&mut app.tui, commands);
@@ -673,7 +668,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     let (effects, commands, overlay_request) = input::handle_main_key(
         &mut app.tui.input,
         &app.tui.agent_state,
-        app.tui.bash_rx.is_some(),
+        app.tui.bash_running.is_some(),
         thread_id,
         key,
     );

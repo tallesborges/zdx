@@ -113,8 +113,8 @@ impl LoginState {
             } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                     OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::ClearLoginRx),
-                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
+                        StateMutation::Auth(AuthMutation::SetLoginInProgress(false)),
+                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
                     ])
                 }
                 KeyCode::Enter => {
@@ -160,7 +160,7 @@ impl LoginState {
                             verifier: pkce_verifier,
                         }])
                         .with_mutations(vec![StateMutation::Auth(
-                            AuthMutation::ClearLoginCallbackRx,
+                            AuthMutation::SetCallbackInProgress(false),
                         )])
                 }
                 KeyCode::Backspace => {
@@ -176,8 +176,8 @@ impl LoginState {
             LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
                     OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::ClearLoginRx),
-                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
+                        StateMutation::Auth(AuthMutation::SetLoginInProgress(false)),
+                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
                     ])
                 } else {
                     OverlayUpdate::stay()

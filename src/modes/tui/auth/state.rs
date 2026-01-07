@@ -2,8 +2,6 @@
 //!
 //! Manages authentication type detection and login flow state.
 
-use tokio::sync::mpsc;
-
 use crate::modes::tui::shared::internal::AuthMutation;
 
 /// Authentication type indicator for status line.
@@ -42,15 +40,18 @@ impl AuthStatus {
 /// Authentication state.
 ///
 /// Encapsulates the current auth type and login flow state.
+///
+/// With the inbox pattern, login results arrive directly via the runtime's
+/// event inbox, so we no longer need per-operation receivers.
 pub struct AuthState {
     /// Current auth type indicator (cached, refreshed on login/logout).
     pub auth_type: AuthStatus,
 
-    /// Receiver for async login token exchange result.
-    pub login_rx: Option<tokio::sync::mpsc::Receiver<Result<(), String>>>,
+    /// Whether a login exchange is in progress.
+    pub login_in_progress: bool,
 
-    /// Receiver for local OAuth callback (code) when available.
-    pub login_callback_rx: Option<mpsc::Receiver<Option<String>>>,
+    /// Whether a local OAuth callback is being awaited.
+    pub callback_in_progress: bool,
 }
 
 impl Default for AuthState {
@@ -64,8 +65,8 @@ impl AuthState {
     pub fn new() -> Self {
         Self {
             auth_type: AuthStatus::detect(),
-            login_rx: None,
-            login_callback_rx: None,
+            login_in_progress: false,
+            callback_in_progress: false,
         }
     }
 
@@ -78,8 +79,10 @@ impl AuthState {
     pub fn apply(&mut self, mutation: AuthMutation) {
         match mutation {
             AuthMutation::RefreshStatus => self.refresh(),
-            AuthMutation::ClearLoginRx => self.login_rx = None,
-            AuthMutation::ClearLoginCallbackRx => self.login_callback_rx = None,
+            AuthMutation::SetLoginInProgress(in_progress) => self.login_in_progress = in_progress,
+            AuthMutation::SetCallbackInProgress(in_progress) => {
+                self.callback_in_progress = in_progress
+            }
         }
     }
 }

@@ -35,7 +35,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
-use crate::core::events::{AgentEvent, ToolOutput};
+use crate::core::events::AgentEvent;
 use crate::core::thread_log::ThreadLog;
 // Feature state imports
 use crate::modes::tui::auth::AuthState;
@@ -154,8 +154,8 @@ pub struct TuiState {
     pub agent_state: AgentState,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
-    /// Receiver for direct bash command execution results (id, command, receiver).
-    pub bash_rx: Option<(String, String, oneshot::Receiver<ToolOutput>)>,
+    /// Currently running bash command info (id, command) - results come via inbox.
+    pub bash_running: Option<(String, String)>,
     /// Cancel sender for direct bash command execution.
     pub bash_cancel: Option<oneshot::Sender<()>>,
     /// Git branch name (cached at startup).
@@ -222,7 +222,7 @@ impl TuiState {
             system_prompt,
             agent_state: AgentState::Idle,
             spinner_frame: 0,
-            bash_rx: None,
+            bash_running: None,
             bash_cancel: None,
             git_branch,
             display_path,

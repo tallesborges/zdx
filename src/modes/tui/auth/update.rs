@@ -19,8 +19,9 @@ pub fn handle_login_result(
     result: Result<(), String>,
     provider: crate::providers::ProviderKind,
 ) -> (Vec<StateMutation>, LoginOverlayAction) {
-    auth.login_rx = None;
-    auth.login_callback_rx = None;
+    // Clear in-progress flags
+    auth.login_in_progress = false;
+    auth.callback_in_progress = false;
     match result {
         Ok(()) => {
             auth.refresh();

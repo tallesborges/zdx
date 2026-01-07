@@ -8,7 +8,6 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use tokio::sync::oneshot;
 
 use super::OverlayUpdate;
 use crate::modes::tui::input::InputState;
@@ -20,6 +19,10 @@ const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
 const MAX_FILES: usize = 1000;
 const MAX_DEPTH: usize = 15;
 
+/// File picker state.
+///
+/// With the inbox pattern, file discovery results arrive via the inbox.
+/// The `discovery_cancel` flag is used to cancel the background file walk.
 #[derive(Debug)]
 pub struct FilePickerState {
     pub trigger_pos: usize,
@@ -28,7 +31,6 @@ pub struct FilePickerState {
     pub selected: usize,
     pub offset: usize,
     pub loading: bool,
-    pub discovery_rx: Option<oneshot::Receiver<Vec<PathBuf>>>,
     /// Set to true on Drop to stop the background file walk.
     pub discovery_cancel: Option<Arc<AtomicBool>>,
 }
@@ -51,7 +53,6 @@ impl FilePickerState {
                 selected: 0,
                 offset: 0,
                 loading: true,
-                discovery_rx: None,
                 discovery_cancel: None,
             },
             vec![UiEffect::DiscoverFiles],
