@@ -11,7 +11,7 @@ use std::sync::atomic::AtomicBool;
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::core::events::AgentEvent;
+use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
@@ -167,6 +167,17 @@ pub enum UiEvent {
 
     /// Clipboard copy completed successfully.
     ClipboardCopied,
+
+    /// Direct bash execution started (for `!` shortcut).
+    BashExecutionStarted {
+        id: String,
+        command: String,
+        rx: oneshot::Receiver<ToolOutput>,
+        cancel: oneshot::Sender<()>,
+    },
+
+    /// Direct bash execution completed.
+    BashExecuted { id: String, result: ToolOutput },
 
     /// Thread async I/O results.
     Thread(ThreadUiEvent),

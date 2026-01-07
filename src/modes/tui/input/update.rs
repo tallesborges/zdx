@@ -31,6 +31,7 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 pub fn handle_main_key(
     input: &mut InputState,
     agent_state: &AgentState,
+    bash_running: bool,
     thread_id: Option<String>,
     key: crossterm::event::KeyEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
@@ -88,6 +89,8 @@ pub fn handle_main_key(
             // Ctrl+C: interrupt agent, clear input, or quit
             if agent_state.is_running() {
                 (vec![UiEffect::InterruptAgent], vec![], None)
+            } else if bash_running {
+                (vec![UiEffect::InterruptBash], vec![], None)
             } else if !input.get_text().is_empty() {
                 input.clear();
                 (vec![], vec![], None)
@@ -96,7 +99,7 @@ pub fn handle_main_key(
             }
         }
         KeyCode::Enter if !shift && !alt => {
-            return submit_input(input, agent_state, thread_id);
+            return submit_input(input, agent_state, bash_running, thread_id);
         }
         KeyCode::Char('j') if ctrl => {
             input.textarea.insert_newline();
@@ -110,6 +113,8 @@ pub fn handle_main_key(
                 (vec![], vec![], None)
             } else if agent_state.is_running() {
                 (vec![UiEffect::InterruptAgent], vec![], None)
+            } else if bash_running {
+                (vec![UiEffect::InterruptBash], vec![], None)
             } else {
                 input.clear();
                 (vec![], vec![], None)
@@ -213,9 +218,10 @@ pub fn handle_main_key(
 fn submit_input(
     input: &mut InputState,
     agent_state: &AgentState,
+    bash_running: bool,
     thread_id: Option<String>,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
-    if !matches!(agent_state, AgentState::Idle) {
+    if !matches!(agent_state, AgentState::Idle) || bash_running {
         return (vec![], vec![], None);
     }
 
@@ -270,6 +276,33 @@ fn submit_input(
                 None,
             );
         }
+    }
+
+    // Bang command: !<command> - execute bash directly
+    if let Some(command) = trimmed.strip_prefix('!') {
+        let command = command.trim();
+        if command.is_empty() {
+            input.clear();
+            return (
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Usage: !<command> (e.g., !ls -la)".to_string(),
+                    ),
+                )],
+                None,
+            );
+        }
+        input.history.push(text.clone());
+        input.reset_navigation();
+        input.clear();
+        return (
+            vec![UiEffect::ExecuteBash {
+                command: command.to_string(),
+            }],
+            vec![],
+            None,
+        );
     }
 
     // Check if we're submitting the handoff goal (to trigger generation)

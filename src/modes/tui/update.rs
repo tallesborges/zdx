@@ -197,6 +197,70 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
 
+        // Direct bash execution events
+        UiEvent::BashExecutionStarted {
+            id,
+            command,
+            rx,
+            cancel,
+        } => {
+            app.tui.bash_rx = Some((id.clone(), command.clone(), rx));
+            app.tui.bash_cancel = Some(cancel);
+
+            // Create a running tool cell immediately (shows spinner)
+            let input = serde_json::json!({ "command": command });
+            let cell = HistoryCell::tool_running(&id, "bash", input);
+            app.tui.transcript.cells.push(cell);
+
+            // Don't add to messages yet - wait for result so we can send
+            // a single user message with command + output
+            vec![]
+        }
+        UiEvent::BashExecuted { id, result } => {
+            // Get command from bash_rx before clearing
+            let command = app.tui.bash_rx.as_ref().map(|(_, cmd, _)| cmd.clone());
+            app.tui.bash_rx = None;
+            app.tui.bash_cancel = None;
+
+            // Find the existing tool cell and set the result
+            if let Some(cell) =
+                app.tui.transcript.cells.iter_mut().find(
+                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == &id),
+                )
+            {
+                cell.set_tool_result(result.clone());
+            }
+
+            // Persist to thread and add to messages for LLM context
+            let mut effects = vec![];
+            if let Some(cmd) = command
+                && app.tui.thread.thread_log.is_some()
+            {
+                // Format as a user message describing what the user did
+                // This makes it clear to the LLM that the USER ran the command
+                let user_message = format!(
+                    "[I executed a bash command]\n$ {}\n\nResult:\n{}",
+                    cmd,
+                    result.to_json_string()
+                );
+
+                // Save as user message event to thread log
+                effects.push(UiEffect::SaveThread {
+                    event: crate::core::thread_log::ThreadEvent::user_message(&user_message),
+                });
+
+                // Add user message for LLM context
+                app.tui
+                    .thread
+                    .messages
+                    .push(crate::providers::anthropic::ChatMessage::user(
+                        &user_message,
+                    ));
+            }
+
+            effects
+        }
+
         // Thread async result events - delegate to thread feature
         UiEvent::Thread(thread_event) => match thread_event {
             ThreadUiEvent::ListStarted { rx } => {
@@ -606,8 +670,13 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .thread_log
         .as_ref()
         .map(|thread_log| thread_log.id.clone());
-    let (effects, commands, overlay_request) =
-        input::handle_main_key(&mut app.tui.input, &app.tui.agent_state, thread_id, key);
+    let (effects, commands, overlay_request) = input::handle_main_key(
+        &mut app.tui.input,
+        &app.tui.agent_state,
+        app.tui.bash_rx.is_some(),
+        thread_id,
+        key,
+    );
     apply_mutations(&mut app.tui, commands);
     if let Some(request) = overlay_request
         && app.overlay.is_none()

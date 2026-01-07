@@ -103,9 +103,16 @@ impl TuiRuntime {
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
             // The agent will send an Interrupted event which resets the flag.
-            if interrupt::is_interrupted() && !self.state.tui.agent_state.is_running() {
-                self.state.tui.should_quit = true;
-                break;
+            if interrupt::is_interrupted() {
+                if self.state.tui.agent_state.is_running() {
+                    // Let the agent handle the interrupt.
+                } else if self.state.tui.bash_rx.is_some() {
+                    self.execute_effect(UiEffect::InterruptBash);
+                    interrupt::reset();
+                } else {
+                    self.state.tui.should_quit = true;
+                    break;
+                }
             }
 
             // Collect events from various sources
@@ -132,6 +139,7 @@ impl TuiRuntime {
                 let marks_dirty = match &event {
                     UiEvent::Tick => {
                         self.state.tui.agent_state.is_running()
+                            || self.state.tui.bash_rx.is_some()
                             || self.state.tui.transcript.selection.has_pending_clear()
                     }
                     UiEvent::Frame { .. } => false,
@@ -182,6 +190,9 @@ impl TuiRuntime {
         // Poll for file discovery result
         self.collect_file_discovery_result(&mut events);
 
+        // Poll for bash execution result
+        self.collect_bash_result(&mut events);
+
         // Poll for thread async operation results
         self.collect_thread_results(&mut events);
 
@@ -196,6 +207,7 @@ impl TuiRuntime {
             Some(Overlay::FilePicker(picker)) if picker.discovery_rx.is_some()
         );
         let needs_fast_poll = self.state.tui.agent_state.is_running()
+            || self.state.tui.bash_rx.is_some()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.auth.login_rx.is_some()
             || self.state.tui.input.handoff.is_generating()
@@ -314,6 +326,30 @@ impl TuiRuntime {
             Err(oneshot::error::TryRecvError::Closed) => {
                 // Emit empty list so picker shows "No files found"
                 events.push(UiEvent::FilesDiscovered(Vec::new()));
+            }
+        }
+    }
+
+    /// Collects bash execution result if available.
+    fn collect_bash_result(&mut self, events: &mut Vec<UiEvent>) {
+        use crate::core::events::ToolOutput;
+
+        let Some((id, _command, rx)) = &mut self.state.tui.bash_rx else {
+            return;
+        };
+
+        match rx.try_recv() {
+            Ok(result) => {
+                let id = id.clone();
+                events.push(UiEvent::BashExecuted { id, result });
+            }
+            Err(oneshot::error::TryRecvError::Empty) => {}
+            Err(oneshot::error::TryRecvError::Closed) => {
+                // Channel closed unexpectedly (task panic/abort) - emit failure to update cell
+                let id = id.clone();
+                let result =
+                    ToolOutput::failure("task_failed", "Bash task terminated unexpectedly");
+                events.push(UiEvent::BashExecuted { id, result });
             }
         }
     }
@@ -448,6 +484,11 @@ impl TuiRuntime {
             UiEffect::InterruptAgent => {
                 handlers::interrupt_agent(&self.state.tui);
             }
+            UiEffect::InterruptBash => {
+                if let Some(cancel) = self.state.tui.bash_cancel.take() {
+                    let _ = cancel.send(());
+                }
+            }
 
             // Auth effects
             UiEffect::SpawnTokenExchange {
@@ -580,6 +621,17 @@ impl TuiRuntime {
                 use crate::modes::tui::shared::Clipboard;
                 if Clipboard::copy(&text).is_ok() {
                     self.dispatch_event(UiEvent::ClipboardCopied);
+                }
+            }
+
+            // Direct bash execution effects
+            UiEffect::ExecuteBash { command } => {
+                // Only spawn if not already running a bash command
+                if self.state.tui.bash_rx.is_none() {
+                    let id = format!("user-bash-{}", chrono::Utc::now().timestamp_millis());
+                    let root = self.state.tui.agent_opts.root.clone();
+                    let event = handlers::spawn_bash_execution(id, command, root);
+                    self.dispatch_event(event);
                 }
             }
         }

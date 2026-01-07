@@ -76,6 +76,17 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
     }
 }
 
+/// Executes a bash command directly (convenience wrapper).
+///
+/// This is a simpler API that takes the command string directly,
+/// useful for direct user invocation (e.g., `!` shortcut).
+pub async fn run(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
+    match run_command(command, ctx, timeout).await {
+        Ok(output) => output.into_tool_output(),
+        Err(e) => e,
+    }
+}
+
 /// Runs a shell command in the context's root directory.
 async fn run_command(
     command: &str,
