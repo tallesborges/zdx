@@ -17,16 +17,20 @@ pub enum LoginOverlayAction {
 pub fn handle_login_result(
     auth: &mut AuthState,
     result: Result<(), String>,
+    provider: crate::providers::ProviderKind,
 ) -> (Vec<StateCommand>, LoginOverlayAction) {
     auth.login_rx = None;
+    auth.login_callback_rx = None;
     match result {
         Ok(()) => {
             auth.refresh();
+            let message = match provider {
+                crate::providers::ProviderKind::Anthropic => "Logged in with Anthropic OAuth.",
+                crate::providers::ProviderKind::OpenAICodex => "Logged in with OpenAI Codex OAuth.",
+            };
             (
                 vec![StateCommand::Transcript(
-                    TranscriptCommand::AppendSystemMessage(
-                        "Logged in with Anthropic OAuth.".to_string(),
-                    ),
+                    TranscriptCommand::AppendSystemMessage(message.to_string()),
                 )],
                 LoginOverlayAction::Close,
             )

@@ -84,7 +84,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::LoginResult(result) => {
-            let (commands, overlay_action) = auth::handle_login_result(&mut app.tui.auth, result);
+            let provider = match &app.overlay {
+                Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
+                    *provider
+                }
+                Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
+                    provider,
+                    ..
+                })) => *provider,
+                _ => crate::providers::provider_for_model(&app.tui.config.model),
+            };
+            let (commands, overlay_action) =
+                auth::handle_login_result(&mut app.tui.auth, result, provider);
             apply_state_commands(&mut app.tui, commands);
 
             match overlay_action {
@@ -92,18 +103,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     app.overlay = None;
                 }
                 auth::LoginOverlayAction::Reopen { error } => {
-                    use crate::providers::oauth::anthropic;
-
-                    let pkce = anthropic::generate_pkce();
-                    let url = anthropic::build_auth_url(&pkce);
-                    app.overlay = Some(overlays::Overlay::Login(
-                        overlays::LoginState::AwaitingCode {
-                            url,
-                            pkce_verifier: pkce.verifier,
-                            input: String::new(),
-                            error: Some(error),
-                        },
-                    ));
+                    app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
+                        provider, error,
+                    )));
                 }
             }
             vec![]
@@ -111,6 +113,41 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::LoginExchangeStarted { rx } => {
             app.tui.auth.login_rx = Some(rx);
             vec![]
+        }
+        UiEvent::LoginCallbackStarted { rx } => {
+            app.tui.auth.login_callback_rx = Some(rx);
+            vec![]
+        }
+        UiEvent::LoginCallbackResult(code) => {
+            let mut effects = Vec::new();
+            if let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay {
+                match login_state {
+                    overlays::LoginState::AwaitingCode {
+                        provider,
+                        pkce_verifier,
+                        error,
+                        ..
+                    } if *provider == crate::providers::ProviderKind::OpenAICodex => match code {
+                        Some(code) => {
+                            *error = None;
+                            let verifier = pkce_verifier.clone();
+                            let provider = *provider;
+                            *login_state = overlays::LoginState::Exchanging { provider };
+                            effects.push(UiEffect::SpawnTokenExchange {
+                                provider,
+                                code,
+                                verifier,
+                            });
+                        }
+                        None => {
+                            *error =
+                                Some("Local login timed out. Paste the code or URL.".to_string());
+                        }
+                    },
+                    _ => {}
+                }
+            }
+            effects
         }
         UiEvent::HandoffResult(result) => {
             let commands = input::handle_handoff_result(&mut app.tui.input, result);
@@ -433,7 +470,8 @@ fn apply_overlay_action(app: &mut AppState, action: overlays::OverlayAction) -> 
 fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
         overlays::OverlayRequest::CommandPalette { command_mode } => {
-            let (state, effects) = overlays::CommandPaletteState::open(command_mode);
+            let provider = crate::providers::provider_for_model(&app.tui.config.model);
+            let (state, effects) = overlays::CommandPaletteState::open(command_mode, provider);
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
             effects
         }
@@ -449,7 +487,7 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::Login => {
-            let (state, effects) = overlays::LoginState::open();
+            let (state, effects) = overlays::LoginState::open(&app.tui);
             app.overlay = Some(overlays::Overlay::Login(state));
             effects
         }

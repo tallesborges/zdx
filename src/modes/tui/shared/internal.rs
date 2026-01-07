@@ -78,6 +78,7 @@ pub enum SessionCommand {
 pub enum AuthCommand {
     RefreshStatus,
     ClearLoginRx,
+    ClearLoginCallbackRx,
 }
 
 /// Config mutations requested by overlays.

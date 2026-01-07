@@ -6,7 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
 use super::OverlayAction;
-use crate::models::AVAILABLE_MODELS;
+use crate::models::available_models;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{ConfigCommand, StateCommand, TranscriptCommand};
@@ -18,7 +18,7 @@ pub struct ModelPickerState {
 
 impl ModelPickerState {
     pub fn open(current_model: &str) -> (Self, Vec<UiEffect>) {
-        let selected = AVAILABLE_MODELS
+        let selected = available_models()
             .iter()
             .position(|m| m.id == current_model)
             .unwrap_or(0);
@@ -47,13 +47,13 @@ impl ModelPickerState {
                 (None, vec![])
             }
             KeyCode::Down => {
-                if self.selected < AVAILABLE_MODELS.len() - 1 {
+                if self.selected < available_models().len().saturating_sub(1) {
                     self.selected += 1;
                 }
                 (None, vec![])
             }
             KeyCode::Enter => {
-                let Some(model) = AVAILABLE_MODELS.get(self.selected) else {
+                let Some(model) = available_models().get(self.selected) else {
                     return (Some(OverlayAction::close()), vec![]);
                 };
 
@@ -91,7 +91,7 @@ pub fn render_model_picker(
     };
 
     let picker_width = 30;
-    let picker_height = (AVAILABLE_MODELS.len() as u16 + 5).max(7);
+    let picker_height = (available_models().len() as u16 + 5).max(7);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     render_overlay_container(frame, picker_area, "Select Model", Color::Magenta);
@@ -106,7 +106,7 @@ pub fn render_model_picker(
     let list_height = inner_area.height.saturating_sub(2);
     let list_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, list_height);
 
-    let items: Vec<ListItem> = AVAILABLE_MODELS
+    let items: Vec<ListItem> = available_models()
         .iter()
         .map(|model| {
             let line = Line::from(Span::styled(

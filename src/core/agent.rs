@@ -5,10 +5,11 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use futures_util::StreamExt;
+use futures_util::{Stream, StreamExt};
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -21,6 +22,8 @@ use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
+use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
+use crate::providers::{ProviderKind, provider_for_model};
 use crate::tools::{self, ToolContext, ToolResult};
 
 /// Options for agent execution.
@@ -75,6 +78,29 @@ impl EventSender {
     /// Use for important events (tool lifecycle, final, errors).
     pub async fn send_important(&self, ev: AgentEvent) {
         let _ = self.tx.send(Arc::new(ev)).await;
+    }
+}
+
+enum ProviderClient {
+    Anthropic(AnthropicClient),
+    OpenAICodex(OpenAICodexClient),
+}
+
+impl ProviderClient {
+    async fn send_messages_stream(
+        &self,
+        messages: &[ChatMessage],
+        tools: &[crate::tools::ToolDefinition],
+        system: Option<&str>,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        match self {
+            ProviderClient::Anthropic(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::OpenAICodex(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+        }
     }
 }
 
@@ -192,18 +218,33 @@ pub async fn run_turn(
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
 
-    // Translate ThinkingLevel to raw API values
-    let thinking_enabled = config.thinking_level.is_enabled();
-    let thinking_budget_tokens = config.thinking_level.budget_tokens().unwrap_or(0);
+    let provider = provider_for_model(&config.model);
 
-    let anthropic_config = AnthropicConfig::from_env(
-        config.model.clone(),
-        config.effective_max_tokens(),
-        config.effective_anthropic_base_url(),
-        thinking_enabled,
-        thinking_budget_tokens,
-    )?;
-    let client = AnthropicClient::new(anthropic_config);
+    let client = match provider {
+        ProviderKind::Anthropic => {
+            // Translate ThinkingLevel to raw API values
+            let thinking_enabled = config.thinking_level.is_enabled();
+            let thinking_budget_tokens = config.thinking_level.budget_tokens().unwrap_or(0);
+
+            let anthropic_config = AnthropicConfig::from_env(
+                config.model.clone(),
+                config.effective_max_tokens(),
+                config.effective_anthropic_base_url(),
+                thinking_enabled,
+                thinking_budget_tokens,
+            )?;
+            ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
+        }
+        ProviderKind::OpenAICodex => {
+            let reasoning_effort = map_thinking_to_reasoning(config.thinking_level);
+            let openai_config = OpenAICodexConfig::new(
+                config.model.clone(),
+                config.effective_max_tokens(),
+                reasoning_effort,
+            );
+            ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
+        }
+    };
 
     let tool_ctx = ToolContext::with_timeout(
         options.root.canonicalize().unwrap_or(options.root.clone()),
@@ -489,6 +530,16 @@ pub async fn run_turn(
             .await;
 
         return Ok((full_text, messages));
+    }
+}
+
+fn map_thinking_to_reasoning(level: crate::config::ThinkingLevel) -> Option<String> {
+    match level {
+        crate::config::ThinkingLevel::Off => None,
+        crate::config::ThinkingLevel::Minimal => Some("low".to_string()),
+        crate::config::ThinkingLevel::Low => Some("low".to_string()),
+        crate::config::ThinkingLevel::Medium => Some("medium".to_string()),
+        crate::config::ThinkingLevel::High => Some("high".to_string()),
     }
 }
 

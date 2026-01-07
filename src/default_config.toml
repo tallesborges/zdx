@@ -27,3 +27,6 @@ tool_timeout_secs = 30
 # Options: off, minimal, low, medium, high
 # Note: max_tokens is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
+
+# OpenAI reasoning effort (used by Codex models).
+# Options: low, medium, high, xhigh

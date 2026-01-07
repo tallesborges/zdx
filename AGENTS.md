@@ -102,6 +102,18 @@
     - `src/providers/anthropic/sse.rs`: SSE parsing + stream events
     - `src/providers/anthropic/types.rs`: API DTOs + chat message types
     - `src/providers/anthropic/errors.rs`: provider error types
+  - `src/providers/openai_codex/`: OpenAI Codex (ChatGPT OAuth) client
+    - `src/providers/openai_codex/mod.rs`: module exports
+    - `src/providers/openai_codex/auth.rs`: OAuth credential resolution + config
+    - `src/providers/openai_codex/client.rs`: OpenAICodexClient + request wiring
+    - `src/providers/openai_codex/prompts/mod.rs`: Codex instruction loading and model normalization
+    - `src/providers/openai_codex/sse.rs`: SSE parsing for Responses API
+    - `src/providers/openai_codex/types.rs`: request DTOs
+    - `src/providers/openai_codex/prompts/gpt_5_codex_prompt.md`: Codex instructions (gpt-5 codex)
+    - `src/providers/openai_codex/prompts/gpt-5.2-codex_prompt.md`: Codex instructions (gpt-5.2 codex)
+    - `src/providers/openai_codex/prompts/gpt-5.1-codex-max_prompt.md`: Codex instructions (gpt-5.1 codex max)
+    - `src/providers/openai_codex/prompts/gpt_5_2_prompt.md`: Instructions (gpt-5.2)
+    - `src/providers/openai_codex/prompts/gpt_5_1_prompt.md`: Instructions (gpt-5.1)
   - `src/providers/oauth.rs`: OAuth token storage + retrieval
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 

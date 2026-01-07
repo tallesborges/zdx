@@ -7,9 +7,12 @@
 //! 1. Perform synchronous I/O and return results for the runtime to convert to events
 //! 2. Spawn async tasks that send results via channels (runtime collects and converts to events)
 
+use std::io::{Read, Write};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
+use std::time::Duration;
 
 use tokio::sync::{mpsc, oneshot};
 
@@ -347,8 +350,12 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 // ============================================================================
 
 /// Spawns a token exchange task.
-pub fn spawn_token_exchange(code: &str, verifier: &str) -> UiEvent {
-    use crate::providers::oauth::anthropic;
+pub fn spawn_token_exchange(
+    provider: crate::providers::ProviderKind,
+    code: &str,
+    verifier: &str,
+) -> UiEvent {
+    use crate::providers::oauth::{anthropic, openai_codex};
 
     let code = code.to_string();
     let pkce_verifier = verifier.to_string();
@@ -356,20 +363,140 @@ pub fn spawn_token_exchange(code: &str, verifier: &str) -> UiEvent {
     let (tx, rx) = mpsc::channel::<Result<(), String>>(1);
 
     tokio::spawn(async move {
-        let pkce = anthropic::Pkce {
-            verifier: pkce_verifier,
-            challenge: String::new(),
-        };
-        let result = match anthropic::exchange_code(&code, &pkce).await {
-            Ok(creds) => {
-                anthropic::save_credentials(&creds).map_err(|e| format!("Failed to save: {}", e))
+        let result = match provider {
+            crate::providers::ProviderKind::Anthropic => {
+                let pkce = anthropic::Pkce {
+                    verifier: pkce_verifier,
+                    challenge: String::new(),
+                };
+                match anthropic::exchange_code(&code, &pkce).await {
+                    Ok(creds) => anthropic::save_credentials(&creds)
+                        .map_err(|e| format!("Failed to save: {}", e)),
+                    Err(e) => Err(e.to_string()),
+                }
             }
-            Err(e) => Err(e.to_string()),
+            crate::providers::ProviderKind::OpenAICodex => {
+                let pkce = openai_codex::Pkce {
+                    verifier: pkce_verifier,
+                    challenge: String::new(),
+                };
+                match openai_codex::exchange_code(&code, &pkce).await {
+                    Ok(creds) => openai_codex::save_credentials(&creds)
+                        .map_err(|e| format!("Failed to save: {}", e)),
+                    Err(e) => Err(e.to_string()),
+                }
+            }
         };
         let _ = tx.send(result).await;
     });
 
     UiEvent::LoginExchangeStarted { rx }
+}
+
+/// Spawns a local OAuth callback listener (if supported).
+pub fn spawn_local_auth_callback(
+    provider: crate::providers::ProviderKind,
+    state: Option<String>,
+) -> UiEvent {
+    let (tx, rx) = mpsc::channel::<Option<String>>(1);
+
+    tokio::spawn(async move {
+        let code = match provider {
+            crate::providers::ProviderKind::OpenAICodex => wait_for_local_code(state.as_deref()),
+            crate::providers::ProviderKind::Anthropic => None,
+        };
+        let _ = tx.send(code).await;
+    });
+
+    UiEvent::LoginCallbackStarted { rx }
+}
+
+fn wait_for_local_code(expected_state: Option<&str>) -> Option<String> {
+    let listener = match TcpListener::bind("127.0.0.1:1455") {
+        Ok(listener) => listener,
+        Err(_) => return None,
+    };
+    let _ = listener.set_nonblocking(true);
+
+    let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
+    let expected_state = expected_state.map(|s| s.to_string());
+
+    std::thread::spawn(move || {
+        let start = std::time::Instant::now();
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    let mut buffer = [0u8; 2048];
+                    let _ = stream.read(&mut buffer);
+                    let request = String::from_utf8_lossy(&buffer);
+                    let code = extract_code_from_request(&request, expected_state.as_deref());
+                    let response = match code.is_some() {
+                        true => oauth_success_response(),
+                        false => oauth_error_response(),
+                    };
+                    let _ = stream.write_all(response.as_bytes());
+                    let _ = tx.send(code);
+                    break;
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if start.elapsed() > Duration::from_secs(60) {
+                        let _ = tx.send(None);
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(100));
+                }
+                Err(_) => {
+                    let _ = tx.send(None);
+                    break;
+                }
+            }
+        }
+    });
+
+    rx.recv_timeout(Duration::from_secs(60)).ok().flatten()
+}
+
+fn extract_code_from_request(request: &str, expected_state: Option<&str>) -> Option<String> {
+    let mut lines = request.lines();
+    let request_line = lines.next()?;
+    let mut parts = request_line.split_whitespace();
+    let _method = parts.next()?;
+    let path = parts.next()?;
+
+    let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
+    if url.path() != "/auth/callback" {
+        return None;
+    }
+    if let Some(expected) = expected_state {
+        let state = url
+            .query_pairs()
+            .find(|(k, _)| k == "state")
+            .map(|(_, v)| v.to_string())?;
+        if state != expected {
+            return None;
+        }
+    }
+    url.query_pairs()
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.to_string())
+}
+
+fn oauth_success_response() -> String {
+    let body = "<html><body><h3>Login complete</h3><p>You can close this window.</p></body></html>";
+    format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
+}
+
+fn oauth_error_response() -> String {
+    let body = "<html><body><h3>Login failed</h3><p>Please return to the terminal and paste the code.</p></body></html>";
+    format!(
+        "HTTP/1.1 400 Bad Request\r\nContent-Type: text/html\r\nContent-Length: {}\r\n\r\n{}",
+        body.len(),
+        body
+    )
 }
 
 // ============================================================================

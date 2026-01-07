@@ -29,6 +29,9 @@ pub struct OAuthCredentials {
     pub access: String,
     /// Expiry timestamp in milliseconds since epoch
     pub expires: u64,
+    /// Optional account identifier for providers that require it
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
 }
 
 impl OAuthCredentials {
@@ -247,6 +250,7 @@ pub mod anthropic {
             refresh: token_data.refresh_token,
             access: token_data.access_token,
             expires: expires_at,
+            account_id: None,
         })
     }
 
@@ -287,6 +291,7 @@ pub mod anthropic {
             refresh: token_data.refresh_token,
             access: token_data.access_token,
             expires: expires_at,
+            account_id: None,
         })
     }
 
@@ -328,6 +333,251 @@ pub mod anthropic {
     }
 }
 
+/// OpenAI Codex (ChatGPT OAuth) helpers.
+pub mod openai_codex {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+
+    /// Provider key for OpenAI Codex in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "openai-codex";
+
+    /// OpenAI Codex OAuth client ID (public, not a secret)
+    const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
+
+    /// OpenAI OAuth URLs
+    const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
+    const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
+    const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
+    const SCOPES: &str = "openid profile email offline_access";
+
+    /// JWT claim path used to extract the ChatGPT account id.
+    pub const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
+
+    /// PKCE code verifier and challenge
+    pub struct Pkce {
+        pub verifier: String,
+        pub challenge: String,
+    }
+
+    /// OpenAI Codex credentials with account id.
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    pub struct OpenAICodexCredentials {
+        pub access: String,
+        pub refresh: String,
+        pub expires: u64,
+        pub account_id: String,
+    }
+
+    /// Generate PKCE code verifier and challenge
+    pub fn generate_pkce() -> Pkce {
+        let uuid1 = uuid::Uuid::new_v4();
+        let uuid2 = uuid::Uuid::new_v4();
+        let mut verifier_bytes = [0u8; 32];
+        verifier_bytes[..16].copy_from_slice(uuid1.as_bytes());
+        verifier_bytes[16..].copy_from_slice(uuid2.as_bytes());
+        let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        Pkce {
+            verifier,
+            challenge,
+        }
+    }
+
+    /// Build the authorization URL for OpenAI Codex OAuth
+    pub fn build_auth_url(pkce: &Pkce, state: &str) -> String {
+        let params = [
+            ("response_type", "code"),
+            ("client_id", CLIENT_ID),
+            ("redirect_uri", REDIRECT_URI),
+            ("scope", SCOPES),
+            ("code_challenge", &pkce.challenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+            ("id_token_add_organizations", "true"),
+            ("codex_cli_simplified_flow", "true"),
+            ("originator", "codex_cli_rs"),
+        ];
+
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+
+        format!("{}?{}", AUTHORIZE_URL, query)
+    }
+
+    /// Parses a pasted authorization input into code + optional state.
+    pub fn parse_authorization_input(input: &str) -> (Option<String>, Option<String>) {
+        let value = input.trim();
+        if value.is_empty() {
+            return (None, None);
+        }
+
+        if let Ok(url) = url::Url::parse(value) {
+            let code = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        if let Some((code, state)) = value.split_once('#') {
+            return (Some(code.to_string()), Some(state.to_string()));
+        }
+
+        if value.contains("code=") {
+            let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
+            let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        (Some(value.to_string()), None)
+    }
+
+    /// Exchanges authorization code for tokens.
+    pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "authorization_code")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("code", auth_code)
+            .append_pair("code_verifier", &pkce.verifier)
+            .append_pair("redirect_uri", REDIRECT_URI)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send token exchange request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token exchange failed (HTTP {}): {}", status, body);
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse token response")?;
+
+        let expires_at = compute_expires_at(token_data.expires_in);
+        let account_id = decode_account_id(&token_data.access_token);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data.refresh_token,
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id,
+        })
+    }
+
+    /// Refreshes an expired access token.
+    pub async fn refresh_token(refresh_token: &str) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "refresh_token")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("refresh_token", refresh_token)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send token refresh request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token refresh failed (HTTP {}): {}", status, body);
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse token response")?;
+
+        let expires_at = compute_expires_at(token_data.expires_in);
+        let account_id = decode_account_id(&token_data.access_token);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data.refresh_token,
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id,
+        })
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        refresh_token: String,
+        expires_in: u64,
+    }
+
+    fn compute_expires_at(expires_in_secs: u64) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        now + (expires_in_secs * 1000).saturating_sub(5 * 60 * 1000)
+    }
+
+    fn decode_account_id(token: &str) -> Option<String> {
+        let parts: Vec<&str> = token.split('.').collect();
+        if parts.len() != 3 {
+            return None;
+        }
+        let payload = parts[1];
+        let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+        let json: serde_json::Value = serde_json::from_slice(&decoded).ok()?;
+        let claim = json.get(JWT_CLAIM_PATH)?;
+        claim
+            .get("chatgpt_account_id")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+    }
+
+    /// Loads the OpenAI Codex OAuth credentials from cache.
+    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache.get(PROVIDER_KEY).cloned())
+    }
+
+    /// Saves OpenAI Codex OAuth credentials to cache.
+    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+        let mut cache = OAuthCache::load()?;
+        cache.set(PROVIDER_KEY, creds.clone());
+        cache.save()?;
+        Ok(())
+    }
+
+    /// Removes the OpenAI Codex OAuth credentials from cache.
+    pub fn clear_credentials() -> Result<bool> {
+        let mut cache = OAuthCache::load()?;
+        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        cache.save()?;
+        Ok(had_creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -345,6 +595,7 @@ mod tests {
             refresh: "refresh".to_string(),
             access: "access".to_string(),
             expires: now - 1000, // 1 second ago
+            account_id: None,
         };
         assert!(expired.is_expired());
 
@@ -353,6 +604,7 @@ mod tests {
             refresh: "refresh".to_string(),
             access: "access".to_string(),
             expires: now + 60000, // 1 minute from now
+            account_id: None,
         };
         assert!(!valid.is_expired());
     }
@@ -368,6 +620,7 @@ mod tests {
                 refresh: "refresh-token".to_string(),
                 access: "access-token".to_string(),
                 expires: 1234567890000,
+                account_id: None,
             },
         );
 
@@ -391,6 +644,7 @@ mod tests {
                 refresh: "r".to_string(),
                 access: "a".to_string(),
                 expires: 0,
+                account_id: None,
             },
         );
         assert!(cache.get("anthropic").is_some());
