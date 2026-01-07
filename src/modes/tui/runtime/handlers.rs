@@ -9,7 +9,7 @@
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 use std::time::Duration;
@@ -61,12 +61,13 @@ pub fn spawn_thread_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
 /// Spawns async thread loading (full switch) and returns the receiver.
 ///
 /// Loads events, builds transcript cells, messages, and history.
-pub fn spawn_thread_load(thread_id: String) -> UiEvent {
+pub fn spawn_thread_load(thread_id: String, root: PathBuf) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
         let id = thread_id.clone();
-        let event = tokio::task::spawn_blocking(move || load_thread_sync(&id))
+        let root = root.clone();
+        let event = tokio::task::spawn_blocking(move || load_thread_sync(&id, &root))
             .await
             .unwrap_or_else(|e| {
                 UiEvent::Thread(ThreadUiEvent::LoadFailed {
@@ -81,7 +82,7 @@ pub fn spawn_thread_load(thread_id: String) -> UiEvent {
 }
 
 /// Synchronous thread loading (runs in blocking task).
-fn load_thread_sync(thread_id: &str) -> UiEvent {
+fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     // Load thread events (I/O)
     let events = match thread_log::load_thread_events(thread_id) {
         Ok(events) => events,
@@ -97,6 +98,8 @@ fn load_thread_sync(thread_id: &str) -> UiEvent {
 
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
+
+    let stored_root = thread_log::extract_root_path_from_events(&events);
 
     // Build API messages for thread context
     let messages = thread_log::thread_events_to_messages(events);
@@ -115,6 +118,22 @@ fn load_thread_sync(thread_id: &str) -> UiEvent {
 
     // Create or get the thread handle for future appends
     let thread_log_handle = thread_log::ThreadLog::with_id(thread_id.to_string()).ok();
+
+    // Auto-relink root path if it differs (best effort).
+    if let Some(stored_root) = stored_root {
+        let current_root = root
+            .canonicalize()
+            .unwrap_or_else(|_| root.to_path_buf())
+            .display()
+            .to_string();
+        if stored_root != current_root
+            && let Some(mut handle) = thread_log_handle.clone()
+        {
+            let _ = handle.set_root_path(root);
+        }
+    } else if let Some(mut handle) = thread_log_handle.clone() {
+        let _ = handle.set_root_path(root);
+    }
 
     UiEvent::Thread(ThreadUiEvent::Loaded {
         thread_id: thread_id.to_string(),
@@ -161,7 +180,7 @@ pub fn spawn_thread_create(config: crate::config::Config, root: PathBuf) -> UiEv
     tokio::spawn(async move {
         let event =
             tokio::task::spawn_blocking(move || {
-                let thread_log_handle = match thread_log::ThreadLog::new() {
+                let thread_log_handle = match thread_log::ThreadLog::new_with_root(&root) {
                     Ok(thread_log_handle) => thread_log_handle,
                     Err(e) => {
                         return UiEvent::Thread(ThreadUiEvent::CreateFailed {
@@ -202,18 +221,20 @@ pub fn spawn_forked_thread(
     events: Vec<ThreadEvent>,
     user_input: Option<String>,
     turn_number: usize,
+    root: PathBuf,
 ) -> UiEvent {
     let (tx, rx) = mpsc::channel::<UiEvent>(1);
 
     tokio::spawn(async move {
-        let event =
-            tokio::task::spawn_blocking(move || fork_thread_sync(events, user_input, turn_number))
-                .await
-                .unwrap_or_else(|e| {
-                    UiEvent::Thread(ThreadUiEvent::ForkFailed {
-                        error: format!("Task failed: {}", e),
-                    })
-                });
+        let event = tokio::task::spawn_blocking(move || {
+            fork_thread_sync(events, user_input, turn_number, &root)
+        })
+        .await
+        .unwrap_or_else(|e| {
+            UiEvent::Thread(ThreadUiEvent::ForkFailed {
+                error: format!("Task failed: {}", e),
+            })
+        });
 
         let _ = tx.send(event).await;
     });
@@ -225,8 +246,9 @@ fn fork_thread_sync(
     events: Vec<ThreadEvent>,
     user_input: Option<String>,
     turn_number: usize,
+    root: &Path,
 ) -> UiEvent {
-    let mut thread_log_handle = match thread_log::ThreadLog::new() {
+    let mut thread_log_handle = match thread_log::ThreadLog::new_with_root(root) {
         Ok(thread_log_handle) => thread_log_handle,
         Err(e) => {
             return UiEvent::Thread(ThreadUiEvent::ForkFailed {

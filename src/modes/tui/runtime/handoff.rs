@@ -132,8 +132,9 @@ async fn run_subagent(
 /// Executes a handoff submit: creates a new thread and persists the prompt.
 ///
 /// Returns the new thread for the reducer to store, or an error string.
-pub fn execute_handoff_submit(prompt: &str) -> Result<ThreadLog, String> {
-    let mut thread_log_handle = thread_log::ThreadLog::new().map_err(|e| e.to_string())?;
+pub fn execute_handoff_submit(prompt: &str, root: &Path) -> Result<ThreadLog, String> {
+    let mut thread_log_handle =
+        thread_log::ThreadLog::new_with_root(root).map_err(|e| e.to_string())?;
 
     if let Err(_err) = thread_log_handle.append(&ThreadEvent::user_message(prompt)) {
         // Errors are silently ignored for thread persistence

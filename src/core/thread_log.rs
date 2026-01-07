@@ -15,7 +15,7 @@
 
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -119,6 +119,8 @@ pub enum ThreadEvent {
         schema_version: u32,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        root_path: Option<String>,
         ts: String,
     },
 
@@ -175,11 +177,12 @@ pub enum ThreadEvent {
 }
 
 impl ThreadEvent {
-    /// Creates a new meta event with the current schema version.
-    pub fn meta() -> Self {
+    /// Creates a new meta event with an optional root path.
+    pub fn meta_with_root(root_path: Option<String>) -> Self {
         Self::Meta {
             schema_version: SCHEMA_VERSION,
             title: None,
+            root_path,
             ts: chrono_timestamp(),
         }
     }
@@ -337,6 +340,8 @@ pub struct ThreadLog {
     path: PathBuf,
     /// Whether this is a new thread (needs meta event written).
     is_new: bool,
+    /// Root path for the thread (workspace association).
+    root_path: Option<String>,
 }
 
 impl ThreadLog {
@@ -373,11 +378,14 @@ impl ThreadLog {
         }
     }
 
-    /// Creates a new thread with a generated ID.
-    ///
-    /// # Panics
-    /// In tests, panics if `ZDX_HOME` is not set (to prevent polluting user's home).
-    pub fn new() -> Result<Self> {
+    /// Creates a new thread and associates it with a root path.
+    pub fn new_with_root(root: &Path) -> Result<Self> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root_path = Some(root.display().to_string());
+        Self::new_with_root_path(root_path)
+    }
+
+    fn new_with_root_path(root_path: Option<String>) -> Result<Self> {
         Self::guard_thread_creation();
 
         let id = generate_thread_id();
@@ -387,7 +395,12 @@ impl ThreadLog {
         let path = dir.join(format!("{}.jsonl", id));
         let is_new = !path.exists();
 
-        Ok(Self { id, path, is_new })
+        Ok(Self {
+            id,
+            path,
+            is_new,
+            root_path,
+        })
     }
 
     /// Creates or opens a thread with a specific ID.
@@ -403,13 +416,18 @@ impl ThreadLog {
         let path = dir.join(format!("{}.jsonl", id));
         let is_new = !path.exists();
 
-        Ok(Self { id, path, is_new })
+        Ok(Self {
+            id,
+            path,
+            is_new,
+            root_path: None,
+        })
     }
 
     /// Ensures the meta event is written for new threads.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {
-            self.append_raw(&ThreadEvent::meta())?;
+            self.append_raw(&ThreadEvent::meta_with_root(self.root_path.clone()))?;
             self.is_new = false;
         }
         Ok(())
@@ -455,6 +473,15 @@ impl ThreadLog {
         let normalized = title.and_then(normalize_title);
         rewrite_meta_with_title(&self.path, normalized.clone())?;
         Ok(normalized)
+    }
+
+    /// Updates the thread root path stored in the meta event.
+    pub fn set_root_path(&mut self, root: &Path) -> Result<()> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root_path = Some(root.display().to_string());
+        self.ensure_meta()?;
+        rewrite_meta_with_root(&self.path, root_path)?;
+        Ok(())
     }
 }
 
@@ -524,6 +551,47 @@ fn rewrite_meta_with_title(path: &PathBuf, title: Option<String>) -> Result<()> 
     Ok(())
 }
 
+/// Rewrites the meta event with an updated root path, preserving the rest of the file.
+fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp thread file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Thread file is empty"))?;
+
+    let mut meta_event: ThreadEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        ThreadEvent::Meta {
+            root_path: ref mut meta_root,
+            ..
+        } => {
+            *meta_root = root_path;
+        }
+        _ => bail!("First thread event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{}", new_meta).context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read thread line")?;
+        writeln!(temp, "{}", line).context("Failed to write thread line")?;
+    }
+
+    temp.sync_all().context("Failed to sync temp thread file")?;
+    fs::rename(&temp_path, path).context("Failed to replace thread file")?;
+    Ok(())
+}
+
 /// Reads only the meta line to extract title (backward compatible).
 fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
     if !path.exists() {
@@ -559,6 +627,41 @@ fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
     }
 }
 
+/// Reads only the meta line to extract root path (backward compatible).
+fn read_meta_root_path(path: &PathBuf) -> Result<Option<Option<String>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+
+    // Read first non-empty line
+    loop {
+        first_line.clear();
+        let bytes = reader.read_line(&mut first_line)?;
+        if bytes == 0 {
+            return Ok(None); // Empty file
+        }
+        if !first_line.trim().is_empty() {
+            break;
+        }
+    }
+
+    // Parse meta event, defaulting root_path to None if missing
+    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
+        Ok(event) => event,
+        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+    };
+
+    if let ThreadEvent::Meta { root_path, .. } = parsed {
+        Ok(Some(root_path))
+    } else {
+        Ok(None) // First event wasn't meta
+    }
+}
+
 /// Generates a unique thread ID using UUID v4.
 fn generate_thread_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -575,7 +678,7 @@ fn generate_thread_id() -> String {
 /// # Example
 ///
 /// ```ignore
-/// let thread = ThreadLog::new()?;
+/// let thread = ThreadLog::new_with_root(Path::new("."))?;
 /// let (tx, rx) = agent::create_event_channel();
 /// let persist_handle = spawn_thread_persist_task(thread, rx);
 ///
@@ -602,6 +705,7 @@ pub fn spawn_thread_persist_task(mut thread: ThreadLog, mut rx: AgentEventRx) ->
 pub struct ThreadSummary {
     pub id: String,
     pub title: Option<String>,
+    pub root_path: Option<String>,
     pub modified: Option<SystemTime>,
 }
 
@@ -637,10 +741,12 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
             let id = stem.to_string_lossy().to_string();
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
             let title = read_meta_title(&path).unwrap_or(None).flatten();
+            let root_path = read_meta_root_path(&path).unwrap_or(None).flatten();
 
             threads.push(ThreadSummary {
                 id,
                 title,
+                root_path,
                 modified,
             });
         }
@@ -656,6 +762,14 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
 pub fn load_thread_events(id: &str) -> Result<Vec<ThreadEvent>> {
     let thread = ThreadLog::with_id(id.to_string())?;
     thread.read_events()
+}
+
+/// Extracts the root path from thread events (if present).
+pub fn extract_root_path_from_events(events: &[ThreadEvent]) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        ThreadEvent::Meta { root_path, .. } => root_path.clone(),
+        _ => None,
+    })
 }
 
 /// Returns the ID of the most recently modified thread.
@@ -975,7 +1089,7 @@ impl ThreadPersistenceOptions {
     /// Returns None if no_save is true.
     /// Returns existing thread if thread_id is provided.
     /// Returns new thread otherwise.
-    pub fn resolve(&self) -> Result<Option<ThreadLog>> {
+    pub fn resolve(&self, root: &Path) -> Result<Option<ThreadLog>> {
         if self.no_save {
             return Ok(None);
         }
@@ -984,7 +1098,7 @@ impl ThreadPersistenceOptions {
             return Ok(Some(ThreadLog::with_id(id.clone())?));
         }
 
-        Ok(Some(ThreadLog::new()?))
+        Ok(Some(ThreadLog::new_with_root(root)?))
     }
 }
 
@@ -1069,7 +1183,7 @@ mod tests {
 
     #[test]
     fn test_thread_event_serialization() {
-        let meta = ThreadEvent::meta();
+        let meta = ThreadEvent::meta_with_root(None);
         let json = serde_json::to_string(&meta).unwrap();
         assert!(json.contains("\"type\":\"meta\""));
         assert!(json.contains("\"schema_version\":1"));
@@ -1120,7 +1234,7 @@ mod tests {
             no_save: true,
             ..Default::default()
         };
-        assert!(opts.resolve().unwrap().is_none());
+        assert!(opts.resolve(Path::new(".")).unwrap().is_none());
     }
 
     #[test]
@@ -1132,14 +1246,14 @@ mod tests {
             thread_id: Some(id.clone()),
             ..Default::default()
         };
-        let thread = opts.resolve().unwrap().unwrap();
+        let thread = opts.resolve(Path::new(".")).unwrap().unwrap();
         assert_eq!(thread.id, id);
     }
 
     #[test]
     fn test_format_transcript_with_tools() {
         let events = vec![
-            ThreadEvent::meta(),
+            ThreadEvent::meta_with_root(None),
             ThreadEvent::user_message("read main.rs"),
             ThreadEvent::tool_use("t1", "read", json!({"path": "main.rs"})),
             ThreadEvent::tool_result(
@@ -1392,7 +1506,7 @@ mod tests {
     #[test]
     fn test_format_transcript_with_thinking() {
         let events = vec![
-            ThreadEvent::meta(),
+            ThreadEvent::meta_with_root(None),
             ThreadEvent::user_message("explain this"),
             ThreadEvent::thinking(
                 "Analyzing the request...".to_string(),

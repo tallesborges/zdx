@@ -221,8 +221,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
@@ -266,8 +269,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
@@ -297,8 +303,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
@@ -338,8 +347,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
@@ -376,8 +388,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
@@ -414,8 +429,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let (state, overlay_effects) =
-                        overlays::ThreadPickerState::open(threads, original_cells);
+                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                        threads,
+                        original_cells,
+                        &app.tui.agent_opts.root,
+                    );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
                 }
