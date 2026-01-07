@@ -18,6 +18,7 @@
 mod handlers;
 mod handoff;
 
+use std::future::Future;
 use std::io::Stdout;
 use std::path::PathBuf;
 
@@ -31,7 +32,7 @@ use crate::config::Config;
 use crate::core::interrupt;
 use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::app::{AgentState, AppState};
-use crate::modes::tui::events::UiEvent;
+use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -316,10 +317,44 @@ impl TuiRuntime {
         }
     }
 
+    /// Spawns an async effect, sending an optional "started" event immediately
+    /// and the result event when complete.
+    ///
+    /// This centralizes the spawn-and-send pattern: handlers become pure async
+    /// functions that return `UiEvent`, while the runtime handles spawning.
+    fn spawn_effect<F, Fut>(&self, started: Option<UiEvent>, f: F)
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = UiEvent> + Send + 'static,
+    {
+        let tx = self.inbox_tx.clone();
+        if let Some(ev) = started {
+            let _ = tx.send(ev);
+        }
+        tokio::spawn(async move {
+            let _ = tx.send(f().await);
+        });
+    }
+
+    /// Spawns an effect that returns both a started event and a future.
+    ///
+    /// Used for handlers with cancel tokens where the started event contains
+    /// shared state (the cancel token) that the future also needs.
+    fn spawn_effect_pair<Fut>(&self, started: UiEvent, fut: Fut)
+    where
+        Fut: Future<Output = UiEvent> + Send + 'static,
+    {
+        let tx = self.inbox_tx.clone();
+        let _ = tx.send(started);
+        tokio::spawn(async move {
+            let _ = tx.send(fut.await);
+        });
+    }
+
     /// Executes a single effect by dispatching to the appropriate handler.
     ///
-    /// With the inbox pattern, handlers receive `inbox_tx` and send results
-    /// directly to the inbox. No more per-operation receivers.
+    /// Uses `spawn_effect` for pure async handlers (thread ops, auth) and
+    /// `spawn_effect_pair` for handlers with cancel tokens (file discovery, bash).
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
             // Simple effects (inline)
@@ -344,18 +379,22 @@ impl TuiRuntime {
                 }
             }
 
-            // Auth effects (inbox pattern)
+            // Auth effects (pure async handlers)
             UiEffect::SpawnTokenExchange {
                 provider,
                 code,
                 verifier,
             } => {
                 self.state.tui.auth.login_in_progress = true;
-                handlers::start_token_exchange(self.inbox_tx.clone(), provider, &code, &verifier);
+                self.spawn_effect(None, move || {
+                    handlers::token_exchange(provider, code, verifier)
+                });
             }
             UiEffect::StartLocalAuthCallback { provider, state } => {
                 self.state.tui.auth.callback_in_progress = true;
-                handlers::start_local_auth_callback(self.inbox_tx.clone(), provider, state);
+                self.spawn_effect(None, move || {
+                    handlers::local_auth_callback(provider, state)
+                });
             }
 
             // Config effects
@@ -376,7 +415,7 @@ impl TuiRuntime {
                 // Errors are silently ignored - level is already set in state
             }
 
-            // Thread effects (inbox pattern - handlers send events to inbox)
+            // Thread effects (pure async handlers)
             UiEffect::SaveThread { event } => {
                 if let Some(ref mut s) = self.state.tui.thread.thread_log {
                     let _ = s.append(&event);
@@ -385,7 +424,10 @@ impl TuiRuntime {
             }
             UiEffect::RenameThread { thread_id, title } => {
                 if !self.state.tui.thread_ops.rename_loading {
-                    handlers::start_thread_rename(self.inbox_tx.clone(), thread_id, title);
+                    self.spawn_effect(
+                        Some(UiEvent::Thread(ThreadUiEvent::RenameStarted)),
+                        move || handlers::thread_rename(thread_id, title),
+                    );
                 }
             }
             UiEffect::CreateNewThread => {
@@ -393,7 +435,10 @@ impl TuiRuntime {
                 if !self.state.tui.thread_ops.create_loading {
                     let config = self.state.tui.config.clone();
                     let root = self.state.tui.agent_opts.root.clone();
-                    handlers::start_thread_create(self.inbox_tx.clone(), config, root);
+                    self.spawn_effect(
+                        Some(UiEvent::Thread(ThreadUiEvent::CreateStarted)),
+                        move || handlers::thread_create(config, root),
+                    );
                 }
             }
             UiEffect::ForkThread {
@@ -402,12 +447,10 @@ impl TuiRuntime {
                 turn_number,
             } => {
                 if !self.state.tui.thread_ops.fork_loading {
-                    handlers::start_thread_fork(
-                        self.inbox_tx.clone(),
-                        events,
-                        user_input,
-                        turn_number,
-                        self.state.tui.agent_opts.root.clone(),
+                    let root = self.state.tui.agent_opts.root.clone();
+                    self.spawn_effect(
+                        Some(UiEvent::Thread(ThreadUiEvent::ForkStarted)),
+                        move || handlers::thread_fork(events, user_input, turn_number, root),
                     );
                 }
             }
@@ -415,22 +458,27 @@ impl TuiRuntime {
                 // Only spawn if not already loading and no overlay is open
                 if !self.state.tui.thread_ops.list_loading && self.state.overlay.is_none() {
                     let original_cells = self.state.tui.transcript.cells.clone();
-                    handlers::start_thread_list_load(self.inbox_tx.clone(), original_cells);
+                    self.spawn_effect(
+                        Some(UiEvent::Thread(ThreadUiEvent::ListStarted)),
+                        move || handlers::thread_list_load(original_cells),
+                    );
                 }
             }
             UiEffect::LoadThread { thread_id } => {
                 // Only spawn if not already loading
                 if !self.state.tui.thread_ops.load_loading {
-                    handlers::start_thread_load(
-                        self.inbox_tx.clone(),
-                        thread_id,
-                        self.state.tui.agent_opts.root.clone(),
+                    let root = self.state.tui.agent_opts.root.clone();
+                    self.spawn_effect(
+                        Some(UiEvent::Thread(ThreadUiEvent::LoadStarted)),
+                        move || handlers::thread_load(thread_id, root),
                     );
                 }
             }
             UiEffect::PreviewThread { thread_id } => {
-                // Cancel any pending preview and start new one
-                handlers::start_thread_preview(self.inbox_tx.clone(), thread_id);
+                self.spawn_effect(
+                    Some(UiEvent::Thread(ThreadUiEvent::PreviewStarted)),
+                    move || handlers::thread_preview(thread_id),
+                );
             }
 
             // Handoff effects (still uses oneshot for cancel mechanism)
@@ -459,10 +507,11 @@ impl TuiRuntime {
                 }
             }
 
-            // File picker effects (inbox pattern)
+            // File picker effects (returns started event + future for cancel support)
             UiEffect::DiscoverFiles => {
                 let root = self.state.tui.agent_opts.root.clone();
-                handlers::start_file_discovery(self.inbox_tx.clone(), &root);
+                let (started, fut) = handlers::file_discovery(root);
+                self.spawn_effect_pair(started, fut);
             }
 
             // Clipboard effects
@@ -473,13 +522,14 @@ impl TuiRuntime {
                 }
             }
 
-            // Direct bash execution effects (inbox pattern)
+            // Direct bash execution effects (returns started event + future for cancel support)
             UiEffect::ExecuteBash { command } => {
                 // Only spawn if not already running a bash command
                 if self.state.tui.bash_running.is_none() {
                     let id = format!("user-bash-{}", chrono::Utc::now().timestamp_millis());
                     let root = self.state.tui.agent_opts.root.clone();
-                    handlers::start_bash_execution(self.inbox_tx.clone(), id, command, root);
+                    let (started, fut) = handlers::bash_execution(id, command, root);
+                    self.spawn_effect_pair(started, fut);
                 }
             }
         }

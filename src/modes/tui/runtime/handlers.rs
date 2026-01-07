@@ -1,17 +1,21 @@
 //! Effect handlers for the TUI runtime.
 //!
 //! This module contains the implementation of side effects triggered by the reducer.
-//! These functions perform I/O and spawn async tasks. They do NOT mutate state directly.
+//! These functions perform I/O and async tasks. They do NOT mutate state directly.
 //!
-//! ## Inbox Pattern
+//! ## Pure Async Pattern
 //!
-//! Handlers follow the "inbox" pattern: they spawn async tasks that send `UiEvent`s
-//! directly to the runtime's inbox channel. This eliminates per-operation receivers
-//! and simplifies the runtime's event collection.
+//! Handlers are pure async functions that return `UiEvent`. The runtime uses
+//! `spawn_effect` to spawn them and send results to the inbox. This keeps
+//! handlers focused on business logic while the runtime handles spawning.
 //!
-//! Handler styles:
-//! 1. **Pure worker**: Does work (async or blocking) and sends `UiEvent` to inbox
-//! 2. **Spawner**: Takes `UiEventSender`, spawns task, task sends final `UiEvent`
+//! ```ignore
+//! // Handler: pure async, returns UiEvent
+//! pub async fn thread_list_load(cells: Vec<HistoryCell>) -> UiEvent { ... }
+//!
+//! // Runtime: spawns and sends to inbox
+//! self.spawn_effect(Some(started_event), || handler(args));
+//! ```
 
 use std::io::{Read, Write};
 use std::net::TcpListener;
@@ -29,77 +33,54 @@ use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::transcript::{HistoryCell, build_transcript_from_events};
 
 // ============================================================================
-// Inbox Types
+// Inbox Types (used by runtime)
 // ============================================================================
 
 /// Sender for the runtime's event inbox.
-///
-/// Handlers use this to send `UiEvent`s back to the runtime for processing.
 pub type UiEventSender = mpsc::UnboundedSender<UiEvent>;
 
 /// Receiver for the runtime's event inbox.
 pub type UiEventReceiver = mpsc::UnboundedReceiver<UiEvent>;
 
-/// Helper to send an event to the inbox, ignoring errors (receiver dropped).
-fn send(tx: &UiEventSender, ev: UiEvent) {
-    let _ = tx.send(ev);
+// ============================================================================
+// Thread Handlers (Pure Async)
+// ============================================================================
+
+/// Loads the list of threads.
+///
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
+    tokio::task::spawn_blocking(move || match thread_log::list_threads() {
+        Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
+            error: "No threads found.".to_string(),
+        }),
+        Ok(threads) => UiEvent::Thread(ThreadUiEvent::ListLoaded {
+            threads,
+            original_cells,
+        }),
+        Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
+            error: format!("Failed to load threads: {}", e),
+        }),
+    })
+    .await
+    .unwrap_or_else(|e| {
+        UiEvent::Thread(ThreadUiEvent::ListFailed {
+            error: format!("Task failed: {}", e),
+        })
+    })
 }
 
-// ============================================================================
-// Thread Handlers (Inbox Pattern)
-// ============================================================================
-
-/// Starts async thread list loading.
+/// Loads a thread by ID (full switch).
 ///
-/// Sends `ListStarted` immediately, then `ListLoaded` or `ListFailed` when done.
-pub fn start_thread_list_load(inbox: UiEventSender, original_cells: Vec<HistoryCell>) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::ListStarted));
-
-    tokio::spawn(async move {
-        let ev = tokio::task::spawn_blocking(move || match thread_log::list_threads() {
-            Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
-                error: "No threads found.".to_string(),
-            }),
-            Ok(threads) => UiEvent::Thread(ThreadUiEvent::ListLoaded {
-                threads,
-                original_cells,
-            }),
-            Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
-                error: format!("Failed to load threads: {}", e),
-            }),
-        })
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_load(thread_id: String, root: PathBuf) -> UiEvent {
+    tokio::task::spawn_blocking(move || load_thread_sync(&thread_id, &root))
         .await
         .unwrap_or_else(|e| {
-            UiEvent::Thread(ThreadUiEvent::ListFailed {
+            UiEvent::Thread(ThreadUiEvent::LoadFailed {
                 error: format!("Task failed: {}", e),
             })
-        });
-
-        send(&inbox, ev);
-    });
-}
-
-/// Starts async thread loading (full switch).
-///
-/// Sends `LoadStarted` immediately, then `Loaded` or `LoadFailed` when done.
-pub fn start_thread_load(inbox: UiEventSender, thread_id: String, root: PathBuf) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::LoadStarted));
-
-    tokio::spawn(async move {
-        let id = thread_id.clone();
-        let root = root.clone();
-        let ev = tokio::task::spawn_blocking(move || load_thread_sync(&id, &root))
-            .await
-            .unwrap_or_else(|e| {
-                UiEvent::Thread(ThreadUiEvent::LoadFailed {
-                    error: format!("Task failed: {}", e),
-                })
-            });
-
-        send(&inbox, ev);
-    });
+        })
 }
 
 /// Synchronous thread loading (runs in blocking task).
@@ -166,102 +147,74 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     })
 }
 
-/// Starts async thread preview loading.
+/// Loads a thread preview.
 ///
-/// Sends `PreviewStarted` immediately, then `PreviewLoaded` or `PreviewFailed` when done.
-pub fn start_thread_preview(inbox: UiEventSender, thread_id: String) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::PreviewStarted));
-
-    tokio::spawn(async move {
-        let ev = tokio::task::spawn_blocking(move || {
-            match thread_log::load_thread_events(&thread_id) {
-                Ok(events) => {
-                    let cells = build_transcript_from_events(&events);
-                    UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
-                }
-                Err(_) => {
-                    // Silent failure for preview - errors shown on actual load
-                    UiEvent::Thread(ThreadUiEvent::PreviewFailed)
-                }
-            }
-        })
-        .await
-        .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed));
-
-        send(&inbox, ev);
-    });
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_preview(thread_id: String) -> UiEvent {
+    tokio::task::spawn_blocking(move || match thread_log::load_thread_events(&thread_id) {
+        Ok(events) => {
+            let cells = build_transcript_from_events(&events);
+            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
+        }
+        Err(_) => {
+            // Silent failure for preview - errors shown on actual load
+            UiEvent::Thread(ThreadUiEvent::PreviewFailed)
+        }
+    })
+    .await
+    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed))
 }
 
-/// Starts async new thread creation.
+/// Creates a new thread.
 ///
-/// Sends `CreateStarted` immediately, then `Created` or `CreateFailed` when done.
-pub fn start_thread_create(inbox: UiEventSender, config: crate::config::Config, root: PathBuf) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::CreateStarted));
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_create(config: crate::config::Config, root: PathBuf) -> UiEvent {
+    tokio::task::spawn_blocking(move || {
+        let thread_log_handle = match thread_log::ThreadLog::new_with_root(&root) {
+            Ok(thread_log_handle) => thread_log_handle,
+            Err(e) => {
+                return UiEvent::Thread(ThreadUiEvent::CreateFailed {
+                    error: format!("Failed to create thread: {}", e),
+                });
+            }
+        };
 
-    tokio::spawn(async move {
-        let ev = tokio::task::spawn_blocking(move || {
-            let thread_log_handle = match thread_log::ThreadLog::new_with_root(&root) {
-                Ok(thread_log_handle) => thread_log_handle,
-                Err(e) => {
-                    return UiEvent::Thread(ThreadUiEvent::CreateFailed {
-                        error: format!("Failed to create thread: {}", e),
-                    });
-                }
+        // Load AGENTS.md paths
+        let context_paths =
+            match crate::core::context::build_effective_system_prompt_with_paths(&config, &root) {
+                Ok(effective) => effective.loaded_agents_paths,
+                Err(_) => Vec::new(), // Context loading failed, but thread was created
             };
 
-            // Load AGENTS.md paths
-            let context_paths =
-                match crate::core::context::build_effective_system_prompt_with_paths(
-                    &config, &root,
-                ) {
-                    Ok(effective) => effective.loaded_agents_paths,
-                    Err(_) => Vec::new(), // Context loading failed, but thread was created
-                };
-
-            UiEvent::Thread(ThreadUiEvent::Created {
-                thread_log: thread_log_handle,
-                context_paths,
-            })
+        UiEvent::Thread(ThreadUiEvent::Created {
+            thread_log: thread_log_handle,
+            context_paths,
         })
-        .await
-        .unwrap_or_else(|e| {
-            UiEvent::Thread(ThreadUiEvent::CreateFailed {
-                error: format!("Task failed: {}", e),
-            })
-        });
-
-        send(&inbox, ev);
-    });
+    })
+    .await
+    .unwrap_or_else(|e| {
+        UiEvent::Thread(ThreadUiEvent::CreateFailed {
+            error: format!("Task failed: {}", e),
+        })
+    })
 }
 
-/// Starts async forked thread creation.
+/// Forks a thread at a specific point.
 ///
-/// Sends `ForkStarted` immediately, then `ForkedLoaded` or `ForkFailed` when done.
-pub fn start_thread_fork(
-    inbox: UiEventSender,
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_fork(
     events: Vec<ThreadEvent>,
     user_input: Option<String>,
     turn_number: usize,
     root: PathBuf,
-) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::ForkStarted));
-
-    tokio::spawn(async move {
-        let ev = tokio::task::spawn_blocking(move || {
-            fork_thread_sync(events, user_input, turn_number, &root)
-        })
+) -> UiEvent {
+    tokio::task::spawn_blocking(move || fork_thread_sync(events, user_input, turn_number, &root))
         .await
         .unwrap_or_else(|e| {
             UiEvent::Thread(ThreadUiEvent::ForkFailed {
                 error: format!("Task failed: {}", e),
             })
-        });
-
-        send(&inbox, ev);
-    });
+        })
 }
 
 fn fork_thread_sync(
@@ -313,35 +266,27 @@ fn fork_thread_sync(
     })
 }
 
-/// Starts async thread rename.
+/// Renames a thread.
 ///
-/// Sends `RenameStarted` immediately, then `Renamed` or `RenameFailed` when done.
-pub fn start_thread_rename(inbox: UiEventSender, thread_id: String, title: Option<String>) {
-    // Send started event immediately
-    send(&inbox, UiEvent::Thread(ThreadUiEvent::RenameStarted));
-
-    tokio::spawn(async move {
-        let id = thread_id.clone();
-        let ev = tokio::task::spawn_blocking(move || {
-            match thread_log::set_thread_title(&id, title.clone()) {
-                Ok(new_title) => UiEvent::Thread(ThreadUiEvent::Renamed {
-                    thread_id: id,
-                    title: new_title,
-                }),
-                Err(e) => UiEvent::Thread(ThreadUiEvent::RenameFailed {
-                    error: format!("Failed to rename thread: {}", e),
-                }),
-            }
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn thread_rename(thread_id: String, title: Option<String>) -> UiEvent {
+    tokio::task::spawn_blocking(move || {
+        match thread_log::set_thread_title(&thread_id, title.clone()) {
+            Ok(new_title) => UiEvent::Thread(ThreadUiEvent::Renamed {
+                thread_id,
+                title: new_title,
+            }),
+            Err(e) => UiEvent::Thread(ThreadUiEvent::RenameFailed {
+                error: format!("Failed to rename thread: {}", e),
+            }),
+        }
+    })
+    .await
+    .unwrap_or_else(|e| {
+        UiEvent::Thread(ThreadUiEvent::RenameFailed {
+            error: format!("Task failed: {}", e),
         })
-        .await
-        .unwrap_or_else(|e| {
-            UiEvent::Thread(ThreadUiEvent::RenameFailed {
-                error: format!("Task failed: {}", e),
-            })
-        });
-
-        send(&inbox, ev);
-    });
+    })
 }
 
 // ============================================================================
@@ -391,67 +336,58 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 }
 
 // ============================================================================
-// Auth Handlers (Inbox Pattern)
+// Auth Handlers (Pure Async)
 // ============================================================================
 
-/// Starts a token exchange task.
+/// Exchanges an OAuth code for credentials.
 ///
-/// Sends `LoginResult` when the exchange completes.
-pub fn start_token_exchange(
-    inbox: UiEventSender,
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn token_exchange(
     provider: crate::providers::ProviderKind,
-    code: &str,
-    verifier: &str,
-) {
+    code: String,
+    verifier: String,
+) -> UiEvent {
     use crate::providers::oauth::{anthropic, openai_codex};
 
-    let code = code.to_string();
-    let pkce_verifier = verifier.to_string();
-
-    tokio::spawn(async move {
-        let result = match provider {
-            crate::providers::ProviderKind::Anthropic => {
-                let pkce = anthropic::Pkce {
-                    verifier: pkce_verifier,
-                    challenge: String::new(),
-                };
-                match anthropic::exchange_code(&code, &pkce).await {
-                    Ok(creds) => anthropic::save_credentials(&creds)
-                        .map_err(|e| format!("Failed to save: {}", e)),
-                    Err(e) => Err(e.to_string()),
-                }
+    let result = match provider {
+        crate::providers::ProviderKind::Anthropic => {
+            let pkce = anthropic::Pkce {
+                verifier,
+                challenge: String::new(),
+            };
+            match anthropic::exchange_code(&code, &pkce).await {
+                Ok(creds) => anthropic::save_credentials(&creds)
+                    .map_err(|e| format!("Failed to save: {}", e)),
+                Err(e) => Err(e.to_string()),
             }
-            crate::providers::ProviderKind::OpenAICodex => {
-                let pkce = openai_codex::Pkce {
-                    verifier: pkce_verifier,
-                    challenge: String::new(),
-                };
-                match openai_codex::exchange_code(&code, &pkce).await {
-                    Ok(creds) => openai_codex::save_credentials(&creds)
-                        .map_err(|e| format!("Failed to save: {}", e)),
-                    Err(e) => Err(e.to_string()),
-                }
+        }
+        crate::providers::ProviderKind::OpenAICodex => {
+            let pkce = openai_codex::Pkce {
+                verifier,
+                challenge: String::new(),
+            };
+            match openai_codex::exchange_code(&code, &pkce).await {
+                Ok(creds) => openai_codex::save_credentials(&creds)
+                    .map_err(|e| format!("Failed to save: {}", e)),
+                Err(e) => Err(e.to_string()),
             }
-        };
-        send(&inbox, UiEvent::LoginResult(result));
-    });
+        }
+    };
+    UiEvent::LoginResult(result)
 }
 
-/// Starts a local OAuth callback listener (if supported).
+/// Listens for a local OAuth callback.
 ///
-/// Sends `LoginCallbackResult` when a callback is received or times out.
-pub fn start_local_auth_callback(
-    inbox: UiEventSender,
+/// Pure async function - runtime spawns and sends result to inbox.
+pub async fn local_auth_callback(
     provider: crate::providers::ProviderKind,
     state: Option<String>,
-) {
-    tokio::spawn(async move {
-        let code = match provider {
-            crate::providers::ProviderKind::OpenAICodex => wait_for_local_code(state.as_deref()),
-            crate::providers::ProviderKind::Anthropic => None,
-        };
-        send(&inbox, UiEvent::LoginCallbackResult(code));
-    });
+) -> UiEvent {
+    let code = match provider {
+        crate::providers::ProviderKind::OpenAICodex => wait_for_local_code(state.as_deref()),
+        crate::providers::ProviderKind::Anthropic => None,
+    };
+    UiEvent::LoginCallbackResult(code)
 }
 
 fn wait_for_local_code(expected_state: Option<&str>) -> Option<String> {
@@ -543,40 +479,51 @@ fn oauth_error_response() -> String {
 }
 
 // ============================================================================
-// File Picker Handlers (Inbox Pattern)
+// File Picker Handlers
 // ============================================================================
 
-/// Starts async file discovery with cancellation support.
+/// File discovery with cancellation support.
 ///
-/// Sends `FileDiscoveryStarted` immediately (with cancel token), then
-/// `FilesDiscovered` when complete.
-pub fn start_file_discovery(inbox: UiEventSender, root: &std::path::Path) {
+/// Returns (started_event, future) - started event contains cancel token,
+/// future does the discovery work.
+pub fn file_discovery(
+    root: PathBuf,
+) -> (
+    UiEvent,
+    impl std::future::Future<Output = UiEvent> + Send + 'static,
+) {
     use crate::modes::tui::overlays::discover_files;
 
-    let root = root.to_path_buf();
     let cancel = Arc::new(AtomicBool::new(false));
     let cancel_clone = cancel.clone();
+    let started = UiEvent::FileDiscoveryStarted { cancel };
 
-    // Send started event with cancel token for reducer to store
-    send(&inbox, UiEvent::FileDiscoveryStarted { cancel });
-
-    tokio::spawn(async move {
+    let future = async move {
         let files = tokio::task::spawn_blocking(move || discover_files(&root, &cancel_clone))
             .await
             .unwrap_or_default();
-        send(&inbox, UiEvent::FilesDiscovered(files));
-    });
+        UiEvent::FilesDiscovered(files)
+    };
+
+    (started, future)
 }
 
 // ============================================================================
-// Direct Bash Execution Handlers (Inbox Pattern)
+// Direct Bash Execution Handlers
 // ============================================================================
 
-/// Starts async direct bash command execution (for `!` shortcut).
+/// Bash execution with cancellation support.
 ///
-/// Sends `BashExecutionStarted` immediately (with cancel token), then
-/// `BashExecuted` when complete.
-pub fn start_bash_execution(inbox: UiEventSender, id: String, command: String, root: PathBuf) {
+/// Returns (started_event, future) - started event contains cancel token,
+/// future runs the command.
+pub fn bash_execution(
+    id: String,
+    command: String,
+    root: PathBuf,
+) -> (
+    UiEvent,
+    impl std::future::Future<Output = UiEvent> + Send + 'static,
+) {
     use crate::core::events::ToolOutput;
     use crate::tools::{ToolContext, bash};
 
@@ -584,29 +531,24 @@ pub fn start_bash_execution(inbox: UiEventSender, id: String, command: String, r
     let cmd = command.clone();
     let result_id = id.clone();
 
-    // Send started event with cancel token for reducer to store
-    send(
-        &inbox,
-        UiEvent::BashExecutionStarted {
-            id,
-            command,
-            cancel: cancel_tx,
-        },
-    );
+    let started = UiEvent::BashExecutionStarted {
+        id,
+        command,
+        cancel: cancel_tx,
+    };
 
-    tokio::spawn(async move {
+    let future = async move {
         let ctx = ToolContext::with_timeout(root, None);
         let run_fut = bash::run(&cmd, &ctx, None);
         let result = tokio::select! {
             result = run_fut => result,
             _ = &mut cancel_rx => ToolOutput::canceled("Interrupted by user"),
         };
-        send(
-            &inbox,
-            UiEvent::BashExecuted {
-                id: result_id,
-                result,
-            },
-        );
-    });
+        UiEvent::BashExecuted {
+            id: result_id,
+            result,
+        }
+    };
+
+    (started, future)
 }
