@@ -193,9 +193,9 @@ fn render_transcript_lazy(
 pub fn calculate_cell_line_counts(
     state: &TuiState,
     terminal_width: usize,
-    transcript_margin: u16,
+    horizontal_overhead: usize,
 ) -> Vec<(CellId, usize)> {
-    let effective_width = terminal_width.saturating_sub((transcript_margin * 2) as usize);
+    let effective_width = terminal_width.saturating_sub(horizontal_overhead);
 
     state
         .transcript

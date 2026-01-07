@@ -27,6 +27,10 @@ const STATUS_HEIGHT: u16 = 1;
 /// Transcript horizontal margin (padding on each side).
 pub const TRANSCRIPT_MARGIN: u16 = 1;
 
+/// Width reserved for the scrollbar on the right side.
+/// This ensures there's always a gap between transcript content and the scrollbar.
+const SCROLLBAR_WIDTH: u16 = 1;
+
 /// Spinner frames for status line animation.
 const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 
@@ -41,8 +45,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     // Calculate dynamic input height based on content
     let input_height = input::calculate_input_height(state, area.height);
 
-    // Get terminal size for transcript rendering (account for margins)
-    let transcript_width = area.width.saturating_sub(TRANSCRIPT_MARGIN * 2) as usize;
+    // Get terminal size for transcript rendering (account for margins and scrollbar)
+    let transcript_width =
+        area.width.saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
 
     // Calculate transcript pane height (no header now)
     let transcript_height = area.height.saturating_sub(input_height + STATUS_HEIGHT) as usize;
@@ -104,14 +109,16 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         ])
         .split(area);
 
-    // Transcript area with horizontal margins
+    // Transcript area with horizontal margins (also accounts for scrollbar)
     // NOTE: No .wrap() here - content is already pre-wrapped by render_transcript()
     // Adding wrap would cause double-wrapping and visual artifacts
     let transcript = Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
     let transcript_area = Rect {
         x: chunks[0].x + TRANSCRIPT_MARGIN,
         y: chunks[0].y,
-        width: chunks[0].width.saturating_sub(TRANSCRIPT_MARGIN * 2),
+        width: chunks[0]
+            .width
+            .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH),
         height: chunks[0].height,
     };
     frame.render_widget(transcript, transcript_area);
@@ -185,7 +192,8 @@ pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height:
 /// Calculates cell line info and returns it for external application.
 ///
 /// This is a thin wrapper around transcript::calculate_cell_line_counts
-/// that passes the TRANSCRIPT_MARGIN constant.
+/// that passes the combined horizontal overhead (margins + scrollbar).
 pub fn calculate_cell_line_counts(state: &TuiState, terminal_width: usize) -> Vec<(CellId, usize)> {
-    transcript::calculate_cell_line_counts(state, terminal_width, TRANSCRIPT_MARGIN)
+    let horizontal_overhead = (TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
+    transcript::calculate_cell_line_counts(state, terminal_width, horizontal_overhead)
 }
