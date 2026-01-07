@@ -16,7 +16,8 @@ pub async fn run(
     model_override: Option<&str>,
     thinking_override: Option<&str>,
 ) -> Result<()> {
-    let thread = thread_opts.resolve().context("resolve thread")?;
+    let root_path = PathBuf::from(root);
+    let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
 
     // Apply overrides if provided
     let config = {
@@ -30,9 +31,7 @@ pub async fn run(
         c
     };
 
-    let exec_opts = modes::exec::ExecOptions {
-        root: PathBuf::from(root),
-    };
+    let exec_opts = modes::exec::ExecOptions { root: root_path };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
     modes::exec::run_exec(prompt, &config, thread, &exec_opts)

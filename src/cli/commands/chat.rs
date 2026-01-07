@@ -25,9 +25,9 @@ pub async fn run(
         return exec::run(root, thread_opts, prompt, config, None, None).await;
     }
 
-    let thread = thread_opts.resolve().context("resolve thread")?;
-
     let root_path = PathBuf::from(root);
+    let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
+
     modes::run_interactive_chat(config, thread, root_path)
         .await
         .context("interactive chat failed")?;

@@ -509,7 +509,12 @@ impl TuiRuntime {
                 turn_number,
             } => {
                 if self.state.tui.thread_ops.fork_rx.is_none() {
-                    let event = handlers::spawn_forked_thread(events, user_input, turn_number);
+                    let event = handlers::spawn_forked_thread(
+                        events,
+                        user_input,
+                        turn_number,
+                        self.state.tui.agent_opts.root.clone(),
+                    );
                     self.dispatch_event(event);
                 }
             }
@@ -524,7 +529,10 @@ impl TuiRuntime {
             UiEffect::LoadThread { thread_id } => {
                 // Only spawn if not already loading
                 if self.state.tui.thread_ops.load_rx.is_none() {
-                    let event = handlers::spawn_thread_load(thread_id);
+                    let event = handlers::spawn_thread_load(
+                        thread_id,
+                        self.state.tui.agent_opts.root.clone(),
+                    );
                     self.dispatch_event(event);
                 }
             }
@@ -548,12 +556,17 @@ impl TuiRuntime {
                     )));
                 }
             }
-            UiEffect::HandoffSubmit { prompt } => match handoff::execute_handoff_submit(&prompt) {
-                Ok(thread_log) => self.dispatch_event(UiEvent::HandoffThreadCreated { thread_log }),
-                Err(error) => {
-                    self.dispatch_event(UiEvent::HandoffThreadCreateFailed { error });
+            UiEffect::HandoffSubmit { prompt } => {
+                let root = &self.state.tui.agent_opts.root;
+                match handoff::execute_handoff_submit(&prompt, root) {
+                    Ok(thread_log) => {
+                        self.dispatch_event(UiEvent::HandoffThreadCreated { thread_log });
+                    }
+                    Err(error) => {
+                        self.dispatch_event(UiEvent::HandoffThreadCreateFailed { error });
+                    }
                 }
-            },
+            }
 
             // File picker effects
             UiEffect::DiscoverFiles => {

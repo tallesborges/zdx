@@ -103,6 +103,7 @@ mod tests {
             ThreadEvent::Meta {
                 schema_version: 1,
                 title: None,
+                root_path: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
@@ -207,6 +208,7 @@ mod tests {
             ThreadEvent::Meta {
                 schema_version: 1,
                 title: None,
+                root_path: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
