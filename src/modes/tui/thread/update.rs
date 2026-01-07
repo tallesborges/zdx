@@ -32,12 +32,12 @@ pub fn handle_thread_event(
     let mut commands = Vec::new();
     let mut overlay_action = ThreadOverlayAction::None;
     let effects = match event {
-        ThreadUiEvent::ListStarted { .. }
-        | ThreadUiEvent::LoadStarted { .. }
-        | ThreadUiEvent::PreviewStarted { .. }
-        | ThreadUiEvent::CreateStarted { .. }
-        | ThreadUiEvent::ForkStarted { .. }
-        | ThreadUiEvent::RenameStarted { .. } => vec![],
+        ThreadUiEvent::ListStarted
+        | ThreadUiEvent::LoadStarted
+        | ThreadUiEvent::PreviewStarted
+        | ThreadUiEvent::CreateStarted
+        | ThreadUiEvent::ForkStarted
+        | ThreadUiEvent::RenameStarted => vec![],
         ThreadUiEvent::ListLoaded {
             threads,
             original_cells,

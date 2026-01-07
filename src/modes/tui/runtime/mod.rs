@@ -392,9 +392,7 @@ impl TuiRuntime {
             }
             UiEffect::StartLocalAuthCallback { provider, state } => {
                 self.state.tui.auth.callback_in_progress = true;
-                self.spawn_effect(None, move || {
-                    handlers::local_auth_callback(provider, state)
-                });
+                self.spawn_effect(None, move || handlers::local_auth_callback(provider, state));
             }
 
             // Config effects
