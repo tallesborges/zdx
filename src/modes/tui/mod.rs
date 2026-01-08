@@ -94,6 +94,18 @@ pub async fn run_interactive_chat_with_history(
         TuiRuntime::with_history(config.clone(), root, effective.prompt, thread_log, history)?
     };
 
+    // Add system message for config path (only if config exists on disk).
+    let config_path = crate::config::paths::config_path();
+    if config_path.exists() {
+        let message = format!("Config file: {}", config_path.display());
+        runtime
+            .state
+            .tui
+            .transcript
+            .cells
+            .push(HistoryCell::system(message));
+    }
+
     // Add system message for thread path
     if let Some(ref s) = runtime.state.tui.thread.thread_log {
         let thread_path_msg = format!("Thread path: {}", s.path().display());

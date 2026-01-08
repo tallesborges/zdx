@@ -56,6 +56,13 @@ pub async fn run_exec(
         let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
     }
 
+    // Emit config path info (only if config exists on disk).
+    let config_path = crate::config::paths::config_path();
+    if config_path.exists() {
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Config file: {}", config_path.display());
+    }
+
     // Emit loaded AGENTS.md paths info (per SPEC §10)
     if !effective.loaded_agents_paths.is_empty() {
         let paths_str: Vec<String> = effective

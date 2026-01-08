@@ -5,5 +5,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-anyhow = "1.0.100"
-tempfile = "3.23.0"
+anyhow = { workspace = true }
+clap = { workspace = true }
+tempfile = { workspace = true }
