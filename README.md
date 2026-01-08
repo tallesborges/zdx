@@ -6,9 +6,7 @@ A fast, beautiful agentic coding assistant.
 
 ## What it is
 
-- **4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
-- **Handoff** — AMP-style context-aware prompt generation to start fresh threads ([learn more](https://ampcode.com/news/handoff))
-- **No MCP support** — if you need it, check out [mcporter](https://github.com/steipete/mcporter)
+ZDX is a TUI coding agent that helps you as a developer be productive. The vision is to be a faster, lightweight tool.
 
 ## Why it exists
 
@@ -19,8 +17,11 @@ Built because I needed something:
 
 ## Features
 
-- **Anthropic provider** with API key or OAuth authentication
-- **Open AI (Codex) provider** with OAuth authentication
+- **4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
+- **Anthropic provider** with API key or OAuth authentication (Claude Pro/Max)
+- **OpenAI provider** with API key (OpenAI API) or OAuth (Codex Subscription)
+- **OpenRouter provider** with API key
+- **Gemini provider** with API key
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display
