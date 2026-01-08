@@ -6,10 +6,11 @@
 use std::ops::Range;
 use std::time::{Duration, Instant};
 
+use unicode_segmentation::UnicodeSegmentation;
+
 use super::CellId;
 use super::selection::{PositionMap, SelectionState};
 use crate::modes::tui::shared::internal::TranscriptMutation;
-use unicode_segmentation::UnicodeSegmentation;
 
 const DOUBLE_CLICK_MAX_DELAY: Duration = Duration::from_millis(400);
 const DOUBLE_CLICK_MAX_COLUMN_DELTA: usize = 1;
@@ -480,7 +481,11 @@ impl TranscriptState {
         if is_double_click {
             self.last_click = None;
         } else {
-            self.last_click = Some(ClickInfo { line, column, at: now });
+            self.last_click = Some(ClickInfo {
+                line,
+                column,
+                at: now,
+            });
         }
 
         is_double_click
@@ -527,9 +532,7 @@ impl TranscriptState {
 }
 
 fn is_word_grapheme(grapheme: &str) -> bool {
-    grapheme
-        .chars()
-        .any(|ch| ch.is_alphanumeric() || ch == '_')
+    grapheme.chars().any(|ch| ch.is_alphanumeric() || ch == '_')
 }
 
 #[cfg(test)]
