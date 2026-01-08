@@ -64,9 +64,9 @@ impl TimelineState {
         let initial_offset = entries
             .first()
             .and_then(|entry| scroll.cell_start_line(entry.cell_index));
-        let mut commands = Vec::new();
+        let mut mutations = Vec::new();
         if let Some(offset) = initial_offset {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::SetScrollOffset { offset },
             ));
         }
@@ -78,7 +78,7 @@ impl TimelineState {
                 initial_scroll,
             },
             vec![],
-            commands,
+            mutations,
         )
     }
 

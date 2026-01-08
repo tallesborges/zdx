@@ -39,7 +39,7 @@ pub fn handle_main_key(
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
 
-    let (effects, commands, overlay_request) = match key.code {
+    let (effects, mutations, overlay_request) = match key.code {
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
         KeyCode::Char('u') if ctrl && !shift && !alt => {
             let (row, _) = input.textarea.cursor();
@@ -211,7 +211,7 @@ pub fn handle_main_key(
         }
     };
 
-    (effects, commands, overlay_request)
+    (effects, mutations, overlay_request)
 }
 
 /// Handles input submission.
@@ -426,7 +426,7 @@ pub fn handle_handoff_result(
             )]
         }
         Err(error) => {
-            let mut commands = vec![StateMutation::Transcript(
+            let mut mutations = vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(format!(
                     "Handoff generation failed: {}",
                     error
@@ -437,7 +437,7 @@ pub fn handle_handoff_result(
             if let Some(goal) = goal {
                 input.set_text(&goal);
                 input.handoff = HandoffState::Pending;
-                commands.push(StateMutation::Transcript(
+                mutations.push(StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
                         "Press Enter to retry, or Esc to cancel.".to_string(),
                     ),
@@ -446,7 +446,7 @@ pub fn handle_handoff_result(
                 input.handoff = HandoffState::Idle;
             }
 
-            commands
+            mutations
         }
     }
 }

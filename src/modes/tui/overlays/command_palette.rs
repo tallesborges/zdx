@@ -49,11 +49,11 @@ impl CommandPaletteState {
 
         match key.code {
             KeyCode::Esc => {
-                let mut commands = Vec::new();
+                let mut mutations = Vec::new();
                 if self.insert_slash_on_escape {
-                    commands.push(StateMutation::Input(InputMutation::InsertChar('/')));
+                    mutations.push(StateMutation::Input(InputMutation::InsertChar('/')));
                 }
-                OverlayUpdate::close().with_mutations(commands)
+                OverlayUpdate::close().with_mutations(mutations)
             }
             KeyCode::Char('c') if ctrl => OverlayUpdate::close(),
             KeyCode::Up => {
@@ -72,12 +72,12 @@ impl CommandPaletteState {
             }
             KeyCode::Enter | KeyCode::Tab => {
                 if let Some(cmd_name) = self.get_selected_command_name() {
-                    let (open_overlay, effects, commands) = execute_command(tui, cmd_name);
+                    let (open_overlay, effects, mutations) = execute_command(tui, cmd_name);
                     let update = match open_overlay {
                         Some(request) => OverlayUpdate::open(request),
                         None => OverlayUpdate::close(),
                     };
-                    update.with_ui_effects(effects).with_mutations(commands)
+                    update.with_ui_effects(effects).with_mutations(mutations)
                 } else {
                     OverlayUpdate::close()
                 }
@@ -129,29 +129,29 @@ fn execute_command(
     match cmd_name {
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "copy-id" => {
-            let (effects, commands) = execute_copy_id(tui);
-            (None, effects, commands)
+            let (effects, mutations) = execute_copy_id(tui);
+            (None, effects, mutations)
         }
         "login" => (Some(OverlayRequest::Login), vec![], vec![]),
         "logout" => {
-            let (effects, commands) = execute_logout(tui);
-            (None, effects, commands)
+            let (effects, mutations) = execute_logout(tui);
+            (None, effects, mutations)
         }
         "rename" => {
-            let (effects, commands) = execute_rename(tui);
-            (None, effects, commands)
+            let (effects, mutations) = execute_rename(tui);
+            (None, effects, mutations)
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
         "threads" => (None, vec![UiEffect::OpenThreadPicker], vec![]),
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {
-            let (effects, commands) = execute_handoff(tui);
-            (None, effects, commands)
+            let (effects, mutations) = execute_handoff(tui);
+            (None, effects, mutations)
         }
         "new" => {
-            let (effects, commands) = execute_new(tui);
-            (None, effects, commands)
+            let (effects, mutations) = execute_new(tui);
+            (None, effects, mutations)
         }
         "quit" => (None, execute_quit(tui), vec![]),
         _ => (None, vec![], vec![]),
@@ -162,7 +162,7 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     use crate::providers::oauth::{anthropic, openai_codex};
     use crate::providers::provider_for_model;
 
-    let mut commands = Vec::new();
+    let mut mutations = Vec::new();
     let provider = provider_for_model(&tui.config.model);
     let result = match provider {
         crate::providers::ProviderKind::Anthropic => {
@@ -175,8 +175,8 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 
     match result {
         Ok((true, label)) => {
-            commands.push(StateMutation::Auth(AuthMutation::RefreshStatus));
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Auth(AuthMutation::RefreshStatus));
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(format!(
                     "Logged out from {} OAuth.",
                     label
@@ -184,20 +184,20 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
             ));
         }
         Ok((false, _)) => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(
                     "No OAuth credentials to clear.".to_string(),
                 ),
             ));
         }
         Err(e) => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(format!("Logout failed: {}", e)),
             ));
         }
     }
 
-    (vec![], commands)
+    (vec![], mutations)
 }
 
 fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
@@ -285,7 +285,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         );
     }
 
-    let mut commands = vec![
+    let mut mutations = vec![
         StateMutation::Transcript(TranscriptMutation::Clear),
         StateMutation::Thread(ThreadMutation::ClearMessages),
         StateMutation::Thread(ThreadMutation::ResetUsage),
@@ -293,12 +293,12 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     ];
 
     if tui.thread.thread_log.is_some() {
-        (vec![UiEffect::CreateNewThread], commands)
+        (vec![UiEffect::CreateNewThread], mutations)
     } else {
-        commands.push(StateMutation::Transcript(
+        mutations.push(StateMutation::Transcript(
             TranscriptMutation::AppendSystemMessage("Thread cleared.".to_string()),
         ));
-        (vec![], commands)
+        (vec![], mutations)
     }
 }
 

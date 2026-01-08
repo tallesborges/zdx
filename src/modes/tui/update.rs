@@ -36,13 +36,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => {
             let has_thread = app.tui.thread.thread_log.is_some();
-            let (mut effects, commands) = transcript::handle_agent_event(
+            let (mut effects, mutations) = transcript::handle_agent_event(
                 &mut app.tui.transcript,
                 &mut app.tui.agent_state,
                 has_thread,
                 &agent_event,
             );
-            apply_mutations(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, mutations);
 
             // Save usage to thread after each request completes.
             // A request is complete when we receive output tokens (MessageDelta with usage).
@@ -98,9 +98,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 })) => *provider,
                 _ => crate::providers::provider_for_model(&app.tui.config.model),
             };
-            let (commands, overlay_action) =
+            let (mutations, overlay_action) =
                 auth::handle_login_result(&mut app.tui.auth, result, provider);
-            apply_mutations(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, mutations);
 
             match overlay_action {
                 auth::LoginOverlayAction::Close => {
@@ -150,8 +150,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             effects
         }
         UiEvent::HandoffResult(result) => {
-            let commands = input::handle_handoff_result(&mut app.tui.input, result);
-            apply_mutations(&mut app.tui, commands);
+            let mutations = input::handle_handoff_result(&mut app.tui.input, result);
+            apply_mutations(&mut app.tui, mutations);
             vec![]
         }
         UiEvent::HandoffGenerationStarted { goal, cancel } => {
@@ -270,12 +270,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 original_cells,
             } => {
                 app.tui.thread_ops.list_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ListLoaded {
                         threads,
                         original_cells,
                     });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -296,9 +296,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             ThreadUiEvent::ListFailed { error } => {
                 app.tui.thread_ops.list_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::LoadStarted => {
@@ -314,7 +314,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 usage,
             } => {
                 app.tui.thread_ops.load_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Loaded {
                         thread_id,
                         cells,
@@ -323,7 +323,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         thread_log,
                         usage,
                     });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -344,9 +344,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             ThreadUiEvent::LoadFailed { error } => {
                 app.tui.thread_ops.load_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::LoadFailed { error });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::PreviewStarted => {
@@ -369,9 +369,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 }
 
                 app.tui.thread_ops.preview_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -406,9 +406,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 }
 
                 app.tui.thread_ops.preview_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::CreateStarted => {
@@ -424,12 +424,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 context_paths,
             } => {
                 app.tui.thread_ops.create_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Created {
                         thread_log,
                         context_paths,
                     });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -459,7 +459,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 turn_number,
             } => {
                 app.tui.thread_ops.fork_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ForkedLoaded {
                         thread_id,
                         cells,
@@ -470,7 +470,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         user_input,
                         turn_number,
                     });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -491,16 +491,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             ThreadUiEvent::CreateFailed { error } => {
                 app.tui.thread_ops.create_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::CreateFailed { error });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::ForkFailed { error } => {
                 app.tui.thread_ops.fork_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::RenameStarted => {
@@ -509,9 +509,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             ThreadUiEvent::Renamed { thread_id, title } => {
                 app.tui.thread_ops.rename_loading = false;
-                let (mut effects, commands, overlay_action) =
+                let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Renamed { thread_id, title });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
@@ -532,9 +532,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             ThreadUiEvent::RenameFailed { error } => {
                 app.tui.thread_ops.rename_loading = false;
-                let (effects, commands, _) =
+                let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::RenameFailed { error });
-                apply_mutations(&mut app.tui, commands);
+                apply_mutations(&mut app.tui, mutations);
                 effects
             }
         },
@@ -634,13 +634,13 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::Timeline => {
-            let (state, effects, commands) = overlays::TimelineState::open(
+            let (state, effects, mutations) = overlays::TimelineState::open(
                 &app.tui.transcript.cells,
                 &app.tui.transcript.scroll,
                 app.tui.transcript.scroll.mode.clone(),
             );
             app.overlay = Some(overlays::Overlay::Timeline(state));
-            apply_mutations(&mut app.tui, commands);
+            apply_mutations(&mut app.tui, mutations);
             effects
         }
     }
@@ -722,14 +722,14 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .thread_log
         .as_ref()
         .map(|thread_log| thread_log.id.clone());
-    let (effects, commands, overlay_request) = input::handle_main_key(
+    let (effects, mutations, overlay_request) = input::handle_main_key(
         &mut app.tui.input,
         &app.tui.agent_state,
         app.tui.bash_running.is_some(),
         thread_id,
         key,
     );
-    apply_mutations(&mut app.tui, commands);
+    apply_mutations(&mut app.tui, mutations);
     if let Some(request) = overlay_request
         && app.overlay.is_none()
     {

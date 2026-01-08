@@ -71,11 +71,11 @@ impl FilePickerState {
                 OverlayUpdate::close()
             }
             KeyCode::Enter | KeyCode::Tab => {
-                let mut commands = Vec::new();
+                let mut mutations = Vec::new();
                 if let Some(command) = self.select_file_and_insert(input) {
-                    commands.push(StateMutation::Input(command));
+                    mutations.push(StateMutation::Input(command));
                 }
-                OverlayUpdate::close().with_mutations(commands)
+                OverlayUpdate::close().with_mutations(mutations)
             }
             KeyCode::Up => {
                 if self.selected > 0 {
