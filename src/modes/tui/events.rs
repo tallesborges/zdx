@@ -3,6 +3,12 @@
 //! This module defines the unified event enum for the TUI.
 //! All external inputs (terminal, agent, async results) are converted to `UiEvent`
 //! before being processed by the reducer.
+//!
+//! ## Inbox Pattern
+//!
+//! Events follow the "inbox" pattern where async operations send events directly
+//! to the runtime's event inbox. `*Started` events are now simple markers (no rx fields)
+//! that indicate an operation has begun. Results arrive as separate events.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,14 +19,18 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
+use crate::modes::tui::shared::RequestId;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
 /// Thread event enum for async thread operations.
+///
+/// With the inbox pattern, `*Started` events are simple markers indicating
+/// an operation has begun. Results arrive as separate events via the inbox.
 #[derive(Debug)]
 pub enum ThreadUiEvent {
-    /// Thread list load started; reducer should store the receiver.
-    ListStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread list load started (operation in progress).
+    ListStarted,
 
     /// Thread list loaded for picker.
     ListLoaded {
@@ -31,8 +41,8 @@ pub enum ThreadUiEvent {
     /// Thread list load failed.
     ListFailed { error: String },
 
-    /// Thread load started; reducer should store the receiver.
-    LoadStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread load started (operation in progress).
+    LoadStarted,
 
     /// Thread loaded successfully (for switching to a thread).
     Loaded {
@@ -48,20 +58,23 @@ pub enum ThreadUiEvent {
     /// Thread load failed.
     LoadFailed { error: String },
 
-    /// Thread preview load started; reducer should store the receiver.
-    PreviewStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread preview load started (operation in progress).
+    PreviewStarted,
 
     /// Thread preview loaded (for thread picker navigation).
-    PreviewLoaded { cells: Vec<HistoryCell> },
+    PreviewLoaded {
+        req: RequestId,
+        cells: Vec<HistoryCell>,
+    },
 
     /// Thread preview load failed (silent - just don't update).
-    PreviewFailed,
+    PreviewFailed { req: RequestId },
 
-    /// Thread creation started; reducer should store the receiver.
-    CreateStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread creation started (operation in progress).
+    CreateStarted,
 
-    /// Thread fork started; reducer should store the receiver.
-    ForkStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread fork started (operation in progress).
+    ForkStarted,
 
     /// New thread created successfully.
     Created {
@@ -88,8 +101,8 @@ pub enum ThreadUiEvent {
     /// Thread fork failed.
     ForkFailed { error: String },
 
-    /// Thread rename started; reducer should store the receiver.
-    RenameStarted { rx: mpsc::Receiver<UiEvent> },
+    /// Thread rename started (operation in progress).
+    RenameStarted,
 
     /// Thread rename succeeded.
     Renamed {
@@ -105,6 +118,12 @@ pub enum ThreadUiEvent {
 ///
 /// All inputs to the TUI are converted to this type before processing.
 /// The reducer (`update`) pattern-matches on these events to update state.
+///
+/// ## Inbox Pattern
+///
+/// With the inbox pattern, async operations send events directly to the runtime's
+/// event inbox. `*Started` events now only contain data needed by the reducer
+/// (like cancel tokens), not result receivers.
 #[derive(Debug)]
 pub enum UiEvent {
     /// Timer tick (for animation, polling).
@@ -126,15 +145,10 @@ pub enum UiEvent {
     AgentSpawned { rx: mpsc::Receiver<Arc<AgentEvent>> },
 
     /// Async login token exchange completed.
-    LoginResult(Result<(), String>),
-
-    /// Token exchange spawned; reducer should store login receiver.
-    LoginExchangeStarted {
-        rx: mpsc::Receiver<Result<(), String>>,
+    LoginResult {
+        req: RequestId,
+        result: Result<(), String>,
     },
-
-    /// Local OAuth callback listener spawned.
-    LoginCallbackStarted { rx: mpsc::Receiver<Option<String>> },
 
     /// Local OAuth callback returned with an optional code.
     LoginCallbackResult(Option<String>),
@@ -143,10 +157,8 @@ pub enum UiEvent {
     HandoffResult(Result<String, String>),
 
     /// Handoff generation spawned; reducer should set handoff generating state.
-    /// Handoff generation spawned; reducer should set handoff generating state.
     HandoffGenerationStarted {
         goal: String,
-        rx: oneshot::Receiver<Result<String, String>>,
         cancel: oneshot::Sender<()>,
     },
 
@@ -156,11 +168,8 @@ pub enum UiEvent {
     /// Handoff thread creation failed.
     HandoffThreadCreateFailed { error: String },
 
-    /// File discovery started.
-    FileDiscoveryStarted {
-        rx: oneshot::Receiver<Vec<PathBuf>>,
-        cancel: Arc<AtomicBool>,
-    },
+    /// File discovery started (with cancel token for reducer to store).
+    FileDiscoveryStarted { cancel: Arc<AtomicBool> },
 
     /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),
@@ -168,11 +177,10 @@ pub enum UiEvent {
     /// Clipboard copy completed successfully.
     ClipboardCopied,
 
-    /// Direct bash execution started (for `!` shortcut).
+    /// Direct bash execution started (with cancel token for reducer to store).
     BashExecutionStarted {
         id: String,
         command: String,
-        rx: oneshot::Receiver<ToolOutput>,
         cancel: oneshot::Sender<()>,
     },
 

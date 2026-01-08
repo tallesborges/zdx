@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use super::OverlayUpdate;
+use super::{OverlayEffect, OverlayUpdate};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -113,8 +113,8 @@ impl LoginState {
             } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                     OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::ClearLoginRx),
-                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
+                        StateMutation::Auth(AuthMutation::CancelLoginRequest),
+                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
                     ])
                 }
                 KeyCode::Enter => {
@@ -154,13 +154,13 @@ impl LoginState {
                     *self = LoginState::Exchanging { provider };
 
                     OverlayUpdate::stay()
-                        .with_effects(vec![UiEffect::SpawnTokenExchange {
+                        .with_effects(vec![OverlayEffect::StartTokenExchange {
                             provider,
                             code,
                             verifier: pkce_verifier,
                         }])
                         .with_mutations(vec![StateMutation::Auth(
-                            AuthMutation::ClearLoginCallbackRx,
+                            AuthMutation::SetCallbackInProgress(false),
                         )])
                 }
                 KeyCode::Backspace => {
@@ -176,8 +176,8 @@ impl LoginState {
             LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
                     OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::ClearLoginRx),
-                        StateMutation::Auth(AuthMutation::ClearLoginCallbackRx),
+                        StateMutation::Auth(AuthMutation::CancelLoginRequest),
+                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
                     ])
                 } else {
                     OverlayUpdate::stay()

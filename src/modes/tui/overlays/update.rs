@@ -21,7 +21,7 @@ use crate::modes::tui::app::TuiState;
 /// # Example
 ///
 /// ```ignore
-/// let update = overlays::handle_overlay_key(&app.tui, &mut app.overlay, key);
+/// let update = overlays::handle_overlay_key(&mut app.tui, &mut app.overlay, key);
 /// if let Some(update) = update {
 ///     apply_mutations(&mut app.tui, update.mutations);
 ///     return apply_overlay_update(app, update);
