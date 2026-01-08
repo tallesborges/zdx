@@ -353,10 +353,10 @@ impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
             anthropic: default_anthropic_provider(),
-            openai: default_openai_provider(),
             openai_codex: default_openai_codex_provider(),
-            openrouter: default_openrouter_provider(),
+            openai: default_openai_provider(),
             gemini: default_gemini_provider(),
+            openrouter: default_openrouter_provider(),
         }
     }
 }
@@ -365,9 +365,9 @@ fn default_anthropic_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
-            "claude-haiku-4-5".to_string(),
             "claude-opus-4-5".to_string(),
             "claude-sonnet-4-5".to_string(),
+            "claude-haiku-4-5".to_string(),
         ],
         ..Default::default()
     }
@@ -392,9 +392,9 @@ fn default_openai_codex_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.2-codex".to_string(),
             "gpt-5.1-codex-max".to_string(),
             "gpt-5.1-codex-mini".to_string(),
-            "gpt-5.2-codex".to_string(),
             "gpt-5.2".to_string(),
         ],
         ..Default::default()
