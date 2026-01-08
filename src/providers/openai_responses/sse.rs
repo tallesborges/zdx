@@ -7,7 +7,7 @@ use anyhow::{Result, anyhow};
 use futures_util::Stream;
 use serde_json::Value;
 
-use crate::providers::anthropic::{StreamEvent, Usage};
+use crate::providers::{StreamEvent, Usage};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind {

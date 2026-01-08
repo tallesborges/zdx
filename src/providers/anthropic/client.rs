@@ -4,12 +4,12 @@ use anyhow::Result;
 use futures_util::Stream;
 
 use super::auth::{AnthropicConfig, AuthMethod, DEFAULT_BASE_URL};
-use super::errors::{ProviderError, ProviderErrorKind};
-use super::sse::{SseParser, StreamEvent};
+use super::sse::SseParser;
 use super::types::{
-    ApiContentBlock, ApiMessage, ApiMessageContent, ApiToolDef, CacheControl, ChatMessage,
+    ApiContentBlock, ApiMessage, ApiMessageContent, ApiToolDef, CacheControl,
     StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
+use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, StreamEvent};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";

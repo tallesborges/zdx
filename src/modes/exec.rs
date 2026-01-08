@@ -16,7 +16,7 @@ use crate::config::Config;
 use crate::core::agent::AgentOptions;
 use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Options for exec execution.
 #[derive(Debug, Clone)]

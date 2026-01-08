@@ -251,9 +251,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 app.tui
                     .thread
                     .messages
-                    .push(crate::providers::anthropic::ChatMessage::user(
-                        &user_message,
-                    ));
+                    .push(crate::providers::ChatMessage::user(&user_message));
             }
 
             effects

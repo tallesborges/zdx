@@ -1,7 +1,8 @@
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use serde_json::Value;
 
-use crate::tools::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
+use crate::providers::shared::{ChatContentBlock, ChatMessage, MessageContent};
+use crate::tools::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
 // === API Request Types ===
 
@@ -260,70 +261,6 @@ impl ApiMessage {
                     content: ApiMessageContent::Blocks(api_blocks),
                 }
             }
-        }
-    }
-}
-
-// === Public Chat Types ===
-
-/// Content block in a chat message.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ChatContentBlock {
-    #[serde(rename = "thinking")]
-    Thinking { thinking: String, signature: String },
-    #[serde(rename = "text")]
-    Text(String),
-    #[serde(rename = "tool_use")]
-    ToolUse {
-        id: String,
-        name: String,
-        input: Value,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult(ToolResult),
-}
-
-/// Message content - either simple text or structured blocks.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum MessageContent {
-    Text(String),
-    Blocks(Vec<ChatContentBlock>),
-}
-
-/// A chat message with owned data.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ChatMessage {
-    pub role: String,
-    pub content: MessageContent,
-}
-
-impl ChatMessage {
-    pub fn user(content: impl Into<String>) -> Self {
-        Self {
-            role: "user".to_string(),
-            content: MessageContent::Text(content.into()),
-        }
-    }
-
-    /// Creates an assistant message with content blocks (for tool use).
-    pub fn assistant_blocks(blocks: Vec<ChatContentBlock>) -> Self {
-        Self {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(blocks),
-        }
-    }
-
-    /// Creates a user message with tool results.
-    pub fn tool_results(results: Vec<ToolResult>) -> Self {
-        let blocks: Vec<ChatContentBlock> = results
-            .into_iter()
-            .map(ChatContentBlock::ToolResult)
-            .collect();
-        Self {
-            role: "user".to_string(),
-            content: MessageContent::Blocks(blocks),
         }
     }
 }

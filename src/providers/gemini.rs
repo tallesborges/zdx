@@ -9,7 +9,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::providers::anthropic::{
+use crate::providers::{
     ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
     Usage,
 };

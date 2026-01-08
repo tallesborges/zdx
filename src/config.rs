@@ -557,6 +557,7 @@ mod tests {
             providers: ProvidersConfig {
                 anthropic: ProviderConfig {
                     base_url: Some("   ".to_string()),
+                    ..Default::default()
                 },
                 ..Default::default()
             },

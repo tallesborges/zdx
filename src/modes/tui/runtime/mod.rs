@@ -37,7 +37,7 @@ use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
 pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);

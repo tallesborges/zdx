@@ -7,7 +7,7 @@ use crate::config::ThinkingLevel;
 use crate::core::thread_log::{ThreadLog, Usage};
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::transcript::{HistoryCell, ScrollMode};
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Mutations for cross-slice state changes.
 #[derive(Debug)]

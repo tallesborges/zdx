@@ -21,7 +21,7 @@ use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
 use crate::modes::tui::shared::RequestId;
 use crate::modes::tui::transcript::HistoryCell;
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Thread event enum for async thread operations.
 ///

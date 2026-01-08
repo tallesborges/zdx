@@ -7,6 +7,12 @@ pub mod openai_api;
 pub mod openai_codex;
 pub mod openai_responses;
 pub mod openrouter;
+pub mod shared;
+
+pub use shared::{
+    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
+    Usage,
+};
 
 /// Provider selection based on model naming.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
