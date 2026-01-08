@@ -22,6 +22,10 @@ pub enum LoginState {
     Exchanging {
         provider: ProviderKind,
     },
+    ApiKeyInfo {
+        provider: ProviderKind,
+        env_var: String,
+    },
 }
 
 impl LoginState {
@@ -85,6 +89,10 @@ impl LoginState {
                 }
                 (state, effects)
             }
+            _ => {
+                let env_var = provider.api_key_env_var().unwrap_or("API_KEY").to_string();
+                (LoginState::ApiKeyInfo { provider, env_var }, vec![])
+            }
         }
     }
 
@@ -92,6 +100,7 @@ impl LoginState {
         match self {
             LoginState::AwaitingCode { provider, .. } => *provider,
             LoginState::Exchanging { provider } => *provider,
+            LoginState::ApiKeyInfo { provider, .. } => *provider,
         }
     }
 
@@ -149,6 +158,7 @@ impl LoginState {
                                 }
                             }
                         }
+                        _ => code.to_string(),
                     };
 
                     *self = LoginState::Exchanging { provider };
@@ -183,6 +193,7 @@ impl LoginState {
                     OverlayUpdate::stay()
                 }
             }
+            LoginState::ApiKeyInfo { .. } => OverlayUpdate::close(),
         }
     }
 }

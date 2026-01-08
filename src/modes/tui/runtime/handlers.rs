@@ -374,6 +374,7 @@ pub async fn token_exchange(
                 Err(e) => Err(e.to_string()),
             }
         }
+        _ => Err("OAuth is not supported for this provider.".to_string()),
     };
     UiEvent::LoginResult { req, result }
 }
@@ -387,7 +388,7 @@ pub async fn local_auth_callback(
 ) -> UiEvent {
     let code = match provider {
         crate::providers::ProviderKind::OpenAICodex => wait_for_local_code(state.as_deref()),
-        crate::providers::ProviderKind::Anthropic => None,
+        _ => None,
     };
     UiEvent::LoginCallbackResult(code)
 }

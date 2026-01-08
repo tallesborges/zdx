@@ -1,95 +1,69 @@
 //! Model registry for the TUI model picker.
 //!
-//! This module re-exports the generated model data from `models_generated.rs`.
-//! The generated file is produced by `cargo run --bin generate_models` and should
-//! be committed to the repository.
+//! Loads models from `<base>/models.toml` when present, otherwise falls back to
+//! `default_models.toml`.
 
-#[path = "models_generated.rs"]
-mod generated;
-
+use std::collections::HashSet;
+use std::fs;
+use std::path::Path;
 use std::sync::OnceLock;
 
-// Re-export types for use throughout the application
-pub use generated::{ModelOption, ModelPricing};
+use serde::Deserialize;
 
-const CODEX_MODELS: &[ModelOption] = &[
-    ModelOption {
-        id: "gpt-5.1-codex",
-        display_name: "GPT-5.1 Codex",
-        pricing: ModelPricing {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.125,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-    ModelOption {
-        id: "gpt-5.1-codex-max",
-        display_name: "GPT-5.1 Codex Max",
-        pricing: ModelPricing {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.125,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-    ModelOption {
-        id: "gpt-5.1-codex-mini",
-        display_name: "GPT-5.1 Codex Mini",
-        pricing: ModelPricing {
-            input: 0.25,
-            output: 2.0,
-            cache_read: 0.025,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-    ModelOption {
-        id: "gpt-5.2-codex",
-        display_name: "GPT-5.2 Codex",
-        pricing: ModelPricing {
-            input: 0.0,
-            output: 0.0,
-            cache_read: 0.0,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-    ModelOption {
-        id: "gpt-5.2",
-        display_name: "GPT-5.2",
-        pricing: ModelPricing {
-            input: 1.75,
-            output: 14.0,
-            cache_read: 0.175,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-    ModelOption {
-        id: "gpt-5.1",
-        display_name: "GPT-5.1",
-        pricing: ModelPricing {
-            input: 1.25,
-            output: 10.0,
-            cache_read: 0.13,
-            cache_write: 0.0,
-        },
-        context_limit: 400_000,
-    },
-];
+const DEFAULT_MODELS_TOML: &str = include_str!("../default_models.toml");
+
+pub fn default_models_toml() -> &'static str {
+    DEFAULT_MODELS_TOML
+}
+
+/// Pricing information for a model (prices per million tokens).
+#[derive(Debug, Clone, Copy)]
+pub struct ModelPricing {
+    /// Input tokens cost per million
+    pub input: f64,
+    /// Output tokens cost per million
+    pub output: f64,
+    /// Cache read cost per million tokens
+    pub cache_read: f64,
+    /// Cache write cost per million tokens
+    pub cache_write: f64,
+}
+
+/// Definition of an available model.
+#[derive(Debug, Clone)]
+pub struct ModelOption {
+    /// Model ID (sent to API)
+    pub id: &'static str,
+    /// Provider identifier
+    pub provider: &'static str,
+    /// Display name for the picker
+    pub display_name: &'static str,
+    /// Pricing information
+    pub pricing: ModelPricing,
+    /// Context window size in tokens
+    pub context_limit: u64,
+}
 
 static ALL_MODELS: OnceLock<Vec<ModelOption>> = OnceLock::new();
 
-/// Returns all available models (generated + extra providers).
+/// Returns all available models (config + fallback).
 pub fn available_models() -> &'static [ModelOption] {
     ALL_MODELS
         .get_or_init(|| {
-            let mut models = generated::AVAILABLE_MODELS.to_vec();
-            models.extend_from_slice(CODEX_MODELS);
-            models
+            let mut models =
+                load_models_from_path(&crate::config::paths::zdx_home().join("models.toml"))
+                    .or_else(|| load_models_from_str(DEFAULT_MODELS_TOML))
+                    .unwrap_or_default();
+
+            let mut seen = HashSet::new();
+            let mut combined = Vec::new();
+
+            for model in models.drain(..) {
+                if seen.insert(model.id) {
+                    combined.push(model);
+                }
+            }
+            combined
         })
         .as_slice()
 }
@@ -97,6 +71,119 @@ pub fn available_models() -> &'static [ModelOption] {
 impl ModelOption {
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
-        available_models().iter().find(|m| m.id == id)
+        if let Some(model) = available_models().iter().find(|m| m.id == id) {
+            return Some(model);
+        }
+
+        let target = crate::providers::resolve_provider(id);
+        available_models().iter().find(|m| {
+            let candidate = crate::providers::resolve_provider(m.id);
+            candidate.kind == target.kind && candidate.model == target.model
+        })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelsFile {
+    #[serde(rename = "model")]
+    models: Vec<ModelRecord>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ModelRecord {
+    id: String,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    display_name: Option<String>,
+    #[serde(default)]
+    context_limit: Option<u64>,
+    #[serde(default)]
+    pricing: Option<ModelPricingRecord>,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ModelPricingRecord {
+    #[serde(default)]
+    input: f64,
+    #[serde(default)]
+    output: f64,
+    #[serde(default)]
+    cache_read: f64,
+    #[serde(default)]
+    cache_write: f64,
+}
+
+fn load_models_from_path(path: &Path) -> Option<Vec<ModelOption>> {
+    let contents = fs::read_to_string(path).ok()?;
+    load_models_from_str(&contents)
+}
+
+fn load_models_from_str(contents: &str) -> Option<Vec<ModelOption>> {
+    let file: ModelsFile = match toml::from_str(contents) {
+        Ok(file) => file,
+        Err(err) => {
+            eprintln!("Warning: failed to parse models file: {}", err);
+            return None;
+        }
+    };
+
+    let models = file
+        .models
+        .into_iter()
+        .filter_map(model_record_to_option)
+        .collect();
+
+    Some(models)
+}
+
+fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
+    let id = record.id.trim().to_string();
+    if id.is_empty() {
+        return None;
+    }
+
+    let provider = record
+        .provider
+        .unwrap_or_else(|| {
+            provider_id_for_kind(crate::providers::resolve_provider(&id).kind).to_string()
+        })
+        .trim()
+        .to_lowercase();
+
+    let display_name = record
+        .display_name
+        .unwrap_or_else(|| id.clone())
+        .trim()
+        .to_string();
+
+    let context_limit = record.context_limit.unwrap_or(0);
+    let pricing = record.pricing.unwrap_or_default();
+
+    Some(ModelOption {
+        id: leak_string(id),
+        provider: leak_string(provider),
+        display_name: leak_string(display_name),
+        pricing: ModelPricing {
+            input: pricing.input,
+            output: pricing.output,
+            cache_read: pricing.cache_read,
+            cache_write: pricing.cache_write,
+        },
+        context_limit,
+    })
+}
+
+fn leak_string(value: String) -> &'static str {
+    Box::leak(value.into_boxed_str())
+}
+
+fn provider_id_for_kind(kind: crate::providers::ProviderKind) -> &'static str {
+    match kind {
+        crate::providers::ProviderKind::Anthropic => "anthropic",
+        crate::providers::ProviderKind::OpenAICodex => "openai-codex",
+        crate::providers::ProviderKind::OpenAI => "openai",
+        crate::providers::ProviderKind::OpenRouter => "openrouter",
+        crate::providers::ProviderKind::Gemini => "gemini",
     }
 }

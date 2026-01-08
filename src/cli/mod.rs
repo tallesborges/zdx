@@ -98,6 +98,12 @@ enum Commands {
         #[arg(long = "openai-codex")]
         openai_codex: bool,
     },
+
+    /// Manage model registry
+    Models {
+        #[command(subcommand)]
+        command: ModelsCommands,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -133,6 +139,12 @@ enum ConfigCommands {
     Path,
     /// Initialize a default config file (if not present)
     Init,
+}
+
+#[derive(clap::Subcommand)]
+enum ModelsCommands {
+    /// Fetch and update the models registry from models.dev
+    Update,
 }
 
 pub fn run() -> Result<()> {
@@ -212,6 +224,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
             (true, false) => commands::auth::logout_anthropic(),
             (false, true) => commands::auth::logout_openai_codex(),
             _ => anyhow::bail!("Please specify a provider: --anthropic or --openai-codex"),
+        },
+
+        Commands::Models { command } => match command {
+            ModelsCommands::Update => commands::models::update(&config).await,
         },
     }
 }

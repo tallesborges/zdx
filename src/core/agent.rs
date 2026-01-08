@@ -22,8 +22,11 @@ use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
 };
+use crate::providers::gemini::{GeminiClient, GeminiConfig};
+use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
-use crate::providers::{ProviderKind, provider_for_model};
+use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
+use crate::providers::{ProviderKind, resolve_provider};
 use crate::tools::{self, ToolContext, ToolResult};
 
 /// Options for agent execution.
@@ -84,6 +87,9 @@ impl EventSender {
 enum ProviderClient {
     Anthropic(AnthropicClient),
     OpenAICodex(OpenAICodexClient),
+    OpenAI(OpenAIClient),
+    OpenRouter(OpenRouterClient),
+    Gemini(GeminiClient),
 }
 
 impl ProviderClient {
@@ -98,6 +104,15 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::OpenAICodex(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::OpenAI(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::OpenRouter(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Gemini(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
         }
@@ -218,7 +233,8 @@ pub async fn run_turn(
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
 
-    let provider = provider_for_model(&config.model);
+    let selection = resolve_provider(&config.model);
+    let provider = selection.kind;
 
     let client = match provider {
         ProviderKind::Anthropic => {
@@ -227,9 +243,9 @@ pub async fn run_turn(
             let thinking_budget_tokens = config.thinking_level.budget_tokens().unwrap_or(0);
 
             let anthropic_config = AnthropicConfig::from_env(
-                config.model.clone(),
+                selection.model.clone(),
                 config.effective_max_tokens(),
-                config.effective_anthropic_base_url(),
+                config.providers.anthropic.effective_base_url(),
                 thinking_enabled,
                 thinking_budget_tokens,
             )?;
@@ -238,11 +254,35 @@ pub async fn run_turn(
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(config.thinking_level);
             let openai_config = OpenAICodexConfig::new(
-                config.model.clone(),
+                selection.model.clone(),
                 config.effective_max_tokens(),
                 reasoning_effort,
             );
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
+        }
+        ProviderKind::OpenAI => {
+            let openai_config = OpenAIConfig::from_env(
+                selection.model.clone(),
+                config.effective_max_tokens(),
+                config.providers.openai.effective_base_url(),
+            )?;
+            ProviderClient::OpenAI(OpenAIClient::new(openai_config))
+        }
+        ProviderKind::OpenRouter => {
+            let openrouter_config = OpenRouterConfig::from_env(
+                selection.model.clone(),
+                config.effective_max_tokens(),
+                config.providers.openrouter.effective_base_url(),
+            )?;
+            ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
+        }
+        ProviderKind::Gemini => {
+            let gemini_config = GeminiConfig::from_env(
+                selection.model.clone(),
+                config.effective_max_tokens(),
+                config.providers.gemini.effective_base_url(),
+            )?;
+            ProviderClient::Gemini(GeminiClient::new(gemini_config))
         }
     };
 

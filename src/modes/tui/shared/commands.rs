@@ -55,12 +55,12 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "login",
         aliases: &[],
-        description: "Login with Anthropic OAuth",
+        description: "Authenticate with the active provider",
     },
     Command {
         name: "logout",
         aliases: &[],
-        description: "Logout from Anthropic OAuth",
+        description: "Clear auth for the active provider",
     },
     Command {
         name: "rename",
