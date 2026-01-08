@@ -23,6 +23,9 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     let title = match login_state.provider() {
         crate::providers::ProviderKind::Anthropic => "Anthropic Login",
         crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
+        crate::providers::ProviderKind::OpenAI => "OpenAI Login",
+        crate::providers::ProviderKind::OpenRouter => "OpenRouter Login",
+        crate::providers::ProviderKind::Gemini => "Gemini Login",
     };
     render_overlay_container(frame, popup_area, title, Color::Cyan);
 
@@ -68,6 +71,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
                     match provider {
                         crate::providers::ProviderKind::Anthropic => "Paste auth code:",
                         crate::providers::ProviderKind::OpenAICodex => "Paste auth code or URL:",
+                        _ => "Paste auth code:",
                     },
                     Style::default().fg(Color::White),
                 )),
@@ -99,6 +103,22 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             Line::from(""),
             Line::from(Span::styled(
                 "Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )),
+        ],
+        LoginState::ApiKeyInfo { env_var, .. } => vec![
+            Line::from(Span::styled(
+                "This provider uses API keys.",
+                Style::default().fg(Color::Green),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                format!("Set {} in your shell.", env_var),
+                Style::default().fg(Color::Yellow),
+            )),
+            Line::from(""),
+            Line::from(Span::styled(
+                "Press Esc to close",
                 Style::default().fg(Color::DarkGray),
             )),
         ],

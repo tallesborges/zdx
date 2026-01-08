@@ -27,6 +27,7 @@ pub fn handle_login_result(
             let message = match provider {
                 crate::providers::ProviderKind::Anthropic => "Logged in with Anthropic OAuth.",
                 crate::providers::ProviderKind::OpenAICodex => "Logged in with OpenAI Codex OAuth.",
+                _ => "Login complete.",
             };
             (
                 vec![StateMutation::Transcript(

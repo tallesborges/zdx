@@ -1,0 +1,292 @@
+//! Shared OpenAI-compatible Responses API helpers.
+
+use std::pin::Pin;
+
+use anyhow::{Result, bail};
+use futures_util::Stream;
+use reqwest::header::HeaderMap;
+
+use crate::providers::anthropic::{
+    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, StreamEvent,
+};
+use crate::tools::{ToolDefinition, ToolResultContent};
+
+mod sse;
+mod types;
+
+pub use sse::ResponsesSseParser;
+pub use types::{FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody};
+
+/// Shared configuration for Responses API requests.
+#[derive(Debug, Clone)]
+pub struct ResponsesConfig {
+    pub base_url: String,
+    pub path: String,
+    pub model: String,
+    pub max_output_tokens: Option<u32>,
+    pub reasoning_effort: Option<String>,
+    pub instructions: Option<String>,
+    pub store: Option<bool>,
+}
+
+/// Sends a Responses API request and returns a stream of normalized events.
+pub async fn send_responses_stream(
+    http: &reqwest::Client,
+    config: &ResponsesConfig,
+    headers: HeaderMap,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    system: Option<&str>,
+) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    let input = build_input(messages, system)?;
+    if input.is_empty() {
+        bail!("No input messages provided for OpenAI request");
+    }
+
+    let tool_defs = if tools.is_empty() {
+        None
+    } else {
+        Some(tools.iter().map(FunctionTool::from).collect())
+    };
+
+    let request = RequestBody {
+        model: config.model.clone(),
+        stream: true,
+        store: config.store,
+        max_output_tokens: config.max_output_tokens,
+        instructions: config.instructions.clone(),
+        reasoning: config
+            .reasoning_effort
+            .as_ref()
+            .map(|effort| ReasoningConfig {
+                effort: effort.clone(),
+            }),
+        input,
+        tools: tool_defs,
+    };
+
+    let url = format!("{}{}", config.base_url, config.path);
+
+    let response = http
+        .post(&url)
+        .headers(headers)
+        .json(&request)
+        .send()
+        .await
+        .map_err(classify_reqwest_error)?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
+    }
+
+    let byte_stream = response.bytes_stream();
+    let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());
+    Ok(Box::pin(event_stream))
+}
+
+fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+    if e.is_timeout() {
+        ProviderError::timeout(format!("Request timed out: {}", e))
+    } else if e.is_connect() {
+        ProviderError::timeout(format!("Connection failed: {}", e))
+    } else if e.is_request() {
+        ProviderError::new(
+            ProviderErrorKind::HttpStatus,
+            format!("Request error: {}", e),
+        )
+    } else {
+        ProviderError::new(
+            ProviderErrorKind::HttpStatus,
+            format!("Network error: {}", e),
+        )
+    }
+}
+
+fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<InputItem>> {
+    use crate::providers::anthropic::MessageContent;
+
+    let mut input = Vec::new();
+    if let Some(prompt) = system {
+        input.push(InputItem {
+            id: None,
+            item_type: "message".to_string(),
+            role: Some("developer".to_string()),
+            content: Some(vec![InputContent::InputText {
+                text: prompt.to_string(),
+            }]),
+            call_id: None,
+            name: None,
+            arguments: None,
+            output: None,
+        });
+    }
+
+    for msg in messages {
+        match (&msg.role[..], &msg.content) {
+            ("user", MessageContent::Text(text)) => {
+                input.push(InputItem {
+                    id: None,
+                    item_type: "message".to_string(),
+                    role: Some("user".to_string()),
+                    content: Some(vec![InputContent::InputText { text: text.clone() }]),
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    output: None,
+                });
+            }
+            ("assistant", MessageContent::Text(text)) => {
+                input.push(InputItem {
+                    id: None,
+                    item_type: "message".to_string(),
+                    role: Some("assistant".to_string()),
+                    content: Some(vec![InputContent::OutputText { text: text.clone() }]),
+                    call_id: None,
+                    name: None,
+                    arguments: None,
+                    output: None,
+                });
+            }
+            ("assistant", MessageContent::Blocks(blocks)) => {
+                for block in blocks {
+                    match block {
+                        ChatContentBlock::Text(text) => {
+                            input.push(InputItem {
+                                id: None,
+                                item_type: "message".to_string(),
+                                role: Some("assistant".to_string()),
+                                content: Some(vec![InputContent::OutputText {
+                                    text: text.clone(),
+                                }]),
+                                call_id: None,
+                                name: None,
+                                arguments: None,
+                                output: None,
+                            });
+                        }
+                        ChatContentBlock::ToolUse {
+                            id,
+                            name,
+                            input: tool_input,
+                        } => {
+                            let arguments = serde_json::to_string(tool_input)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            let mut parts = id.split('|');
+                            let call_id = parts.next().unwrap_or("").to_string();
+                            let tool_id = parts.next().unwrap_or("").to_string();
+                            input.push(InputItem {
+                                id: Some(tool_id),
+                                item_type: "function_call".to_string(),
+                                role: None,
+                                content: None,
+                                call_id: Some(call_id),
+                                name: Some(name.clone()),
+                                arguments: Some(arguments),
+                                output: None,
+                            });
+                        }
+                        ChatContentBlock::Thinking { .. } => {
+                            // Skip thinking blocks for OpenAI-compatible providers.
+                        }
+                        ChatContentBlock::ToolResult(result) => {
+                            let output = match &result.content {
+                                ToolResultContent::Text(text) => text.clone(),
+                                ToolResultContent::Blocks(blocks) => blocks
+                                    .iter()
+                                    .find_map(|block| match block {
+                                        crate::tools::ToolResultBlock::Text { text } => {
+                                            Some(text.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap_or_default(),
+                            };
+
+                            let call_id = result
+                                .tool_use_id
+                                .split('|')
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+
+                            if call_id.is_empty() {
+                                continue;
+                            }
+
+                            input.push(InputItem {
+                                id: None,
+                                item_type: "function_call_output".to_string(),
+                                role: None,
+                                content: None,
+                                call_id: Some(call_id),
+                                name: None,
+                                arguments: None,
+                                output: Some(output),
+                            });
+                        }
+                    }
+                }
+            }
+            ("user", MessageContent::Blocks(blocks)) => {
+                for block in blocks {
+                    match block {
+                        ChatContentBlock::Text(text) => {
+                            input.push(InputItem {
+                                id: None,
+                                item_type: "message".to_string(),
+                                role: Some("user".to_string()),
+                                content: Some(vec![InputContent::InputText { text: text.clone() }]),
+                                call_id: None,
+                                name: None,
+                                arguments: None,
+                                output: None,
+                            });
+                        }
+                        ChatContentBlock::ToolResult(result) => {
+                            let output = match &result.content {
+                                ToolResultContent::Text(text) => text.clone(),
+                                ToolResultContent::Blocks(blocks) => blocks
+                                    .iter()
+                                    .find_map(|block| match block {
+                                        crate::tools::ToolResultBlock::Text { text } => {
+                                            Some(text.clone())
+                                        }
+                                        _ => None,
+                                    })
+                                    .unwrap_or_default(),
+                            };
+
+                            let call_id = result
+                                .tool_use_id
+                                .split('|')
+                                .next()
+                                .unwrap_or("")
+                                .to_string();
+
+                            if call_id.is_empty() {
+                                continue;
+                            }
+
+                            input.push(InputItem {
+                                id: None,
+                                item_type: "function_call_output".to_string(),
+                                role: None,
+                                content: None,
+                                call_id: Some(call_id),
+                                name: None,
+                                arguments: None,
+                                output: Some(output),
+                            });
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(input)
+}

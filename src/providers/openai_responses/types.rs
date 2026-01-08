@@ -1,4 +1,4 @@
-//! Request/response types for OpenAI Codex Responses API.
+//! Request/response types for OpenAI-compatible Responses API.
 
 use serde::Serialize;
 
@@ -10,6 +10,8 @@ pub struct RequestBody {
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none", rename = "max_output_tokens")]
+    pub max_output_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]

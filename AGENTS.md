@@ -5,7 +5,10 @@
 ## Where things are
 
 - `src/main.rs`: binary entrypoint (delegates to `src/cli/`)
-- `src/default_config.toml`: default configuration template
+- `default_config.toml`: default configuration template
+- `default_models.toml`: default model registry fallback
+- `.cargo/config.toml`: cargo alias for `cargo xtask`
+- `xtask/`: maintainer utilities (update default_models.toml)
 - `src/cli/`: CLI arguments + command dispatch
   - `src/cli/mod.rs`: clap structs + dispatch
   - `src/cli/commands/mod.rs`: command module exports
@@ -14,10 +17,9 @@
   - `src/cli/commands/threads.rs`: list/show/resume threads
   - `src/cli/commands/config.rs`: config path/init handlers
   - `src/cli/commands/auth.rs`: login/logout flows
+  - `src/cli/commands/models.rs`: models update handler (models.dev → models.toml)
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for TUI model picker
-- `src/models_generated.rs`: generated model data (from `cargo run --bin generate_models`)
-- `src/bin/generate_models.rs`: binary to generate model data from API
 - `src/core/`: UI-agnostic domain + runtime
   - `src/core/mod.rs`: core module exports
   - `src/core/events.rs`: agent event types for streaming
@@ -103,18 +105,23 @@
     - `src/providers/anthropic/sse.rs`: SSE parsing + stream events
     - `src/providers/anthropic/types.rs`: API DTOs + chat message types
     - `src/providers/anthropic/errors.rs`: provider error types
+  - `src/providers/openai_responses/`: shared OpenAI Responses API helpers
+    - `src/providers/openai_responses/mod.rs`: shared request builder + dispatcher
+    - `src/providers/openai_responses/sse.rs`: SSE parsing for Responses API
+    - `src/providers/openai_responses/types.rs`: request DTOs
   - `src/providers/openai_codex/`: OpenAI Codex (ChatGPT OAuth) client
     - `src/providers/openai_codex/mod.rs`: module exports
     - `src/providers/openai_codex/auth.rs`: OAuth credential resolution + config
     - `src/providers/openai_codex/client.rs`: OpenAICodexClient + request wiring
     - `src/providers/openai_codex/prompts/mod.rs`: Codex instruction loading and model normalization
-    - `src/providers/openai_codex/sse.rs`: SSE parsing for Responses API
-    - `src/providers/openai_codex/types.rs`: request DTOs
     - `src/providers/openai_codex/prompts/gpt_5_codex_prompt.md`: Codex instructions (gpt-5 codex)
     - `src/providers/openai_codex/prompts/gpt-5.2-codex_prompt.md`: Codex instructions (gpt-5.2 codex)
     - `src/providers/openai_codex/prompts/gpt-5.1-codex-max_prompt.md`: Codex instructions (gpt-5.1 codex max)
     - `src/providers/openai_codex/prompts/gpt_5_2_prompt.md`: Instructions (gpt-5.2)
     - `src/providers/openai_codex/prompts/gpt_5_1_prompt.md`: Instructions (gpt-5.1)
+  - `src/providers/openai_api.rs`: OpenAI API key provider (Responses API)
+  - `src/providers/openrouter.rs`: OpenRouter provider (OpenAI-compatible chat completions)
+  - `src/providers/gemini.rs`: Gemini provider (Generative Language API)
   - `src/providers/oauth.rs`: OAuth token storage + retrieval
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 
@@ -122,6 +129,7 @@
 
 - `cargo run -- --help`
 - `cargo run --` (interactive; needs provider key via env)
+- `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
 - `cargo test`
 - `cargo +nightly fmt` (uses nightly for full rustfmt features; stable works but ignores some options)
 - `cargo clippy`

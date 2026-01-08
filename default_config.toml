@@ -18,9 +18,6 @@ tool_timeout_secs = 30
 # System prompt from file (takes precedence over inline)
 # system_prompt_file = "/path/to/system_prompt.md"
 
-# Custom Anthropic API base URL (for proxies or test rigs)
-# anthropic_base_url = "https://api.anthropic.com"
-
 # Extended thinking level
 # Controls how much reasoning Claude shows before responding.
 # Higher levels use more tokens but provide deeper reasoning.
@@ -30,3 +27,28 @@ thinking_level = "off"
 
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
+
+# Provider base URLs (for proxies or test rigs).
+[providers.anthropic]
+enabled = true
+# base_url = "https://api.anthropic.com"
+models = ["claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"]
+
+[providers.openai]
+enabled = true
+# base_url = "https://api.openai.com/v1"
+models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini"]
+
+[providers.openai_codex]
+enabled = true
+models = ["gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.2"]
+
+[providers.openrouter]
+enabled = true
+# base_url = "https://openrouter.ai/api/v1"
+models = ["*:exacto"]
+
+[providers.gemini]
+enabled = true
+# base_url = "https://generativelanguage.googleapis.com/v1beta"
+models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]

@@ -171,6 +171,16 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         crate::providers::ProviderKind::OpenAICodex => {
             openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))
         }
+        _ => {
+            let message = provider
+                .api_key_env_var()
+                .map(|env| format!("Unset {} to log out.", env))
+                .unwrap_or_else(|| "No OAuth credentials to clear.".to_string());
+            mutations.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(message),
+            ));
+            return (vec![], mutations);
+        }
     };
 
     match result {
@@ -374,19 +384,25 @@ pub fn render_command_palette(
             .map(|cmd| {
                 let name = cmd.display_name();
                 let desc = match cmd.name {
-                    "login" => match palette.provider {
-                        crate::providers::ProviderKind::Anthropic => "Login with Anthropic OAuth",
-                        crate::providers::ProviderKind::OpenAICodex => {
-                            "Login with OpenAI Codex OAuth"
+                    "login" => {
+                        if palette.provider.supports_oauth() {
+                            format!("Login with {} OAuth", palette.provider.label())
+                        } else if let Some(env) = palette.provider.api_key_env_var() {
+                            format!("Set {} to authenticate", env)
+                        } else {
+                            "Login".to_string()
                         }
-                    },
-                    "logout" => match palette.provider {
-                        crate::providers::ProviderKind::Anthropic => "Logout from Anthropic OAuth",
-                        crate::providers::ProviderKind::OpenAICodex => {
-                            "Logout from OpenAI Codex OAuth"
+                    }
+                    "logout" => {
+                        if palette.provider.supports_oauth() {
+                            format!("Logout from {} OAuth", palette.provider.label())
+                        } else if let Some(env) = palette.provider.api_key_env_var() {
+                            format!("Unset {} to log out", env)
+                        } else {
+                            "Logout".to_string()
                         }
-                    },
-                    _ => cmd.description,
+                    }
+                    _ => cmd.description.to_string(),
                 };
                 let line = Line::from(vec![
                     Span::styled(

@@ -30,7 +30,11 @@ impl AuthStatus {
         }
 
         // Check for API key in environment
-        if std::env::var("ANTHROPIC_API_KEY").is_ok() {
+        if std::env::var("ANTHROPIC_API_KEY").is_ok()
+            || std::env::var("OPENAI_API_KEY").is_ok()
+            || std::env::var("OPENROUTER_API_KEY").is_ok()
+            || std::env::var("GEMINI_API_KEY").is_ok()
+        {
             return AuthStatus::ApiKey;
         }
 

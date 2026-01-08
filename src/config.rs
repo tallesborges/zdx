@@ -82,7 +82,7 @@ impl ThinkingLevel {
 }
 
 /// Default config template with comments, embedded at compile time.
-const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("default_config.toml");
+const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../default_config.toml");
 
 pub mod paths {
     //! Path resolution for ZDX configuration and data directories.
@@ -136,8 +136,9 @@ pub struct Config {
     /// Timeout for tool execution in seconds (0 disables)
     pub tool_timeout_secs: u32,
 
-    /// Optional Anthropic API base URL (for test rigs or proxies)
-    pub anthropic_base_url: Option<String>,
+    /// Provider configuration (base URLs, etc.).
+    #[serde(default)]
+    pub providers: ProvidersConfig,
 
     /// Thinking level for extended thinking feature
     #[serde(default)]
@@ -259,12 +260,11 @@ impl Config {
         }
     }
 
-    /// Returns the effective Anthropic base URL from config, if set.
-    /// Empty strings are treated as unset.
-    pub fn effective_anthropic_base_url(&self) -> Option<&str> {
-        self.anthropic_base_url
-            .as_deref()
-            .filter(|s| !s.trim().is_empty())
+    /// Returns the path to the models file.
+    /// Defaults to `<base>/models.toml`.
+    pub fn models_path(&self) -> std::path::PathBuf {
+        let base = paths::zdx_home();
+        base.join("models.toml")
     }
 
     /// Returns the effective max_tokens to use in API requests.
@@ -327,9 +327,120 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
-            anthropic_base_url: None,
+            providers: ProvidersConfig::default(),
             thinking_level: ThinkingLevel::default(),
         }
+    }
+}
+
+/// Provider-specific configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct ProvidersConfig {
+    #[serde(default = "default_anthropic_provider")]
+    pub anthropic: ProviderConfig,
+    #[serde(default = "default_openai_provider")]
+    pub openai: ProviderConfig,
+    #[serde(default = "default_openai_codex_provider")]
+    pub openai_codex: ProviderConfig,
+    #[serde(default = "default_openrouter_provider")]
+    pub openrouter: ProviderConfig,
+    #[serde(default = "default_gemini_provider")]
+    pub gemini: ProviderConfig,
+}
+
+impl Default for ProvidersConfig {
+    fn default() -> Self {
+        Self {
+            anthropic: default_anthropic_provider(),
+            openai: default_openai_provider(),
+            openai_codex: default_openai_codex_provider(),
+            openrouter: default_openrouter_provider(),
+            gemini: default_gemini_provider(),
+        }
+    }
+}
+
+fn default_anthropic_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "claude-haiku-4-5".to_string(),
+            "claude-opus-4-5".to_string(),
+            "claude-sonnet-4-5".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_openai_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "gpt-5.2".to_string(),
+            "gpt-5-mini".to_string(),
+            "gpt-5-nano".to_string(),
+            "gpt-5.1-codex".to_string(),
+            "gpt-5.1-codex-max".to_string(),
+            "gpt-5.1-codex-mini".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_openai_codex_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "gpt-5.1-codex-max".to_string(),
+            "gpt-5.1-codex-mini".to_string(),
+            "gpt-5.2-codex".to_string(),
+            "gpt-5.2".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_openrouter_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["*:exacto".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_gemini_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "gemini-3-flash-preview".to_string(),
+            "gemini-3-pro-preview".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.5-flash-lite".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+/// Provider configuration entry.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct ProviderConfig {
+    /// Optional API base URL (for proxies).
+    pub base_url: Option<String>,
+    /// Whether this provider is enabled for `zdx models update`.
+    pub enabled: Option<bool>,
+    /// Desired models for `zdx models update` (supports '*' wildcard).
+    pub models: Vec<String>,
+}
+
+impl ProviderConfig {
+    /// Returns the effective base URL if set and non-empty.
+    pub fn effective_base_url(&self) -> Option<&str> {
+        self.base_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
     }
 }
 
@@ -428,13 +539,13 @@ mod tests {
 
         fs::write(
             &config_path,
-            "anthropic_base_url = \"https://my-proxy.example.com\"\n",
+            "[providers.anthropic]\nbase_url = \"https://my-proxy.example.com\"\n",
         )
         .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(
-            config.effective_anthropic_base_url(),
+            config.providers.anthropic.effective_base_url(),
             Some("https://my-proxy.example.com")
         );
     }
@@ -443,10 +554,15 @@ mod tests {
     #[test]
     fn test_anthropic_base_url_empty_is_none() {
         let config = Config {
-            anthropic_base_url: Some("   ".to_string()),
+            providers: ProvidersConfig {
+                anthropic: ProviderConfig {
+                    base_url: Some("   ".to_string()),
+                },
+                ..Default::default()
+            },
             ..Default::default()
         };
-        assert_eq!(config.effective_anthropic_base_url(), None);
+        assert_eq!(config.providers.anthropic.effective_base_url(), None);
     }
 
     /// save_model: creates new config file with template if it doesn't exist.

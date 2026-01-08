@@ -1,4 +1,4 @@
-//! SSE parsing for OpenAI Codex Responses streaming.
+//! SSE parsing for OpenAI-compatible Responses streaming.
 
 use std::collections::VecDeque;
 use std::pin::Pin;
@@ -34,8 +34,8 @@ impl StreamState {
     }
 }
 
-/// SSE parser for OpenAI Codex Responses API.
-pub struct CodexSseParser<S> {
+/// SSE parser for OpenAI Responses API.
+pub struct ResponsesSseParser<S> {
     inner: S,
     buffer: Vec<u8>,
     model: String,
@@ -43,7 +43,7 @@ pub struct CodexSseParser<S> {
     pending: VecDeque<StreamEvent>,
 }
 
-impl<S> CodexSseParser<S> {
+impl<S> ResponsesSseParser<S> {
     pub fn new(stream: S, model: String) -> Self {
         Self {
             inner: stream,
@@ -237,7 +237,7 @@ impl<S> CodexSseParser<S> {
     }
 }
 
-impl<S, E> Stream for CodexSseParser<S>
+impl<S, E> Stream for ResponsesSseParser<S>
 where
     S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
@@ -288,8 +288,11 @@ fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
 
     match (crlf_pos, lf_pos) {
         (Some(c), Some(l)) => {
-            // Return whichever comes first
-            if l <= c { Some((l, 2)) } else { Some((c, 4)) }
+            if l <= c {
+                Some((l, 2))
+            } else {
+                Some((c, 4))
+            }
         }
         (Some(c), None) => Some((c, 4)),
         (None, Some(l)) => Some((l, 2)),
