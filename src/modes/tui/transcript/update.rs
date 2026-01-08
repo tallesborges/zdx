@@ -360,7 +360,13 @@ pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcr
             if let Some((line, col)) =
                 screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
-                transcript.start_selection(line, col);
+                if transcript.register_click(line, col) {
+                    if !transcript.select_word_at(line, col) {
+                        transcript.start_selection(line, col);
+                    }
+                } else {
+                    transcript.start_selection(line, col);
+                }
             }
         }
         MouseEventKind::Drag(MouseButton::Left) => {
