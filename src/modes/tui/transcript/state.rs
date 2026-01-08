@@ -4,10 +4,22 @@
 //! rendering cache for the transcript area.
 
 use std::ops::Range;
+use std::time::{Duration, Instant};
 
 use super::CellId;
 use super::selection::{PositionMap, SelectionState};
 use crate::modes::tui::shared::internal::TranscriptMutation;
+use unicode_segmentation::UnicodeSegmentation;
+
+const DOUBLE_CLICK_MAX_DELAY: Duration = Duration::from_millis(400);
+const DOUBLE_CLICK_MAX_COLUMN_DELTA: usize = 1;
+
+#[derive(Debug, Clone, Copy)]
+struct ClickInfo {
+    line: usize,
+    column: usize,
+    at: Instant,
+}
 
 /// Scroll mode for the transcript.
 #[derive(Debug, Clone)]
@@ -303,6 +315,9 @@ pub struct TranscriptState {
     /// Position map for selection coordinate translation.
     /// Rebuilt each render to track visual line → cell/text mappings.
     pub position_map: PositionMap,
+
+    /// Last click info for double-click detection.
+    last_click: Option<ClickInfo>,
 }
 
 impl Default for TranscriptState {
@@ -316,6 +331,7 @@ impl Default for TranscriptState {
             terminal_size: (80, 24),
             selection: SelectionState::new(),
             position_map: PositionMap::new(),
+            last_click: None,
         }
     }
 }
@@ -448,6 +464,72 @@ impl TranscriptState {
     pub fn check_selection_timeout(&mut self) -> bool {
         self.selection.check_and_clear()
     }
+
+    /// Records a click and returns true if it qualifies as a double-click.
+    pub fn register_click(&mut self, line: usize, column: usize) -> bool {
+        let now = Instant::now();
+        let is_double_click = self
+            .last_click
+            .filter(|last| {
+                now.duration_since(last.at) <= DOUBLE_CLICK_MAX_DELAY
+                    && last.line == line
+                    && last.column.abs_diff(column) <= DOUBLE_CLICK_MAX_COLUMN_DELTA
+            })
+            .is_some();
+
+        if is_double_click {
+            self.last_click = None;
+        } else {
+            self.last_click = Some(ClickInfo { line, column, at: now });
+        }
+
+        is_double_click
+    }
+
+    /// Selects the word at the given visual position.
+    ///
+    /// Returns false if no word was found at the position.
+    pub fn select_word_at(&mut self, line: usize, column: usize) -> bool {
+        let Some(mapping) = self.position_map.get_by_global_line(line) else {
+            return false;
+        };
+
+        let graphemes: Vec<&str> = mapping.text.graphemes(true).collect();
+        if graphemes.is_empty() {
+            return false;
+        }
+
+        let mut idx = column;
+        if idx >= graphemes.len() {
+            idx = graphemes.len().saturating_sub(1);
+        }
+
+        if !is_word_grapheme(graphemes[idx]) {
+            return false;
+        }
+
+        let mut start = idx;
+        while start > 0 && is_word_grapheme(graphemes[start - 1]) {
+            start -= 1;
+        }
+
+        let mut end = idx + 1;
+        while end < graphemes.len() && is_word_grapheme(graphemes[end]) {
+            end += 1;
+        }
+
+        use super::selection::VisualPosition;
+        self.selection.start(VisualPosition::new(line, start));
+        self.selection.extend(VisualPosition::new(line, end));
+        self.selection.finish();
+        true
+    }
+}
+
+fn is_word_grapheme(grapheme: &str) -> bool {
+    grapheme
+        .chars()
+        .any(|ch| ch.is_alphanumeric() || ch == '_')
 }
 
 #[cfg(test)]

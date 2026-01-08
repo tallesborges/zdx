@@ -112,6 +112,15 @@ impl PositionMap {
         self.lines.borrow().get(line).cloned()
     }
 
+    /// Gets a clone of the mapping for a global line index.
+    ///
+    /// Accounts for scroll offset when lazy rendering is active.
+    pub fn get_by_global_line(&self, line: usize) -> Option<LineMapping> {
+        let scroll_offset = *self.scroll_offset.borrow();
+        let local_idx = line.checked_sub(scroll_offset)?;
+        self.lines.borrow().get(local_idx).cloned()
+    }
+
     /// Gets the text content for a range of visual lines.
     ///
     /// The start and end positions use global line indices.
