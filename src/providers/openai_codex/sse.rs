@@ -289,11 +289,7 @@ fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
     match (crlf_pos, lf_pos) {
         (Some(c), Some(l)) => {
             // Return whichever comes first
-            if l <= c {
-                Some((l, 2))
-            } else {
-                Some((c, 4))
-            }
+            if l <= c { Some((l, 2)) } else { Some((c, 4)) }
         }
         (Some(c), None) => Some((c, 4)),
         (None, Some(l)) => Some((l, 2)),
