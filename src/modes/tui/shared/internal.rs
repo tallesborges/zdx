@@ -77,8 +77,8 @@ pub enum ThreadMutation {
 #[derive(Debug)]
 pub enum AuthMutation {
     RefreshStatus,
-    ClearLoginRx,
-    ClearLoginCallbackRx,
+    SetCallbackInProgress(bool),
+    CancelLoginRequest,
 }
 
 /// Config mutations requested by overlays.

@@ -57,7 +57,7 @@ impl ModelPickerState {
                 let display_name = model.display_name;
 
                 OverlayUpdate::close()
-                    .with_effects(vec![UiEffect::PersistModel {
+                    .with_ui_effects(vec![UiEffect::PersistModel {
                         model: model_id.clone(),
                     }])
                     .with_mutations(vec![

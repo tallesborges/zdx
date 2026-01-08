@@ -32,7 +32,7 @@ pub fn handle_agent_event(
     has_thread: bool,
     event: &AgentEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    let mut commands = Vec::new();
+    let mut mutations = Vec::new();
     let effects =
         match event {
             AgentEvent::AssistantDelta { text } => {
@@ -113,7 +113,7 @@ pub fn handle_agent_event(
                 // received or didn't have a chance to apply the delta.
                 apply_pending_delta(transcript, agent_state);
 
-                commands.push(StateMutation::Thread(ThreadMutation::SetMessages(
+                mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
                     messages.clone(),
                 )));
                 *agent_state = AgentState::Idle;
@@ -153,7 +153,7 @@ pub fn handle_agent_event(
                 cache_read_input_tokens,
                 cache_creation_input_tokens,
             } => {
-                commands.push(StateMutation::Thread(ThreadMutation::UpdateUsage {
+                mutations.push(StateMutation::Thread(ThreadMutation::UpdateUsage {
                     input: *input_tokens,
                     output: *output_tokens,
                     cache_read: *cache_read_input_tokens,
@@ -172,7 +172,7 @@ pub fn handle_agent_event(
             }
         };
 
-    (effects, commands)
+    (effects, mutations)
 }
 
 // ============================================================================

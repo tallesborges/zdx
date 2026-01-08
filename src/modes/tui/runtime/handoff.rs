@@ -1,6 +1,9 @@
 //! Handoff generation handlers.
 //!
 //! Handles spawning a subagent to generate handoff prompts from thread context.
+//!
+//! Uses the spawn_effect_pair pattern: returns (started_event, future) where
+//! the started event contains the cancel token and the future does the work.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -72,17 +75,17 @@ fn process_subagent_output(output: std::process::Output) -> Result<String, Strin
 }
 
 /// Runs the subagent process with timeout and cancellation support.
+///
+/// Pure async function - returns UiEvent::HandoffResult directly.
 async fn run_subagent(
-    tx: oneshot::Sender<Result<String, String>>,
-    cancel: oneshot::Receiver<()>,
+    mut cancel_rx: oneshot::Receiver<()>,
     generation_prompt: String,
     root: PathBuf,
-) {
+) -> UiEvent {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
         Err(e) => {
-            let _ = tx.send(Err(format!("Failed to get executable: {}", e)));
-            return;
+            return UiEvent::HandoffResult(Err(format!("Failed to get executable: {}", e)));
         }
     };
 
@@ -105,14 +108,13 @@ async fn run_subagent(
     {
         Ok(c) => c,
         Err(e) => {
-            let _ = tx.send(Err(format!("Failed to spawn subagent: {}", e)));
-            return;
+            return UiEvent::HandoffResult(Err(format!("Failed to spawn subagent: {}", e)));
         }
     };
 
     // Cancel fires on explicit send(()) OR when cancel handle is dropped
     let result = tokio::select! {
-        cancelled = cancel => match cancelled {
+        cancelled = &mut cancel_rx => match cancelled {
             Ok(()) | Err(_) => Err("Handoff cancelled".to_string()),
         },
         output = tokio::time::timeout(
@@ -126,7 +128,7 @@ async fn run_subagent(
         }
     };
 
-    let _ = tx.send(result);
+    UiEvent::HandoffResult(result)
 }
 
 /// Executes a handoff submit: creates a new thread and persists the prompt.
@@ -143,31 +145,39 @@ pub fn execute_handoff_submit(prompt: &str, root: &Path) -> Result<ThreadLog, St
     Ok(thread_log_handle)
 }
 
-/// Spawns an async task to generate a handoff prompt using a subagent.
-pub fn spawn_handoff_generation(thread_id: &str, goal: &str, root: &Path) -> UiEvent {
-    let (tx, rx) = oneshot::channel::<Result<String, String>>();
-    let (cancel, cancel_recv) = oneshot::channel::<()>();
+/// Prepares handoff generation with cancellation support.
+///
+/// Returns (started_event, future) - started event contains cancel token,
+/// future runs the subagent and returns HandoffResult.
+pub fn handoff_generation(
+    thread_id: &str,
+    goal: &str,
+    root: &Path,
+) -> (
+    UiEvent,
+    impl std::future::Future<Output = UiEvent> + Send + 'static,
+) {
+    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let goal_string = goal.to_string();
 
-    let thread_content = match load_thread_content(thread_id) {
-        Ok(content) => content,
-        Err(e) => {
-            let _ = tx.send(Err(e));
-            return UiEvent::HandoffGenerationStarted {
-                goal: goal.to_string(),
-                rx,
-                cancel,
-            };
-        }
+    let started = UiEvent::HandoffGenerationStarted {
+        goal: goal_string.clone(),
+        cancel: cancel_tx,
     };
 
-    let generation_prompt = build_handoff_prompt(&thread_content, goal);
+    // Load thread content synchronously (it's quick I/O)
+    let thread_content = load_thread_content(thread_id);
     let root = root.to_path_buf();
 
-    tokio::spawn(run_subagent(tx, cancel_recv, generation_prompt, root));
+    let future = async move {
+        let content = match thread_content {
+            Ok(content) => content,
+            Err(e) => return UiEvent::HandoffResult(Err(e)),
+        };
 
-    UiEvent::HandoffGenerationStarted {
-        goal: goal.to_string(),
-        rx,
-        cancel,
-    }
+        let generation_prompt = build_handoff_prompt(&content, &goal_string);
+        run_subagent(cancel_rx, generation_prompt, root).await
+    };
+
+    (started, future)
 }

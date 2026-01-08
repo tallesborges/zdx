@@ -8,6 +8,7 @@
 
 use crate::config::ThinkingLevel;
 use crate::core::thread_log::ThreadEvent;
+use crate::modes::tui::shared::RequestId;
 use crate::providers::ProviderKind;
 
 /// Effects returned by the reducer for the runtime to execute.
@@ -33,6 +34,7 @@ pub enum UiEffect {
         provider: ProviderKind,
         code: String,
         verifier: String,
+        req: RequestId,
     },
 
     /// Start a local OAuth callback listener (if supported).
@@ -79,7 +81,7 @@ pub enum UiEffect {
 
     /// Preview a thread (show transcript without full switch).
     /// Used during thread picker navigation.
-    PreviewThread { thread_id: String },
+    PreviewThread { thread_id: String, req: RequestId },
 
     /// Discover project files for the file picker.
     DiscoverFiles,

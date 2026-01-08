@@ -2,11 +2,8 @@
 //!
 //! Manages the active thread, message history, and token usage tracking.
 
-use tokio::sync::mpsc;
-
 use crate::core::thread_log::{ThreadLog, Usage};
 use crate::models::ModelPricing;
-use crate::modes::tui::events::UiEvent;
 use crate::modes::tui::shared::internal::ThreadMutation;
 use crate::providers::anthropic::ChatMessage;
 
@@ -77,28 +74,28 @@ impl ThreadState {
 
 /// Tracks async thread operations (loading, creating, previewing).
 ///
-/// This is separate from `ThreadState` because it tracks in-flight operations,
-/// not the current thread data. Follows the same pattern as `AuthState.login_rx`
-/// and `HandoffState::Generating { rx }`.
+/// With the inbox pattern, this uses simple boolean flags instead of receivers.
+/// Operations send events directly to the inbox, and these flags indicate
+/// whether an operation is in progress.
 #[derive(Default)]
 pub struct ThreadOpsState {
-    /// Receiver for async thread list loading (for thread picker).
-    pub list_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread list loading is in progress.
+    pub list_loading: bool,
 
-    /// Receiver for async thread loading (full switch).
-    pub load_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread loading (full switch) is in progress.
+    pub load_loading: bool,
 
-    /// Receiver for async thread preview loading.
-    pub preview_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread preview loading is in progress.
+    pub preview_loading: bool,
 
-    /// Receiver for async thread creation.
-    pub create_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread creation is in progress.
+    pub create_loading: bool,
 
-    /// Receiver for async thread fork.
-    pub fork_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread fork is in progress.
+    pub fork_loading: bool,
 
-    /// Receiver for async thread rename.
-    pub rename_rx: Option<mpsc::Receiver<UiEvent>>,
+    /// Whether thread rename is in progress.
+    pub rename_loading: bool,
 }
 
 impl ThreadOpsState {
@@ -109,12 +106,12 @@ impl ThreadOpsState {
 
     /// Returns true if any async operation is in progress.
     pub fn is_loading(&self) -> bool {
-        self.list_rx.is_some()
-            || self.load_rx.is_some()
-            || self.preview_rx.is_some()
-            || self.create_rx.is_some()
-            || self.fork_rx.is_some()
-            || self.rename_rx.is_some()
+        self.list_loading
+            || self.load_loading
+            || self.preview_loading
+            || self.create_loading
+            || self.fork_loading
+            || self.rename_loading
     }
 }
 

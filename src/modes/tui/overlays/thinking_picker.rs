@@ -60,7 +60,7 @@ impl ThinkingPickerState {
                     format!("Thinking level set to {}", level.display_name())
                 };
                 OverlayUpdate::close()
-                    .with_effects(vec![UiEffect::PersistThinking { level }])
+                    .with_ui_effects(vec![UiEffect::PersistThinking { level }])
                     .with_mutations(vec![
                         StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),

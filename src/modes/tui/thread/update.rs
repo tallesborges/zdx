@@ -29,15 +29,15 @@ pub enum ThreadOverlayAction {
 pub fn handle_thread_event(
     event: ThreadUiEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, ThreadOverlayAction) {
-    let mut commands = Vec::new();
+    let mut mutations = Vec::new();
     let mut overlay_action = ThreadOverlayAction::None;
     let effects = match event {
-        ThreadUiEvent::ListStarted { .. }
-        | ThreadUiEvent::LoadStarted { .. }
-        | ThreadUiEvent::PreviewStarted { .. }
-        | ThreadUiEvent::CreateStarted { .. }
-        | ThreadUiEvent::ForkStarted { .. }
-        | ThreadUiEvent::RenameStarted { .. } => vec![],
+        ThreadUiEvent::ListStarted
+        | ThreadUiEvent::LoadStarted
+        | ThreadUiEvent::PreviewStarted
+        | ThreadUiEvent::CreateStarted
+        | ThreadUiEvent::ForkStarted
+        | ThreadUiEvent::RenameStarted => vec![],
         ThreadUiEvent::ListLoaded {
             threads,
             original_cells,
@@ -49,7 +49,7 @@ pub fn handle_thread_event(
             vec![]
         }
         ThreadUiEvent::ListFailed { error } => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));
             vec![]
@@ -69,21 +69,21 @@ pub fn handle_thread_event(
                 messages,
                 history,
                 usage,
-                &mut commands,
+                &mut mutations,
             );
             vec![]
         }
         ThreadUiEvent::LoadFailed { error } => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));
             vec![]
         }
-        ThreadUiEvent::PreviewLoaded { cells } => {
-            handle_thread_preview_loaded(cells, &mut commands);
+        ThreadUiEvent::PreviewLoaded { req: _, cells } => {
+            handle_thread_preview_loaded(cells, &mut mutations);
             vec![]
         }
-        ThreadUiEvent::PreviewFailed => {
+        ThreadUiEvent::PreviewFailed { .. } => {
             // Silent failure for preview - errors shown on actual load
             vec![]
         }
@@ -91,7 +91,7 @@ pub fn handle_thread_event(
             thread_log,
             context_paths,
         } => {
-            handle_thread_created(thread_log, context_paths, &mut commands);
+            handle_thread_created(thread_log, context_paths, &mut mutations);
             vec![]
         }
         ThreadUiEvent::ForkedLoaded {
@@ -112,38 +112,38 @@ pub fn handle_thread_event(
                 usage,
                 user_input,
                 turn_number,
-                &mut commands,
+                &mut mutations,
             );
             vec![]
         }
         ThreadUiEvent::CreateFailed { error } => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage("Thread cleared.".to_string()),
             ));
             vec![]
         }
         ThreadUiEvent::ForkFailed { error } => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));
             vec![]
         }
         ThreadUiEvent::Renamed { thread_id, title } => {
-            handle_thread_renamed(&thread_id, title, &mut commands);
+            handle_thread_renamed(&thread_id, title, &mut mutations);
             vec![]
         }
         ThreadUiEvent::RenameFailed { error } => {
-            commands.push(StateMutation::Transcript(
+            mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));
             vec![]
         }
     };
 
-    (effects, commands, overlay_action)
+    (effects, mutations, overlay_action)
 }
 
 /// Handles thread list loaded - opens thread picker overlay.
@@ -155,23 +155,23 @@ fn handle_thread_loaded(
     messages: Vec<ChatMessage>,
     history: Vec<String>,
     usage: (Usage, Usage),
-    commands: &mut Vec<StateMutation>,
+    mutations: &mut Vec<StateMutation>,
 ) {
     let (cumulative, latest) = usage;
-    commands.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
         cells,
     )));
-    commands.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::ClearWrapCache,
     ));
-    commands.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
-    commands.push(StateMutation::Thread(ThreadMutation::SetThread(thread_log)));
-    commands.push(StateMutation::Thread(ThreadMutation::SetUsage {
+    mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(thread_log)));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
         latest,
     }));
-    commands.push(StateMutation::Input(InputMutation::SetHistory(history)));
+    mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
 
     // Show confirmation message
     let short_id = if thread_id.len() > 8 {
@@ -179,18 +179,18 @@ fn handle_thread_loaded(
     } else {
         thread_id.to_string()
     };
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!("Switched to thread {}", short_id)),
     ));
 }
 
 /// Handles thread preview loaded - shows transcript without full switch.
-fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, commands: &mut Vec<StateMutation>) {
-    commands.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, mutations: &mut Vec<StateMutation>) {
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
         cells,
     )));
-    commands.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::ClearWrapCache,
     ));
 }
@@ -199,15 +199,15 @@ fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, commands: &mut Vec<Stat
 fn handle_thread_created(
     thread_log: ThreadLog,
     context_paths: Vec<PathBuf>,
-    commands: &mut Vec<StateMutation>,
+    mutations: &mut Vec<StateMutation>,
 ) {
     let thread_path = thread_log.path().display().to_string();
-    commands.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
+    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
 
     // Show thread path
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!("Thread path: {}", thread_path)),
     ));
 
@@ -218,7 +218,7 @@ fn handle_thread_created(
             .map(|p| format!("  - {}", p.display()))
             .collect();
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        commands.push(StateMutation::Transcript(
+        mutations.push(StateMutation::Transcript(
             TranscriptMutation::AppendSystemMessage(message),
         ));
     }
@@ -233,30 +233,30 @@ fn handle_thread_forked(
     usage: (Usage, Usage),
     user_input: Option<String>,
     turn_number: usize,
-    commands: &mut Vec<StateMutation>,
+    mutations: &mut Vec<StateMutation>,
 ) {
     let (cumulative, latest) = usage;
-    commands.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
         cells,
     )));
-    commands.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(TranscriptMutation::ResetScroll));
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::ClearWrapCache,
     ));
-    commands.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
-    commands.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
+    mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
-    commands.push(StateMutation::Thread(ThreadMutation::SetUsage {
+    mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
         latest,
     }));
-    commands.push(StateMutation::Input(InputMutation::SetHistory(history)));
-    commands.push(StateMutation::Input(InputMutation::Clear));
+    mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
+    mutations.push(StateMutation::Input(InputMutation::Clear));
     if let Some(text) = user_input {
-        commands.push(StateMutation::Input(InputMutation::SetText(text)));
+        mutations.push(StateMutation::Input(InputMutation::SetText(text)));
     }
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!("Forked from turn {}.", turn_number)),
     ));
 }
@@ -265,11 +265,11 @@ fn handle_thread_forked(
 fn handle_thread_renamed(
     thread_id: &str,
     title: Option<String>,
-    commands: &mut Vec<StateMutation>,
+    mutations: &mut Vec<StateMutation>,
 ) {
     let short_id = short_thread_id(thread_id);
     let display_title = title.unwrap_or_else(|| short_id.clone());
-    commands.push(StateMutation::Transcript(
+    mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!(
             "Thread {} renamed to \"{}\".",
             short_id, display_title
