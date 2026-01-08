@@ -104,8 +104,7 @@
     - `src/providers/anthropic/auth.rs`: auth resolution + config
     - `src/providers/anthropic/client.rs`: AnthropicClient + request wiring
     - `src/providers/anthropic/sse.rs`: SSE parsing + stream events
-    - `src/providers/anthropic/types.rs`: API DTOs + chat message types
-    - `src/providers/anthropic/errors.rs`: provider error types
+    - `src/providers/anthropic/types.rs`: API DTOs + request/response shapes
   - `src/providers/openai_responses/`: shared OpenAI Responses API helpers
     - `src/providers/openai_responses/mod.rs`: shared request builder + dispatcher
     - `src/providers/openai_responses/sse.rs`: SSE parsing for Responses API
