@@ -28,7 +28,7 @@ Built because I needed something:
 - **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
 - **File picker** — type `@` to browse and insert project files (respects .gitignore)
 - **Bang commands** — type `!<command>` to execute bash commands directly (e.g., `!ls -la`, `!git status`)
-- **Text selection** — click and drag to select, auto-copies to clipboard
+- **Text selection** — click and drag to select, double-click selects a word, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume or switch between previous threads (filtered by workspace, Ctrl+T to show all)
 - **Timeline overlay** — jump to turns and fork from any message
