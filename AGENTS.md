@@ -130,6 +130,8 @@
 - `cargo run -- --help`
 - `cargo run --` (interactive; needs provider key via env)
 - `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
+- `cargo xtask update-default-config` (maintainer: refresh default_config.toml)
+- `cargo xtask update-defaults` (maintainer: refresh both defaults)
 - `cargo test`
 - `cargo +nightly fmt` (uses nightly for full rustfmt features; stable works but ignores some options)
 - `cargo clippy`

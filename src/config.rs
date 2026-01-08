@@ -81,8 +81,113 @@ impl ThinkingLevel {
     }
 }
 
-/// Default config template with comments, embedded at compile time.
-const DEFAULT_CONFIG_TEMPLATE: &str = include_str!("../default_config.toml");
+/// Returns the default config template with comments.
+///
+/// This is the source of truth for default_config.toml.
+fn default_config_template() -> String {
+    fn format_models(models: &[String]) -> String {
+        models
+            .iter()
+            .map(|model| format!("\"{}\"", model))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    let providers = ProvidersConfig::default();
+    let thinking_default = ThinkingLevel::default();
+    let mut out = String::new();
+
+    out.push_str("# ZDX Configuration\n");
+    out.push_str("#\n");
+    out.push_str("# This file is auto-generated. Edit as needed.\n");
+    out.push_str("# Documentation: https://github.com/tallesborges/zdx#configuration\n\n");
+
+    out.push_str("# The Claude model to use\n");
+    out.push_str(&format!("model = \"{}\"\n\n", Config::DEFAULT_MODEL));
+
+    out.push_str("# Maximum tokens for responses\n");
+    out.push_str(&format!("max_tokens = {}\n\n", Config::DEFAULT_MAX_TOKENS));
+
+    out.push_str("# Timeout for tool execution in seconds (0 disables timeout)\n");
+    out.push_str(&format!(
+        "tool_timeout_secs = {}\n\n",
+        Config::DEFAULT_TOOL_TIMEOUT_SECS
+    ));
+
+    out.push_str("# System prompt (inline)\n");
+    out.push_str("# system_prompt = \"You are a helpful coding assistant.\"\n\n");
+
+    out.push_str("# System prompt from file (takes precedence over inline)\n");
+    out.push_str("# system_prompt_file = \"/path/to/system_prompt.md\"\n\n");
+
+    out.push_str("# Extended thinking level\n");
+    out.push_str("# Controls how much reasoning Claude shows before responding.\n");
+    out.push_str("# Higher levels use more tokens but provide deeper reasoning.\n");
+    out.push_str("# Options: off, minimal, low, medium, high\n");
+    out.push_str(
+        "# Note: max_tokens is auto-adjusted to ensure room for both thinking and response.\n",
+    );
+    out.push_str(&format!(
+        "thinking_level = \"{}\"\n\n",
+        thinking_default.display_name()
+    ));
+
+    out.push_str("# OpenAI reasoning effort (used by Codex models).\n");
+    out.push_str("# Options: low, medium, high, xhigh\n\n");
+
+    out.push_str("# Provider base URLs (for proxies or test rigs).\n");
+
+    out.push_str("[providers.anthropic]\n");
+    if let Some(enabled) = providers.anthropic.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://api.anthropic.com\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n\n",
+        format_models(&providers.anthropic.models)
+    ));
+
+    out.push_str("[providers.openai]\n");
+    if let Some(enabled) = providers.openai.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://api.openai.com/v1\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n\n",
+        format_models(&providers.openai.models)
+    ));
+
+    out.push_str("[providers.openai_codex]\n");
+    if let Some(enabled) = providers.openai_codex.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str(&format!(
+        "models = [{}]\n\n",
+        format_models(&providers.openai_codex.models)
+    ));
+
+    out.push_str("[providers.openrouter]\n");
+    if let Some(enabled) = providers.openrouter.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://openrouter.ai/api/v1\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n\n",
+        format_models(&providers.openrouter.models)
+    ));
+
+    out.push_str("[providers.gemini]\n");
+    if let Some(enabled) = providers.gemini.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://generativelanguage.googleapis.com/v1beta\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n",
+        format_models(&providers.gemini.models)
+    ));
+
+    out
+}
 
 pub mod paths {
     //! Path resolution for ZDX configuration and data directories.
@@ -147,8 +252,9 @@ pub struct Config {
 
 impl Config {
     const DEFAULT_MODEL: &str = "claude-haiku-4-5";
-    const DEFAULT_MAX_TOKENS: u32 = 1024;
-    const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 30;
+    const DEFAULT_MAX_TOKENS: u32 = 12288;
+    /// Default is disabled
+    const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
     /// Minimum buffer above thinking budget for response tokens.
     const THINKING_RESPONSE_BUFFER: u32 = 4096;
 
@@ -190,7 +296,7 @@ impl Config {
             fs::read_to_string(path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?
         } else {
-            DEFAULT_CONFIG_TEMPLATE.to_string()
+            default_config_template()
         };
 
         // Parse as editable document (preserves comments and formatting)
@@ -224,7 +330,7 @@ impl Config {
             fs::read_to_string(path)
                 .with_context(|| format!("Failed to read config from {}", path.display()))?
         } else {
-            DEFAULT_CONFIG_TEMPLATE.to_string()
+            default_config_template()
         };
 
         // Parse as editable document (preserves comments and formatting)
@@ -293,7 +399,7 @@ impl Config {
             anyhow::bail!("Config file already exists at {}", path.display());
         }
 
-        Self::write_config(path, DEFAULT_CONFIG_TEMPLATE)
+        Self::write_config(path, &default_config_template())
     }
 
     /// Writes config content to a file, creating parent directories as needed.
@@ -461,7 +567,7 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-haiku-4-5");
-        assert_eq!(config.max_tokens, 1024);
+        assert_eq!(config.max_tokens, 12288);
     }
 
     /// Config loading: partial config merges with defaults.
@@ -474,7 +580,7 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
-        assert_eq!(config.max_tokens, 1024); // default preserved
+        assert_eq!(config.max_tokens, 12288);
     }
 
     /// Config init: creates file with defaults, creates parent dirs (SPEC §9).
@@ -585,7 +691,7 @@ mod tests {
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("# ZDX Configuration"));
         assert!(contents.contains("# Maximum tokens"));
-        assert!(contents.contains("max_tokens = 1024"));
+        assert!(contents.contains("max_tokens = 12288"));
     }
 
     /// save_model: preserves other fields in existing config.

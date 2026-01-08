@@ -1,13 +1,13 @@
 # ZDX Configuration
 #
 # This file is auto-generated. Edit as needed.
-# Documentation: https://github.com/user/zdx#configuration
+# Documentation: https://github.com/tallesborges/zdx#configuration
 
 # The Claude model to use
 model = "claude-haiku-4-5"
 
 # Maximum tokens for responses
-max_tokens = 1024
+max_tokens = 12288
 
 # Timeout for tool execution in seconds (0 disables timeout)
 tool_timeout_secs = 30
@@ -32,12 +32,12 @@ thinking_level = "off"
 [providers.anthropic]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = ["claude-haiku-4-5", "claude-opus-4-5", "claude-sonnet-4-5"]
+models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.openai]
 enabled = true
 # base_url = "https://api.openai.com/v1"
-models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini"]
+models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
 
 [providers.openai_codex]
 enabled = true
