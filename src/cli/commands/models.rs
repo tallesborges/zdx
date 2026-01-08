@@ -125,7 +125,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
         };
 
         let candidates = build_candidates(provider_id, prefix, models_map);
-        let mut selected = select_candidates(provider_id, &provider_cfg.models, &candidates);
+        let selected = select_candidates(provider_id, &provider_cfg.models, &candidates);
 
         if selected.is_empty() {
             eprintln!(
@@ -134,12 +134,6 @@ pub async fn update(config: &config::Config) -> Result<()> {
             );
             continue;
         }
-
-        selected.sort_by(|a, b| {
-            a.display_name
-                .cmp(&b.display_name)
-                .then_with(|| a.full_id.cmp(&b.full_id))
-        });
 
         for candidate in selected {
             let record = ModelRecord {
@@ -232,7 +226,7 @@ fn select_candidates(
             continue;
         }
 
-        let mut matches: Vec<&ModelCandidate> = candidates
+        let matches: Vec<&ModelCandidate> = candidates
             .iter()
             .filter(|candidate| matches_pattern(pattern, candidate))
             .collect();
@@ -244,12 +238,6 @@ fn select_candidates(
             );
             continue;
         }
-
-        matches.sort_by(|a, b| {
-            a.display_name
-                .cmp(&b.display_name)
-                .then_with(|| a.full_id.cmp(&b.full_id))
-        });
 
         selected.extend(matches.into_iter().cloned());
     }
@@ -356,18 +344,12 @@ fn append_codex_records(
     }
 
     let catalog = load_codex_catalog(&config.models_path())?;
-    let mut selected = select_manual_records("openai-codex", &cfg.models, &catalog);
+    let selected = select_manual_records("openai-codex", &cfg.models, &catalog);
 
     if selected.is_empty() {
         eprintln!("Warning: no models matched providers.openai_codex.models");
         return Ok(());
     }
-
-    selected.sort_by(|a, b| {
-        a.display_name
-            .cmp(&b.display_name)
-            .then_with(|| a.id.cmp(&b.id))
-    });
 
     for record in selected {
         let key = record_key(&record);
