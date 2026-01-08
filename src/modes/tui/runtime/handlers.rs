@@ -30,6 +30,7 @@ use crate::core::thread_log::ThreadEvent;
 use crate::core::{interrupt, thread_log};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
+use crate::modes::tui::shared::RequestId;
 use crate::modes::tui::transcript::{HistoryCell, build_transcript_from_events};
 
 // ============================================================================
@@ -150,19 +151,19 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
 /// Loads a thread preview.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
-pub async fn thread_preview(thread_id: String) -> UiEvent {
+pub async fn thread_preview(thread_id: String, req: RequestId) -> UiEvent {
     tokio::task::spawn_blocking(move || match thread_log::load_thread_events(&thread_id) {
         Ok(events) => {
             let cells = build_transcript_from_events(&events);
-            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
+            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { req, cells })
         }
         Err(_) => {
             // Silent failure for preview - errors shown on actual load
-            UiEvent::Thread(ThreadUiEvent::PreviewFailed)
+            UiEvent::Thread(ThreadUiEvent::PreviewFailed { req })
         }
     })
     .await
-    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed))
+    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed { req }))
 }
 
 /// Creates a new thread.
@@ -346,6 +347,7 @@ pub async fn token_exchange(
     provider: crate::providers::ProviderKind,
     code: String,
     verifier: String,
+    req: RequestId,
 ) -> UiEvent {
     use crate::providers::oauth::{anthropic, openai_codex};
 
@@ -373,7 +375,7 @@ pub async fn token_exchange(
             }
         }
     };
-    UiEvent::LoginResult(result)
+    UiEvent::LoginResult { req, result }
 }
 
 /// Listens for a local OAuth callback.

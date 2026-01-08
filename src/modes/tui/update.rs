@@ -83,9 +83,10 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.agent_state = AgentState::Waiting { rx };
             vec![]
         }
-        UiEvent::LoginResult(result) => {
-            // Clear in-progress flag
-            app.tui.auth.login_in_progress = false;
+        UiEvent::LoginResult { req, result } => {
+            if !app.tui.auth.login_request.finish_if_active(req) {
+                return vec![];
+            }
 
             let provider = match &app.overlay {
                 Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
@@ -130,11 +131,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                             let verifier = pkce_verifier.clone();
                             let provider = *provider;
                             *login_state = overlays::LoginState::Exchanging { provider };
-                            effects.push(UiEffect::SpawnTokenExchange {
+                            push_token_exchange(
+                                &mut app.tui,
+                                &mut effects,
                                 provider,
                                 code,
                                 verifier,
-                            });
+                            );
                         }
                         None => {
                             *error =
@@ -350,10 +353,24 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 app.tui.thread_ops.preview_loading = true;
                 vec![]
             }
-            ThreadUiEvent::PreviewLoaded { cells } => {
+            ThreadUiEvent::PreviewLoaded { req, cells } => {
+                let allow = match app.overlay.as_mut() {
+                    Some(overlays::Overlay::ThreadPicker(picker)) => {
+                        picker.preview_request.finish_if_active(req)
+                    }
+                    _ => {
+                        app.tui.thread_ops.preview_loading = false;
+                        return vec![];
+                    }
+                };
+
+                if !allow {
+                    return vec![];
+                }
+
                 app.tui.thread_ops.preview_loading = false;
                 let (mut effects, commands, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
+                    thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
                 apply_mutations(&mut app.tui, commands);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
@@ -373,10 +390,24 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
                 effects
             }
-            ThreadUiEvent::PreviewFailed => {
+            ThreadUiEvent::PreviewFailed { req } => {
+                let allow = match app.overlay.as_mut() {
+                    Some(overlays::Overlay::ThreadPicker(picker)) => {
+                        picker.preview_request.finish_if_active(req)
+                    }
+                    _ => {
+                        app.tui.thread_ops.preview_loading = false;
+                        return vec![];
+                    }
+                };
+
+                if !allow {
+                    return vec![];
+                }
+
                 app.tui.thread_ops.preview_loading = false;
                 let (effects, commands, _) =
-                    thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
+                    thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
                 apply_mutations(&mut app.tui, commands);
                 effects
             }
@@ -533,8 +564,34 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
     }
 }
 
+fn push_token_exchange(
+    tui: &mut TuiState,
+    effects: &mut Vec<UiEffect>,
+    provider: crate::providers::ProviderKind,
+    code: String,
+    verifier: String,
+) {
+    let req = tui.auth.login_request.begin();
+    effects.push(UiEffect::SpawnTokenExchange {
+        provider,
+        code,
+        verifier,
+        req,
+    });
+}
+
 fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> Vec<UiEffect> {
-    let mut effects = update.effects;
+    let mut effects = Vec::with_capacity(update.effects.len());
+    for effect in update.effects {
+        match effect {
+            overlays::OverlayEffect::StartTokenExchange {
+                provider,
+                code,
+                verifier,
+            } => push_token_exchange(&mut app.tui, &mut effects, provider, code, verifier),
+            overlays::OverlayEffect::Ui(effect) => effects.push(effect),
+        }
+    }
     match update.transition {
         overlays::OverlayTransition::Stay => {}
         overlays::OverlayTransition::Close => {

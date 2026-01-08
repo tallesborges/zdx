@@ -7,6 +7,7 @@ use ratatui::layout::Rect;
 use super::OverlayUpdate;
 use crate::core::thread_log::ThreadSummary;
 use crate::modes::tui::app::TuiState;
+use crate::modes::tui::shared::LatestOnly;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
 use crate::modes::tui::thread::render_thread_picker;
@@ -30,7 +31,7 @@ impl ThreadScope {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ThreadPickerState {
     pub all_threads: Vec<ThreadSummary>,
     pub scope: ThreadScope,
@@ -40,6 +41,8 @@ pub struct ThreadPickerState {
     pub original_cells: Vec<HistoryCell>,
     /// When the last copy occurred (for showing brief "Copied!" feedback).
     pub copied_at: Option<Instant>,
+    /// Tracks the latest preview request.
+    pub preview_request: LatestOnly,
 }
 
 impl ThreadPickerState {
@@ -53,7 +56,7 @@ impl ThreadPickerState {
             .unwrap_or_else(|_| current_root.to_path_buf())
             .display()
             .to_string();
-        let state = Self {
+        let mut state = Self {
             all_threads: threads,
             scope: ThreadScope::Current,
             current_root,
@@ -61,6 +64,7 @@ impl ThreadPickerState {
             offset: 0,
             original_cells,
             copied_at: None,
+            preview_request: LatestOnly::default(),
         };
         let effects = state.preview_selected_effects();
         (state, effects)
@@ -79,7 +83,7 @@ impl ThreadPickerState {
                 self.scope = self.scope.toggle();
                 self.selected = 0;
                 self.offset = 0;
-                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                 OverlayUpdate::close().with_mutations(vec![
@@ -99,7 +103,7 @@ impl ThreadPickerState {
                     }
                 }
                 self.selected = self.selected.min(total.saturating_sub(1));
-                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             KeyCode::Down | KeyCode::Char('j') => {
                 let total = self.visible_threads().len();
@@ -109,7 +113,7 @@ impl ThreadPickerState {
                         self.offset = self.selected - VISIBLE_HEIGHT + 1;
                     }
                 }
-                OverlayUpdate::stay().with_effects(self.preview_selected_effects())
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             KeyCode::Enter => {
                 if tui.agent_state.is_running() {
@@ -121,7 +125,7 @@ impl ThreadPickerState {
                 }
 
                 if let Some(thread) = self.selected_thread() {
-                    OverlayUpdate::close().with_effects(vec![UiEffect::LoadThread {
+                    OverlayUpdate::close().with_ui_effects(vec![UiEffect::LoadThread {
                         thread_id: thread.id.clone(),
                     }])
                 } else {
@@ -130,7 +134,7 @@ impl ThreadPickerState {
             }
             KeyCode::Char('y') => {
                 if let Some(thread) = self.selected_thread() {
-                    OverlayUpdate::stay().with_effects(vec![UiEffect::CopyToClipboard {
+                    OverlayUpdate::stay().with_ui_effects(vec![UiEffect::CopyToClipboard {
                         text: thread.id.clone(),
                     }])
                 } else {
@@ -163,14 +167,14 @@ impl ThreadPickerState {
         }
     }
 
-    fn preview_selected_effects(&self) -> Vec<UiEffect> {
-        self.selected_thread()
-            .map(|thread| {
-                vec![UiEffect::PreviewThread {
-                    thread_id: thread.id.clone(),
-                }]
-            })
-            .unwrap_or_default()
+    fn preview_selected_effects(&mut self) -> Vec<UiEffect> {
+        let thread_id = self.selected_thread().map(|thread| thread.id.clone());
+        if let Some(thread_id) = thread_id {
+            let req = self.preview_request.begin();
+            vec![UiEffect::PreviewThread { thread_id, req }]
+        } else {
+            Vec::new()
+        }
     }
 }
 

@@ -20,7 +20,6 @@ pub fn handle_login_result(
     provider: crate::providers::ProviderKind,
 ) -> (Vec<StateMutation>, LoginOverlayAction) {
     // Clear in-progress flags
-    auth.login_in_progress = false;
     auth.callback_in_progress = false;
     match result {
         Ok(()) => {

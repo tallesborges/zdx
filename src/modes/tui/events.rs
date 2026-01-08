@@ -19,6 +19,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
+use crate::modes::tui::shared::RequestId;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::anthropic::ChatMessage;
 
@@ -61,10 +62,13 @@ pub enum ThreadUiEvent {
     PreviewStarted,
 
     /// Thread preview loaded (for thread picker navigation).
-    PreviewLoaded { cells: Vec<HistoryCell> },
+    PreviewLoaded {
+        req: RequestId,
+        cells: Vec<HistoryCell>,
+    },
 
     /// Thread preview load failed (silent - just don't update).
-    PreviewFailed,
+    PreviewFailed { req: RequestId },
 
     /// Thread creation started (operation in progress).
     CreateStarted,
@@ -141,7 +145,10 @@ pub enum UiEvent {
     AgentSpawned { rx: mpsc::Receiver<Arc<AgentEvent>> },
 
     /// Async login token exchange completed.
-    LoginResult(Result<(), String>),
+    LoginResult {
+        req: RequestId,
+        result: Result<(), String>,
+    },
 
     /// Local OAuth callback returned with an optional code.
     LoginCallbackResult(Option<String>),

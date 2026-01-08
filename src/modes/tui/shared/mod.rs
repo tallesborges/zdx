@@ -10,6 +10,7 @@ pub mod clipboard;
 pub mod commands;
 pub mod effects;
 pub mod internal;
+pub mod request_id;
 pub mod scrollbar;
 pub mod text;
 
@@ -18,5 +19,6 @@ pub use clipboard::Clipboard;
 pub use internal::{
     AuthMutation, ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
+pub use request_id::{LatestOnly, RequestId};
 pub use scrollbar::Scrollbar;
 pub use text::sanitize_for_display;

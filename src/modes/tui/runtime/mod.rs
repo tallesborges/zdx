@@ -24,6 +24,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use crossterm::event;
+use handlers::{UiEventReceiver, UiEventSender};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
@@ -37,8 +38,6 @@ use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::{render, terminal, update};
 use crate::providers::anthropic::ChatMessage;
-
-use handlers::{UiEventReceiver, UiEventSender};
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
 pub const FRAME_DURATION: std::time::Duration = std::time::Duration::from_millis(16);
@@ -222,7 +221,7 @@ impl TuiRuntime {
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.bash_running.is_some()
             || self.state.tui.transcript.selection.has_pending_clear()
-            || self.state.tui.auth.login_in_progress
+            || self.state.tui.auth.login_request.has_active()
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
             || file_discovery_pending
@@ -358,10 +357,10 @@ impl TuiRuntime {
                 provider,
                 code,
                 verifier,
+                req,
             } => {
-                self.state.tui.auth.login_in_progress = true;
                 self.spawn_effect(None, move || {
-                    handlers::token_exchange(provider, code, verifier)
+                    handlers::token_exchange(provider, code, verifier, req)
                 });
             }
             UiEffect::StartLocalAuthCallback { provider, state } => {
@@ -446,10 +445,10 @@ impl TuiRuntime {
                     );
                 }
             }
-            UiEffect::PreviewThread { thread_id } => {
+            UiEffect::PreviewThread { thread_id, req } => {
                 self.spawn_effect(
                     Some(UiEvent::Thread(ThreadUiEvent::PreviewStarted)),
-                    move || handlers::thread_preview(thread_id),
+                    move || handlers::thread_preview(thread_id, req),
                 );
             }
 

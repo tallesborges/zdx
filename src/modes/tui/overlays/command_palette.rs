@@ -77,7 +77,7 @@ impl CommandPaletteState {
                         Some(request) => OverlayUpdate::open(request),
                         None => OverlayUpdate::close(),
                     };
-                    update.with_effects(effects).with_mutations(commands)
+                    update.with_ui_effects(effects).with_mutations(commands)
                 } else {
                     OverlayUpdate::close()
                 }

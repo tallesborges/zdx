@@ -156,7 +156,7 @@ impl TimelineState {
                 }
 
                 match self.fork_effect(tui) {
-                    Some(effect) => OverlayUpdate::close().with_effects(vec![effect]),
+                    Some(effect) => OverlayUpdate::close().with_ui_effects(vec![effect]),
                     None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(
                             "No timeline entry selected.".to_string(),

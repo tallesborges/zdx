@@ -45,6 +45,7 @@ pub use update::{handle_files_discovered, handle_overlay_key};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::StateMutation;
+use crate::providers::ProviderKind;
 
 // ============================================================================
 // OverlayRequest / OverlayTransition / OverlayUpdate
@@ -74,7 +75,7 @@ pub enum OverlayTransition {
 pub struct OverlayUpdate {
     pub transition: OverlayTransition,
     pub mutations: Vec<StateMutation>,
-    pub effects: Vec<UiEffect>,
+    pub effects: Vec<OverlayEffect>,
 }
 
 impl OverlayUpdate {
@@ -103,8 +104,13 @@ impl OverlayUpdate {
         self
     }
 
-    pub fn with_effects(mut self, effects: Vec<UiEffect>) -> Self {
+    pub fn with_effects(mut self, effects: Vec<OverlayEffect>) -> Self {
         self.effects = effects;
+        self
+    }
+
+    pub fn with_ui_effects(mut self, effects: Vec<UiEffect>) -> Self {
+        self.effects = effects.into_iter().map(OverlayEffect::Ui).collect();
         self
     }
 }
@@ -122,6 +128,23 @@ pub enum Overlay {
     Login(LoginState),
     FilePicker(FilePickerState),
     Timeline(TimelineState),
+}
+
+/// Effects that can be emitted by overlays.
+#[derive(Debug)]
+pub enum OverlayEffect {
+    Ui(UiEffect),
+    StartTokenExchange {
+        provider: ProviderKind,
+        code: String,
+        verifier: String,
+    },
+}
+
+impl From<UiEffect> for OverlayEffect {
+    fn from(effect: UiEffect) -> Self {
+        OverlayEffect::Ui(effect)
+    }
 }
 
 impl Overlay {
