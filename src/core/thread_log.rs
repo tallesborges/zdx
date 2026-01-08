@@ -1102,18 +1102,22 @@ impl ThreadPersistenceOptions {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::OnceLock;
+
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
 
-    fn setup_temp_zdx_home() -> TempDir {
-        let temp = TempDir::new().unwrap();
-        // SAFETY: Tests run serially, and we control the environment variable access
-        unsafe {
-            std::env::set_var("ZDX_HOME", temp.path());
-        }
-        temp
+    fn setup_temp_zdx_home() -> &'static TempDir {
+        static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
+        ZDX_HOME.get_or_init(|| {
+            let temp = TempDir::new().unwrap();
+            unsafe {
+                std::env::set_var("ZDX_HOME", temp.path());
+            }
+            temp
+        })
     }
 
     fn unique_thread_id(prefix: &str) -> String {
