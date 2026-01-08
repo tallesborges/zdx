@@ -6,7 +6,7 @@ A fast, beautiful agentic coding assistant.
 
 ## What it is
 
-- **Just 4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
+- **4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
 - **Handoff** — AMP-style context-aware prompt generation to start fresh threads ([learn more](https://ampcode.com/news/handoff))
 - **No MCP support** — if you need it, check out [mcporter](https://github.com/steipete/mcporter)
 

@@ -15,10 +15,6 @@ pub mod scrollbar;
 pub mod text;
 
 pub use clipboard::Clipboard;
-#[allow(unused_imports)]
-pub use internal::{
-    AuthMutation, ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
-};
 pub use request_id::{LatestOnly, RequestId};
 pub use scrollbar::Scrollbar;
 pub use text::sanitize_for_display;

@@ -6,7 +6,7 @@ use anyhow::{Result, bail};
 use futures_util::Stream;
 use reqwest::header::HeaderMap;
 
-use crate::providers::anthropic::{
+use crate::providers::{
     ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, StreamEvent,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
@@ -105,7 +105,7 @@ fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
 }
 
 fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<InputItem>> {
-    use crate::providers::anthropic::MessageContent;
+    use crate::providers::MessageContent;
 
     let mut input = Vec::new();
     if let Some(prompt) = system {

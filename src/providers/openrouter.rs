@@ -9,7 +9,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::providers::anthropic::{
+use crate::providers::{
     ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
     Usage,
 };

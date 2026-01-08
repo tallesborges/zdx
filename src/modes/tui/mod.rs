@@ -40,7 +40,7 @@ pub use runtime::TuiRuntime;
 use crate::config::Config;
 use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::transcript::HistoryCell;
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(

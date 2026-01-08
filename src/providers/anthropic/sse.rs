@@ -4,57 +4,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::Stream;
 use serde::Deserialize;
 
-/// Token usage information from Anthropic API.
-///
-/// Tracks input/output tokens and cache-related tokens for cost calculation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct Usage {
-    /// Input tokens (non-cached)
-    pub input_tokens: u64,
-    /// Output tokens
-    pub output_tokens: u64,
-    /// Tokens read from cache
-    pub cache_read_input_tokens: u64,
-    /// Tokens written to cache
-    pub cache_creation_input_tokens: u64,
-}
-
-/// Events emitted during streaming.
-#[derive(Debug, Clone, PartialEq)]
-pub enum StreamEvent {
-    /// Message started, contains model info and initial usage
-    MessageStart { model: String, usage: Usage },
-    /// A content block has started (text or tool_use or thinking)
-    ContentBlockStart {
-        index: usize,
-        block_type: String,
-        /// For tool_use blocks: the tool use ID
-        id: Option<String>,
-        /// For tool_use blocks: the tool name
-        name: Option<String>,
-    },
-    /// Text delta within a content block
-    TextDelta { index: usize, text: String },
-    /// Partial JSON delta for tool input
-    InputJsonDelta { index: usize, partial_json: String },
-    /// Thinking delta within a thinking content block
-    ThinkingDelta { index: usize, thinking: String },
-    /// Signature delta within a thinking content block
-    SignatureDelta { index: usize, signature: String },
-    /// A content block has ended
-    ContentBlockStop { index: usize },
-    /// Message delta (e.g., stop_reason update, final usage)
-    MessageDelta {
-        stop_reason: Option<String>,
-        usage: Option<Usage>,
-    },
-    /// Message completed
-    MessageStop,
-    /// Ping event (keepalive)
-    Ping,
-    /// Error event from API
-    Error { error_type: String, message: String },
-}
+use crate::providers::shared::{StreamEvent, Usage};
 
 /// SSE parser that converts a byte stream into StreamEvents.
 pub struct SseParser<S> {

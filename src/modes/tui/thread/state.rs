@@ -5,7 +5,7 @@
 use crate::core::thread_log::{ThreadLog, Usage};
 use crate::models::ModelPricing;
 use crate::modes::tui::shared::internal::ThreadMutation;
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Thread state.
 ///

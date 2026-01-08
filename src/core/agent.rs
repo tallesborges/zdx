@@ -19,14 +19,14 @@ use tokio::time::{Duration, timeout};
 use crate::config::Config;
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
-use crate::providers::anthropic::{
-    AnthropicClient, AnthropicConfig, ChatContentBlock, ChatMessage, ProviderError, StreamEvent,
-};
+use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::providers::gemini::{GeminiClient, GeminiConfig};
 use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
-use crate::providers::{ProviderKind, resolve_provider};
+use crate::providers::{
+    ChatContentBlock, ChatMessage, ProviderError, ProviderKind, StreamEvent, resolve_provider,
+};
 use crate::tools::{self, ToolContext, ToolResult};
 
 /// Options for agent execution.

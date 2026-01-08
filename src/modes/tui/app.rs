@@ -43,7 +43,7 @@ use crate::modes::tui::input::InputState;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::thread::{ThreadOpsState, ThreadState};
 use crate::modes::tui::transcript::{CellId, HistoryCell, TranscriptState};
-use crate::providers::anthropic::{ChatContentBlock, ChatMessage};
+use crate::providers::{ChatContentBlock, ChatMessage};
 
 // ============================================================================
 // AppState (Combined State)
@@ -231,7 +231,7 @@ impl TuiState {
 
     /// Builds transcript cells from message history.
     fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
-        use crate::providers::anthropic::MessageContent;
+        use crate::providers::MessageContent;
 
         let mut transcript = Vec::new();
 

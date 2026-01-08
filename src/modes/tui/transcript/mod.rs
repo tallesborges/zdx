@@ -26,12 +26,7 @@ pub use cell::{CellId, HistoryCell, ToolState};
 pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
 // Re-export selection types (only those used externally)
 pub use selection::{LineMapping, SelectionState};
-// Test-only exports (used in transcript/state.rs tests)
-#[cfg(test)]
-#[allow(unused_imports)]
-pub use state::{CellLineInfo, ScrollAccumulator};
-// Re-export scroll types (used by tests in state/mod.rs via state/transcript.rs shim)
-#[allow(unused_imports)] // Used in test configurations via state/transcript.rs shim
+// Re-export scroll types
 pub use state::{ScrollMode, ScrollState};
 // Re-export state types
 pub use state::{TranscriptState, VisibleRange};

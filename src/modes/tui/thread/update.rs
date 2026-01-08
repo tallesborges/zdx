@@ -11,7 +11,7 @@ use crate::modes::tui::shared::internal::{
     InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
 use crate::modes::tui::transcript::HistoryCell;
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Handles thread UI events.
 ///

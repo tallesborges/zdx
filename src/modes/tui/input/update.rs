@@ -13,7 +13,7 @@ use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{StateMutation, ThreadMutation, TranscriptMutation};
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::HistoryCell;
-use crate::providers::anthropic::ChatMessage;
+use crate::providers::ChatMessage;
 
 /// Handles paste events for input.
 ///

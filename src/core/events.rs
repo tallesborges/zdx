@@ -8,7 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::providers::anthropic::{ChatMessage, ProviderErrorKind};
+use crate::providers::{ChatMessage, ProviderErrorKind};
 
 /// Events emitted by the agent during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

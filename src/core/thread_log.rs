@@ -783,7 +783,7 @@ pub fn latest_thread_id() -> Result<Option<String>> {
 /// Loads thread events and converts them to ChatMessages for API use.
 ///
 /// Reconstructs the full thread including tool use/result pairs.
-pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::anthropic::ChatMessage>> {
+pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::ChatMessage>> {
     let events = load_thread_events(id)?;
     Ok(thread_events_to_messages(events))
 }
@@ -800,10 +800,8 @@ pub fn set_thread_title(id: &str, title: Option<String>) -> Result<Option<String
 }
 
 /// Converts thread events to chat messages for API replay.
-pub fn thread_events_to_messages(
-    events: Vec<ThreadEvent>,
-) -> Vec<crate::providers::anthropic::ChatMessage> {
-    use crate::providers::anthropic::{ChatContentBlock, ChatMessage, MessageContent};
+pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::providers::ChatMessage> {
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
     let mut messages: Vec<ChatMessage> = Vec::new();
 
@@ -1316,7 +1314,7 @@ mod tests {
 
     #[test]
     fn test_events_to_messages_with_thinking() {
-        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+        use crate::providers::{ChatContentBlock, MessageContent};
 
         let events = vec![
             ThreadEvent::user_message("solve this problem"),
@@ -1356,7 +1354,7 @@ mod tests {
         // This should produce a SINGLE assistant message with [thinking, text] blocks,
         // NOT two separate messages. The API rejects modifications to thinking blocks
         // in the latest assistant message, so they must be in the same message.
-        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+        use crate::providers::{ChatContentBlock, MessageContent};
 
         let events = vec![
             ThreadEvent::user_message("explain this"),
@@ -1401,7 +1399,7 @@ mod tests {
         // 2. Assistant: [Thinking1, ToolUse]
         // 3. User: [ToolResult]
         // 4. Assistant: [Thinking2, Text]
-        use crate::providers::anthropic::{ChatContentBlock, MessageContent};
+        use crate::providers::{ChatContentBlock, MessageContent};
 
         let events = vec![
             ThreadEvent::user_message("run a command"),

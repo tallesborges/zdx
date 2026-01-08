@@ -17,14 +17,8 @@
 
 mod auth;
 mod client;
-mod errors;
 mod sse;
 mod types;
 
-#[allow(unused_imports)]
-pub use auth::{AnthropicConfig, AuthMethod};
+pub use auth::AnthropicConfig;
 pub use client::AnthropicClient;
-pub use errors::{ProviderError, ProviderErrorKind};
-#[allow(unused_imports)]
-pub use sse::{SseParser, StreamEvent, Usage, parse_sse_event};
-pub use types::{ChatContentBlock, ChatMessage, MessageContent};

@@ -98,6 +98,7 @@
   - `src/tools/write.rs`: file write tool
 - `src/providers/`: provider clients
   - `src/providers/mod.rs`: provider module exports
+  - `src/providers/shared.rs`: provider-agnostic chat/error/stream types
   - `src/providers/anthropic/`: Anthropic API client
     - `src/providers/anthropic/mod.rs`: public re-exports
     - `src/providers/anthropic/auth.rs`: auth resolution + config
