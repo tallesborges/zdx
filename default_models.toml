@@ -110,6 +110,18 @@ cache_read = 0.025
 cache_write = 0.0
 
 [[model]]
+id = "openai:gpt-4.1"
+provider = "openai"
+display_name = "GPT-4.1"
+context_limit = 1047576
+
+[model.pricing]
+input = 2.0
+output = 8.0
+cache_read = 0.5
+cache_write = 0.0
+
+[[model]]
 id = "openrouter:deepseek/deepseek-v3.1-terminus:exacto"
 provider = "openrouter"
 display_name = "DeepSeek V3.1 Terminus (exacto)"
