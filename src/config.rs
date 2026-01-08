@@ -383,6 +383,7 @@ fn default_openai_provider() -> ProviderConfig {
             "gpt-5.1-codex".to_string(),
             "gpt-5.1-codex-max".to_string(),
             "gpt-5.1-codex-mini".to_string(),
+            "gpt-4.1".to_string(),
         ],
         ..Default::default()
     }
