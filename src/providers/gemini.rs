@@ -7,6 +7,7 @@ use anyhow::{Context, Result, anyhow};
 use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use crate::providers::anthropic::{
     ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
@@ -15,6 +16,7 @@ use crate::providers::anthropic::{
 use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
 
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
+const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
 /// Gemini API configuration.
 #[derive(Debug, Clone)]
@@ -157,10 +159,12 @@ fn build_request(
     system: Option<&str>,
     max_output_tokens: u32,
 ) -> Result<Value> {
+    let active_loop_start = active_loop_start_index(messages);
     let mut contents = Vec::new();
     let mut tool_name_map: HashMap<String, String> = HashMap::new();
 
-    for msg in messages {
+    for (idx, msg) in messages.iter().enumerate() {
+        let add_thought_signature = idx >= active_loop_start;
         match (&msg.role[..], &msg.content) {
             ("user", MessageContent::Text(text)) => {
                 contents.push(json!({
@@ -176,6 +180,7 @@ fn build_request(
             }
             ("assistant", MessageContent::Blocks(blocks)) => {
                 let mut parts = Vec::new();
+                let mut added_signature = false;
                 for block in blocks {
                     match block {
                         ChatContentBlock::Text(text) => {
@@ -183,12 +188,17 @@ fn build_request(
                         }
                         ChatContentBlock::ToolUse { id, name, input } => {
                             tool_name_map.insert(id.clone(), name.clone());
-                            parts.push(json!({
+                            let mut part = json!({
                                 "functionCall": {
                                     "name": name,
                                     "args": input
                                 }
-                            }));
+                            });
+                            if add_thought_signature && !added_signature {
+                                part["thoughtSignature"] = json!(SYNTHETIC_THOUGHT_SIGNATURE);
+                                added_signature = true;
+                            }
+                            parts.push(part);
                         }
                         ChatContentBlock::Thinking { .. } => {}
                         ChatContentBlock::ToolResult(_) => {}
@@ -283,6 +293,24 @@ fn build_request(
     Ok(request)
 }
 
+fn active_loop_start_index(messages: &[ChatMessage]) -> usize {
+    messages.iter().rposition(matches_user_text).unwrap_or(0)
+}
+
+fn matches_user_text(msg: &ChatMessage) -> bool {
+    if msg.role != "user" {
+        return false;
+    }
+
+    match &msg.content {
+        MessageContent::Text(text) => !text.trim().is_empty(),
+        MessageContent::Blocks(blocks) => blocks.iter().any(|block| match block {
+            ChatContentBlock::Text(text) => !text.trim().is_empty(),
+            _ => false,
+        }),
+    }
+}
+
 fn tool_result_text(result: &ToolResult) -> String {
     match &result.content {
         ToolResultContent::Text(text) => text.clone(),
@@ -301,6 +329,7 @@ struct GeminiSseParser<S> {
     inner: S,
     buffer: Vec<u8>,
     model: String,
+    run_id: String,
     pending: VecDeque<StreamEvent>,
     next_index: usize,
     text_index: Option<usize>,
@@ -318,6 +347,7 @@ impl<S> GeminiSseParser<S> {
             inner: stream,
             buffer: Vec::new(),
             model,
+            run_id: Uuid::new_v4().to_string(),
             pending: VecDeque::new(),
             next_index: 0,
             text_index: None,
@@ -449,7 +479,7 @@ impl<S> GeminiSseParser<S> {
                         }
                         self.emitted_tool_calls.insert(key);
 
-                        let tool_id = format!("gemini-tool-{}", self.next_index);
+                        let tool_id = format!("gemini-{}-{}", self.run_id, self.next_index);
                         let index = self.next_index;
                         self.next_index += 1;
                         self.saw_tool = true;
