@@ -26,6 +26,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
         crate::providers::ProviderKind::OpenAI => "OpenAI Login",
         crate::providers::ProviderKind::OpenRouter => "OpenRouter Login",
         crate::providers::ProviderKind::Gemini => "Gemini Login",
+        crate::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
     };
     render_overlay_container(frame, popup_area, title, Color::Cyan);
 

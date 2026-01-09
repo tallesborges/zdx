@@ -87,6 +87,9 @@ enum Commands {
         /// Provider to log in to
         #[arg(long = "openai-codex")]
         openai_codex: bool,
+        /// Provider to log in to (Google Cloud Code Assist)
+        #[arg(long = "gemini-cli")]
+        gemini_cli: bool,
     },
 
     /// Log out from a provider (clear cached token)
@@ -97,6 +100,9 @@ enum Commands {
         /// Provider to log out from
         #[arg(long = "openai-codex")]
         openai_codex: bool,
+        /// Provider to log out from (Google Cloud Code Assist)
+        #[arg(long = "gemini-cli")]
+        gemini_cli: bool,
     },
 
     /// Manage model registry
@@ -211,19 +217,27 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Login {
             anthropic,
             openai_codex,
-        } => match (anthropic, openai_codex) {
-            (true, false) => commands::auth::login_anthropic().await,
-            (false, true) => commands::auth::login_openai_codex().await,
-            _ => anyhow::bail!("Please specify a provider: --anthropic or --openai-codex"),
+            gemini_cli,
+        } => match (anthropic, openai_codex, gemini_cli) {
+            (true, false, false) => commands::auth::login_anthropic().await,
+            (false, true, false) => commands::auth::login_openai_codex().await,
+            (false, false, true) => commands::auth::login_gemini_cli().await,
+            _ => anyhow::bail!(
+                "Please specify a provider: --anthropic, --openai-codex, or --gemini-cli"
+            ),
         },
 
         Commands::Logout {
             anthropic,
             openai_codex,
-        } => match (anthropic, openai_codex) {
-            (true, false) => commands::auth::logout_anthropic(),
-            (false, true) => commands::auth::logout_openai_codex(),
-            _ => anyhow::bail!("Please specify a provider: --anthropic or --openai-codex"),
+            gemini_cli,
+        } => match (anthropic, openai_codex, gemini_cli) {
+            (true, false, false) => commands::auth::logout_anthropic(),
+            (false, true, false) => commands::auth::logout_openai_codex(),
+            (false, false, true) => commands::auth::logout_gemini_cli(),
+            _ => anyhow::bail!(
+                "Please specify a provider: --anthropic, --openai-codex, or --gemini-cli"
+            ),
         },
 
         Commands::Models { command } => match command {

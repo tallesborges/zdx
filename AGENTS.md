@@ -122,6 +122,13 @@
   - `src/providers/openai_api.rs`: OpenAI API key provider (Responses API)
   - `src/providers/openrouter.rs`: OpenRouter provider (OpenAI-compatible chat completions)
   - `src/providers/gemini.rs`: Gemini provider (Generative Language API)
+  - `src/providers/gemini_cli/`: Gemini CLI (Cloud Code Assist OAuth) provider
+    - `src/providers/gemini_cli/mod.rs`: public re-exports
+    - `src/providers/gemini_cli/auth.rs`: auth resolution + config
+    - `src/providers/gemini_cli/client.rs`: GeminiCliClient + request wiring (Cloud Code Assist API)
+  - `src/providers/gemini_shared/`: shared Gemini API helpers
+    - `src/providers/gemini_shared/mod.rs`: message conversion, request building, error classification
+    - `src/providers/gemini_shared/sse.rs`: GeminiSseParser for SSE stream parsing
   - `src/providers/oauth.rs`: OAuth token storage + retrieval
 - `tests/`: integration tests (`assert_cmd`, fixtures)
 

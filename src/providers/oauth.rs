@@ -145,8 +145,9 @@ pub mod anthropic {
     /// Anthropic OAuth URLs
     const AUTHORIZE_URL: &str = "https://claude.ai/oauth/authorize";
     const TOKEN_URL: &str = "https://console.anthropic.com/v1/oauth/token";
-    const REDIRECT_URI: &str = "https://console.anthropic.com/oauth/code/callback";
-    const SCOPES: &str = "org:create_api_key user:profile user:inference";
+    /// Local OAuth callback path (port is dynamic).
+    pub const LOCAL_CALLBACK_PATH: &str = "/callback";
+    const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code";
 
     /// PKCE code verifier and challenge
     pub struct Pkce {
@@ -175,16 +176,16 @@ pub mod anthropic {
     }
 
     /// Build the authorization URL for Anthropic OAuth
-    pub fn build_auth_url(pkce: &Pkce) -> String {
+    pub fn build_auth_url(pkce: &Pkce, state: &str, redirect_uri: &str) -> String {
         let params = [
             ("code", "true"),
             ("client_id", CLIENT_ID),
             ("response_type", "code"),
-            ("redirect_uri", REDIRECT_URI),
+            ("redirect_uri", redirect_uri),
             ("scope", SCOPES),
             ("code_challenge", &pkce.challenge),
             ("code_challenge_method", "S256"),
-            ("state", &pkce.verifier),
+            ("state", state),
         ];
 
         let query: String = url::form_urlencoded::Serializer::new(String::new())
@@ -194,8 +195,55 @@ pub mod anthropic {
         format!("{}?{}", AUTHORIZE_URL, query)
     }
 
+    /// Builds the redirect URI for a given localhost port.
+    pub fn build_redirect_uri(port: u16) -> String {
+        format!("http://localhost:{}{}", port, LOCAL_CALLBACK_PATH)
+    }
+
+    /// Generates a random high localhost port for OAuth callbacks.
+    pub fn random_local_port() -> u16 {
+        let id = uuid::Uuid::new_v4();
+        let bytes = id.as_bytes();
+        let raw = u16::from_le_bytes([bytes[0], bytes[1]]);
+        49152 + (raw % 16384)
+    }
+
+    /// Parses a pasted authorization input into code + optional state.
+    pub fn parse_authorization_input(input: &str) -> (Option<String>, Option<String>) {
+        let value = input.trim();
+        if value.is_empty() {
+            return (None, None);
+        }
+
+        if let Ok(url) = url::Url::parse(value) {
+            let code = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        if let Some((code, state)) = value.split_once('#') {
+            return (Some(code.to_string()), Some(state.to_string()));
+        }
+
+        if value.contains("code=") {
+            let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
+            let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        (Some(value.to_string()), None)
+    }
+
     /// Exchange authorization code for tokens
-    pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
+    pub async fn exchange_code(
+        auth_code: &str,
+        pkce: &Pkce,
+        redirect_uri: &str,
+    ) -> Result<OAuthCredentials> {
         // Parse auth code (format: code#state)
         let parts: Vec<&str> = auth_code.split('#').collect();
         if parts.len() != 2 {
@@ -220,7 +268,7 @@ pub mod anthropic {
                 "client_id": CLIENT_ID,
                 "code": code,
                 "state": state,
-                "redirect_uri": REDIRECT_URI,
+                "redirect_uri": redirect_uri,
                 "code_verifier": pkce.verifier,
             }))
             .send()
@@ -578,6 +626,330 @@ pub mod openai_codex {
     }
 }
 
+/// Google Gemini CLI (Cloud Code Assist OAuth) helpers.
+pub mod gemini_cli {
+    use base64::Engine;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    use sha2::{Digest, Sha256};
+
+    use super::*;
+
+    /// Provider key for Gemini CLI in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "gemini-cli";
+
+    /// Google OAuth client ID (public, from Gemini CLI)
+    const CLIENT_ID: &str =
+        "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com";
+
+    /// Google OAuth client secret (public, from Gemini CLI)
+    const CLIENT_SECRET: &str = "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";
+
+    /// Google OAuth URLs
+    const AUTHORIZE_URL: &str = "https://accounts.google.com/o/oauth2/v2/auth";
+    const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+    const REDIRECT_URI: &str = "http://localhost:8085/oauth2callback";
+
+    /// OAuth scopes for Cloud Code Assist
+    const SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile";
+
+    /// Cloud Code Assist API endpoint
+    const CLOUD_CODE_API: &str = "https://cloudcode-pa.googleapis.com";
+
+    /// PKCE code verifier and challenge
+    pub struct Pkce {
+        pub verifier: String,
+        pub challenge: String,
+    }
+
+    /// Gemini CLI credentials with project ID.
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    pub struct GeminiCliCredentials {
+        pub access: String,
+        pub refresh: String,
+        pub expires: u64,
+        pub project_id: String,
+    }
+
+    /// Generate PKCE code verifier and challenge
+    pub fn generate_pkce() -> Pkce {
+        let uuid1 = uuid::Uuid::new_v4();
+        let uuid2 = uuid::Uuid::new_v4();
+        let mut verifier_bytes = [0u8; 32];
+        verifier_bytes[..16].copy_from_slice(uuid1.as_bytes());
+        verifier_bytes[16..].copy_from_slice(uuid2.as_bytes());
+        let verifier = URL_SAFE_NO_PAD.encode(verifier_bytes);
+
+        let mut hasher = Sha256::new();
+        hasher.update(verifier.as_bytes());
+        let challenge = URL_SAFE_NO_PAD.encode(hasher.finalize());
+
+        Pkce {
+            verifier,
+            challenge,
+        }
+    }
+
+    /// Build the authorization URL for Google OAuth
+    pub fn build_auth_url(pkce: &Pkce, state: &str) -> String {
+        let params = [
+            ("response_type", "code"),
+            ("client_id", CLIENT_ID),
+            ("redirect_uri", REDIRECT_URI),
+            ("scope", SCOPES),
+            ("code_challenge", &pkce.challenge),
+            ("code_challenge_method", "S256"),
+            ("state", state),
+            ("access_type", "offline"),
+            ("prompt", "consent"),
+        ];
+
+        let query: String = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(params)
+            .finish();
+
+        format!("{}?{}", AUTHORIZE_URL, query)
+    }
+
+    /// Parses a pasted authorization input into code + optional state.
+    pub fn parse_authorization_input(input: &str) -> (Option<String>, Option<String>) {
+        let value = input.trim();
+        if value.is_empty() {
+            return (None, None);
+        }
+
+        if let Ok(url) = url::Url::parse(value) {
+            let code = url.query_pairs().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = url
+                .query_pairs()
+                .find(|(k, _)| k == "state")
+                .map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        if let Some((code, state)) = value.split_once('#') {
+            return (Some(code.to_string()), Some(state.to_string()));
+        }
+
+        if value.contains("code=") {
+            let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
+            let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
+            let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
+            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+        }
+
+        (Some(value.to_string()), None)
+    }
+
+    /// Exchanges authorization code for tokens.
+    pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "authorization_code")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("client_secret", CLIENT_SECRET)
+            .append_pair("code", auth_code)
+            .append_pair("code_verifier", &pkce.verifier)
+            .append_pair("redirect_uri", REDIRECT_URI)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send token exchange request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token exchange failed (HTTP {}): {}", status, body);
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse token response")?;
+
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data.refresh_token.unwrap_or_default(),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: None, // Will be set after project discovery
+        })
+    }
+
+    /// Refreshes an expired access token.
+    pub async fn refresh_token(refresh_token: &str, project_id: &str) -> Result<OAuthCredentials> {
+        let client = reqwest::Client::new();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("grant_type", "refresh_token")
+            .append_pair("client_id", CLIENT_ID)
+            .append_pair("client_secret", CLIENT_SECRET)
+            .append_pair("refresh_token", refresh_token)
+            .finish();
+
+        let response = client
+            .post(TOKEN_URL)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .body(body)
+            .send()
+            .await
+            .context("Failed to send token refresh request")?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let body = response.text().await.unwrap_or_default();
+            anyhow::bail!("Token refresh failed (HTTP {}): {}", status, body);
+        }
+
+        let token_data: TokenResponse = response
+            .json()
+            .await
+            .context("Failed to parse token response")?;
+
+        let expires_at = compute_expires_at(token_data.expires_in);
+
+        Ok(OAuthCredentials {
+            cred_type: "oauth".to_string(),
+            refresh: token_data
+                .refresh_token
+                .unwrap_or_else(|| refresh_token.to_string()),
+            access: token_data.access_token,
+            expires: expires_at,
+            account_id: Some(project_id.to_string()),
+        })
+    }
+
+    /// Discovers or provisions a Cloud Code Assist project.
+    pub async fn discover_project(access_token: &str) -> Result<String> {
+        let client = reqwest::Client::new();
+
+        let metadata = serde_json::json!({
+            "ideType": "IDE_UNSPECIFIED",
+            "platform": "PLATFORM_UNSPECIFIED",
+            "pluginType": "GEMINI",
+        });
+
+        // Try to load existing project first
+        let load_url = format!("{}/v1internal:loadCodeAssist", CLOUD_CODE_API);
+        let response = client
+            .post(&load_url)
+            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Content-Type", "application/json")
+            .body(serde_json::json!({ "metadata": metadata.clone() }).to_string())
+            .send()
+            .await
+            .context("Failed to load Cloud Code Assist project")?;
+
+        if response.status().is_success() {
+            let data: serde_json::Value = response.json().await.unwrap_or_default();
+            if let Some(project) = data.get("cloudaicompanionProject").and_then(|v| v.as_str()) {
+                return Ok(project.to_string());
+            }
+
+            let tier_id = data
+                .get("allowedTiers")
+                .and_then(|v| v.as_array())
+                .and_then(|tiers| {
+                    tiers
+                        .iter()
+                        .find(|tier| tier.get("isDefault").and_then(|v| v.as_bool()) == Some(true))
+                        .or_else(|| tiers.first())
+                })
+                .and_then(|tier| tier.get("id").and_then(|v| v.as_str()))
+                .unwrap_or("FREE")
+                .to_string();
+
+            // Try to onboard user (provision new project) with retries.
+            let onboard_url = format!("{}/v1internal:onboardUser", CLOUD_CODE_API);
+            for attempt in 0..10 {
+                let response = client
+                    .post(&onboard_url)
+                    .header("Authorization", format!("Bearer {}", access_token))
+                    .header("Content-Type", "application/json")
+                    .body(
+                        serde_json::json!({
+                            "tierId": tier_id.clone(),
+                            "metadata": metadata.clone(),
+                        })
+                        .to_string(),
+                    )
+                    .send()
+                    .await
+                    .context("Failed to onboard user for Cloud Code Assist")?;
+
+                if response.status().is_success() {
+                    let data: serde_json::Value = response
+                        .json()
+                        .await
+                        .context("Failed to parse onboard response")?;
+                    let done = data.get("done").and_then(|v| v.as_bool()) == Some(true);
+                    let project_id = data
+                        .get("response")
+                        .and_then(|v| v.get("cloudaicompanionProject"))
+                        .and_then(|v| v.get("id"))
+                        .and_then(|v| v.as_str());
+                    if done
+                        && let Some(project_id) = project_id
+                    {
+                        return Ok(project_id.to_string());
+                    }
+                }
+
+                if attempt < 9 {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                }
+            }
+        }
+
+        anyhow::bail!(
+            "Could not discover or provision a Google Cloud project. Ensure you have access to Google Cloud Code Assist."
+        )
+    }
+
+    #[derive(Debug, Deserialize)]
+    struct TokenResponse {
+        access_token: String,
+        refresh_token: Option<String>,
+        expires_in: u64,
+    }
+
+    fn compute_expires_at(expires_in_secs: u64) -> u64 {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_millis() as u64)
+            .unwrap_or(0);
+        now + (expires_in_secs * 1000).saturating_sub(5 * 60 * 1000)
+    }
+
+    /// Loads the Gemini CLI OAuth credentials from cache.
+    pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
+        let cache = OAuthCache::load()?;
+        Ok(cache.get(PROVIDER_KEY).cloned())
+    }
+
+    /// Saves Gemini CLI OAuth credentials to cache.
+    pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
+        let mut cache = OAuthCache::load()?;
+        cache.set(PROVIDER_KEY, creds.clone());
+        cache.save()?;
+        Ok(())
+    }
+
+    /// Removes the Gemini CLI OAuth credentials from cache.
+    pub fn clear_credentials() -> Result<bool> {
+        let mut cache = OAuthCache::load()?;
+        let had_creds = cache.remove(PROVIDER_KEY).is_some();
+        cache.save()?;
+        Ok(had_creds)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,7 +1050,8 @@ mod tests {
     #[test]
     fn test_auth_url_format() {
         let pkce = anthropic::generate_pkce();
-        let url = anthropic::build_auth_url(&pkce);
+        let redirect_uri = anthropic::build_redirect_uri(55555);
+        let url = anthropic::build_auth_url(&pkce, "state", &redirect_uri);
 
         assert!(url.starts_with("https://claude.ai/oauth/authorize?"));
         assert!(url.contains("client_id="));

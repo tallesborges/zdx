@@ -19,13 +19,16 @@ pub enum AuthStatus {
 impl AuthStatus {
     /// Detects the current authentication type.
     pub fn detect() -> Self {
-        use crate::providers::oauth::{anthropic, openai_codex};
+        use crate::providers::oauth::{anthropic, gemini_cli, openai_codex};
 
         // Check for OAuth credentials first
         if let Ok(Some(_creds)) = anthropic::load_credentials() {
             return AuthStatus::OAuth;
         }
         if let Ok(Some(_creds)) = openai_codex::load_credentials() {
+            return AuthStatus::OAuth;
+        }
+        if let Ok(Some(_creds)) = gemini_cli::load_credentials() {
             return AuthStatus::OAuth;
         }
 
