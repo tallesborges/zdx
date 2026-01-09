@@ -2,6 +2,8 @@
 
 pub mod anthropic;
 pub mod gemini;
+pub mod gemini_cli;
+pub mod gemini_shared;
 pub mod oauth;
 pub mod openai_api;
 pub mod openai_codex;
@@ -22,6 +24,7 @@ pub enum ProviderKind {
     OpenAI,
     OpenRouter,
     Gemini,
+    GeminiCli,
 }
 
 /// Provider selection result with normalized model ID.
@@ -39,11 +42,15 @@ impl ProviderKind {
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
             ProviderKind::Gemini => "Gemini",
+            ProviderKind::GeminiCli => "Gemini CLI",
         }
     }
 
     pub fn supports_oauth(&self) -> bool {
-        matches!(self, ProviderKind::Anthropic | ProviderKind::OpenAICodex)
+        matches!(
+            self,
+            ProviderKind::Anthropic | ProviderKind::OpenAICodex | ProviderKind::GeminiCli
+        )
     }
 
     pub fn api_key_env_var(&self) -> Option<&'static str> {
@@ -53,6 +60,7 @@ impl ProviderKind {
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
             ProviderKind::OpenAICodex => None,
+            ProviderKind::GeminiCli => None,
         }
     }
 }
@@ -107,6 +115,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
                 "gemini" | "google" => ProviderKind::Gemini,
+                "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
                 "codex" | "openai-codex" => ProviderKind::OpenAICodex,
                 _ => continue,
             };

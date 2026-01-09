@@ -48,14 +48,6 @@ pub(crate) struct SystemBlock {
 }
 
 impl SystemBlock {
-    pub(crate) fn new(text: impl Into<String>) -> Self {
-        Self {
-            block_type: "text",
-            text: text.into(),
-            cache_control: None,
-        }
-    }
-
     pub(crate) fn with_cache_control(text: impl Into<String>) -> Self {
         Self {
             block_type: "text",

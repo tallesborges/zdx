@@ -21,6 +21,7 @@ use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::providers::gemini::{GeminiClient, GeminiConfig};
+use crate::providers::gemini_cli::{GeminiCliClient, GeminiCliConfig};
 use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
@@ -90,6 +91,7 @@ enum ProviderClient {
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
     Gemini(GeminiClient),
+    GeminiCli(GeminiCliClient),
 }
 
 impl ProviderClient {
@@ -113,6 +115,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Gemini(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::GeminiCli(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
         }
@@ -286,6 +291,10 @@ pub async fn run_turn(
                 config.providers.gemini.effective_base_url(),
             )?;
             ProviderClient::Gemini(GeminiClient::new(gemini_config))
+        }
+        ProviderKind::GeminiCli => {
+            let gemini_cli_config = GeminiCliConfig::new(selection.model.clone(), max_tokens);
+            ProviderClient::GeminiCli(GeminiCliClient::new(gemini_cli_config))
         }
     };
 

@@ -223,5 +223,6 @@ fn provider_id_for_kind(kind: crate::providers::ProviderKind) -> &'static str {
         crate::providers::ProviderKind::OpenAI => "openai",
         crate::providers::ProviderKind::OpenRouter => "openrouter",
         crate::providers::ProviderKind::Gemini => "gemini",
+        crate::providers::ProviderKind::GeminiCli => "gemini-cli",
     }
 }

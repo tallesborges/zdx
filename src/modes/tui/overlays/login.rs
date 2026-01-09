@@ -16,6 +16,7 @@ pub enum LoginState {
         url: String,
         pkce_verifier: String,
         oauth_state: Option<String>,
+        redirect_uri: Option<String>,
         input: String,
         error: Option<String>,
     },
@@ -49,20 +50,27 @@ impl LoginState {
                 use crate::providers::oauth::anthropic;
 
                 let pkce = anthropic::generate_pkce();
-                let url = anthropic::build_auth_url(&pkce);
+                let oauth_state = uuid::Uuid::new_v4().to_string();
+                let callback_port = anthropic::random_local_port();
+                let redirect_uri = anthropic::build_redirect_uri(callback_port);
+                let url = anthropic::build_auth_url(&pkce, &oauth_state, &redirect_uri);
                 let state = LoginState::AwaitingCode {
                     provider,
                     url: url.clone(),
                     pkce_verifier: pkce.verifier,
-                    oauth_state: None,
+                    oauth_state: Some(oauth_state.clone()),
+                    redirect_uri: Some(redirect_uri),
                     input: String::new(),
                     error,
                 };
-                let effects = if open_browser {
-                    vec![UiEffect::OpenBrowser { url }]
-                } else {
-                    vec![]
-                };
+                let mut effects = vec![UiEffect::StartLocalAuthCallback {
+                    provider,
+                    state: Some(oauth_state),
+                    port: Some(callback_port),
+                }];
+                if open_browser {
+                    effects.push(UiEffect::OpenBrowser { url });
+                }
                 (state, effects)
             }
             ProviderKind::OpenAICodex => {
@@ -77,12 +85,40 @@ impl LoginState {
                     url: url.clone(),
                     pkce_verifier: pkce.verifier,
                     oauth_state: Some(oauth_state),
+                    redirect_uri: None,
                     input: String::new(),
                     error,
                 };
                 let mut effects = vec![UiEffect::StartLocalAuthCallback {
                     provider,
                     state: Some(oauth_state_copy),
+                    port: None,
+                }];
+                if open_browser {
+                    effects.push(UiEffect::OpenBrowser { url });
+                }
+                (state, effects)
+            }
+            ProviderKind::GeminiCli => {
+                use crate::providers::oauth::gemini_cli;
+
+                let pkce = gemini_cli::generate_pkce();
+                let oauth_state = uuid::Uuid::new_v4().to_string();
+                let url = gemini_cli::build_auth_url(&pkce, &oauth_state);
+                let oauth_state_copy = oauth_state.clone();
+                let state = LoginState::AwaitingCode {
+                    provider,
+                    url: url.clone(),
+                    pkce_verifier: pkce.verifier,
+                    oauth_state: Some(oauth_state),
+                    redirect_uri: None,
+                    input: String::new(),
+                    error,
+                };
+                let mut effects = vec![UiEffect::StartLocalAuthCallback {
+                    provider,
+                    state: Some(oauth_state_copy),
+                    port: None,
                 }];
                 if open_browser {
                     effects.push(UiEffect::OpenBrowser { url });
@@ -117,6 +153,7 @@ impl LoginState {
                 input,
                 pkce_verifier,
                 oauth_state,
+                redirect_uri,
                 error,
                 ..
             } => match key.code {
@@ -130,18 +167,62 @@ impl LoginState {
                     let provider = *provider;
                     let pkce_verifier = pkce_verifier.clone();
                     let oauth_state = oauth_state.clone();
+                    let redirect_uri = redirect_uri.clone();
                     let code = input.trim();
                     if code.is_empty() {
                         return OverlayUpdate::stay();
                     }
 
                     let code = match provider {
-                        ProviderKind::Anthropic => code.to_string(),
+                        ProviderKind::Anthropic => {
+                            use crate::providers::oauth::anthropic;
+
+                            let (parsed_code, provided_state) =
+                                anthropic::parse_authorization_input(code);
+                            let expected_state =
+                                oauth_state.clone().unwrap_or_else(|| pkce_verifier.clone());
+                            if let Some(provided) = provided_state
+                                && provided != expected_state
+                            {
+                                *error = Some("State mismatch.".to_string());
+                                return OverlayUpdate::stay();
+                            }
+                            let parsed_code = match parsed_code {
+                                Some(value) => value,
+                                None => {
+                                    *error =
+                                        Some("Authorization code cannot be empty.".to_string());
+                                    return OverlayUpdate::stay();
+                                }
+                            };
+                            format!("{}#{}", parsed_code, expected_state)
+                        }
                         ProviderKind::OpenAICodex => {
                             use crate::providers::oauth::openai_codex;
 
                             let (parsed_code, provided_state) =
                                 openai_codex::parse_authorization_input(code);
+                            if let Some(expected) = oauth_state
+                                && let Some(provided) = provided_state
+                                && provided != expected
+                            {
+                                *error = Some("State mismatch.".to_string());
+                                return OverlayUpdate::stay();
+                            }
+                            match parsed_code {
+                                Some(value) => value,
+                                None => {
+                                    *error =
+                                        Some("Authorization code cannot be empty.".to_string());
+                                    return OverlayUpdate::stay();
+                                }
+                            }
+                        }
+                        ProviderKind::GeminiCli => {
+                            use crate::providers::oauth::gemini_cli;
+
+                            let (parsed_code, provided_state) =
+                                gemini_cli::parse_authorization_input(code);
                             if let Some(expected) = oauth_state
                                 && let Some(provided) = provided_state
                                 && provided != expected
@@ -168,6 +249,7 @@ impl LoginState {
                             provider,
                             code,
                             verifier: pkce_verifier,
+                            redirect_uri,
                         }])
                         .with_mutations(vec![StateMutation::Auth(
                             AuthMutation::SetCallbackInProgress(false),
