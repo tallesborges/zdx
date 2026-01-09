@@ -12,8 +12,8 @@ use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 use crate::config::ThinkingLevel;
 use crate::models::{ModelOption, model_supports_reasoning};
 use crate::modes::tui::app::TuiState;
-use crate::modes::tui::auth::AuthStatus;
 use crate::modes::tui::thread::ThreadUsage;
+use crate::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
 
 /// Minimum height of the input area (lines, including borders).
 const INPUT_HEIGHT_MIN: u16 = 5;
@@ -154,23 +154,13 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
         return;
     }
 
-    // Build top-left title: model name + auth type + thinking level
-    let auth_indicator = match state.auth.auth_type {
-        AuthStatus::OAuth => " (oauth)",
-        AuthStatus::ApiKey => " (api-key)",
-        AuthStatus::None => "",
-    };
-
-    // Build title spans: model + auth in normal style, thinking in dim style
+    // Build top-left title: model name + thinking level
     let base_style = Style::default().fg(Color::DarkGray);
     let thinking_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
-    let mut title_spans = vec![Span::styled(
-        format!(" {}{}", state.config.model, auth_indicator),
-        base_style,
-    )];
+    let mut title_spans = vec![Span::styled(format!(" {}", state.config.model), base_style)];
 
     // Add thinking indicator with dim style (only when enabled + supported)
     if state.config.thinking_level != ThinkingLevel::Off
@@ -186,7 +176,8 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
 
     // Build top-right title: AMP-style usage display
     // Format: "{percentage}% of {context} · ${cost} (cached: ${savings})"
-    let usage_spans = build_usage_display(&state.thread.usage, &state.config.model);
+    let provider = provider_for_model(&state.config.model);
+    let usage_spans = build_usage_display(&state.thread.usage, &state.config.model, provider);
 
     // Build bottom-left title: detailed token breakdown
     let token_spans = build_token_breakdown(&state.thread.usage);
@@ -349,7 +340,11 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
 ///
 /// Format: "{percentage}% of {context} · ${cost} (cached)"
 /// Example: "11% of 200k · $0.008 (cached)"
-fn build_usage_display(usage: &ThreadUsage, model_id: &str) -> Vec<Span<'static>> {
+fn build_usage_display(
+    usage: &ThreadUsage,
+    model_id: &str,
+    provider: ProviderKind,
+) -> Vec<Span<'static>> {
     let usage_style = Style::default().fg(Color::DarkGray);
     let percentage_style = Style::default().fg(Color::Cyan);
     let cost_style = Style::default().fg(Color::Green);
@@ -357,35 +352,44 @@ fn build_usage_display(usage: &ThreadUsage, model_id: &str) -> Vec<Span<'static>
         .fg(Color::Green)
         .add_modifier(Modifier::DIM);
 
+    let show_pricing = provider.auth_mode() == ProviderAuthMode::ApiKey;
+    let show_subscription = provider.auth_mode() == ProviderAuthMode::OAuth;
+
     // Try to find the model to get pricing and context limit
     let model = ModelOption::find_by_id(model_id);
 
     match model {
         Some(m) => {
             let percentage = usage.context_percentage(m.context_limit);
-            let cost = usage.calculate_cost(&m.pricing);
-            let savings = usage.cache_savings(&m.pricing);
 
             let mut spans = vec![
                 Span::styled(format!("{:.0}%", percentage), percentage_style),
                 Span::styled(
-                    format!(
-                        " of {} · ",
-                        ThreadUsage::format_context_limit(m.context_limit)
-                    ),
+                    format!(" of {}", ThreadUsage::format_context_limit(m.context_limit)),
                     usage_style,
                 ),
-                Span::styled(ThreadUsage::format_cost(cost), cost_style),
             ];
 
-            // Show cache savings indicator if there are cache hits
-            if savings > 0.001 {
-                spans.push(Span::styled(
-                    format!(" (saved {})", ThreadUsage::format_cost(savings)),
-                    cached_style,
-                ));
-            } else if usage.cache_read_tokens > 0 {
-                spans.push(Span::styled(" (cached)", cached_style));
+            if show_subscription {
+                spans.push(Span::styled(" · (subscription)", cached_style));
+            }
+
+            if show_pricing {
+                let cost = usage.calculate_cost(&m.pricing);
+                let savings = usage.cache_savings(&m.pricing);
+
+                spans.push(Span::styled(" · ", usage_style));
+                spans.push(Span::styled(ThreadUsage::format_cost(cost), cost_style));
+
+                // Show cache savings indicator if there are cache hits
+                if savings > 0.001 {
+                    spans.push(Span::styled(
+                        format!(" (saved {})", ThreadUsage::format_cost(savings)),
+                        cached_style,
+                    ));
+                } else if usage.cache_read_tokens > 0 {
+                    spans.push(Span::styled(" (cached)", cached_style));
+                }
             }
 
             spans.push(Span::styled(" ", usage_style));

@@ -27,6 +27,12 @@ pub enum ProviderKind {
     GeminiCli,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProviderAuthMode {
+    OAuth,
+    ApiKey,
+}
+
 /// Provider selection result with normalized model ID.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProviderSelection {
@@ -61,6 +67,17 @@ impl ProviderKind {
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
             ProviderKind::OpenAICodex => None,
             ProviderKind::GeminiCli => None,
+        }
+    }
+
+    pub fn auth_mode(&self) -> ProviderAuthMode {
+        match self {
+            ProviderKind::Anthropic => ProviderAuthMode::OAuth,
+            ProviderKind::OpenAICodex => ProviderAuthMode::OAuth,
+            ProviderKind::GeminiCli => ProviderAuthMode::OAuth,
+            ProviderKind::OpenAI => ProviderAuthMode::ApiKey,
+            ProviderKind::OpenRouter => ProviderAuthMode::ApiKey,
+            ProviderKind::Gemini => ProviderAuthMode::ApiKey,
         }
     }
 }
