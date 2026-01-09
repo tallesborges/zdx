@@ -21,7 +21,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     let popup_area = calculate_overlay_area(area, area.height, popup_width, popup_height);
 
     let title = match login_state.provider() {
-        crate::providers::ProviderKind::Anthropic => "Anthropic Login",
+        crate::providers::ProviderKind::Anthropic => "Anthropic API Key",
         crate::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
         crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
         crate::providers::ProviderKind::OpenAI => "OpenAI Login",
@@ -71,7 +71,6 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
                 Line::from(""),
                 Line::from(Span::styled(
                     match provider {
-                        crate::providers::ProviderKind::Anthropic => "Paste auth code:",
                         crate::providers::ProviderKind::OpenAICodex => "Paste auth code or URL:",
                         _ => "Paste auth code:",
                     },

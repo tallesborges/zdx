@@ -165,14 +165,14 @@ fn execute_command(
 }
 
 fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    use crate::providers::oauth::{anthropic, openai_codex};
+    use crate::providers::oauth::{claude_cli, openai_codex};
     use crate::providers::provider_for_model;
 
     let mut mutations = Vec::new();
     let provider = provider_for_model(&tui.config.model);
     let result = match provider {
-        crate::providers::ProviderKind::Anthropic => {
-            anthropic::clear_credentials().map(|had| (had, "Anthropic"))
+        crate::providers::ProviderKind::ClaudeCli => {
+            claude_cli::clear_credentials().map(|had| (had, "Claude CLI"))
         }
         crate::providers::ProviderKind::OpenAICodex => {
             openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))

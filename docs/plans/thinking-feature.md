@@ -49,17 +49,17 @@
 
 | What exists | Location | Gaps |
 |-------------|----------|------|
-| SSE streaming parser | `anthropic.rs:520+` | No `thinking_delta`/`signature_delta` parsing |
-| StreamEvent enum | `anthropic.rs:431` | No thinking variants |
-| SseDelta struct | `anthropic.rs:660` | No `thinking`/`signature` fields |
-| AgentEvent enum | `events.rs:16` | No `ThinkingDelta`/`ThinkingComplete` |
-| Agent content block tracking | `agent.rs:246+` | Works by index ✓ — reuse for thinking |
-| Turn grouping | `agent.rs:336` | Already groups blocks into single message ✓ |
-| HistoryCell enum | `transcript.rs:70` | No `Thinking` cell variant |
-| UI event handler | `update.rs:398+` | No thinking event handling |
-| Config struct | `config.rs:51` | No `thinking_enabled` / `thinking_budget_tokens` |
-| Beta headers | `anthropic.rs:31-34` | Already includes `interleaved-thinking-2025-05-14` ✓ |
-| Default max_tokens | `config.rs` | 1024 — too low for thinking (API requires max_tokens > budget_tokens) |
+| SSE streaming parser | `src/providers/anthropic/sse.rs` | No `thinking_delta`/`signature_delta` parsing |
+| StreamEvent enum | `src/providers/anthropic/sse.rs` | No thinking variants |
+| SseDelta struct | `src/providers/anthropic/sse.rs` | No `thinking`/`signature` fields |
+| AgentEvent enum | `src/core/events.rs` | No `ThinkingDelta`/`ThinkingComplete` |
+| Agent content block tracking | `src/core/agent.rs` | Works by index ✓ — reuse for thinking |
+| Turn grouping | `src/core/agent.rs` | Already groups blocks into single message ✓ |
+| HistoryCell enum | `src/modes/tui/transcript/state.rs` | No `Thinking` cell variant |
+| UI event handler | `src/modes/tui/update.rs` | No thinking event handling |
+| Config struct | `src/config.rs` | No `thinking_enabled` / `thinking_budget_tokens` |
+| Beta headers | `src/providers/anthropic/client.rs` | Already includes `interleaved-thinking-2025-05-14` ✓ |
+| Default max_tokens | `src/config.rs` | 1024 — too low for thinking (API requires max_tokens > budget_tokens) |
 
 ---
 

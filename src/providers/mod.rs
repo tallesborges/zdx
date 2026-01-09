@@ -1,6 +1,7 @@
 //! LLM provider implementations.
 
 pub mod anthropic;
+pub mod claude_cli;
 pub mod gemini;
 pub mod gemini_cli;
 pub mod gemini_shared;
@@ -57,10 +58,7 @@ impl ProviderKind {
     pub fn supports_oauth(&self) -> bool {
         matches!(
             self,
-            ProviderKind::Anthropic
-                | ProviderKind::ClaudeCli
-                | ProviderKind::OpenAICodex
-                | ProviderKind::GeminiCli
+            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli
         )
     }
 
@@ -78,7 +76,7 @@ impl ProviderKind {
 
     pub fn auth_mode(&self) -> ProviderAuthMode {
         match self {
-            ProviderKind::Anthropic => ProviderAuthMode::OAuth,
+            ProviderKind::Anthropic => ProviderAuthMode::ApiKey,
             ProviderKind::ClaudeCli => ProviderAuthMode::OAuth,
             ProviderKind::OpenAICodex => ProviderAuthMode::OAuth,
             ProviderKind::GeminiCli => ProviderAuthMode::OAuth,

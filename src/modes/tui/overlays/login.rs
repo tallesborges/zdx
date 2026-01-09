@@ -47,13 +47,17 @@ impl LoginState {
     ) -> (Self, Vec<UiEffect>) {
         match provider {
             ProviderKind::Anthropic => {
-                use crate::providers::oauth::anthropic;
+                let env_var = provider.api_key_env_var().unwrap_or("API_KEY").to_string();
+                (LoginState::ApiKeyInfo { provider, env_var }, vec![])
+            }
+            ProviderKind::ClaudeCli => {
+                use crate::providers::oauth::claude_cli;
 
-                let pkce = anthropic::generate_pkce();
+                let pkce = claude_cli::generate_pkce();
                 let oauth_state = uuid::Uuid::new_v4().to_string();
-                let callback_port = anthropic::random_local_port();
-                let redirect_uri = anthropic::build_redirect_uri(callback_port);
-                let url = anthropic::build_auth_url(&pkce, &oauth_state, &redirect_uri);
+                let callback_port = claude_cli::random_local_port();
+                let redirect_uri = claude_cli::build_redirect_uri(callback_port);
+                let url = claude_cli::build_auth_url(&pkce, &oauth_state, &redirect_uri);
                 let state = LoginState::AwaitingCode {
                     provider,
                     url: url.clone(),
@@ -174,11 +178,11 @@ impl LoginState {
                     }
 
                     let code = match provider {
-                        ProviderKind::Anthropic => {
-                            use crate::providers::oauth::anthropic;
+                        ProviderKind::ClaudeCli => {
+                            use crate::providers::oauth::claude_cli;
 
                             let (parsed_code, provided_state) =
-                                anthropic::parse_authorization_input(code);
+                                claude_cli::parse_authorization_input(code);
                             let expected_state =
                                 oauth_state.clone().unwrap_or_else(|| pkce_verifier.clone());
                             if let Some(provided) = provided_state

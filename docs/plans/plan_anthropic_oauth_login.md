@@ -1,3 +1,5 @@
+Note: superseded by Claude CLI OAuth provider split; Anthropic is API-key only now.
+
 Goals
 - Add Anthropic OAuth login to zdx with local token cache in `<base>/oauth.json` and provider wiring.
 - Ship a minimal CLI login flow first, then TUI `/login`, keeping core UI-agnostic and reducer-driven.

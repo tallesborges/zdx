@@ -100,12 +100,16 @@
 - `src/providers/`: provider clients
   - `src/providers/mod.rs`: provider module exports
   - `src/providers/shared.rs`: provider-agnostic chat/error/stream types
-  - `src/providers/anthropic/`: Anthropic API client
-    - `src/providers/anthropic/mod.rs`: public re-exports
-    - `src/providers/anthropic/auth.rs`: auth resolution + config
+  - `src/providers/anthropic/`: Anthropic API key client + shared Messages helpers
+    - `src/providers/anthropic/mod.rs`: shared helpers + re-exports
+    - `src/providers/anthropic/auth.rs`: API key resolution + config
     - `src/providers/anthropic/client.rs`: AnthropicClient + request wiring
     - `src/providers/anthropic/sse.rs`: SSE parsing + stream events
     - `src/providers/anthropic/types.rs`: API DTOs + request/response shapes
+  - `src/providers/claude_cli/`: Claude CLI OAuth provider (Anthropic Messages API)
+    - `src/providers/claude_cli/mod.rs`: public re-exports
+    - `src/providers/claude_cli/auth.rs`: OAuth resolution + config
+    - `src/providers/claude_cli/client.rs`: ClaudeCliClient + request wiring
   - `src/providers/openai_responses/`: shared OpenAI Responses API helpers
     - `src/providers/openai_responses/mod.rs`: shared request builder + dispatcher
     - `src/providers/openai_responses/sse.rs`: SSE parsing for Responses API

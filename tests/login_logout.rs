@@ -34,7 +34,7 @@ fn test_logout_when_not_logged_in() {
         .arg("--anthropic")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Not logged in to Anthropic"));
+        .stdout(predicate::str::contains("Anthropic uses API keys."));
 }
 
 #[test]
@@ -45,17 +45,17 @@ fn test_logout_clears_credentials() {
     // Create an oauth.json with credentials in the new format
     fs::write(
         &oauth_path,
-        r#"{"anthropic": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
+        r#"{"claude-cli": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
     )
     .unwrap();
 
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp.path())
         .arg("logout")
-        .arg("--anthropic")
+        .arg("--claude-cli")
         .assert()
         .success()
-        .stdout(predicate::str::contains("Logged out from Anthropic"));
+        .stdout(predicate::str::contains("Logged out from Claude CLI"));
 
     // Check the credentials were removed
     let contents = fs::read_to_string(&oauth_path).unwrap();
@@ -74,7 +74,7 @@ fn test_login_shows_oauth_instructions() {
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
-        .arg("--anthropic")
+        .arg("--claude-cli")
         .output()
         .expect("Failed to run command");
 
@@ -87,7 +87,7 @@ fn test_login_shows_oauth_instructions() {
     );
     assert!(
         stdout.contains("claude.ai"),
-        "Should show claude.ai authorization URL"
+        "Should show authorization URL"
     );
     assert!(stdout.contains("code"), "Should mention authorization code");
 }
@@ -100,7 +100,7 @@ fn test_login_prompts_when_already_logged_in() {
     // Create existing credentials
     fs::write(
         &oauth_path,
-        r#"{"anthropic": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
+        r#"{"claude-cli": {"type": "oauth", "refresh": "refresh-token", "access": "access-token", "expires": 9999999999999}}"#,
     )
     .unwrap();
 
@@ -109,7 +109,7 @@ fn test_login_prompts_when_already_logged_in() {
         .env("ZDX_HOME", temp.path())
         .env("ZDX_NO_BROWSER", "1")
         .arg("login")
-        .arg("--anthropic")
+        .arg("--claude-cli")
         .output()
         .expect("Failed to run command");
 
@@ -141,7 +141,7 @@ fn test_oauth_file_permissions_on_logout() {
             .open(&oauth_path)
             .unwrap();
         file.write_all(
-            br#"{"anthropic": {"type": "oauth", "refresh": "r", "access": "a", "expires": 0}}"#,
+            br#"{"claude-cli": {"type": "oauth", "refresh": "r", "access": "a", "expires": 0}}"#,
         )
         .unwrap();
     }
@@ -150,7 +150,7 @@ fn test_oauth_file_permissions_on_logout() {
     cargo_bin_cmd!("zdx")
         .env("ZDX_HOME", temp.path())
         .arg("logout")
-        .arg("--anthropic")
+        .arg("--claude-cli")
         .assert()
         .success();
 

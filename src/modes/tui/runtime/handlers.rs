@@ -350,11 +350,11 @@ pub async fn token_exchange(
     redirect_uri: Option<String>,
     req: RequestId,
 ) -> UiEvent {
-    use crate::providers::oauth::{anthropic, gemini_cli, openai_codex};
+    use crate::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
     let result = match provider {
-        crate::providers::ProviderKind::Anthropic => {
-            let pkce = anthropic::Pkce {
+        crate::providers::ProviderKind::ClaudeCli => {
+            let pkce = claude_cli::Pkce {
                 verifier,
                 challenge: String::new(),
             };
@@ -363,12 +363,12 @@ pub async fn token_exchange(
                 None => {
                     return UiEvent::LoginResult {
                         req,
-                        result: Err("Missing redirect URI for Anthropic OAuth.".to_string()),
+                        result: Err("Missing redirect URI for Claude CLI OAuth.".to_string()),
                     };
                 }
             };
-            match anthropic::exchange_code(&code, &pkce, &redirect_uri).await {
-                Ok(creds) => anthropic::save_credentials(&creds)
+            match claude_cli::exchange_code(&code, &pkce, &redirect_uri).await {
+                Ok(creds) => claude_cli::save_credentials(&creds)
                     .map_err(|e| format!("Failed to save: {}", e)),
                 Err(e) => Err(e.to_string()),
             }
@@ -418,10 +418,10 @@ pub async fn local_auth_callback(
     port: Option<u16>,
 ) -> UiEvent {
     let code = match provider {
-        crate::providers::ProviderKind::Anthropic => {
-            use crate::providers::oauth::anthropic;
+        crate::providers::ProviderKind::ClaudeCli => {
+            use crate::providers::oauth::claude_cli;
             port.and_then(|port| {
-                wait_for_local_code(port, anthropic::LOCAL_CALLBACK_PATH, state.as_deref())
+                wait_for_local_code(port, claude_cli::LOCAL_CALLBACK_PATH, state.as_deref())
             })
         }
         crate::providers::ProviderKind::OpenAICodex => {
