@@ -235,6 +235,7 @@ pub async fn run_turn(
 
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
+    let max_tokens = config.effective_max_tokens_for(&config.model);
 
     let client = match provider {
         ProviderKind::Anthropic => {
@@ -244,7 +245,7 @@ pub async fn run_turn(
 
             let anthropic_config = AnthropicConfig::from_env(
                 selection.model.clone(),
-                config.effective_max_tokens(),
+                max_tokens,
                 config.providers.anthropic.effective_base_url(),
                 thinking_enabled,
                 thinking_budget_tokens,
@@ -253,17 +254,14 @@ pub async fn run_turn(
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(config.thinking_level);
-            let openai_config = OpenAICodexConfig::new(
-                selection.model.clone(),
-                config.effective_max_tokens(),
-                reasoning_effort,
-            );
+            let openai_config =
+                OpenAICodexConfig::new(selection.model.clone(), max_tokens, reasoning_effort);
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
         }
         ProviderKind::OpenAI => {
             let openai_config = OpenAIConfig::from_env(
                 selection.model.clone(),
-                config.effective_max_tokens(),
+                max_tokens,
                 config.providers.openai.effective_base_url(),
             )?;
             ProviderClient::OpenAI(OpenAIClient::new(openai_config))
@@ -271,7 +269,7 @@ pub async fn run_turn(
         ProviderKind::OpenRouter => {
             let openrouter_config = OpenRouterConfig::from_env(
                 selection.model.clone(),
-                config.effective_max_tokens(),
+                max_tokens,
                 config.providers.openrouter.effective_base_url(),
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
@@ -279,7 +277,7 @@ pub async fn run_turn(
         ProviderKind::Gemini => {
             let gemini_config = GeminiConfig::from_env(
                 selection.model.clone(),
-                config.effective_max_tokens(),
+                max_tokens,
                 config.providers.gemini.effective_base_url(),
             )?;
             ProviderClient::Gemini(GeminiClient::new(gemini_config))

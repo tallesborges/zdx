@@ -1,6 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
@@ -152,7 +152,7 @@ pub fn render_model_picker(
     } else {
         base_width.min(max_width)
     };
-    let picker_height = (available_models().len() as u16 + 6).max(7);
+    let picker_height = (available_models().len() as u16 + 7).max(7);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     render_overlay_container(frame, picker_area, "Select Model", Color::Magenta);
@@ -181,7 +181,7 @@ pub fn render_model_picker(
 
     render_separator(frame, inner_area, 1);
 
-    let list_height = inner_area.height.saturating_sub(4);
+    let list_height = inner_area.height.saturating_sub(5);
     let list_area = Rect::new(
         inner_area.x,
         inner_area.y + 2,
@@ -206,7 +206,8 @@ pub fn render_model_picker(
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Magenta)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -218,6 +219,8 @@ pub fn render_model_picker(
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
     render_separator(frame, inner_area, 2 + list_height);
+    let selected_model = filtered.get(picker.selected).copied();
+    render_capabilities_line(frame, inner_area, 3 + list_height, selected_model);
 
     render_hints(
         frame,
@@ -310,6 +313,54 @@ fn format_pricing(input: f64, output: f64) -> String {
     let input = if input == 0.0 { 0.0 } else { input };
     let output = if output == 0.0 { 0.0 } else { output };
     format!("${}/{}", trim_price(input), trim_price(output))
+}
+
+fn render_capabilities_line(
+    frame: &mut Frame,
+    area: Rect,
+    y_offset: u16,
+    model: Option<&ModelOption>,
+) {
+    if y_offset >= area.height {
+        return;
+    }
+
+    let Some(model) = model else {
+        return;
+    };
+
+    let line_area = Rect::new(area.x, area.y + y_offset, area.width, 1);
+    frame.render_widget(
+        Paragraph::new(capability_line(model)).alignment(Alignment::Center),
+        line_area,
+    );
+}
+
+fn capability_line(model: &ModelOption) -> Line<'static> {
+    let label_style = Style::default().fg(Color::DarkGray);
+    let ok_style = Style::default()
+        .fg(Color::Green)
+        .add_modifier(Modifier::BOLD);
+    let err_style = Style::default().fg(Color::Red).add_modifier(Modifier::BOLD);
+
+    let image_icon = if model.capabilities.input_images {
+        Span::styled("✓", ok_style)
+    } else {
+        Span::styled("✗", err_style)
+    };
+    let reasoning_icon = if model.capabilities.reasoning {
+        Span::styled("✓", ok_style)
+    } else {
+        Span::styled("✗", err_style)
+    };
+
+    Line::from(vec![
+        Span::styled("Image ", label_style),
+        image_icon,
+        Span::styled("  ", label_style),
+        Span::styled("Reasoning ", label_style),
+        reasoning_icon,
+    ])
 }
 
 fn trim_price(value: f64) -> String {

@@ -105,8 +105,12 @@ fn default_config_template() -> String {
     out.push_str("# The Claude model to use\n");
     out.push_str(&format!("model = \"{}\"\n\n", Config::DEFAULT_MODEL));
 
-    out.push_str("# Maximum tokens for responses\n");
-    out.push_str(&format!("max_tokens = {}\n\n", Config::DEFAULT_MAX_TOKENS));
+    out.push_str("# Maximum tokens for responses (optional)\n");
+    out.push_str("# Defaults to the model's output limit when unset.\n");
+    out.push_str(&format!(
+        "# max_tokens = {}\n\n",
+        Config::DEFAULT_MAX_TOKENS
+    ));
 
     out.push_str("# Timeout for tool execution in seconds (0 disables timeout)\n");
     out.push_str(&format!(
@@ -125,7 +129,7 @@ fn default_config_template() -> String {
     out.push_str("# Higher levels use more tokens but provide deeper reasoning.\n");
     out.push_str("# Options: off, minimal, low, medium, high\n");
     out.push_str(
-        "# Note: max_tokens is auto-adjusted to ensure room for both thinking and response.\n",
+        "# Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.\n",
     );
     out.push_str(&format!(
         "thinking_level = \"{}\"\n\n",
@@ -229,8 +233,8 @@ pub struct Config {
     /// The Claude model to use
     pub model: String,
 
-    /// Maximum tokens for responses
-    pub max_tokens: u32,
+    /// Maximum tokens for responses (optional)
+    pub max_tokens: Option<u32>,
 
     /// Optional inline system prompt
     pub system_prompt: Option<String>,
@@ -373,23 +377,40 @@ impl Config {
         base.join("models.toml")
     }
 
-    /// Returns the effective max_tokens to use in API requests.
+    /// Returns the effective max_tokens to use in API requests for a model.
     ///
-    /// When thinking is enabled, ensures max_tokens >= thinking_budget + buffer
-    /// to leave room for the response.
-    pub fn effective_max_tokens(&self) -> u32 {
+    /// Resolution order:
+    /// 1) Explicit config max_tokens (if set)
+    /// 2) Model output limit from the registry
+    /// 3) Fallback default
+    ///
+    /// When thinking is enabled and max_tokens is explicitly set, ensures
+    /// max_tokens >= thinking_budget + buffer to leave room for the response.
+    pub fn effective_max_tokens_for(&self, model_id: &str) -> u32 {
+        let configured = self.max_tokens;
+        let output_limit = crate::models::ModelOption::find_by_id(model_id)
+            .map(|model| model.capabilities.output_limit)
+            .filter(|limit| *limit > 0)
+            .and_then(|limit| u32::try_from(limit).ok());
+
+        let max_tokens = configured
+            .or(output_limit)
+            .unwrap_or(Self::DEFAULT_MAX_TOKENS);
+
         let Some(thinking_budget) = self.thinking_level.budget_tokens() else {
-            // Thinking disabled
-            return self.max_tokens;
+            return max_tokens;
         };
 
         let min_required = thinking_budget + Self::THINKING_RESPONSE_BUFFER;
-        if self.max_tokens >= min_required {
-            self.max_tokens
-        } else {
-            // Auto-adjust to ensure room for both thinking and response
-            min_required
+        if let Some(configured) = configured {
+            if configured < min_required {
+                return min_required;
+            }
+        } else if output_limit.is_none() && max_tokens < min_required {
+            return min_required;
         }
+
+        max_tokens
     }
 
     /// Creates a default config file at the given path.
@@ -429,7 +450,7 @@ impl Default for Config {
     fn default() -> Self {
         Self {
             model: Self::DEFAULT_MODEL.to_string(),
-            max_tokens: Self::DEFAULT_MAX_TOKENS,
+            max_tokens: None,
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
@@ -567,7 +588,7 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-haiku-4-5");
-        assert_eq!(config.max_tokens, 12288);
+        assert_eq!(config.max_tokens, None);
     }
 
     /// Config loading: partial config merges with defaults.
@@ -580,7 +601,7 @@ mod tests {
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
-        assert_eq!(config.max_tokens, 12288);
+        assert_eq!(config.max_tokens, None);
     }
 
     /// Config init: creates file with defaults, creates parent dirs (SPEC §9).
@@ -594,7 +615,7 @@ mod tests {
         assert!(config_path.exists());
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("claude-haiku-4-5"));
-        assert!(contents.contains("max_tokens"));
+        assert!(contents.contains("# max_tokens ="));
     }
 
     /// Config init: fails if file exists (no silent overwrite).
@@ -691,7 +712,7 @@ mod tests {
         let contents = fs::read_to_string(&config_path).unwrap();
         assert!(contents.contains("# ZDX Configuration"));
         assert!(contents.contains("# Maximum tokens"));
-        assert!(contents.contains("max_tokens = 12288"));
+        assert!(contents.contains("# max_tokens = 12288"));
     }
 
     /// save_model: preserves other fields in existing config.
@@ -714,7 +735,7 @@ tool_timeout_secs = 60
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "new-model");
-        assert_eq!(config.max_tokens, 2048); // preserved
+        assert_eq!(config.max_tokens, Some(2048)); // preserved
         assert_eq!(config.tool_timeout_secs, 60); // preserved
     }
 
@@ -795,34 +816,55 @@ max_tokens = 2048
     #[test]
     fn test_effective_max_tokens_thinking_disabled() {
         let config = Config {
-            max_tokens: 1024,
+            max_tokens: Some(1024),
             thinking_level: ThinkingLevel::Off,
             ..Default::default()
         };
-        assert_eq!(config.effective_max_tokens(), 1024);
+        assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 1024);
     }
 
     /// Thinking: effective_max_tokens auto-adjusts when thinking enabled and max_tokens too low.
     #[test]
     fn test_effective_max_tokens_auto_adjusts_when_thinking_enabled() {
         let config = Config {
-            max_tokens: 1024,                      // too low for thinking
+            max_tokens: Some(1024),                // too low for thinking
             thinking_level: ThinkingLevel::Medium, // 8192 budget
             ..Default::default()
         };
         // Should be thinking_budget (8192) + buffer (4096) = 12288
-        assert_eq!(config.effective_max_tokens(), 8192 + 4096);
+        assert_eq!(
+            config.effective_max_tokens_for("claude-haiku-4-5"),
+            8192 + 4096
+        );
     }
 
     /// Thinking: effective_max_tokens respects user value when sufficient.
     #[test]
     fn test_effective_max_tokens_respects_high_value() {
         let config = Config {
-            max_tokens: 20000, // sufficient
+            max_tokens: Some(20000), // sufficient
             thinking_level: ThinkingLevel::Medium,
             ..Default::default()
         };
-        assert_eq!(config.effective_max_tokens(), 20000);
+        assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 20000);
+    }
+
+    /// effective_max_tokens uses the model output limit when max_tokens is unset.
+    #[test]
+    fn test_effective_max_tokens_uses_model_output_limit_when_unset() {
+        let config = Config {
+            max_tokens: None,
+            thinking_level: ThinkingLevel::Off,
+            ..Default::default()
+        };
+        let model_id = "claude-haiku-4-5";
+        let expected = crate::models::ModelOption::find_by_id(model_id)
+            .map(|model| model.capabilities.output_limit)
+            .filter(|limit| *limit > 0)
+            .and_then(|limit| u32::try_from(limit).ok())
+            .unwrap_or(Config::DEFAULT_MAX_TOKENS);
+
+        assert_eq!(config.effective_max_tokens_for(model_id), expected);
     }
 
     /// Thinking: config loads from file with thinking_level.
@@ -892,7 +934,7 @@ thinking_level = "off"
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::Medium);
         assert_eq!(config.model, "claude-sonnet-4"); // preserved
-        assert_eq!(config.max_tokens, 4096); // preserved
+        assert_eq!(config.max_tokens, Some(4096)); // preserved
     }
 
     /// save_thinking_level: preserves comments in config file.

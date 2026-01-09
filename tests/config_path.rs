@@ -34,7 +34,7 @@ fn test_config_init_creates_file() {
 
     let contents = fs::read_to_string(&config_path).unwrap();
     assert!(contents.contains("model ="));
-    assert!(contents.contains("max_tokens ="));
+    assert!(contents.contains("# max_tokens ="));
 }
 
 #[test]

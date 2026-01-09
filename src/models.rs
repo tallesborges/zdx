@@ -29,6 +29,17 @@ pub struct ModelPricing {
     pub cache_write: f64,
 }
 
+/// Capability metadata for a model.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ModelCapabilities {
+    /// Whether the model supports reasoning mode.
+    pub reasoning: bool,
+    /// Whether the model supports image inputs.
+    pub input_images: bool,
+    /// Maximum output tokens supported by the model.
+    pub output_limit: u64,
+}
+
 /// Definition of an available model.
 #[derive(Debug, Clone)]
 pub struct ModelOption {
@@ -42,6 +53,8 @@ pub struct ModelOption {
     pub pricing: ModelPricing,
     /// Context window size in tokens
     pub context_limit: u64,
+    /// Capability metadata from the registry
+    pub capabilities: ModelCapabilities,
 }
 
 static ALL_MODELS: OnceLock<Vec<ModelOption>> = OnceLock::new();
@@ -100,6 +113,8 @@ struct ModelRecord {
     context_limit: Option<u64>,
     #[serde(default)]
     pricing: Option<ModelPricingRecord>,
+    #[serde(default)]
+    capabilities: Option<ModelCapabilitiesRecord>,
 }
 
 #[derive(Debug, Deserialize, Default)]
@@ -112,6 +127,16 @@ struct ModelPricingRecord {
     cache_read: f64,
     #[serde(default)]
     cache_write: f64,
+}
+
+#[derive(Debug, Deserialize, Default)]
+struct ModelCapabilitiesRecord {
+    #[serde(default)]
+    reasoning: bool,
+    #[serde(default)]
+    input_images: bool,
+    #[serde(default)]
+    output_limit: u64,
 }
 
 fn load_models_from_path(path: &Path) -> Option<Vec<ModelOption>> {
@@ -159,6 +184,7 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
 
     let context_limit = record.context_limit.unwrap_or(0);
     let pricing = record.pricing.unwrap_or_default();
+    let capabilities = record.capabilities.unwrap_or_default();
 
     Some(ModelOption {
         id: leak_string(id),
@@ -171,6 +197,11 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
             cache_write: pricing.cache_write,
         },
         context_limit,
+        capabilities: ModelCapabilities {
+            reasoning: capabilities.reasoning,
+            input_images: capabilities.input_images,
+            output_limit: capabilities.output_limit,
+        },
     })
 }
 
