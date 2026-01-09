@@ -1,6 +1,7 @@
 //! Gemini CLI client for Cloud Code Assist API.
 
 use std::pin::Pin;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
 use futures_util::Stream;
@@ -8,7 +9,9 @@ use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::gemini_cli::auth::{GeminiCliConfig, resolve_credentials};
 use crate::providers::gemini_shared::sse::GeminiSseParser;
-use crate::providers::gemini_shared::{build_cloud_code_assist_request, classify_reqwest_error};
+use crate::providers::gemini_shared::{
+    CloudCodeRequestParams, build_cloud_code_assist_request, classify_reqwest_error,
+};
 use crate::providers::{ChatMessage, ProviderError, StreamEvent};
 use crate::tools::ToolDefinition;
 
@@ -22,6 +25,8 @@ const STREAM_PATH: &str = "/v1internal:streamGenerateContent";
 pub struct GeminiCliClient {
     config: GeminiCliConfig,
     http: reqwest::Client,
+    /// Prompt sequence counter for user_prompt_id generation.
+    prompt_seq: AtomicU32,
 }
 
 impl GeminiCliClient {
@@ -29,6 +34,7 @@ impl GeminiCliClient {
         Self {
             config,
             http: reqwest::Client::new(),
+            prompt_seq: AtomicU32::new(0),
         }
     }
 
@@ -39,14 +45,19 @@ impl GeminiCliClient {
         system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let creds = resolve_credentials().await?;
+        let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
 
         let request = build_cloud_code_assist_request(
             messages,
             tools,
             system,
-            &self.config.model,
-            &creds.project_id,
-            Some(self.config.max_tokens),
+            CloudCodeRequestParams {
+                model: &self.config.model,
+                project_id: &creds.project_id,
+                max_output_tokens: Some(self.config.max_tokens),
+                session_id: &self.config.session_id,
+                prompt_seq: seq,
+            },
         )?;
 
         let url = format!("{}{}?alt=sse", API_ENDPOINT, STREAM_PATH);
@@ -81,18 +92,16 @@ fn build_headers(access_token: &str) -> HeaderMap {
         HeaderValue::from_str(&format!("Bearer {}", access_token))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
+    // Mimic official Gemini CLI User-Agent for better rate limits
     headers.insert(
         "User-Agent",
-        HeaderValue::from_static("google-cloud-sdk vscode_cloudshelleditor/0.1"),
+        HeaderValue::from_static("GeminiCLI/0.23.0 (darwin; arm64)"),
     );
-    headers.insert("X-Goog-Api-Client", HeaderValue::from_static("gl-rust/1.0"));
     headers.insert(
-        "Client-Metadata",
-        HeaderValue::from_static(
-            r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#,
-        ),
+        "x-goog-api-client",
+        HeaderValue::from_static("gl-node/22.16.0"),
     );
-    headers.insert("Accept", HeaderValue::from_static("text/event-stream"));
+    headers.insert("Accept", HeaderValue::from_static("*/*"));
     headers.insert("Content-Type", HeaderValue::from_static("application/json"));
     headers
 }
