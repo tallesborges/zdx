@@ -112,6 +112,12 @@ pub enum ThreadUiEvent {
 
     /// Thread rename failed.
     RenameFailed { error: String },
+
+    /// Auto thread title suggestion completed (None if skipped/failed).
+    TitleSuggested {
+        thread_id: String,
+        title: Option<String>,
+    },
 }
 
 /// Unified event enum for the TUI.

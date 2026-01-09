@@ -33,6 +33,7 @@ pub fn handle_main_key(
     agent_state: &AgentState,
     bash_running: bool,
     thread_id: Option<String>,
+    thread_is_empty: bool,
     model_id: &str,
     key: crossterm::event::KeyEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
@@ -104,7 +105,7 @@ pub fn handle_main_key(
             }
         }
         KeyCode::Enter if !shift && !alt => {
-            return submit_input(input, agent_state, bash_running, thread_id);
+            return submit_input(input, agent_state, bash_running, thread_id, thread_is_empty);
         }
         KeyCode::Char('j') if ctrl => {
             input.textarea.insert_newline();
@@ -225,6 +226,7 @@ fn submit_input(
     agent_state: &AgentState,
     bash_running: bool,
     thread_id: Option<String>,
+    thread_is_empty: bool,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
     if !matches!(agent_state, AgentState::Idle) || bash_running {
         return (vec![], vec![], None);
@@ -381,7 +383,7 @@ fn submit_input(
     input.history.push(text.clone());
     input.reset_navigation();
 
-    let effects = if thread_id.is_some() {
+    let mut effects = if thread_id.is_some() {
         vec![
             UiEffect::SaveThread {
                 event: ThreadEvent::user_message(&text),
@@ -393,14 +395,19 @@ fn submit_input(
     };
 
     input.clear();
-    (
-        effects,
-        vec![
-            StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
-            StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
-        ],
-        None,
-    )
+    let mutations = vec![
+        StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
+        StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
+    ];
+
+    if thread_is_empty && let Some(thread_id) = thread_id {
+        effects.push(UiEffect::SuggestThreadTitle {
+            thread_id,
+            message: text.clone(),
+        });
+    }
+
+    (effects, mutations, None)
 }
 
 /// Handles the handoff generation result.

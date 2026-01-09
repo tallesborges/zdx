@@ -36,6 +36,7 @@
     - `src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop, effect dispatch
     - `src/modes/tui/runtime/handlers.rs`: effect handlers (thread ops, agent spawn, auth)
     - `src/modes/tui/runtime/handoff.rs`: handoff generation handlers (subagent spawning)
+    - `src/modes/tui/runtime/thread_title.rs`: auto-title generation handlers (subagent spawning)
     - `src/modes/tui/update.rs`: reducer - orchestrates state mutations, delegates to feature slices
     - `src/modes/tui/render.rs`: pure render functions (no mutations), delegates transcript rendering
     - `src/modes/tui/events.rs`: UiEvent + SessionUiEvent (aggregator for all TUI events)

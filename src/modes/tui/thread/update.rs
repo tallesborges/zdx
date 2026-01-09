@@ -135,6 +135,12 @@ pub fn handle_thread_event(
             handle_thread_renamed(&thread_id, title, &mut mutations);
             vec![]
         }
+        ThreadUiEvent::TitleSuggested {
+            thread_id: _,
+            title: _,
+        } => {
+            vec![]
+        }
         ThreadUiEvent::RenameFailed { error } => {
             mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),

@@ -554,6 +554,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
                 effects
             }
+            ThreadUiEvent::TitleSuggested { thread_id, title } => {
+                let (effects, mutations, _) =
+                    thread::handle_thread_event(ThreadUiEvent::TitleSuggested { thread_id, title });
+                apply_mutations(&mut app.tui, mutations);
+                effects
+            }
             ThreadUiEvent::RenameFailed { error } => {
                 app.tui.thread_ops.rename_loading = false;
                 let (effects, mutations, _) =
@@ -763,11 +769,13 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .thread_log
         .as_ref()
         .map(|thread_log| thread_log.id.clone());
+    let thread_is_empty = app.tui.thread.messages.is_empty();
     let (effects, mutations, overlay_request) = input::handle_main_key(
         &mut app.tui.input,
         &app.tui.agent_state,
         app.tui.bash_running.is_some(),
         thread_id,
+        thread_is_empty,
         &app.tui.config.model,
         key,
     );
