@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use crate::modes::tui::overlays::LoginState;
+use crate::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
 /// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
@@ -17,17 +18,20 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     };
 
     let popup_width = 60;
-    let popup_height = 9;
+    let popup_height = 12;
     let popup_area = calculate_overlay_area(area, area.height, popup_width, popup_height);
 
-    let title = match login_state.provider() {
-        crate::providers::ProviderKind::Anthropic => "Anthropic API Key",
-        crate::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
-        crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
-        crate::providers::ProviderKind::OpenAI => "OpenAI Login",
-        crate::providers::ProviderKind::OpenRouter => "OpenRouter Login",
-        crate::providers::ProviderKind::Gemini => "Gemini Login",
-        crate::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
+    let title = match login_state.selected_provider() {
+        None => "Choose Login Provider",
+        Some(provider) => match provider {
+            crate::providers::ProviderKind::Anthropic => "Anthropic API Key",
+            crate::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
+            crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
+            crate::providers::ProviderKind::OpenAI => "OpenAI Login",
+            crate::providers::ProviderKind::OpenRouter => "OpenRouter Login",
+            crate::providers::ProviderKind::Gemini => "Gemini Login",
+            crate::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
+        },
     };
     render_overlay_container(frame, popup_area, title, Color::Cyan);
 
@@ -39,13 +43,24 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     );
 
     let lines: Vec<Line> = match login_state {
-        LoginState::AwaitingCode {
-            provider,
-            url,
-            input,
-            error,
-            ..
-        } => {
+        LoginState::SelectProvider { selected } => {
+            let entries = render_cli_provider_entries(inner.width, *selected);
+            let mut l = vec![
+                Line::from(Span::styled(
+                    "Select a CLI provider to log in:",
+                    Style::default().fg(Color::White),
+                )),
+                Line::from(""),
+            ];
+            l.extend(entries);
+            l.push(Line::from(""));
+            l.push(Line::from(Span::styled(
+                "Enter to continue, Esc to cancel",
+                Style::default().fg(Color::DarkGray),
+            )));
+            l
+        }
+        LoginState::AwaitingCode { url, error, .. } => {
             let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
 
             let status_message = if error.is_some() {
@@ -70,15 +85,8 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
                 )),
                 Line::from(""),
                 Line::from(Span::styled(
-                    match provider {
-                        crate::providers::ProviderKind::OpenAICodex => "Paste auth code or URL:",
-                        _ => "Paste auth code:",
-                    },
+                    "Waiting for browser login callback...",
                     Style::default().fg(Color::White),
-                )),
-                Line::from(Span::styled(
-                    format!("> {}█", input),
-                    Style::default().fg(Color::Yellow),
                 )),
             ];
             if let Some(e) = error {
@@ -136,4 +144,53 @@ fn truncate_middle(s: &str, max_len: usize) -> String {
     }
     let half = (max_len - 3) / 2;
     format!("{}...{}", &s[..half], &s[s.len() - half..])
+}
+
+fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>> {
+    let label_style = Style::default().fg(Color::White);
+    let selected_style = Style::default().fg(Color::Cyan);
+    let status_on = Style::default().fg(Color::Green);
+    let pad = " ".repeat(2);
+
+    type LoadFn = fn() -> anyhow::Result<Option<crate::providers::oauth::OAuthCredentials>>;
+
+    let providers: [(&str, LoadFn); 3] = [
+        ("Claude CLI", claude_cli::load_credentials),
+        ("OpenAI Codex", openai_codex::load_credentials),
+        ("Gemini CLI", gemini_cli::load_credentials),
+    ];
+
+    providers
+        .iter()
+        .enumerate()
+        .map(|(idx, (label, load_fn))| {
+            let logged_in = load_fn()
+                .ok()
+                .flatten()
+                .filter(|creds| !creds.is_expired())
+                .is_some();
+            let status = if logged_in { "✓ logged in" } else { "" };
+            let status_style = if logged_in { status_on } else { label_style };
+            let pointer = if idx == selected { ">" } else { " " };
+            let name_style = if idx == selected {
+                selected_style
+            } else {
+                label_style
+            };
+            let name = format!("{} {}", pointer, label);
+            let spacing = width
+                .saturating_sub(name.len() as u16)
+                .saturating_sub(status.len() as u16)
+                .saturating_sub(2) as usize;
+            let mut spans = vec![
+                Span::styled(pad.clone(), label_style),
+                Span::styled(name, name_style),
+                Span::styled(" ".repeat(spacing), label_style),
+            ];
+            if !status.is_empty() {
+                spans.push(Span::styled(status, status_style));
+            }
+            Line::from(spans)
+        })
+        .collect()
 }

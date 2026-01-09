@@ -16,6 +16,8 @@ pub struct RequestBody {
     pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub input: Vec<InputItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
