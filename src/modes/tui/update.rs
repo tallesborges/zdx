@@ -129,7 +129,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         ..
                     } if matches!(
                         *provider,
-                        crate::providers::ProviderKind::Anthropic
+                        crate::providers::ProviderKind::ClaudeCli
                             | crate::providers::ProviderKind::OpenAICodex
                             | crate::providers::ProviderKind::GeminiCli
                     ) =>
@@ -139,7 +139,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                                 *error = None;
                                 let verifier = pkce_verifier.clone();
                                 let provider = *provider;
-                                let code = if provider == crate::providers::ProviderKind::Anthropic
+                                let code = if provider == crate::providers::ProviderKind::ClaudeCli
                                 {
                                     let state =
                                         oauth_state.clone().unwrap_or_else(|| verifier.clone());
@@ -148,7 +148,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                                     code
                                 };
                                 let redirect_uri =
-                                    if provider == crate::providers::ProviderKind::Anthropic {
+                                    if provider == crate::providers::ProviderKind::ClaudeCli {
                                         redirect_uri.clone()
                                     } else {
                                         None

@@ -4,7 +4,7 @@
 
 **Existing state:**
 - `read` tool exists (`src/tools/read.rs`) - text-only, 50KB truncation
-- Anthropic provider exists (`src/providers/anthropic.rs`) - handles text, thinking, tool_use, tool_result blocks
+- Anthropic provider exists (`src/providers/anthropic/`) - handles text, thinking, tool_use, tool_result blocks
 - `ChatContentBlock` enum has: `Thinking`, `Text`, `ToolUse`, `ToolResult` variants
 - `ToolResult` has `content: String` - **CRITICAL: must become array for images**
 - `ToolOutput` envelope returns JSON data to the model
@@ -45,7 +45,7 @@ pub struct ToolResult {
     ...
 }
 
-// src/providers/anthropic.rs  
+// src/providers/anthropic/client.rs  
 ApiContentBlock::ToolResult {
     content: String,      // ❌ Serializes as string, not array
     ...
@@ -154,7 +154,7 @@ ApiContentBlock::ToolResult {
     - `ToolResultBlock` = enum: `Text { text: String }` | `Image { mime_type: String, data: String }`
   - [x] Update `ToolResult::from_output()` to handle image content
   - [x] Add `ToolResult::with_image()` constructor for testing
-  - [x] **Refactor `ApiContentBlock::ToolResult`** in `src/providers/anthropic.rs`:
+  - [x] **Refactor `ApiContentBlock::ToolResult`** in `src/providers/anthropic/client.rs`:
     - Change `content: String` to `content: ApiToolResultContent`
     - Serialize as array when contains image: `[{type: "text", ...}, {type: "image", ...}]`
     - Serialize as string when text-only (backwards compatible)

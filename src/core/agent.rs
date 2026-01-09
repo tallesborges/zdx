@@ -20,6 +20,7 @@ use crate::config::Config;
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
+use crate::providers::claude_cli::{ClaudeCliClient, ClaudeCliConfig};
 use crate::providers::gemini::{GeminiClient, GeminiConfig};
 use crate::providers::gemini_cli::{GeminiCliClient, GeminiCliConfig};
 use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
@@ -87,7 +88,7 @@ impl EventSender {
 
 enum ProviderClient {
     Anthropic(AnthropicClient),
-    ClaudeCli(AnthropicClient),
+    ClaudeCli(ClaudeCliClient),
     OpenAICodex(OpenAICodexClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
@@ -252,7 +253,7 @@ pub async fn run_turn(
     };
 
     let client = match provider {
-        ProviderKind::Anthropic | ProviderKind::ClaudeCli => {
+        ProviderKind::Anthropic => {
             // Translate ThinkingLevel to raw API values
             let thinking_enabled = thinking_level.is_enabled();
             let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
@@ -264,12 +265,20 @@ pub async fn run_turn(
                 thinking_enabled,
                 thinking_budget_tokens,
             )?;
-            let client = AnthropicClient::new(anthropic_config);
-            if provider == ProviderKind::ClaudeCli {
-                ProviderClient::ClaudeCli(client)
-            } else {
-                ProviderClient::Anthropic(client)
-            }
+            ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
+        }
+        ProviderKind::ClaudeCli => {
+            let thinking_enabled = thinking_level.is_enabled();
+            let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
+
+            let claude_cli_config = ClaudeCliConfig::new(
+                selection.model.clone(),
+                max_tokens,
+                config.providers.claude_cli.effective_base_url(),
+                thinking_enabled,
+                thinking_budget_tokens,
+            );
+            ProviderClient::ClaudeCli(ClaudeCliClient::new(claude_cli_config))
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);

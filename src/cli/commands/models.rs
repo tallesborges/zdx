@@ -115,6 +115,12 @@ pub async fn update(config: &config::Config) -> Result<()> {
 
     let providers = [
         ("anthropic", "anthropic", None, &config.providers.anthropic),
+        (
+            "claude-cli",
+            "anthropic",
+            Some("claude-cli"),
+            &config.providers.claude_cli,
+        ),
         ("openai", "openai", Some("openai"), &config.providers.openai),
         (
             "openrouter",
@@ -293,7 +299,7 @@ fn build_match_targets(provider_id: &str, raw_id: &str, full_id: &str) -> Vec<St
     targets.push(format!("{}:{}", provider_id, raw_id));
     targets.push(format!("{}/{}", provider_id, raw_id));
 
-    if provider_id == "anthropic" {
+    if provider_id == "anthropic" || provider_id == "claude-cli" {
         targets.push(format!("claude:{}", raw_id));
         targets.push(format!("claude/{}", raw_id));
     }
@@ -357,7 +363,7 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
 }
 
 fn format_display_name(provider_id: &str, name: &str) -> String {
-    if provider_id == "anthropic" {
+    if provider_id == "anthropic" || provider_id == "claude-cli" {
         name.replace(" (latest)", "")
     } else {
         name.to_string()

@@ -25,8 +25,9 @@ pub fn handle_login_result(
         Ok(()) => {
             auth.refresh();
             let message = match provider {
-                crate::providers::ProviderKind::Anthropic => "Logged in with Anthropic OAuth.",
+                crate::providers::ProviderKind::ClaudeCli => "Logged in with Claude CLI OAuth.",
                 crate::providers::ProviderKind::OpenAICodex => "Logged in with OpenAI Codex OAuth.",
+                crate::providers::ProviderKind::GeminiCli => "Logged in with Gemini CLI OAuth.",
                 _ => "Login complete.",
             };
             (

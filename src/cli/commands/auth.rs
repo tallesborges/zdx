@@ -7,30 +7,22 @@ use std::time::Duration;
 use anyhow::Result;
 
 use crate::providers::oauth::{
-    OAuthCache, anthropic as oauth_anthropic, gemini_cli as oauth_gemini_cli,
+    OAuthCache, claude_cli as oauth_claude_cli, gemini_cli as oauth_gemini_cli,
     openai_codex as oauth_codex,
 };
 
 pub async fn login_anthropic() -> Result<()> {
-    do_login_anthropic(false).await
+    println!("Anthropic uses API keys.");
+    println!("Set ANTHROPIC_API_KEY in your shell to authenticate.");
+    Ok(())
 }
 
 pub async fn login_claude_cli() -> Result<()> {
-    do_login_anthropic(true).await
-}
-
-async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
     // Check if already logged in
-    if let Some(existing) = oauth_anthropic::load_credentials()? {
-        let label = if force_claude_cli {
-            "Claude CLI"
-        } else {
-            "Anthropic"
-        };
+    if let Some(existing) = oauth_claude_cli::load_credentials()? {
         println!(
-            "Already logged in to {} (token: {})",
-            label,
-            oauth_anthropic::mask_token(&existing.access)
+            "Already logged in to Claude CLI (token: {})",
+            oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
         io::stdout().flush()?;
@@ -44,23 +36,14 @@ async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
     }
 
     // Generate PKCE challenge
-    let pkce = oauth_anthropic::generate_pkce();
+    let pkce = oauth_claude_cli::generate_pkce();
     let oauth_state = uuid::Uuid::new_v4().to_string();
-    let callback_port = oauth_anthropic::random_local_port();
-    let redirect_uri = oauth_anthropic::build_redirect_uri(callback_port);
-    let mut auth_url = oauth_anthropic::build_auth_url(&pkce, &oauth_state, &redirect_uri);
-    if force_claude_cli {
-        // Claude CLI requires the claude-code client hint to unlock CLI features.
-        auth_url.push_str("&client=claude-code");
-    }
+    let callback_port = oauth_claude_cli::random_local_port();
+    let redirect_uri = oauth_claude_cli::build_redirect_uri(callback_port);
+    let auth_url = oauth_claude_cli::build_auth_url(&pkce, &oauth_state, &redirect_uri);
 
     // Show instructions
-    let label = if force_claude_cli {
-        "Claude CLI"
-    } else {
-        "Anthropic"
-    };
-    println!("To log in to {} with OAuth:", label);
+    println!("To log in to Claude CLI with OAuth:");
     println!();
     println!("  1. A browser window will open (or visit the URL below)");
     println!("  2. Log in to your Anthropic account and authorize access");
@@ -79,7 +62,7 @@ async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
     // Prefer local callback in interactive sessions, fall back to manual paste.
     let expected_state = oauth_state.clone();
     let local_code = if io::stdin().is_terminal() {
-        wait_for_anthropic_code(&expected_state, callback_port)
+        wait_for_claude_cli_code(&expected_state, callback_port)
     } else {
         None
     };
@@ -91,7 +74,7 @@ async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
 
             let mut input = String::new();
             io::stdin().lock().read_line(&mut input)?;
-            let (code, provided_state) = oauth_anthropic::parse_authorization_input(&input);
+            let (code, provided_state) = oauth_claude_cli::parse_authorization_input(&input);
             if let Some(provided) = provided_state
                 && provided != expected_state
             {
@@ -104,17 +87,16 @@ async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
 
     // Exchange code for tokens
     println!("Exchanging code for tokens...");
-    let credentials = oauth_anthropic::exchange_code(&auth_code, &pkce, &redirect_uri).await?;
+    let credentials = oauth_claude_cli::exchange_code(&auth_code, &pkce, &redirect_uri).await?;
 
     // Save credentials
-    oauth_anthropic::save_credentials(&credentials)?;
+    oauth_claude_cli::save_credentials(&credentials)?;
 
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
-        "✓ Logged in to {} (token: {})",
-        label,
-        oauth_anthropic::mask_token(&credentials.access)
+        "✓ Logged in to Claude CLI (token: {})",
+        oauth_claude_cli::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
 
@@ -122,27 +104,20 @@ async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
 }
 
 pub fn logout_anthropic() -> Result<()> {
-    do_logout_anthropic(false)
+    println!("Anthropic uses API keys.");
+    println!("Unset ANTHROPIC_API_KEY to remove authentication.");
+    Ok(())
 }
 
 pub fn logout_claude_cli() -> Result<()> {
-    do_logout_anthropic(true)
-}
-
-fn do_logout_anthropic(force_claude_cli: bool) -> Result<()> {
-    let had_creds = oauth_anthropic::clear_credentials()?;
-    let label = if force_claude_cli {
-        "Claude CLI"
-    } else {
-        "Anthropic"
-    };
+    let had_creds = oauth_claude_cli::clear_credentials()?;
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from {}", label);
+        println!("✓ Logged out from Claude CLI");
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to {} (no credentials found).", label);
+        println!("Not logged in to Claude CLI (no credentials found).");
     }
 
     Ok(())
@@ -152,7 +127,7 @@ pub async fn login_openai_codex() -> Result<()> {
     if let Some(existing) = oauth_codex::load_credentials()? {
         println!(
             "Already logged in to OpenAI Codex (token: {})",
-            oauth_anthropic::mask_token(&existing.access)
+            oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
         io::stdout().flush()?;
@@ -209,7 +184,7 @@ pub async fn login_openai_codex() -> Result<()> {
     println!();
     println!(
         "✓ Logged in to OpenAI Codex (token: {})",
-        oauth_anthropic::mask_token(&credentials.access)
+        oauth_claude_cli::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
 
@@ -234,7 +209,7 @@ pub async fn login_gemini_cli() -> Result<()> {
     if let Some(existing) = oauth_gemini_cli::load_credentials()? {
         println!(
             "Already logged in to Gemini CLI (token: {})",
-            oauth_anthropic::mask_token(&existing.access)
+            oauth_claude_cli::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
         io::stdout().flush()?;
@@ -382,7 +357,7 @@ fn extract_gemini_cli_code_from_request(request: &str, expected_state: &str) -> 
         .map(|(_, v)| v.to_string())
 }
 
-fn wait_for_anthropic_code(state: &str, port: u16) -> Option<String> {
+fn wait_for_claude_cli_code(state: &str, port: u16) -> Option<String> {
     let listener = match TcpListener::bind(format!("127.0.0.1:{}", port)) {
         Ok(listener) => listener,
         Err(_) => return None,
@@ -400,7 +375,7 @@ fn wait_for_anthropic_code(state: &str, port: u16) -> Option<String> {
                     let mut buffer = [0u8; 2048];
                     let _ = stream.read(&mut buffer);
                     let request = String::from_utf8_lossy(&buffer);
-                    let code = extract_anthropic_code_from_request(&request, &state);
+                    let code = extract_claude_cli_code_from_request(&request, &state);
                     let response = match code.is_some() {
                         true => oauth_success_response(),
                         false => oauth_error_response(),
@@ -427,7 +402,7 @@ fn wait_for_anthropic_code(state: &str, port: u16) -> Option<String> {
     rx.recv_timeout(Duration::from_secs(120)).ok().flatten()
 }
 
-fn extract_anthropic_code_from_request(request: &str, expected_state: &str) -> Option<String> {
+fn extract_claude_cli_code_from_request(request: &str, expected_state: &str) -> Option<String> {
     let mut lines = request.lines();
     let request_line = lines.next()?;
     let mut parts = request_line.split_whitespace();
@@ -435,7 +410,7 @@ fn extract_anthropic_code_from_request(request: &str, expected_state: &str) -> O
     let path = parts.next()?;
 
     let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
-    if url.path() != oauth_anthropic::LOCAL_CALLBACK_PATH {
+    if url.path() != oauth_claude_cli::LOCAL_CALLBACK_PATH {
         return None;
     }
     let state = url

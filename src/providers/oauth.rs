@@ -128,16 +128,16 @@ impl OAuthCache {
     }
 }
 
-/// Anthropic-specific OAuth helpers.
-pub mod anthropic {
+/// Claude CLI (Anthropic OAuth) helpers.
+pub mod claude_cli {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
 
     use super::*;
 
-    /// Provider key for Anthropic in the OAuth cache.
-    pub const PROVIDER_KEY: &str = "anthropic";
+    /// Provider key for Claude CLI in the OAuth cache.
+    pub const PROVIDER_KEY: &str = "claude-cli";
 
     /// Anthropic OAuth client ID (public, not a secret)
     const CLIENT_ID: &str = "9d1c250a-e61b-44d9-88ed-5944d1962f5e";
@@ -148,11 +148,21 @@ pub mod anthropic {
     /// Local OAuth callback path (port is dynamic).
     pub const LOCAL_CALLBACK_PATH: &str = "/callback";
     const SCOPES: &str = "org:create_api_key user:profile user:inference user:sessions:claude_code";
+    const CLIENT_HINT: &str = "claude-code";
 
     /// PKCE code verifier and challenge
     pub struct Pkce {
         pub verifier: String,
         pub challenge: String,
+    }
+
+    /// Claude CLI credentials with expiry.
+    #[derive(Debug, Clone)]
+    #[allow(dead_code)]
+    pub struct ClaudeCliCredentials {
+        pub access: String,
+        pub refresh: String,
+        pub expires: u64,
     }
 
     /// Generate PKCE code verifier and challenge
@@ -175,7 +185,7 @@ pub mod anthropic {
         }
     }
 
-    /// Build the authorization URL for Anthropic OAuth
+    /// Build the authorization URL for Claude CLI OAuth
     pub fn build_auth_url(pkce: &Pkce, state: &str, redirect_uri: &str) -> String {
         let params = [
             ("code", "true"),
@@ -186,6 +196,7 @@ pub mod anthropic {
             ("code_challenge", &pkce.challenge),
             ("code_challenge_method", "S256"),
             ("state", state),
+            ("client", CLIENT_HINT),
         ];
 
         let query: String = url::form_urlencoded::Serializer::new(String::new())
@@ -350,13 +361,13 @@ pub mod anthropic {
         expires_in: u64,
     }
 
-    /// Loads the Anthropic OAuth credentials from cache.
+    /// Loads the Claude CLI OAuth credentials from cache.
     pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
         Ok(cache.get(PROVIDER_KEY).cloned())
     }
 
-    /// Saves Anthropic OAuth credentials to cache.
+    /// Saves Claude CLI OAuth credentials to cache.
     pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
         cache.set(PROVIDER_KEY, creds.clone());
@@ -364,7 +375,7 @@ pub mod anthropic {
         Ok(())
     }
 
-    /// Removes the Anthropic OAuth credentials from cache.
+    /// Removes the Claude CLI OAuth credentials from cache.
     pub fn clear_credentials() -> Result<bool> {
         let mut cache = OAuthCache::load()?;
         let had_creds = cache.remove(PROVIDER_KEY).is_some();
@@ -984,7 +995,7 @@ mod tests {
     fn test_oauth_cache_serialization() {
         let mut cache = OAuthCache::default();
         cache.set(
-            "anthropic",
+            "claude-cli",
             OAuthCredentials {
                 cred_type: "oauth".to_string(),
                 refresh: "refresh-token".to_string(),
@@ -997,7 +1008,7 @@ mod tests {
         let json = serde_json::to_string(&cache).unwrap();
         let loaded: OAuthCache = serde_json::from_str(&json).unwrap();
 
-        let creds = loaded.get("anthropic").unwrap();
+        let creds = loaded.get("claude-cli").unwrap();
         assert_eq!(creds.cred_type, "oauth");
         assert_eq!(creds.access, "access-token");
         assert_eq!(creds.refresh, "refresh-token");
@@ -1008,7 +1019,7 @@ mod tests {
     fn test_oauth_cache_remove() {
         let mut cache = OAuthCache::default();
         cache.set(
-            "anthropic",
+            "claude-cli",
             OAuthCredentials {
                 cred_type: "oauth".to_string(),
                 refresh: "r".to_string(),
@@ -1017,27 +1028,27 @@ mod tests {
                 account_id: None,
             },
         );
-        assert!(cache.get("anthropic").is_some());
+        assert!(cache.get("claude-cli").is_some());
 
-        let removed = cache.remove("anthropic");
+        let removed = cache.remove("claude-cli");
         assert!(removed.is_some());
-        assert!(cache.get("anthropic").is_none());
+        assert!(cache.get("claude-cli").is_none());
     }
 
     /// Test: Token masking.
     #[test]
     fn test_mask_token() {
         assert_eq!(
-            anthropic::mask_token("sk-ant-oat-long-token-here"),
+            claude_cli::mask_token("sk-ant-oat-long-token-here"),
             "sk-ant-oat-l..."
         );
-        assert_eq!(anthropic::mask_token("short"), "***");
+        assert_eq!(claude_cli::mask_token("short"), "***");
     }
 
     /// Test: PKCE generation produces valid output.
     #[test]
     fn test_pkce_generation() {
-        let pkce = anthropic::generate_pkce();
+        let pkce = claude_cli::generate_pkce();
         assert!(!pkce.verifier.is_empty());
         assert!(!pkce.challenge.is_empty());
         // Verifier should be base64url encoded 32 bytes = 43 chars
@@ -1047,9 +1058,9 @@ mod tests {
     /// Test: Auth URL contains required parameters.
     #[test]
     fn test_auth_url_format() {
-        let pkce = anthropic::generate_pkce();
-        let redirect_uri = anthropic::build_redirect_uri(55555);
-        let url = anthropic::build_auth_url(&pkce, "state", &redirect_uri);
+        let pkce = claude_cli::generate_pkce();
+        let redirect_uri = claude_cli::build_redirect_uri(55555);
+        let url = claude_cli::build_auth_url(&pkce, "state", &redirect_uri);
 
         assert!(url.starts_with("https://claude.ai/oauth/authorize?"));
         assert!(url.contains("client_id="));
