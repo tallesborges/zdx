@@ -17,7 +17,7 @@ const API_VERSION: &str = "2023-06-01";
 const BETA_HEADER: &str = "fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 /// Beta features for OAuth authentication
 const OAUTH_BETA_HEADER: &str =
-    "oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
+    "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14";
 /// Required system prompt prefix for OAuth tokens (Claude Code identification)
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
@@ -127,7 +127,10 @@ impl AnthropicClient {
             stream: true,
         };
 
-        let url = format!("{}/v1/messages", self.config.base_url);
+        let url = match self.config.auth_method {
+            AuthMethod::OAuth => format!("{}/v1/messages?beta=true", self.config.base_url),
+            AuthMethod::ApiKey => format!("{}/v1/messages", self.config.base_url),
+        };
 
         let mut request_builder = self
             .http
@@ -146,7 +149,10 @@ impl AnthropicClient {
                     "Authorization",
                     format!("Bearer {}", self.config.auth_token),
                 )
-                .header("anthropic-beta", OAUTH_BETA_HEADER),
+                .header("anthropic-beta", OAUTH_BETA_HEADER)
+                .header("user-agent", "claude-cli/2.1.2 (external, cli)")
+                .header("anthropic-dangerous-direct-browser-access", "true")
+                .header("x-app", "cli"),
         };
 
         let response = request_builder
@@ -179,7 +185,7 @@ impl AnthropicClient {
     fn build_system_blocks(&self, system: Option<&str>) -> Option<Vec<SystemBlock>> {
         match system {
             Some(prompt) => Some(vec![
-                SystemBlock::new(CLAUDE_CODE_SYSTEM_PROMPT),
+                SystemBlock::with_cache_control(CLAUDE_CODE_SYSTEM_PROMPT),
                 SystemBlock::with_cache_control(prompt),
             ]),
             None => Some(vec![SystemBlock::with_cache_control(

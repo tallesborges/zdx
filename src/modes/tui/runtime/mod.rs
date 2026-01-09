@@ -357,15 +357,22 @@ impl TuiRuntime {
                 provider,
                 code,
                 verifier,
+                redirect_uri,
                 req,
             } => {
                 self.spawn_effect(None, move || {
-                    handlers::token_exchange(provider, code, verifier, req)
+                    handlers::token_exchange(provider, code, verifier, redirect_uri, req)
                 });
             }
-            UiEffect::StartLocalAuthCallback { provider, state } => {
+            UiEffect::StartLocalAuthCallback {
+                provider,
+                state,
+                port,
+            } => {
                 self.state.tui.auth.callback_in_progress = true;
-                self.spawn_effect(None, move || handlers::local_auth_callback(provider, state));
+                self.spawn_effect(None, move || {
+                    handlers::local_auth_callback(provider, state, port)
+                });
             }
 
             // Config effects

@@ -174,14 +174,17 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                             let arguments = serde_json::to_string(tool_input)
                                 .unwrap_or_else(|_| "{}".to_string());
                             let mut parts = id.split('|');
-                            let call_id = parts.next().unwrap_or("").to_string();
-                            let tool_id = parts.next().unwrap_or("").to_string();
+                            let call_id = parts.next().unwrap_or("");
+                            let tool_id = parts.next().unwrap_or("");
+                            let call_id = (!call_id.is_empty()).then_some(call_id.to_string());
+                            let tool_id = (!tool_id.is_empty()).then_some(tool_id.to_string());
+
                             input.push(InputItem {
-                                id: Some(tool_id),
+                                id: tool_id,
                                 item_type: "function_call".to_string(),
                                 role: None,
                                 content: None,
-                                call_id: Some(call_id),
+                                call_id,
                                 name: Some(name.clone()),
                                 arguments: Some(arguments),
                                 output: None,
@@ -289,4 +292,30 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
     }
 
     Ok(input)
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::build_input;
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+    #[test]
+    fn build_input_skips_empty_tool_id() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
+                id: "anthropic-tool-1".to_string(),
+                name: "read".to_string(),
+                input: json!({"path": "foo.txt"}),
+            }]),
+        }];
+
+        let input = build_input(&messages, None).unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0].item_type, "function_call");
+        assert_eq!(input[0].id, None);
+        assert_eq!(input[0].call_id.as_deref(), Some("anthropic-tool-1"));
+    }
 }
