@@ -10,7 +10,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 use crate::config::ThinkingLevel;
-use crate::models::ModelOption;
+use crate::models::{ModelOption, model_supports_reasoning};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::AuthStatus;
 use crate::modes::tui::thread::ThreadUsage;
@@ -172,8 +172,10 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
         base_style,
     )];
 
-    // Add thinking indicator with dim style (only when enabled)
-    if state.config.thinking_level != ThinkingLevel::Off {
+    // Add thinking indicator with dim style (only when enabled + supported)
+    if state.config.thinking_level != ThinkingLevel::Off
+        && model_supports_reasoning(&state.config.model)
+    {
         title_spans.push(Span::styled(
             format!(" [{}]", state.config.thinking_level.display_name()),
             thinking_style,

@@ -236,12 +236,17 @@ pub async fn run_turn(
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
     let max_tokens = config.effective_max_tokens_for(&config.model);
+    let thinking_level = if crate::models::model_supports_reasoning(&config.model) {
+        config.thinking_level
+    } else {
+        crate::config::ThinkingLevel::Off
+    };
 
     let client = match provider {
         ProviderKind::Anthropic => {
             // Translate ThinkingLevel to raw API values
-            let thinking_enabled = config.thinking_level.is_enabled();
-            let thinking_budget_tokens = config.thinking_level.budget_tokens().unwrap_or(0);
+            let thinking_enabled = thinking_level.is_enabled();
+            let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
 
             let anthropic_config = AnthropicConfig::from_env(
                 selection.model.clone(),
@@ -253,7 +258,7 @@ pub async fn run_turn(
             ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
         }
         ProviderKind::OpenAICodex => {
-            let reasoning_effort = map_thinking_to_reasoning(config.thinking_level);
+            let reasoning_effort = map_thinking_to_reasoning(thinking_level);
             let openai_config =
                 OpenAICodexConfig::new(selection.model.clone(), max_tokens, reasoning_effort);
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))

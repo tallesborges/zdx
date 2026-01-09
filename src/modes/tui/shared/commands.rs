@@ -99,6 +99,13 @@ pub const COMMANDS: &[Command] = &[
     },
 ];
 
+pub fn command_available(command: &Command, model_id: &str) -> bool {
+    if command.name == "thinking" {
+        return crate::models::model_supports_reasoning(model_id);
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

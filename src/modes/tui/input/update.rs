@@ -33,6 +33,7 @@ pub fn handle_main_key(
     agent_state: &AgentState,
     bash_running: bool,
     thread_id: Option<String>,
+    model_id: &str,
     key: crossterm::event::KeyEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -83,7 +84,11 @@ pub fn handle_main_key(
             }),
         ),
         KeyCode::Char('t') if ctrl && !shift && !alt => {
-            (vec![], vec![], Some(OverlayRequest::ThinkingPicker))
+            if crate::models::model_supports_reasoning(model_id) {
+                (vec![], vec![], Some(OverlayRequest::ThinkingPicker))
+            } else {
+                (vec![], vec![], None)
+            }
         }
         KeyCode::Char('c') if ctrl => {
             // Ctrl+C: interrupt agent, clear input, or quit

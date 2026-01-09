@@ -96,6 +96,13 @@ impl ModelOption {
     }
 }
 
+/// Returns true if the model supports reasoning, defaulting to true when unknown.
+pub fn model_supports_reasoning(id: &str) -> bool {
+    ModelOption::find_by_id(id)
+        .map(|model| model.capabilities.reasoning)
+        .unwrap_or(true)
+}
+
 #[derive(Debug, Deserialize)]
 struct ModelsFile {
     #[serde(rename = "model")]
