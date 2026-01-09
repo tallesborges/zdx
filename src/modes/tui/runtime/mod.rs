@@ -14,9 +14,11 @@
 //! - `mod.rs`: Core runtime (TuiRuntime, event loop, effect dispatch)
 //! - `handlers.rs`: Effect handler implementations (I/O, spawning, etc.)
 //! - `handoff.rs`: Handoff generation handlers (subagent spawning)
+//! - `thread_title.rs`: Auto-title generation handlers (subagent spawning)
 
 mod handlers;
 mod handoff;
+mod thread_title;
 
 use std::future::Future;
 use std::io::Stdout;
@@ -407,6 +409,12 @@ impl TuiRuntime {
                         move || handlers::thread_rename(thread_id, title),
                     );
                 }
+            }
+            UiEffect::SuggestThreadTitle { thread_id, message } => {
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_effect(None, move || {
+                    thread_title::suggest_thread_title(thread_id, message, root)
+                });
             }
             UiEffect::CreateNewThread => {
                 // Only spawn if not already loading
