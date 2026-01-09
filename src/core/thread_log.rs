@@ -1007,6 +1007,44 @@ pub fn format_timestamp(time: SystemTime) -> Option<String> {
     Some(datetime.format("%Y-%m-%d %H:%M").to_string())
 }
 
+/// Formats a SystemTime as a short relative age (e.g., "2m ago", "3h ago", "5d ago").
+pub fn format_timestamp_relative(time: SystemTime) -> Option<String> {
+    let datetime: DateTime<Utc> = time.into();
+    let now = Utc::now();
+    let seconds = now.signed_duration_since(datetime).num_seconds().max(0);
+
+    let mins = seconds / 60;
+    if mins < 1 {
+        return Some("just now".to_string());
+    }
+    if mins < 60 {
+        return Some(format!("{}m ago", mins));
+    }
+
+    let hours = mins / 60;
+    if hours < 24 {
+        return Some(format!("{}h ago", hours));
+    }
+
+    let days = hours / 24;
+    if days < 7 {
+        return Some(format!("{}d ago", days));
+    }
+
+    let weeks = days / 7;
+    if weeks < 5 {
+        return Some(format!("{}w ago", weeks));
+    }
+
+    let months = days / 30;
+    if months < 12 {
+        return Some(format!("{}mo ago", months));
+    }
+
+    let years = days / 365;
+    Some(format!("{}y ago", years))
+}
+
 /// Formats a thread transcript in a human-readable format.
 pub fn format_transcript(events: &[ThreadEvent]) -> String {
     let mut output = String::new();

@@ -77,20 +77,30 @@ pub fn render_thread_picker(
             let thread = *thread;
             let timestamp = thread
                 .modified
-                .and_then(thread_log::format_timestamp)
-                .unwrap_or_else(|| "unknown".to_string());
+                .and_then(thread_log::format_timestamp_relative)
+                .unwrap_or_else(|| "—".to_string());
 
-            let display_title = truncate_with_ellipsis(
-                &thread.display_title(),
-                (inner_area.width as usize).saturating_sub(20),
-            );
             let short_id = short_thread_id(&thread.id);
+            let left_width = inner_area.width as usize;
+            let title = thread.display_title();
+            let date_width = timestamp.width();
+            let id_width = short_id.width();
+            let padding = if left_width > date_width + 2 {
+                left_width - date_width - 2
+            } else {
+                left_width
+            };
+            let content_width = padding.saturating_sub(id_width + 2);
+            let display_title = truncate_with_ellipsis(&title, content_width);
+            let gap = padding
+                .saturating_sub(id_width + 2 + display_title.width())
+                .max(1);
 
             let line = Line::from(vec![
                 Span::styled(short_id, Style::default().fg(Color::Cyan)),
                 Span::styled("  ", Style::default()),
                 Span::styled(display_title, Style::default().fg(Color::White)),
-                Span::styled("  ", Style::default()),
+                Span::styled(" ".repeat(gap), Style::default()),
                 Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
