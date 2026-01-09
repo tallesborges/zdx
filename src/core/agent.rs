@@ -376,7 +376,7 @@ pub async fn run_turn(
                 } => {
                     if block_type == "tool_use" {
                         let tool_id = id.unwrap_or_default();
-                        let tool_name = name.unwrap_or_default();
+                        let tool_name = name.unwrap_or_default().to_ascii_lowercase();
 
                         // Emit ToolRequested immediately so UI shows the tool with a spinner
                         // while the JSON input is still streaming. This is especially important

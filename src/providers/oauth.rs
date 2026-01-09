@@ -894,9 +894,7 @@ pub mod gemini_cli {
                         .and_then(|v| v.get("cloudaicompanionProject"))
                         .and_then(|v| v.get("id"))
                         .and_then(|v| v.as_str());
-                    if done
-                        && let Some(project_id) = project_id
-                    {
+                    if done && let Some(project_id) = project_id {
                         return Ok(project_id.to_string());
                     }
                 }

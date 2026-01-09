@@ -14,7 +14,7 @@ use crate::core::events::ToolOutput;
 /// Returns the tool definition for the edit tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
-        name: "edit".to_string(),
+        name: "Edit".to_string(),
         description: "Edit an existing file by performing an exact string replacement. The 'old' text must match exactly (including whitespace and newlines).".to_string(),
         input_schema: json!({
             "type": "object",
