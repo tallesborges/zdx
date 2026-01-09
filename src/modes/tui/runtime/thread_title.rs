@@ -13,7 +13,8 @@ use crate::core::thread_log;
 use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 
 /// Model to use for auto-title generation (fast, cheap).
-const TITLE_MODEL: &str = "claude-haiku-4-5";
+/// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
+const TITLE_MODEL: &str = "claude-cli:claude-haiku-4-5";
 
 /// Thinking level for auto-title generation (minimal reasoning).
 const TITLE_THINKING: &str = "minimal";

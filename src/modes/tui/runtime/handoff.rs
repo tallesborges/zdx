@@ -16,7 +16,8 @@ use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
 use crate::modes::tui::events::UiEvent;
 
 /// Model to use for handoff generation (fast, cheap).
-const HANDOFF_MODEL: &str = "claude-haiku-4-5";
+/// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
+const HANDOFF_MODEL: &str = "claude-cli:claude-haiku-4-5";
 
 /// Thinking level for handoff generation (minimal reasoning).
 const HANDOFF_THINKING: &str = "minimal";
