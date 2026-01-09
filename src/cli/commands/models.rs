@@ -38,6 +38,14 @@ struct CostEntry {
 struct LimitEntry {
     #[serde(default)]
     context: u64,
+    #[serde(default)]
+    output: u64,
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
+struct ModalitiesEntry {
+    #[serde(default)]
+    input: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,9 +55,13 @@ struct ModelEntry {
     #[serde(default)]
     tool_call: bool,
     #[serde(default)]
+    reasoning: bool,
+    #[serde(default)]
     cost: CostEntry,
     #[serde(default)]
     limit: LimitEntry,
+    #[serde(default)]
+    modalities: ModalitiesEntry,
 }
 
 #[derive(Debug, Clone)]
@@ -58,6 +70,7 @@ struct ModelCandidate {
     display_name: String,
     pricing: ModelPricingRecord,
     context_limit: u64,
+    capabilities: ModelCapabilitiesRecord,
     match_targets: Vec<String>,
 }
 
@@ -74,6 +87,8 @@ struct ModelRecord {
     display_name: String,
     context_limit: u64,
     pricing: ModelPricingRecord,
+    #[serde(default)]
+    capabilities: ModelCapabilitiesRecord,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -82,6 +97,16 @@ struct ModelPricingRecord {
     output: f64,
     cache_read: f64,
     cache_write: f64,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
+struct ModelCapabilitiesRecord {
+    #[serde(default)]
+    reasoning: bool,
+    #[serde(default)]
+    input_images: bool,
+    #[serde(default)]
+    output_limit: u64,
 }
 
 pub async fn update(config: &config::Config) -> Result<()> {
@@ -142,6 +167,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
                 display_name: candidate.display_name,
                 context_limit: candidate.context_limit,
                 pricing: candidate.pricing,
+                capabilities: candidate.capabilities,
             };
             let key = record_key(&record);
             if !seen_keys.insert(key) {
@@ -199,6 +225,16 @@ fn build_candidates(
                 cache_read: model.cost.cache_read,
                 cache_write: model.cost.cache_write,
             };
+            let input_images = model
+                .modalities
+                .input
+                .iter()
+                .any(|modality| modality == "image");
+            let capabilities = ModelCapabilitiesRecord {
+                reasoning: model.reasoning,
+                input_images,
+                output_limit: model.limit.output,
+            };
 
             let match_targets = build_match_targets(provider_id, &model.id, &full_id);
 
@@ -207,6 +243,7 @@ fn build_candidates(
                 display_name,
                 pricing,
                 context_limit: model.limit.context,
+                capabilities,
                 match_targets,
             }
         })

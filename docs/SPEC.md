@@ -168,6 +168,7 @@ Error:
 - Location: `<base>/config.toml`
 - Format: TOML
 - Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `thinking_level`
+  - `max_tokens` is optional; when unset, requests use the model output limit.
 - Provider base URLs:
   - `[providers.anthropic].base_url`
   - `[providers.openai].base_url`

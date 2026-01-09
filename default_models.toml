@@ -13,6 +13,11 @@ output = 25.0
 cache_read = 0.5
 cache_write = 6.25
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
 [[model]]
 id = "claude-sonnet-4-5"
 provider = "anthropic"
@@ -24,6 +29,11 @@ input = 3.0
 output = 15.0
 cache_read = 0.3
 cache_write = 3.75
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
 
 [[model]]
 id = "claude-haiku-4-5"
@@ -37,6 +47,11 @@ output = 5.0
 cache_read = 0.1
 cache_write = 1.25
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
 [[model]]
 id = "openai:gpt-5.2"
 provider = "openai"
@@ -48,6 +63,11 @@ input = 1.75
 output = 14.0
 cache_read = 0.175
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "openai:gpt-5-mini"
@@ -61,6 +81,11 @@ output = 2.0
 cache_read = 0.03
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
 [[model]]
 id = "openai:gpt-5-nano"
 provider = "openai"
@@ -72,6 +97,11 @@ input = 0.05
 output = 0.4
 cache_read = 0.01
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "openai:gpt-5.1-codex"
@@ -85,6 +115,11 @@ output = 10.0
 cache_read = 0.125
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
 [[model]]
 id = "openai:gpt-5.1-codex-max"
 provider = "openai"
@@ -96,6 +131,11 @@ input = 1.25
 output = 10.0
 cache_read = 0.125
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "openai:gpt-5.1-codex-mini"
@@ -109,6 +149,11 @@ output = 2.0
 cache_read = 0.025
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
 [[model]]
 id = "openai:gpt-4.1"
 provider = "openai"
@@ -120,6 +165,11 @@ input = 2.0
 output = 8.0
 cache_read = 0.5
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = true
+output_limit = 32768
 
 [[model]]
 id = "openrouter:deepseek/deepseek-v3.1-terminus:exacto"
@@ -133,6 +183,11 @@ output = 1.0
 cache_read = 0.0
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 65536
+
 [[model]]
 id = "openrouter:moonshotai/kimi-k2-0905:exacto"
 provider = "openrouter"
@@ -144,6 +199,11 @@ input = 0.6
 output = 2.5
 cache_read = 0.0
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = false
+output_limit = 16384
 
 [[model]]
 id = "openrouter:openai/gpt-oss-120b:exacto"
@@ -157,6 +217,11 @@ output = 0.24
 cache_read = 0.0
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 32768
+
 [[model]]
 id = "openrouter:qwen/qwen3-coder:exacto"
 provider = "openrouter"
@@ -168,6 +233,11 @@ input = 0.38
 output = 1.53
 cache_read = 0.0
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = false
+input_images = false
+output_limit = 32768
 
 [[model]]
 id = "openrouter:z-ai/glm-4.6:exacto"
@@ -181,6 +251,11 @@ output = 1.9
 cache_read = 0.11
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 128000
+
 [[model]]
 id = "gemini:gemini-3-flash-preview"
 provider = "gemini"
@@ -192,6 +267,11 @@ input = 0.5
 output = 3.0
 cache_read = 0.05
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
 
 [[model]]
 id = "gemini:gemini-3-pro-preview"
@@ -205,6 +285,11 @@ output = 12.0
 cache_read = 0.2
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
 [[model]]
 id = "gemini:gemini-2.5-flash"
 provider = "gemini"
@@ -216,6 +301,11 @@ input = 0.3
 output = 2.5
 cache_read = 0.075
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
 
 [[model]]
 id = "gemini:gemini-2.5-flash-lite"
@@ -229,6 +319,11 @@ output = 0.4
 cache_read = 0.025
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
+
 [[model]]
 id = "gpt-5.2-codex"
 provider = "openai-codex"
@@ -240,6 +335,11 @@ input = 0.0
 output = 0.0
 cache_read = 0.0
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "gpt-5.1-codex-max"
@@ -253,6 +353,11 @@ output = 10.0
 cache_read = 0.125
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
 [[model]]
 id = "gpt-5.1-codex-mini"
 provider = "openai-codex"
@@ -265,6 +370,11 @@ output = 2.0
 cache_read = 0.025
 cache_write = 0.0
 
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
 [[model]]
 id = "gpt-5.2"
 provider = "openai-codex"
@@ -276,3 +386,8 @@ input = 1.75
 output = 14.0
 cache_read = 0.175
 cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000

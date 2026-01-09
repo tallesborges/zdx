@@ -6,14 +6,15 @@
 # The Claude model to use
 model = "claude-haiku-4-5"
 
-# Maximum tokens for responses
-max_tokens = 12288
+# Maximum tokens for responses (optional)
+# Defaults to the model's output limit when unset.
+# max_tokens = 12288
 
 # Timeout for tool execution in seconds (0 disables timeout)
-tool_timeout_secs = 30
+tool_timeout_secs = 0
 
 # System prompt (inline)
-# system_prompt = "You are a helpful assistant."
+# system_prompt = "You are a helpful coding assistant."
 
 # System prompt from file (takes precedence over inline)
 # system_prompt_file = "/path/to/system_prompt.md"
@@ -22,7 +23,7 @@ tool_timeout_secs = 30
 # Controls how much reasoning Claude shows before responding.
 # Higher levels use more tokens but provide deeper reasoning.
 # Options: off, minimal, low, medium, high
-# Note: max_tokens is auto-adjusted to ensure room for both thinking and response.
+# Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
 
 # OpenAI reasoning effort (used by Codex models).
