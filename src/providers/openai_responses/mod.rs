@@ -166,6 +166,11 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 output: None,
                             });
                         }
+                        ChatContentBlock::Image { .. } => {
+                            // Skip images in assistant messages - Responses API doesn't support
+                            // output images in history. The text response about the image is
+                            // preserved, which provides sufficient context.
+                        }
                         ChatContentBlock::ToolUse {
                             id,
                             name,
@@ -194,18 +199,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                             // Skip thinking blocks for OpenAI-compatible providers.
                         }
                         ChatContentBlock::ToolResult(result) => {
-                            let output = match &result.content {
-                                ToolResultContent::Text(text) => text.clone(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .find_map(|block| match block {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default(),
-                            };
+                            let (output, has_image) =
+                                extract_tool_result_with_image(&result.content);
 
                             let call_id = result
                                 .tool_use_id
@@ -218,6 +213,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 continue;
                             }
 
+                            // Add the function call output (text part)
                             input.push(InputItem {
                                 id: None,
                                 item_type: "function_call_output".to_string(),
@@ -228,38 +224,63 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 arguments: None,
                                 output: Some(output),
                             });
+
+                            // If there's an image, add it as a separate user message
+                            // OpenAI Responses API doesn't support images in function_call_output
+                            if let Some((mime_type, data)) = has_image {
+                                let image_url = format!("data:{};base64,{}", mime_type, data);
+                                input.push(InputItem {
+                                    id: None,
+                                    item_type: "message".to_string(),
+                                    role: Some("user".to_string()),
+                                    content: Some(vec![InputContent::InputImage {
+                                        image_url,
+                                        detail: Some("auto".to_string()),
+                                    }]),
+                                    call_id: None,
+                                    name: None,
+                                    arguments: None,
+                                    output: None,
+                                });
+                            }
                         }
                     }
                 }
             }
             ("user", MessageContent::Blocks(blocks)) => {
+                // Collect all content for this user message
+                let mut content_parts: Vec<InputContent> = Vec::new();
+
                 for block in blocks {
                     match block {
                         ChatContentBlock::Text(text) => {
-                            input.push(InputItem {
-                                id: None,
-                                item_type: "message".to_string(),
-                                role: Some("user".to_string()),
-                                content: Some(vec![InputContent::InputText { text: text.clone() }]),
-                                call_id: None,
-                                name: None,
-                                arguments: None,
-                                output: None,
+                            content_parts.push(InputContent::InputText { text: text.clone() });
+                        }
+                        ChatContentBlock::Image { mime_type, data } => {
+                            let image_url = format!("data:{};base64,{}", mime_type, data);
+                            content_parts.push(InputContent::InputImage {
+                                image_url,
+                                detail: Some("auto".to_string()),
                             });
                         }
                         ChatContentBlock::ToolResult(result) => {
-                            let output = match &result.content {
-                                ToolResultContent::Text(text) => text.clone(),
-                                ToolResultContent::Blocks(blocks) => blocks
-                                    .iter()
-                                    .find_map(|block| match block {
-                                        crate::tools::ToolResultBlock::Text { text } => {
-                                            Some(text.clone())
-                                        }
-                                        _ => None,
-                                    })
-                                    .unwrap_or_default(),
-                            };
+                            // First, flush any pending content as a user message
+                            if !content_parts.is_empty() {
+                                input.push(InputItem {
+                                    id: None,
+                                    item_type: "message".to_string(),
+                                    role: Some("user".to_string()),
+                                    content: Some(content_parts),
+                                    call_id: None,
+                                    name: None,
+                                    arguments: None,
+                                    output: None,
+                                });
+                                content_parts = Vec::new();
+                            }
+
+                            let (output, has_image) =
+                                extract_tool_result_with_image(&result.content);
 
                             let call_id = result
                                 .tool_use_id
@@ -282,9 +303,41 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 arguments: None,
                                 output: Some(output),
                             });
+
+                            // If there's an image, add it as a separate user message
+                            if let Some((mime_type, data)) = has_image {
+                                let image_url = format!("data:{};base64,{}", mime_type, data);
+                                input.push(InputItem {
+                                    id: None,
+                                    item_type: "message".to_string(),
+                                    role: Some("user".to_string()),
+                                    content: Some(vec![InputContent::InputImage {
+                                        image_url,
+                                        detail: Some("auto".to_string()),
+                                    }]),
+                                    call_id: None,
+                                    name: None,
+                                    arguments: None,
+                                    output: None,
+                                });
+                            }
                         }
                         _ => {}
                     }
+                }
+
+                // Flush any remaining content
+                if !content_parts.is_empty() {
+                    input.push(InputItem {
+                        id: None,
+                        item_type: "message".to_string(),
+                        role: Some("user".to_string()),
+                        content: Some(content_parts),
+                        call_id: None,
+                        name: None,
+                        arguments: None,
+                        output: None,
+                    });
                 }
             }
             _ => {}
@@ -292,6 +345,34 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
     }
 
     Ok(input)
+}
+
+/// Extracts text and optional image from tool result content.
+/// Returns (text_output, Option<(mime_type, base64_data)>)
+fn extract_tool_result_with_image(
+    content: &ToolResultContent,
+) -> (String, Option<(String, String)>) {
+    match content {
+        ToolResultContent::Text(text) => (text.clone(), None),
+        ToolResultContent::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .find_map(|block| match block {
+                    crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let image = blocks.iter().find_map(|block| match block {
+                crate::tools::ToolResultBlock::Image { mime_type, data } => {
+                    Some((mime_type.clone(), data.clone()))
+                }
+                _ => None,
+            });
+
+            (text, image)
+        }
+    }
 }
 
 #[cfg(test)]

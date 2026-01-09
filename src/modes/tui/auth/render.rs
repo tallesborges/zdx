@@ -22,6 +22,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
 
     let title = match login_state.provider() {
         crate::providers::ProviderKind::Anthropic => "Anthropic Login",
+        crate::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
         crate::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
         crate::providers::ProviderKind::OpenAI => "OpenAI Login",
         crate::providers::ProviderKind::OpenRouter => "OpenRouter Login",

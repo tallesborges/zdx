@@ -16,7 +16,7 @@ use serde_json::{Value, json};
 use crate::providers::{
     ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind,
 };
-use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
+use crate::tools::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
 /// Synthetic thought signature for active loop messages.
 pub const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
@@ -71,6 +71,14 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
                         ChatContentBlock::Text(text) => {
                             parts.push(json!({"text": text}));
                         }
+                        ChatContentBlock::Image { mime_type, data } => {
+                            parts.push(json!({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": data
+                                }
+                            }));
+                        }
                         ChatContentBlock::ToolUse { id, name, input } => {
                             tool_name_map.insert(id.clone(), name.clone());
                             let mut part = json!({
@@ -100,10 +108,19 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
             ("user", MessageContent::Blocks(blocks)) => {
                 let mut parts = Vec::new();
                 let mut tool_results = Vec::new();
+                let mut pending_images: Vec<(String, String)> = Vec::new();
 
                 for block in blocks {
                     match block {
                         ChatContentBlock::Text(text) => parts.push(json!({"text": text})),
+                        ChatContentBlock::Image { mime_type, data } => {
+                            parts.push(json!({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": data
+                                }
+                            }));
+                        }
                         ChatContentBlock::ToolResult(result) => tool_results.push(result),
                         _ => {}
                     }
@@ -111,15 +128,24 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
 
                 for result in tool_results {
                     if let Some(name) = tool_name_map.get(&result.tool_use_id) {
+                        // Get text and optional image from tool result
+                        let (text, image) = extract_tool_result_with_image(&result.content);
+
                         parts.push(json!({
                             "functionResponse": {
                                 "name": name,
                                 "response": {
-                                    "content": tool_result_text(result),
+                                    "content": text,
                                     "is_error": result.is_error
                                 }
                             }
                         }));
+
+                        // Collect images to add as separate message after function responses
+                        // (Gemini may not process inlineData mixed with functionResponse)
+                        if let Some((mime_type, data)) = image {
+                            pending_images.push((mime_type, data));
+                        }
                     }
                 }
 
@@ -127,6 +153,26 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
                     contents.push(json!({
                         "role": "user",
                         "parts": parts
+                    }));
+                }
+
+                // Add tool result images as a separate user message
+                // This ensures Gemini processes them as visual input
+                if !pending_images.is_empty() {
+                    let image_parts: Vec<Value> = pending_images
+                        .into_iter()
+                        .map(|(mime_type, data)| {
+                            json!({
+                                "inlineData": {
+                                    "mimeType": mime_type,
+                                    "data": data
+                                }
+                            })
+                        })
+                        .collect();
+                    contents.push(json!({
+                        "role": "user",
+                        "parts": image_parts
                     }));
                 }
             }
@@ -259,15 +305,30 @@ fn matches_user_text(msg: &ChatMessage) -> bool {
     }
 }
 
-fn tool_result_text(result: &ToolResult) -> String {
-    match &result.content {
-        ToolResultContent::Text(text) => text.clone(),
-        ToolResultContent::Blocks(blocks) => blocks
-            .iter()
-            .find_map(|block| match block {
-                crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
+/// Extracts text and optional image from tool result content.
+/// Returns (text, Option<(mime_type, base64_data)>)
+fn extract_tool_result_with_image(
+    content: &ToolResultContent,
+) -> (String, Option<(String, String)>) {
+    match content {
+        ToolResultContent::Text(text) => (text.clone(), None),
+        ToolResultContent::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .find_map(|block| match block {
+                    ToolResultBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let image = blocks.iter().find_map(|block| match block {
+                ToolResultBlock::Image { mime_type, data } => {
+                    Some((mime_type.clone(), data.clone()))
+                }
                 _ => None,
-            })
-            .unwrap_or_default(),
+            });
+
+            (text, image)
+        }
     }
 }

@@ -50,8 +50,22 @@ pub struct InputItem {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputContent {
-    InputText { text: String },
-    OutputText { text: String },
+    InputText {
+        text: String,
+    },
+    OutputText {
+        text: String,
+    },
+    /// Image content (base64 data URL or HTTP URL)
+    InputImage {
+        /// Image URL - can be:
+        /// - HTTP URL: "https://example.com/image.png"
+        /// - Data URL: "data:image/png;base64,..."
+        image_url: String,
+        /// Detail level: "low", "high", or "auto"
+        #[serde(skip_serializing_if = "Option::is_none")]
+        detail: Option<String>,
+    },
 }
 
 #[derive(Debug, Serialize)]

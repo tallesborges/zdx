@@ -20,6 +20,7 @@ pub use shared::{
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProviderKind {
     Anthropic,
+    ClaudeCli,
     OpenAICodex,
     OpenAI,
     OpenRouter,
@@ -44,6 +45,7 @@ impl ProviderKind {
     pub fn label(&self) -> &'static str {
         match self {
             ProviderKind::Anthropic => "Anthropic",
+            ProviderKind::ClaudeCli => "Claude CLI",
             ProviderKind::OpenAICodex => "OpenAI Codex",
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
@@ -55,13 +57,17 @@ impl ProviderKind {
     pub fn supports_oauth(&self) -> bool {
         matches!(
             self,
-            ProviderKind::Anthropic | ProviderKind::OpenAICodex | ProviderKind::GeminiCli
+            ProviderKind::Anthropic
+                | ProviderKind::ClaudeCli
+                | ProviderKind::OpenAICodex
+                | ProviderKind::GeminiCli
         )
     }
 
     pub fn api_key_env_var(&self) -> Option<&'static str> {
         match self {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
+            ProviderKind::ClaudeCli => None,
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
@@ -73,6 +79,7 @@ impl ProviderKind {
     pub fn auth_mode(&self) -> ProviderAuthMode {
         match self {
             ProviderKind::Anthropic => ProviderAuthMode::OAuth,
+            ProviderKind::ClaudeCli => ProviderAuthMode::OAuth,
             ProviderKind::OpenAICodex => ProviderAuthMode::OAuth,
             ProviderKind::GeminiCli => ProviderAuthMode::OAuth,
             ProviderKind::OpenAI => ProviderAuthMode::ApiKey,
@@ -106,6 +113,8 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
         ProviderKind::OpenAI
     } else if lower.starts_with("gemini") {
         ProviderKind::Gemini
+    } else if lower.starts_with("claude-cli") {
+        ProviderKind::ClaudeCli
     } else {
         ProviderKind::Anthropic
     };
@@ -129,6 +138,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
             let rest = rest.trim();
             let kind = match prefix.as_str() {
                 "anthropic" | "claude" => ProviderKind::Anthropic,
+                "claude-cli" => ProviderKind::ClaudeCli,
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
                 "gemini" | "google" => ProviderKind::Gemini,

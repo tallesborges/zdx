@@ -87,6 +87,7 @@ impl EventSender {
 
 enum ProviderClient {
     Anthropic(AnthropicClient),
+    ClaudeCli(AnthropicClient),
     OpenAICodex(OpenAICodexClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
@@ -103,6 +104,9 @@ impl ProviderClient {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         match self {
             ProviderClient::Anthropic(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::ClaudeCli(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::OpenAICodex(client) => {
@@ -248,7 +252,7 @@ pub async fn run_turn(
     };
 
     let client = match provider {
-        ProviderKind::Anthropic => {
+        ProviderKind::Anthropic | ProviderKind::ClaudeCli => {
             // Translate ThinkingLevel to raw API values
             let thinking_enabled = thinking_level.is_enabled();
             let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
@@ -260,7 +264,12 @@ pub async fn run_turn(
                 thinking_enabled,
                 thinking_budget_tokens,
             )?;
-            ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
+            let client = AnthropicClient::new(anthropic_config);
+            if provider == ProviderKind::ClaudeCli {
+                ProviderClient::ClaudeCli(client)
+            } else {
+                ProviderClient::Anthropic(client)
+            }
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);

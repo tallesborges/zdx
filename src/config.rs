@@ -151,6 +151,16 @@ fn default_config_template() -> String {
         format_models(&providers.anthropic.models)
     ));
 
+    out.push_str("[providers.claude_cli]\n");
+    if let Some(enabled) = providers.claude_cli.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://api.anthropic.com\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n\n",
+        format_models(&providers.claude_cli.models)
+    ));
+
     out.push_str("[providers.openai]\n");
     if let Some(enabled) = providers.openai.enabled {
         out.push_str(&format!("enabled = {}\n", enabled));
@@ -481,6 +491,8 @@ impl Default for Config {
 pub struct ProvidersConfig {
     #[serde(default = "default_anthropic_provider")]
     pub anthropic: ProviderConfig,
+    #[serde(default = "default_claude_cli_provider")]
+    pub claude_cli: ProviderConfig,
     #[serde(default = "default_openai_provider")]
     pub openai: ProviderConfig,
     #[serde(default = "default_openai_codex_provider")]
@@ -497,6 +509,7 @@ impl Default for ProvidersConfig {
     fn default() -> Self {
         Self {
             anthropic: default_anthropic_provider(),
+            claude_cli: default_claude_cli_provider(),
             openai_codex: default_openai_codex_provider(),
             openai: default_openai_provider(),
             gemini: default_gemini_provider(),
@@ -507,6 +520,18 @@ impl Default for ProvidersConfig {
 }
 
 fn default_anthropic_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "claude-opus-4-5".to_string(),
+            "claude-sonnet-4-5".to_string(),
+            "claude-haiku-4-5".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_claude_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![

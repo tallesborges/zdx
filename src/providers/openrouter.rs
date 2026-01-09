@@ -196,11 +196,37 @@ struct StreamOptions {
 struct ChatCompletionMessage {
     role: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    content: Option<String>,
+    content: Option<ChatMessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_calls: Option<Vec<ChatToolCall>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     tool_call_id: Option<String>,
+}
+
+/// Message content - either a simple string or an array of content parts.
+#[derive(Debug, Serialize)]
+#[serde(untagged)]
+enum ChatMessageContent {
+    /// Simple text content (serializes as a string)
+    Text(String),
+    /// Multi-part content with text and images (serializes as an array)
+    Parts(Vec<ChatContentPart>),
+}
+
+/// Content part for multi-part messages.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ChatContentPart {
+    /// Text content part
+    Text { text: String },
+    /// Image URL content part (supports both URLs and base64 data URLs)
+    ImageUrl { image_url: ImageUrlData },
+}
+
+/// Image URL data structure.
+#[derive(Debug, Serialize)]
+struct ImageUrlData {
+    url: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -259,7 +285,7 @@ impl ChatCompletionRequest {
         {
             out_messages.push(ChatCompletionMessage {
                 role: "system".to_string(),
-                content: Some(prompt.to_string()),
+                content: Some(ChatMessageContent::Text(prompt.to_string())),
                 tool_calls: None,
                 tool_call_id: None,
             });
@@ -270,7 +296,7 @@ impl ChatCompletionRequest {
                 ("user", MessageContent::Text(text)) => {
                     out_messages.push(ChatCompletionMessage {
                         role: "user".to_string(),
-                        content: Some(text.clone()),
+                        content: Some(ChatMessageContent::Text(text.clone())),
                         tool_calls: None,
                         tool_call_id: None,
                     });
@@ -278,7 +304,7 @@ impl ChatCompletionRequest {
                 ("assistant", MessageContent::Text(text)) => {
                     out_messages.push(ChatCompletionMessage {
                         role: "assistant".to_string(),
-                        content: Some(text.clone()),
+                        content: Some(ChatMessageContent::Text(text.clone())),
                         tool_calls: None,
                         tool_call_id: None,
                     });
@@ -304,6 +330,8 @@ impl ChatCompletionRequest {
                             }
                             ChatContentBlock::Thinking { .. } => {}
                             ChatContentBlock::ToolResult(_) => {}
+                            // OpenRouter doesn't support images in assistant messages
+                            ChatContentBlock::Image { .. } => {}
                         }
                     }
 
@@ -313,39 +341,100 @@ impl ChatCompletionRequest {
 
                     out_messages.push(ChatCompletionMessage {
                         role: "assistant".to_string(),
-                        content: (!text.is_empty()).then_some(text),
+                        content: (!text.is_empty()).then_some(ChatMessageContent::Text(text)),
                         tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
                         tool_call_id: None,
                     });
                 }
                 ("user", MessageContent::Blocks(blocks)) => {
-                    let mut text = String::new();
+                    let mut content_parts: Vec<ChatContentPart> = Vec::new();
                     let mut tool_results: Vec<&ToolResult> = Vec::new();
 
                     for block in blocks {
                         match block {
-                            ChatContentBlock::Text(value) => text.push_str(value),
+                            ChatContentBlock::Text(value) => {
+                                content_parts.push(ChatContentPart::Text {
+                                    text: value.clone(),
+                                });
+                            }
+                            ChatContentBlock::Image { mime_type, data } => {
+                                // Convert to data URL format
+                                let url = format!("data:{};base64,{}", mime_type, data);
+                                content_parts.push(ChatContentPart::ImageUrl {
+                                    image_url: ImageUrlData { url },
+                                });
+                            }
                             ChatContentBlock::ToolResult(result) => tool_results.push(result),
                             _ => {}
                         }
                     }
 
-                    if !text.is_empty() {
+                    // Add user message with content parts (text and images)
+                    if !content_parts.is_empty() {
+                        // If only text parts (no images), collapse to simple string for compatibility
+                        // with non-multimodal models and legacy OpenAI-compatible endpoints
+                        let has_images = content_parts
+                            .iter()
+                            .any(|p| matches!(p, ChatContentPart::ImageUrl { .. }));
+
+                        let content = if !has_images && content_parts.len() == 1 {
+                            // Single text part - use string format
+                            if let ChatContentPart::Text { text } = &content_parts[0] {
+                                ChatMessageContent::Text(text.clone())
+                            } else {
+                                ChatMessageContent::Parts(content_parts)
+                            }
+                        } else if !has_images {
+                            // Multiple text parts - concatenate into single string
+                            let combined: String = content_parts
+                                .iter()
+                                .filter_map(|p| match p {
+                                    ChatContentPart::Text { text } => Some(text.as_str()),
+                                    _ => None,
+                                })
+                                .collect::<Vec<_>>()
+                                .join("");
+                            ChatMessageContent::Text(combined)
+                        } else {
+                            // Has images - use array format
+                            ChatMessageContent::Parts(content_parts)
+                        };
+
                         out_messages.push(ChatCompletionMessage {
                             role: "user".to_string(),
-                            content: Some(text),
+                            content: Some(content),
                             tool_calls: None,
                             tool_call_id: None,
                         });
                     }
 
+                    // Add tool results as separate tool messages
                     for result in tool_results {
+                        // Extract text and optional image from tool result
+                        let (text, image) = extract_tool_result_with_image(&result.content);
+
                         out_messages.push(ChatCompletionMessage {
                             role: "tool".to_string(),
-                            content: Some(tool_result_text(result)),
+                            content: Some(ChatMessageContent::Text(text)),
                             tool_calls: None,
                             tool_call_id: Some(result.tool_use_id.clone()),
                         });
+
+                        // If there's an image in the tool result, add it as a follow-up user message
+                        // (OpenRouter/OpenAI doesn't support images in tool responses)
+                        if let Some((mime_type, data)) = image {
+                            let url = format!("data:{};base64,{}", mime_type, data);
+                            out_messages.push(ChatCompletionMessage {
+                                role: "user".to_string(),
+                                content: Some(ChatMessageContent::Parts(vec![
+                                    ChatContentPart::ImageUrl {
+                                        image_url: ImageUrlData { url },
+                                    },
+                                ])),
+                                tool_calls: None,
+                                tool_call_id: None,
+                            });
+                        }
                     }
                 }
                 _ => {}
@@ -371,16 +460,31 @@ impl ChatCompletionRequest {
     }
 }
 
-fn tool_result_text(result: &ToolResult) -> String {
-    match &result.content {
-        ToolResultContent::Text(text) => text.clone(),
-        ToolResultContent::Blocks(blocks) => blocks
-            .iter()
-            .find_map(|block| match block {
-                crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
+/// Extracts text and optional image from tool result content.
+/// Returns (text, Option<(mime_type, base64_data)>)
+fn extract_tool_result_with_image(
+    content: &ToolResultContent,
+) -> (String, Option<(String, String)>) {
+    match content {
+        ToolResultContent::Text(text) => (text.clone(), None),
+        ToolResultContent::Blocks(blocks) => {
+            let text = blocks
+                .iter()
+                .find_map(|block| match block {
+                    crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
+                    _ => None,
+                })
+                .unwrap_or_default();
+
+            let image = blocks.iter().find_map(|block| match block {
+                crate::tools::ToolResultBlock::Image { mime_type, data } => {
+                    Some((mime_type.clone(), data.clone()))
+                }
                 _ => None,
-            })
-            .unwrap_or_default(),
+            });
+
+            (text, image)
+        }
     }
 }
 

@@ -15,6 +15,13 @@ pub enum ChatContentBlock {
     Thinking { thinking: String, signature: String },
     #[serde(rename = "text")]
     Text(String),
+    #[serde(rename = "image")]
+    Image {
+        /// MIME type (e.g., "image/png", "image/jpeg")
+        mime_type: String,
+        /// Base64-encoded image data
+        data: String,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,

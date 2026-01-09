@@ -84,6 +84,9 @@ enum Commands {
         /// Provider to log in to
         #[arg(long)]
         anthropic: bool,
+        /// Provider to log in to (Claude CLI OAuth)
+        #[arg(long = "claude-cli")]
+        claude_cli: bool,
         /// Provider to log in to
         #[arg(long = "openai-codex")]
         openai_codex: bool,
@@ -97,6 +100,9 @@ enum Commands {
         /// Provider to log out from
         #[arg(long)]
         anthropic: bool,
+        /// Provider to log out from (Claude CLI OAuth)
+        #[arg(long = "claude-cli")]
+        claude_cli: bool,
         /// Provider to log out from
         #[arg(long = "openai-codex")]
         openai_codex: bool,
@@ -216,27 +222,31 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
         Commands::Login {
             anthropic,
+            claude_cli,
             openai_codex,
             gemini_cli,
-        } => match (anthropic, openai_codex, gemini_cli) {
-            (true, false, false) => commands::auth::login_anthropic().await,
-            (false, true, false) => commands::auth::login_openai_codex().await,
-            (false, false, true) => commands::auth::login_gemini_cli().await,
+        } => match (anthropic, claude_cli, openai_codex, gemini_cli) {
+            (true, false, false, false) => commands::auth::login_anthropic().await,
+            (false, true, false, false) => commands::auth::login_claude_cli().await,
+            (false, false, true, false) => commands::auth::login_openai_codex().await,
+            (false, false, false, true) => commands::auth::login_gemini_cli().await,
             _ => anyhow::bail!(
-                "Please specify a provider: --anthropic, --openai-codex, or --gemini-cli"
+                "Please specify a provider: --anthropic, --claude-cli, --openai-codex, or --gemini-cli"
             ),
         },
 
         Commands::Logout {
             anthropic,
+            claude_cli,
             openai_codex,
             gemini_cli,
-        } => match (anthropic, openai_codex, gemini_cli) {
-            (true, false, false) => commands::auth::logout_anthropic(),
-            (false, true, false) => commands::auth::logout_openai_codex(),
-            (false, false, true) => commands::auth::logout_gemini_cli(),
+        } => match (anthropic, claude_cli, openai_codex, gemini_cli) {
+            (true, false, false, false) => commands::auth::logout_anthropic(),
+            (false, true, false, false) => commands::auth::logout_claude_cli(),
+            (false, false, true, false) => commands::auth::logout_openai_codex(),
+            (false, false, false, true) => commands::auth::logout_gemini_cli(),
             _ => anyhow::bail!(
-                "Please specify a provider: --anthropic, --openai-codex, or --gemini-cli"
+                "Please specify a provider: --anthropic, --claude-cli, --openai-codex, or --gemini-cli"
             ),
         },
 
