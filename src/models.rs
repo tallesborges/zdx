@@ -219,6 +219,7 @@ fn leak_string(value: String) -> &'static str {
 fn provider_id_for_kind(kind: crate::providers::ProviderKind) -> &'static str {
     match kind {
         crate::providers::ProviderKind::Anthropic => "anthropic",
+        crate::providers::ProviderKind::ClaudeCli => "claude-cli",
         crate::providers::ProviderKind::OpenAICodex => "openai-codex",
         crate::providers::ProviderKind::OpenAI => "openai",
         crate::providers::ProviderKind::OpenRouter => "openrouter",

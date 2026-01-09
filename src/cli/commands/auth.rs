@@ -12,10 +12,24 @@ use crate::providers::oauth::{
 };
 
 pub async fn login_anthropic() -> Result<()> {
+    do_login_anthropic(false).await
+}
+
+pub async fn login_claude_cli() -> Result<()> {
+    do_login_anthropic(true).await
+}
+
+async fn do_login_anthropic(force_claude_cli: bool) -> Result<()> {
     // Check if already logged in
     if let Some(existing) = oauth_anthropic::load_credentials()? {
+        let label = if force_claude_cli {
+            "Claude CLI"
+        } else {
+            "Anthropic"
+        };
         println!(
-            "Already logged in to Anthropic (token: {})",
+            "Already logged in to {} (token: {})",
+            label,
             oauth_anthropic::mask_token(&existing.access)
         );
         print!("Do you want to replace the existing credentials? [y/N] ");
@@ -34,10 +48,19 @@ pub async fn login_anthropic() -> Result<()> {
     let oauth_state = uuid::Uuid::new_v4().to_string();
     let callback_port = oauth_anthropic::random_local_port();
     let redirect_uri = oauth_anthropic::build_redirect_uri(callback_port);
-    let auth_url = oauth_anthropic::build_auth_url(&pkce, &oauth_state, &redirect_uri);
+    let mut auth_url = oauth_anthropic::build_auth_url(&pkce, &oauth_state, &redirect_uri);
+    if force_claude_cli {
+        // Claude CLI requires the claude-code client hint to unlock CLI features.
+        auth_url.push_str("&client=claude-code");
+    }
 
     // Show instructions
-    println!("To log in to Anthropic with OAuth:");
+    let label = if force_claude_cli {
+        "Claude CLI"
+    } else {
+        "Anthropic"
+    };
+    println!("To log in to {} with OAuth:", label);
     println!();
     println!("  1. A browser window will open (or visit the URL below)");
     println!("  2. Log in to your Anthropic account and authorize access");
@@ -89,7 +112,8 @@ pub async fn login_anthropic() -> Result<()> {
     let cache_path = OAuthCache::cache_path();
     println!();
     println!(
-        "✓ Logged in to Anthropic (token: {})",
+        "✓ Logged in to {} (token: {})",
+        label,
         oauth_anthropic::mask_token(&credentials.access)
     );
     println!("  Credentials saved to: {}", cache_path.display());
@@ -98,14 +122,27 @@ pub async fn login_anthropic() -> Result<()> {
 }
 
 pub fn logout_anthropic() -> Result<()> {
+    do_logout_anthropic(false)
+}
+
+pub fn logout_claude_cli() -> Result<()> {
+    do_logout_anthropic(true)
+}
+
+fn do_logout_anthropic(force_claude_cli: bool) -> Result<()> {
     let had_creds = oauth_anthropic::clear_credentials()?;
+    let label = if force_claude_cli {
+        "Claude CLI"
+    } else {
+        "Anthropic"
+    };
 
     if had_creds {
         let cache_path = OAuthCache::cache_path();
-        println!("✓ Logged out from Anthropic");
+        println!("✓ Logged out from {}", label);
         println!("  Credentials removed from: {}", cache_path.display());
     } else {
-        println!("Not logged in to Anthropic (no credentials found).");
+        println!("Not logged in to {} (no credentials found).", label);
     }
 
     Ok(())

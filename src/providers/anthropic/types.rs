@@ -147,6 +147,8 @@ pub(crate) enum ApiContentBlock {
         #[serde(skip_serializing_if = "Option::is_none")]
         cache_control: Option<CacheControl>,
     },
+    #[serde(rename = "image")]
+    Image { source: ApiImageSource },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -205,6 +207,13 @@ impl ApiMessage {
                                 Some(CacheControl::ephemeral())
                             } else {
                                 None
+                            },
+                        },
+                        ChatContentBlock::Image { mime_type, data } => ApiContentBlock::Image {
+                            source: ApiImageSource {
+                                source_type: "base64",
+                                media_type: mime_type.clone(),
+                                data: data.clone(),
                             },
                         },
                         ChatContentBlock::ToolUse { id, name, input } => ApiContentBlock::ToolUse {
