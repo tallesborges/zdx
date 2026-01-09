@@ -20,8 +20,8 @@ use crate::providers::ChatMessage;
 /// Sanitizes pasted text by stripping ANSI escapes and expanding tabs to spaces.
 pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
     let sanitized = sanitize_for_display(text);
-    if let Some(Overlay::Login(LoginState::AwaitingCode { input, .. })) = overlay {
-        input.push_str(&sanitized);
+    if let Some(Overlay::Login(LoginState::AwaitingCode { .. })) = overlay {
+        // Ignore paste while waiting for OAuth callback.
     } else {
         input.textarea.insert_str(&sanitized);
     }

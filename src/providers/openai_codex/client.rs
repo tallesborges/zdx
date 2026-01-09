@@ -53,7 +53,8 @@ impl OpenAICodexClient {
             max_output_tokens: None,
             reasoning_effort: self.config.reasoning_effort.clone(),
             instructions,
-            store: Some(false),
+            store: Some(true),
+            include: Some(vec!["reasoning.summary".to_string()]),
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await

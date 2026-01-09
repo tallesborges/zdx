@@ -407,6 +407,7 @@ fn model_matches_filter(model: &ModelOption, filter: &str) -> bool {
 fn provider_label(provider_id: &str) -> String {
     match provider_id {
         "anthropic" => ProviderKind::Anthropic.label().to_string(),
+        "claude-cli" => ProviderKind::ClaudeCli.label().to_string(),
         "openai" => ProviderKind::OpenAI.label().to_string(),
         "openrouter" => ProviderKind::OpenRouter.label().to_string(),
         "gemini" => ProviderKind::Gemini.label().to_string(),

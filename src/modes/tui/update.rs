@@ -616,19 +616,6 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
     let mut effects = Vec::with_capacity(update.effects.len());
     for effect in update.effects {
         match effect {
-            overlays::OverlayEffect::StartTokenExchange {
-                provider,
-                code,
-                verifier,
-                redirect_uri,
-            } => push_token_exchange(
-                &mut app.tui,
-                &mut effects,
-                provider,
-                code,
-                verifier,
-                redirect_uri,
-            ),
             overlays::OverlayEffect::Ui(effect) => effects.push(effect),
         }
     }

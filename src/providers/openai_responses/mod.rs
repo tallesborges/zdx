@@ -27,6 +27,7 @@ pub struct ResponsesConfig {
     pub reasoning_effort: Option<String>,
     pub instructions: Option<String>,
     pub store: Option<bool>,
+    pub include: Option<Vec<String>>,
 }
 
 /// Sends a Responses API request and returns a stream of normalized events.
@@ -61,6 +62,7 @@ pub async fn send_responses_stream(
             .map(|effort| ReasoningConfig {
                 effort: effort.clone(),
             }),
+        include: config.include.clone(),
         input,
         tools: tool_defs,
     };

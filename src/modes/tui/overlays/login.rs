@@ -2,22 +2,24 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
 
-use super::{OverlayEffect, OverlayUpdate};
+use super::OverlayUpdate;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::auth::render_login_overlay;
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{AuthMutation, StateMutation};
-use crate::providers::{ProviderKind, provider_for_model};
+use crate::providers::ProviderKind;
 
 #[derive(Debug, Clone)]
 pub enum LoginState {
+    SelectProvider {
+        selected: usize,
+    },
     AwaitingCode {
         provider: ProviderKind,
         url: String,
         pkce_verifier: String,
         oauth_state: Option<String>,
         redirect_uri: Option<String>,
-        input: String,
         error: Option<String>,
     },
     Exchanging {
@@ -30,21 +32,24 @@ pub enum LoginState {
 }
 
 impl LoginState {
-    pub fn open(tui: &TuiState) -> (Self, Vec<UiEffect>) {
-        let provider = provider_for_model(&tui.config.model);
-        Self::open_with_provider(provider, None, true)
+    pub fn open(_tui: &TuiState) -> (Self, Vec<UiEffect>) {
+        (LoginState::SelectProvider { selected: 0 }, vec![])
+    }
+
+    fn cli_providers() -> &'static [ProviderKind] {
+        &[
+            ProviderKind::ClaudeCli,
+            ProviderKind::OpenAICodex,
+            ProviderKind::GeminiCli,
+        ]
     }
 
     pub fn reopen(provider: ProviderKind, error: String) -> Self {
-        let (state, _) = Self::open_with_provider(provider, Some(error), false);
+        let (state, _) = Self::open_with_provider(provider, Some(error));
         state
     }
 
-    fn open_with_provider(
-        provider: ProviderKind,
-        error: Option<String>,
-        open_browser: bool,
-    ) -> (Self, Vec<UiEffect>) {
+    fn open_with_provider(provider: ProviderKind, error: Option<String>) -> (Self, Vec<UiEffect>) {
         match provider {
             ProviderKind::Anthropic => {
                 let env_var = provider.api_key_env_var().unwrap_or("API_KEY").to_string();
@@ -64,17 +69,16 @@ impl LoginState {
                     pkce_verifier: pkce.verifier,
                     oauth_state: Some(oauth_state.clone()),
                     redirect_uri: Some(redirect_uri),
-                    input: String::new(),
                     error,
                 };
-                let mut effects = vec![UiEffect::StartLocalAuthCallback {
-                    provider,
-                    state: Some(oauth_state),
-                    port: Some(callback_port),
-                }];
-                if open_browser {
-                    effects.push(UiEffect::OpenBrowser { url });
-                }
+                let effects = vec![
+                    UiEffect::OpenBrowser { url },
+                    UiEffect::StartLocalAuthCallback {
+                        provider,
+                        state: Some(oauth_state),
+                        port: Some(callback_port),
+                    },
+                ];
                 (state, effects)
             }
             ProviderKind::OpenAICodex => {
@@ -90,17 +94,16 @@ impl LoginState {
                     pkce_verifier: pkce.verifier,
                     oauth_state: Some(oauth_state),
                     redirect_uri: None,
-                    input: String::new(),
                     error,
                 };
-                let mut effects = vec![UiEffect::StartLocalAuthCallback {
-                    provider,
-                    state: Some(oauth_state_copy),
-                    port: None,
-                }];
-                if open_browser {
-                    effects.push(UiEffect::OpenBrowser { url });
-                }
+                let effects = vec![
+                    UiEffect::OpenBrowser { url },
+                    UiEffect::StartLocalAuthCallback {
+                        provider,
+                        state: Some(oauth_state_copy),
+                        port: None,
+                    },
+                ];
                 (state, effects)
             }
             ProviderKind::GeminiCli => {
@@ -116,17 +119,16 @@ impl LoginState {
                     pkce_verifier: pkce.verifier,
                     oauth_state: Some(oauth_state),
                     redirect_uri: None,
-                    input: String::new(),
                     error,
                 };
-                let mut effects = vec![UiEffect::StartLocalAuthCallback {
-                    provider,
-                    state: Some(oauth_state_copy),
-                    port: None,
-                }];
-                if open_browser {
-                    effects.push(UiEffect::OpenBrowser { url });
-                }
+                let effects = vec![
+                    UiEffect::OpenBrowser { url },
+                    UiEffect::StartLocalAuthCallback {
+                        provider,
+                        state: Some(oauth_state_copy),
+                        port: None,
+                    },
+                ];
                 (state, effects)
             }
             _ => {
@@ -136,11 +138,12 @@ impl LoginState {
         }
     }
 
-    pub fn provider(&self) -> ProviderKind {
+    pub fn selected_provider(&self) -> Option<ProviderKind> {
         match self {
-            LoginState::AwaitingCode { provider, .. } => *provider,
-            LoginState::Exchanging { provider } => *provider,
-            LoginState::ApiKeyInfo { provider, .. } => *provider,
+            LoginState::SelectProvider { .. } => None,
+            LoginState::AwaitingCode { provider, .. } => Some(*provider),
+            LoginState::Exchanging { provider } => Some(*provider),
+            LoginState::ApiKeyInfo { provider, .. } => Some(*provider),
         }
     }
 
@@ -152,120 +155,39 @@ impl LoginState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match self {
-            LoginState::AwaitingCode {
-                provider,
-                input,
-                pkce_verifier,
-                oauth_state,
-                redirect_uri,
-                error,
-                ..
-            } => match key.code {
+            LoginState::SelectProvider { selected } => match key.code {
+                KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
+                    OverlayUpdate::close()
+                }
+                KeyCode::Up => {
+                    if *selected > 0 {
+                        *selected -= 1;
+                    }
+                    OverlayUpdate::stay()
+                }
+                KeyCode::Down => {
+                    if *selected < Self::cli_providers().len().saturating_sub(1) {
+                        *selected += 1;
+                    }
+                    OverlayUpdate::stay()
+                }
+                KeyCode::Enter => {
+                    let provider = Self::cli_providers()
+                        .get(*selected)
+                        .copied()
+                        .unwrap_or(ProviderKind::OpenAICodex);
+                    let (state, effects) = Self::open_with_provider(provider, None);
+                    *self = state;
+                    OverlayUpdate::stay().with_ui_effects(effects)
+                }
+                _ => OverlayUpdate::stay(),
+            },
+            LoginState::AwaitingCode { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                     OverlayUpdate::close().with_mutations(vec![
                         StateMutation::Auth(AuthMutation::CancelLoginRequest),
                         StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
                     ])
-                }
-                KeyCode::Enter => {
-                    let provider = *provider;
-                    let pkce_verifier = pkce_verifier.clone();
-                    let oauth_state = oauth_state.clone();
-                    let redirect_uri = redirect_uri.clone();
-                    let code = input.trim();
-                    if code.is_empty() {
-                        return OverlayUpdate::stay();
-                    }
-
-                    let code = match provider {
-                        ProviderKind::ClaudeCli => {
-                            use crate::providers::oauth::claude_cli;
-
-                            let (parsed_code, provided_state) =
-                                claude_cli::parse_authorization_input(code);
-                            let expected_state =
-                                oauth_state.clone().unwrap_or_else(|| pkce_verifier.clone());
-                            if let Some(provided) = provided_state
-                                && provided != expected_state
-                            {
-                                *error = Some("State mismatch.".to_string());
-                                return OverlayUpdate::stay();
-                            }
-                            let parsed_code = match parsed_code {
-                                Some(value) => value,
-                                None => {
-                                    *error =
-                                        Some("Authorization code cannot be empty.".to_string());
-                                    return OverlayUpdate::stay();
-                                }
-                            };
-                            format!("{}#{}", parsed_code, expected_state)
-                        }
-                        ProviderKind::OpenAICodex => {
-                            use crate::providers::oauth::openai_codex;
-
-                            let (parsed_code, provided_state) =
-                                openai_codex::parse_authorization_input(code);
-                            if let Some(expected) = oauth_state
-                                && let Some(provided) = provided_state
-                                && provided != expected
-                            {
-                                *error = Some("State mismatch.".to_string());
-                                return OverlayUpdate::stay();
-                            }
-                            match parsed_code {
-                                Some(value) => value,
-                                None => {
-                                    *error =
-                                        Some("Authorization code cannot be empty.".to_string());
-                                    return OverlayUpdate::stay();
-                                }
-                            }
-                        }
-                        ProviderKind::GeminiCli => {
-                            use crate::providers::oauth::gemini_cli;
-
-                            let (parsed_code, provided_state) =
-                                gemini_cli::parse_authorization_input(code);
-                            if let Some(expected) = oauth_state
-                                && let Some(provided) = provided_state
-                                && provided != expected
-                            {
-                                *error = Some("State mismatch.".to_string());
-                                return OverlayUpdate::stay();
-                            }
-                            match parsed_code {
-                                Some(value) => value,
-                                None => {
-                                    *error =
-                                        Some("Authorization code cannot be empty.".to_string());
-                                    return OverlayUpdate::stay();
-                                }
-                            }
-                        }
-                        _ => code.to_string(),
-                    };
-
-                    *self = LoginState::Exchanging { provider };
-
-                    OverlayUpdate::stay()
-                        .with_effects(vec![OverlayEffect::StartTokenExchange {
-                            provider,
-                            code,
-                            verifier: pkce_verifier,
-                            redirect_uri,
-                        }])
-                        .with_mutations(vec![StateMutation::Auth(
-                            AuthMutation::SetCallbackInProgress(false),
-                        )])
-                }
-                KeyCode::Backspace => {
-                    input.pop();
-                    OverlayUpdate::stay()
-                }
-                KeyCode::Char(c) if !ctrl => {
-                    input.push(c);
-                    OverlayUpdate::stay()
                 }
                 _ => OverlayUpdate::stay(),
             },
