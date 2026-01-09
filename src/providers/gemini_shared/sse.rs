@@ -116,10 +116,24 @@ impl<S> GeminiSseParser<S> {
                 .get("candidatesTokenCount")
                 .and_then(|v| v.as_u64())
                 .unwrap_or(0);
+            let cached_from_details = usage
+                .get("cacheTokensDetails")
+                .and_then(|v| v.as_array())
+                .map(|details| {
+                    details
+                        .iter()
+                        .filter_map(|item| item.get("tokenCount").and_then(|v| v.as_u64()))
+                        .sum::<u64>()
+                })
+                .unwrap_or(0);
+            let cached = usage
+                .get("cachedContentTokenCount")
+                .and_then(|v| v.as_u64())
+                .unwrap_or(cached_from_details);
             self.final_usage = Some(Usage {
-                input_tokens: prompt,
+                input_tokens: prompt.saturating_sub(cached),
                 output_tokens: completion,
-                cache_read_input_tokens: 0,
+                cache_read_input_tokens: cached,
                 cache_creation_input_tokens: 0,
             });
         }
