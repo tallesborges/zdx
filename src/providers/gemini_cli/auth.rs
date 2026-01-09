@@ -9,11 +9,17 @@ use crate::providers::oauth::gemini_cli as oauth_gemini_cli;
 pub struct GeminiCliConfig {
     pub model: String,
     pub max_tokens: u32,
+    /// Session ID for rate limit grouping (persists across requests in a session).
+    pub session_id: String,
 }
 
 impl GeminiCliConfig {
     pub fn new(model: String, max_tokens: u32) -> Self {
-        Self { model, max_tokens }
+        Self {
+            model,
+            max_tokens,
+            session_id: uuid::Uuid::new_v4().to_string(),
+        }
     }
 }
 

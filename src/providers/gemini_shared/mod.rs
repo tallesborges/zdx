@@ -240,14 +240,24 @@ pub fn build_gemini_request(
     Ok(request)
 }
 
+/// Parameters for building a Cloud Code Assist request.
+pub struct CloudCodeRequestParams<'a> {
+    pub model: &'a str,
+    pub project_id: &'a str,
+    pub max_output_tokens: Option<u32>,
+    pub session_id: &'a str,
+    pub prompt_seq: u32,
+}
+
 /// Builds a Cloud Code Assist request body (for OAuth auth).
+///
+/// `session_id` and `prompt_seq` are used to generate `user_prompt_id` in the format
+/// used by the official Gemini CLI: `<session_id>########<seq>`.
 pub fn build_cloud_code_assist_request(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system: Option<&str>,
-    model: &str,
-    project_id: &str,
-    max_output_tokens: Option<u32>,
+    params: CloudCodeRequestParams<'_>,
 ) -> Result<Value> {
     let (contents, _) = build_contents(messages);
     let tools_value = build_tools(tools);
@@ -268,7 +278,7 @@ pub fn build_cloud_code_assist_request(
         inner_request["tools"] = tools_value;
     }
 
-    if let Some(tokens) = max_output_tokens
+    if let Some(tokens) = params.max_output_tokens
         && tokens > 0
     {
         inner_request["generationConfig"] = json!({
@@ -276,12 +286,14 @@ pub fn build_cloud_code_assist_request(
         });
     }
 
+    // Format matches official Gemini CLI: <session_id>########<seq>
+    let user_prompt_id = format!("{}########{}", params.session_id, params.prompt_seq);
+
     let request = json!({
-        "project": project_id,
-        "model": model,
+        "project": params.project_id,
+        "model": params.model,
+        "user_prompt_id": user_prompt_id,
         "request": inner_request,
-        "userAgent": "zdx",
-        "requestId": uuid::Uuid::new_v4().to_string(),
     });
 
     Ok(request)
