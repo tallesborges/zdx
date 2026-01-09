@@ -1,6 +1,6 @@
+use std::fs;
 use std::path::PathBuf;
 use std::process::Command;
-use std::{fs, path};
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -24,7 +24,7 @@ enum CommandName {
 
 impl Default for CommandName {
     fn default() -> Self {
-        CommandName::UpdateDefaultModels
+        CommandName::UpdateDefaults
     }
 }
 
