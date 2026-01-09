@@ -22,6 +22,7 @@ Built because I needed something:
 - **OpenAI provider** with API key (OpenAI API) or OAuth (Codex Subscription)
 - **OpenRouter provider** with API key
 - **Gemini provider** with API key
+- **Gemini CLI provider** with OAuth (Cloud Code Assist)
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display

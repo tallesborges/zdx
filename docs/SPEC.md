@@ -147,18 +147,19 @@ Error:
 
 ## 10) Providers
 
-**Shipped:** Anthropic Claude (streaming + tool loop), OpenAI Codex (Responses API + OAuth), OpenAI API (Responses + API key), OpenRouter (OpenAI-compatible chat completions + API key), Gemini (Generative Language API + API key).
+**Shipped:** Anthropic Claude (streaming + tool loop), OpenAI Codex (Responses API + OAuth), OpenAI API (Responses + API key), OpenRouter (OpenAI-compatible chat completions + API key), Gemini (Generative Language API + API key), Gemini CLI (Cloud Code Assist + OAuth).
 
 - API keys are env-only (never stored in config):
   - `ANTHROPIC_API_KEY`
   - `OPENAI_API_KEY`
   - `OPENROUTER_API_KEY`
   - `GEMINI_API_KEY`
-- OAuth tokens may be cached in `<base>/oauth.json`.
+- OAuth tokens may be cached in `<base>/oauth.json` (Anthropic, OpenAI Codex, Gemini CLI).
 - Auth precedence for Anthropic: `oauth.json` > `ANTHROPIC_API_KEY`.
 - OpenAI Codex uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --openai-codex`).
+- Gemini CLI uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --gemini-cli`).
 - Provider selection:
-  - Explicit prefixes: `openai:`, `openrouter:`, `gemini:`, `anthropic:`, `codex:` (also `openrouter/`).
+  - Explicit prefixes: `openai:`, `openrouter:`, `gemini:`, `gemini-cli:`, `google-gemini-cli:`, `anthropic:`, `codex:` (also `openrouter/`).
   - Heuristics: models containing `codex` → OpenAI Codex; `gpt-*`/`o*` → OpenAI; `gemini-*` → Gemini; `claude-*` → Anthropic.
 
 ---
@@ -168,13 +169,14 @@ Error:
 - Location: `<base>/config.toml`
 - Format: TOML
 - Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `thinking_level`
-  - `max_tokens` is optional; when unset, requests use the model output limit.
+  - `max_tokens` is optional; when unset, requests use the model output limit (exclusive, minus 1).
 - Provider base URLs:
   - `[providers.anthropic].base_url`
   - `[providers.openai].base_url`
   - `[providers.openai_codex].base_url` (unused; reserved)
   - `[providers.openrouter].base_url`
   - `[providers.gemini].base_url`
+  - `[providers.gemini_cli].base_url` (unused; reserved)
 - Models registry:
   - `[providers.<provider>]` (`enabled`, `models`)
   - `models` entries support `*` wildcards for `zdx models update`.

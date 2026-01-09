@@ -325,6 +325,74 @@ input_images = true
 output_limit = 65536
 
 [[model]]
+id = "gemini-cli:gemini-3-flash-preview"
+provider = "gemini-cli"
+display_name = "Gemini 3 Flash Preview"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.5
+output = 3.0
+cache_read = 0.05
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
+
+[[model]]
+id = "gemini-cli:gemini-3-pro-preview"
+provider = "gemini-cli"
+display_name = "Gemini 3 Pro Preview"
+context_limit = 1000000
+
+[model.pricing]
+input = 2.0
+output = 12.0
+cache_read = 0.2
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
+[[model]]
+id = "gemini-cli:gemini-2.5-flash"
+provider = "gemini-cli"
+display_name = "Gemini 2.5 Flash"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.3
+output = 2.5
+cache_read = 0.075
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
+
+[[model]]
+id = "gemini-cli:gemini-2.5-flash-lite"
+provider = "gemini-cli"
+display_name = "Gemini 2.5 Flash Lite"
+context_limit = 1048576
+
+[model.pricing]
+input = 0.1
+output = 0.4
+cache_read = 0.025
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 65536
+
+[[model]]
 id = "gpt-5.2-codex"
 provider = "openai-codex"
 display_name = "GPT-5.2 Codex"

@@ -123,6 +123,12 @@ pub async fn update(config: &config::Config) -> Result<()> {
             &config.providers.openrouter,
         ),
         ("gemini", "google", Some("gemini"), &config.providers.gemini),
+        (
+            "gemini-cli",
+            "google",
+            Some("gemini-cli"),
+            &config.providers.gemini_cli,
+        ),
     ];
 
     let mut records = Vec::new();

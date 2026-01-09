@@ -123,27 +123,53 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     overlays::LoginState::AwaitingCode {
                         provider,
                         pkce_verifier,
+                        oauth_state,
+                        redirect_uri,
                         error,
                         ..
-                    } if *provider == crate::providers::ProviderKind::OpenAICodex => match code {
-                        Some(code) => {
-                            *error = None;
-                            let verifier = pkce_verifier.clone();
-                            let provider = *provider;
-                            *login_state = overlays::LoginState::Exchanging { provider };
-                            push_token_exchange(
-                                &mut app.tui,
-                                &mut effects,
-                                provider,
-                                code,
-                                verifier,
-                            );
+                    } if matches!(
+                        *provider,
+                        crate::providers::ProviderKind::Anthropic
+                            | crate::providers::ProviderKind::OpenAICodex
+                            | crate::providers::ProviderKind::GeminiCli
+                    ) =>
+                    {
+                        match code {
+                            Some(code) => {
+                                *error = None;
+                                let verifier = pkce_verifier.clone();
+                                let provider = *provider;
+                                let code = if provider == crate::providers::ProviderKind::Anthropic
+                                {
+                                    let state =
+                                        oauth_state.clone().unwrap_or_else(|| verifier.clone());
+                                    format!("{}#{}", code, state)
+                                } else {
+                                    code
+                                };
+                                let redirect_uri =
+                                    if provider == crate::providers::ProviderKind::Anthropic {
+                                        redirect_uri.clone()
+                                    } else {
+                                        None
+                                    };
+                                *login_state = overlays::LoginState::Exchanging { provider };
+                                push_token_exchange(
+                                    &mut app.tui,
+                                    &mut effects,
+                                    provider,
+                                    code,
+                                    verifier,
+                                    redirect_uri,
+                                );
+                            }
+                            None => {
+                                *error = Some(
+                                    "Local login timed out. Paste the code or URL.".to_string(),
+                                );
+                            }
                         }
-                        None => {
-                            *error =
-                                Some("Local login timed out. Paste the code or URL.".to_string());
-                        }
-                    },
+                    }
                     _ => {}
                 }
             }
@@ -568,12 +594,14 @@ fn push_token_exchange(
     provider: crate::providers::ProviderKind,
     code: String,
     verifier: String,
+    redirect_uri: Option<String>,
 ) {
     let req = tui.auth.login_request.begin();
     effects.push(UiEffect::SpawnTokenExchange {
         provider,
         code,
         verifier,
+        redirect_uri,
         req,
     });
 }
@@ -586,7 +614,15 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
                 provider,
                 code,
                 verifier,
-            } => push_token_exchange(&mut app.tui, &mut effects, provider, code, verifier),
+                redirect_uri,
+            } => push_token_exchange(
+                &mut app.tui,
+                &mut effects,
+                provider,
+                code,
+                verifier,
+                redirect_uri,
+            ),
             overlays::OverlayEffect::Ui(effect) => effects.push(effect),
         }
     }

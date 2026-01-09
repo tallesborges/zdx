@@ -138,6 +138,7 @@ pub enum OverlayEffect {
         provider: ProviderKind,
         code: String,
         verifier: String,
+        redirect_uri: Option<String>,
     },
 }
 

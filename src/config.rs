@@ -106,7 +106,7 @@ fn default_config_template() -> String {
     out.push_str(&format!("model = \"{}\"\n\n", Config::DEFAULT_MODEL));
 
     out.push_str("# Maximum tokens for responses (optional)\n");
-    out.push_str("# Defaults to the model's output limit when unset.\n");
+    out.push_str("# Defaults to the model's output limit (exclusive, minus 1) when unset.\n");
     out.push_str(&format!(
         "# max_tokens = {}\n\n",
         Config::DEFAULT_MAX_TOKENS
@@ -188,6 +188,16 @@ fn default_config_template() -> String {
     out.push_str(&format!(
         "models = [{}]\n",
         format_models(&providers.gemini.models)
+    ));
+
+    out.push_str("\n[providers.gemini_cli]\n");
+    if let Some(enabled) = providers.gemini_cli.enabled {
+        out.push_str(&format!("enabled = {}\n", enabled));
+    }
+    out.push_str("# base_url = \"https://cloudcode-pa.googleapis.com\"\n");
+    out.push_str(&format!(
+        "models = [{}]\n",
+        format_models(&providers.gemini_cli.models)
     ));
 
     out
@@ -381,7 +391,7 @@ impl Config {
     ///
     /// Resolution order:
     /// 1) Explicit config max_tokens (if set)
-    /// 2) Model output limit from the registry
+    /// 2) Model output limit from the registry (exclusive, minus 1)
     /// 3) Fallback default
     ///
     /// When thinking is enabled and max_tokens is explicitly set, ensures
@@ -392,22 +402,27 @@ impl Config {
             .map(|model| model.capabilities.output_limit)
             .filter(|limit| *limit > 0)
             .and_then(|limit| u32::try_from(limit).ok());
+        let output_limit_exclusive = output_limit
+            .and_then(|limit| limit.checked_sub(1))
+            .filter(|limit| *limit > 0);
 
-        let max_tokens = configured
-            .or(output_limit)
+        let mut max_tokens = configured
+            .or(output_limit_exclusive)
             .unwrap_or(Self::DEFAULT_MAX_TOKENS);
 
-        let Some(thinking_budget) = self.thinking_level.budget_tokens() else {
-            return max_tokens;
-        };
-
-        let min_required = thinking_budget + Self::THINKING_RESPONSE_BUFFER;
-        if let Some(configured) = configured {
-            if configured < min_required {
-                return min_required;
+        if let Some(thinking_budget) = self.thinking_level.budget_tokens() {
+            let min_required = thinking_budget + Self::THINKING_RESPONSE_BUFFER;
+            if let Some(configured) = configured {
+                if configured < min_required {
+                    max_tokens = min_required;
+                }
+            } else if output_limit_exclusive.is_none() && max_tokens < min_required {
+                max_tokens = min_required;
             }
-        } else if output_limit.is_none() && max_tokens < min_required {
-            return min_required;
+        }
+
+        if let Some(limit) = output_limit_exclusive {
+            max_tokens = max_tokens.min(limit);
         }
 
         max_tokens
@@ -474,6 +489,8 @@ pub struct ProvidersConfig {
     pub openrouter: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
     pub gemini: ProviderConfig,
+    #[serde(default = "default_gemini_cli_provider")]
+    pub gemini_cli: ProviderConfig,
 }
 
 impl Default for ProvidersConfig {
@@ -483,6 +500,7 @@ impl Default for ProvidersConfig {
             openai_codex: default_openai_codex_provider(),
             openai: default_openai_provider(),
             gemini: default_gemini_provider(),
+            gemini_cli: default_gemini_cli_provider(),
             openrouter: default_openrouter_provider(),
         }
     }
@@ -538,6 +556,19 @@ fn default_openrouter_provider() -> ProviderConfig {
 }
 
 fn default_gemini_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "gemini-3-flash-preview".to_string(),
+            "gemini-3-pro-preview".to_string(),
+            "gemini-2.5-flash".to_string(),
+            "gemini-2.5-flash-lite".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
+fn default_gemini_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
@@ -849,7 +880,7 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 20000);
     }
 
-    /// effective_max_tokens uses the model output limit when max_tokens is unset.
+    /// effective_max_tokens uses the model output limit (exclusive) when max_tokens is unset.
     #[test]
     fn test_effective_max_tokens_uses_model_output_limit_when_unset() {
         let config = Config {
@@ -862,6 +893,8 @@ max_tokens = 2048
             .map(|model| model.capabilities.output_limit)
             .filter(|limit| *limit > 0)
             .and_then(|limit| u32::try_from(limit).ok())
+            .and_then(|limit| limit.checked_sub(1))
+            .filter(|limit| *limit > 0)
             .unwrap_or(Config::DEFAULT_MAX_TOKENS);
 
         assert_eq!(config.effective_max_tokens_for(model_id), expected);

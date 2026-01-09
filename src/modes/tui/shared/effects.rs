@@ -34,6 +34,7 @@ pub enum UiEffect {
         provider: ProviderKind,
         code: String,
         verifier: String,
+        redirect_uri: Option<String>,
         req: RequestId,
     },
 
@@ -41,6 +42,7 @@ pub enum UiEffect {
     StartLocalAuthCallback {
         provider: ProviderKind,
         state: Option<String>,
+        port: Option<u16>,
     },
 
     /// Open a URL in the system browser.
