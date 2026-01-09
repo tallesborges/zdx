@@ -15,7 +15,7 @@ use crate::core::events::ToolOutput;
 /// Returns the tool definition for the bash tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
-        name: "bash".to_string(),
+        name: "Bash".to_string(),
         description: "Execute a shell command. Returns stdout, stderr, and exit code. \
             Useful for running tools like rg (ripgrep), cargo test, etc."
             .to_string(),

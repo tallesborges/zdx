@@ -14,7 +14,7 @@ use crate::core::events::ToolOutput;
 /// Returns the tool definition for the write tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
-        name: "write".to_string(),
+        name: "Write".to_string(),
         description:
             "Write content to a file. Creates the file if it doesn't exist, overwrites if it does."
                 .to_string(),

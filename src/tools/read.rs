@@ -58,7 +58,7 @@ fn detect_image_mime(path: &Path) -> Option<String> {
 /// Returns the tool definition for the read tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
-        name: "read".to_string(),
+        name: "Read".to_string(),
         description: "Read the contents of a file. Returns the file content as text. Also supports reading image files (JPEG, PNG, GIF, WebP) for visual analysis.".to_string(),
         input_schema: json!({
             "type": "object",
