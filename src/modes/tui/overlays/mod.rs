@@ -210,8 +210,11 @@ mod tests {
         let none: Option<Overlay> = None;
         assert!(none.is_none());
 
-        let (palette, _) =
-            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (palette, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 

@@ -9,7 +9,7 @@ use super::{OverlayRequest, OverlayUpdate};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::shared::clipboard::Clipboard;
-use crate::modes::tui::shared::commands::{COMMANDS, Command};
+use crate::modes::tui::shared::commands::{COMMANDS, Command, command_available};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
     AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
@@ -20,6 +20,7 @@ pub struct CommandPaletteState {
     pub filter: String,
     pub selected: usize,
     pub provider: crate::providers::ProviderKind,
+    pub model_id: String,
     /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
     pub insert_slash_on_escape: bool,
 }
@@ -28,12 +29,14 @@ impl CommandPaletteState {
     pub fn open(
         insert_slash_on_escape: bool,
         provider: crate::providers::ProviderKind,
+        model_id: String,
     ) -> (Self, Vec<UiEffect>) {
         (
             Self {
                 filter: String::new(),
                 selected: 0,
                 provider,
+                model_id,
                 insert_slash_on_escape,
             },
             vec![],
@@ -98,11 +101,14 @@ impl CommandPaletteState {
 
     pub fn filtered_commands(&self) -> Vec<&'static Command> {
         if self.filter.is_empty() {
-            COMMANDS.iter().collect()
+            COMMANDS
+                .iter()
+                .filter(|cmd| command_available(cmd, &self.model_id))
+                .collect()
         } else {
             COMMANDS
                 .iter()
-                .filter(|cmd| cmd.matches(&self.filter))
+                .filter(|cmd| command_available(cmd, &self.model_id) && cmd.matches(&self.filter))
                 .collect()
         }
     }
@@ -452,15 +458,24 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
-        let (state, _) = CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), COMMANDS.len());
+        let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
+        assert!(names.contains(&"thinking"));
     }
 
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
-        let (mut state, _) =
-            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (mut state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 2);
@@ -470,9 +485,24 @@ mod tests {
     }
 
     #[test]
+    fn test_palette_state_filtered_commands_hides_thinking_when_unsupported() {
+        let (state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::OpenAI,
+            "openai:gpt-4.1".to_string(),
+        );
+        let filtered = state.filtered_commands();
+        let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
+        assert!(!names.contains(&"thinking"));
+    }
+
+    #[test]
     fn test_palette_state_filtered_commands_no_match() {
-        let (mut state, _) =
-            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (mut state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
@@ -480,8 +510,11 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection() {
-        let (mut state, _) =
-            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (mut state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         state.selected = COMMANDS.len() + 10;
         state.clamp_selection();
         assert_eq!(state.selected, COMMANDS.len() - 1);
@@ -489,8 +522,11 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
-        let (mut state, _) =
-            CommandPaletteState::open(true, crate::providers::ProviderKind::Anthropic);
+        let (mut state, _) = CommandPaletteState::open(
+            true,
+            crate::providers::ProviderKind::Anthropic,
+            "claude-haiku-4-5".to_string(),
+        );
         state.filter = "xyz".to_string();
         state.selected = 5;
         state.clamp_selection();

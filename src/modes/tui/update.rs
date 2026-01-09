@@ -606,7 +606,11 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
     match request {
         overlays::OverlayRequest::CommandPalette { command_mode } => {
             let provider = crate::providers::provider_for_model(&app.tui.config.model);
-            let (state, effects) = overlays::CommandPaletteState::open(command_mode, provider);
+            let (state, effects) = overlays::CommandPaletteState::open(
+                command_mode,
+                provider,
+                app.tui.config.model.clone(),
+            );
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
             effects
         }
@@ -616,6 +620,9 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::ThinkingPicker => {
+            if !crate::models::model_supports_reasoning(&app.tui.config.model) {
+                return vec![];
+            }
             let (state, effects) =
                 overlays::ThinkingPickerState::open(app.tui.config.thinking_level);
             app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
@@ -725,6 +732,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         &app.tui.agent_state,
         app.tui.bash_running.is_some(),
         thread_id,
+        &app.tui.config.model,
         key,
     );
     apply_mutations(&mut app.tui, mutations);
