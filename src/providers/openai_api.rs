@@ -75,8 +75,8 @@ impl OpenAIClient {
             max_output_tokens: Some(self.config.max_output_tokens),
             reasoning_effort: None,
             instructions: None,
-            store: Some(true),
-            include: Some(vec!["reasoning.summary".to_string()]),
+            store: Some(false),
+            include: None,
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
