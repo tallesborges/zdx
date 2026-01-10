@@ -80,26 +80,26 @@ pub fn render_thread_picker(
                 .and_then(thread_log::format_timestamp_relative)
                 .unwrap_or_else(|| "—".to_string());
 
-            let short_id = short_thread_id(&thread.id);
-            let left_width = inner_area.width as usize;
-            let title = thread.display_title();
-            let date_width = timestamp.width();
-            let id_width = short_id.width();
-            let padding = if left_width > date_width + 2 {
-                left_width - date_width - 2
+            // Show title if available, otherwise fall back to short ID
+            let display_name = if thread.title.is_some() {
+                thread.display_title()
             } else {
-                left_width
+                short_thread_id(&thread.id).to_string()
             };
-            let content_width = padding.saturating_sub(id_width + 2);
-            let display_title = truncate_with_ellipsis(&title, content_width);
-            let gap = padding
-                .saturating_sub(id_width + 2 + display_title.width())
+
+            // Account for highlight symbol "▶ " (3 chars wide)
+            let highlight_width = 3;
+            let available_width = (inner_area.width as usize).saturating_sub(highlight_width);
+            let date_width = timestamp.width();
+            // Reserve space for date + gap (minimum 1 space)
+            let name_max_width = available_width.saturating_sub(date_width + 2);
+            let display_name = truncate_with_ellipsis(&display_name, name_max_width);
+            let gap = available_width
+                .saturating_sub(display_name.width() + date_width)
                 .max(1);
 
             let line = Line::from(vec![
-                Span::styled(short_id, Style::default().fg(Color::Cyan)),
-                Span::styled("  ", Style::default()),
-                Span::styled(display_title, Style::default().fg(Color::White)),
+                Span::styled(display_name, Style::default().fg(Color::White)),
                 Span::styled(" ".repeat(gap), Style::default()),
                 Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
             ]);
