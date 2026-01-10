@@ -58,7 +58,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects.push(UiEffect::SaveThread {
                     event: crate::core::thread_log::ThreadEvent::usage(usage),
                 });
-                // Mark as saved to prevent duplicate saves on TurnComplete/Interrupted
+                // Mark as saved to prevent duplicate saves on TurnCompleted/Interrupted
                 app.tui.thread.usage.mark_saved();
             }
 
@@ -67,7 +67,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             // we still want to save the input tokens that were consumed.
             if matches!(
                 &agent_event,
-                crate::core::events::AgentEvent::TurnComplete { .. }
+                crate::core::events::AgentEvent::TurnCompleted { .. }
                     | crate::core::events::AgentEvent::Interrupted
             ) && has_thread
                 && app.tui.thread.usage.has_unsaved_usage()
@@ -834,24 +834,24 @@ mod tests {
     }
 
     #[test]
-    fn test_apply_scroll_delta_coalesces_events() {
+    fn test_apply_scroll_delta_with_acceleration() {
         let config = crate::config::Config::default();
         let mut app = AppState::new(config, std::path::PathBuf::new(), None, None);
         app.tui.transcript.scroll.update_line_count(100);
         app.tui.transcript.viewport_height = 20;
 
-        // Simulate multiple scroll up events (trackpad-like)
+        // First frame: multiple events accumulated, but acceleration starts at 1
         app.tui.transcript.scroll_accumulator.accumulate(-1);
         app.tui.transcript.scroll_accumulator.accumulate(-1);
         app.tui.transcript.scroll_accumulator.accumulate(-1);
 
-        // Apply should coalesce into single scroll of 3 lines
+        // Apply scrolls 1 line (acceleration starting point)
         transcript::apply_scroll_delta(&mut app.tui.transcript);
 
-        // Should be anchored at offset 77 (80 - 3)
+        // Should be anchored at offset 79 (80 - 1)
         assert!(matches!(
             app.tui.transcript.scroll.mode,
-            ScrollMode::Anchored { offset: 77 }
+            ScrollMode::Anchored { offset: 79 }
         ));
     }
 }

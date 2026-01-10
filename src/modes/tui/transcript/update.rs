@@ -16,7 +16,7 @@ use crate::modes::tui::shared::internal::{StateMutation, ThreadMutation};
 use crate::modes::tui::transcript::{HistoryCell, ToolState, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
-const MOUSE_SCROLL_LINES: usize = 3;
+const MOUSE_SCROLL_LINES: usize = 1;
 
 // ============================================================================
 // Agent Event Handler
@@ -39,10 +39,10 @@ pub fn handle_agent_event(
                 handle_assistant_delta(transcript, agent_state, text);
                 vec![]
             }
-            AgentEvent::AssistantComplete { .. } => {
+            AgentEvent::AssistantCompleted { .. } => {
                 // Apply any pending delta before finalizing to ensure no content is lost.
                 // This is critical because multiple events can be processed in one loop
-                // iteration, and TurnComplete may follow immediately after AssistantComplete.
+                // iteration, and TurnCompleted may follow immediately after AssistantCompleted.
                 apply_pending_delta(transcript, agent_state);
 
                 if let AgentState::Streaming { cell_id, .. } = &agent_state
@@ -86,7 +86,7 @@ pub fn handle_agent_event(
                 }
                 vec![]
             }
-            AgentEvent::ToolInputReady { id, input, .. } => {
+            AgentEvent::ToolInputCompleted { id, input, .. } => {
                 // Update the existing tool cell with the complete input
                 if let Some(cell) = transcript.cells.iter_mut().find(
                     |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
@@ -96,7 +96,7 @@ pub fn handle_agent_event(
                 vec![]
             }
             AgentEvent::ToolStarted { .. } => vec![],
-            AgentEvent::ToolFinished { id, result } => {
+            AgentEvent::ToolCompleted { id, result } => {
                 if let Some(cell) = transcript.cells.iter_mut().find(
                     |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if *tool_use_id == *id),
                 ) {
@@ -104,12 +104,12 @@ pub fn handle_agent_event(
                 }
                 vec![]
             }
-            AgentEvent::TurnComplete {
+            AgentEvent::TurnCompleted {
                 final_text,
                 messages,
             } => {
                 // Apply any pending delta before resetting agent state to ensure no
-                // content is lost. This handles edge cases where AssistantComplete wasn't
+                // content is lost. This handles edge cases where AssistantCompleted wasn't
                 // received or didn't have a chance to apply the delta.
                 apply_pending_delta(transcript, agent_state);
 
@@ -127,12 +127,12 @@ pub fn handle_agent_event(
                     vec![]
                 }
             }
-            // Thinking events - create or update thinking cells in transcript
-            AgentEvent::ThinkingDelta { text } => {
+            // Reasoning events - create or update thinking cells in transcript
+            AgentEvent::ReasoningDelta { text } => {
                 handle_thinking_delta(transcript, agent_state, text);
                 vec![]
             }
-            AgentEvent::ThinkingComplete { signature, .. } => {
+            AgentEvent::ReasoningCompleted { block } => {
                 // Find the last streaming thinking cell and finalize it
                 if let Some(cell) = transcript.cells.iter_mut().rev().find(|c| {
                     matches!(
@@ -143,7 +143,7 @@ pub fn handle_agent_event(
                         }
                     )
                 }) {
-                    cell.finalize_thinking(signature.clone());
+                    cell.finalize_thinking(block.replay.clone());
                 }
                 vec![]
             }
@@ -167,7 +167,7 @@ pub fn handle_agent_event(
             }
             AgentEvent::ToolOutputDelta { .. } => {
                 // TODO: Update tool cell with streaming output
-                // For now, we only show final output in ToolFinished
+                // For now, we only show final output in ToolCompleted
                 vec![]
             }
         };
@@ -500,6 +500,7 @@ pub fn apply_pending_delta(transcript: &mut TranscriptState, agent_state: &mut A
 ///
 /// Called once per frame after all events are processed to coalesce
 /// rapid scroll events (especially from trackpads) into a single scroll.
+/// Uses scroll acceleration: slow for precision, faster for long scrolls.
 pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
     let delta = transcript.scroll_accumulator.take_delta();
     if delta == 0 {
