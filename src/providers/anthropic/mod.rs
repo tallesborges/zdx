@@ -40,6 +40,7 @@ pub(crate) fn build_api_messages_with_cache_control(messages: &[ChatMessage]) ->
         .map(|m| ApiMessage::from_chat_message(m, false))
         .collect();
 
+    sanitize_tool_use_ids(&mut api_messages);
     apply_cache_control_to_last_user_block(&mut api_messages);
 
     api_messages
@@ -123,6 +124,44 @@ fn apply_cache_control_to_last_user_block(api_messages: &mut [ApiMessage]) {
                 *cache_control = Some(CacheControl::ephemeral());
             }
             _ => {}
+        }
+    }
+}
+
+fn sanitize_tool_use_ids(api_messages: &mut [ApiMessage]) {
+    fn sanitize(id: &str) -> String {
+        id.chars()
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect::<String>()
+    }
+
+    for message in api_messages.iter_mut() {
+        let ApiMessageContent::Blocks(blocks) = &mut message.content else {
+            continue;
+        };
+
+        for block in blocks.iter_mut() {
+            match block {
+                ApiContentBlock::ToolUse { id, .. } => {
+                    let sanitized = sanitize(id);
+                    if sanitized != *id {
+                        *id = sanitized;
+                    }
+                }
+                ApiContentBlock::ToolResult { tool_use_id, .. } => {
+                    let sanitized = sanitize(tool_use_id);
+                    if sanitized != *tool_use_id {
+                        *tool_use_id = sanitized;
+                    }
+                }
+                _ => {}
+            }
         }
     }
 }
