@@ -13,14 +13,21 @@ pub struct OpenAICodexConfig {
     #[allow(dead_code)]
     pub max_tokens: u32,
     pub reasoning_effort: Option<String>,
+    pub prompt_cache_key: Option<String>,
 }
 
 impl OpenAICodexConfig {
-    pub fn new(model: String, max_tokens: u32, reasoning_effort: Option<String>) -> Self {
+    pub fn new(
+        model: String,
+        max_tokens: u32,
+        reasoning_effort: Option<String>,
+        prompt_cache_key: Option<String>,
+    ) -> Self {
         Self {
             model,
             max_tokens,
             reasoning_effort,
+            prompt_cache_key,
         }
     }
 }

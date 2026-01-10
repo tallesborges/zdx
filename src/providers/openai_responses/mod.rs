@@ -28,6 +28,8 @@ pub struct ResponsesConfig {
     pub instructions: Option<String>,
     pub store: Option<bool>,
     pub include: Option<Vec<String>>,
+    pub prompt_cache_key: Option<String>,
+    pub parallel_tool_calls: Option<bool>,
 }
 
 /// Sends a Responses API request and returns a stream of normalized events.
@@ -61,10 +63,13 @@ pub async fn send_responses_stream(
             .as_ref()
             .map(|effort| ReasoningConfig {
                 effort: effort.clone(),
+                summary: Some("auto".to_string()),
             }),
         include: config.include.clone(),
         input,
         tools: tool_defs,
+        prompt_cache_key: config.prompt_cache_key.clone(),
+        parallel_tool_calls: config.parallel_tool_calls,
     };
 
     let url = format!("{}{}", config.base_url, config.path);
