@@ -120,6 +120,7 @@ impl TuiRuntime {
 
     fn event_loop(&mut self) -> Result<()> {
         let mut dirty = true; // Start dirty to ensure initial render
+        let mut last_pending_delta = 0;
 
         while !self.state.tui.should_quit {
             // Check for Ctrl+C signal (only quit if agent is idle)
@@ -173,6 +174,13 @@ impl TuiRuntime {
                 }
                 self.execute_effects(effects);
             }
+
+            // Mark dirty when scroll delta changes (mouse wheel coalescing).
+            let pending_delta = self.state.tui.transcript.scroll_accumulator.peek_delta();
+            if pending_delta != 0 && pending_delta != last_pending_delta {
+                dirty = true;
+            }
+            last_pending_delta = pending_delta;
 
             // Only render if something changed
             if dirty {

@@ -27,6 +27,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
             // Check if selection should be auto-cleared after copy
             app.tui.transcript.check_selection_timeout();
+            // Apply pending streaming deltas each tick so final chunks render without input
+            transcript::apply_pending_delta(&mut app.tui.transcript, &mut app.tui.agent_state);
             vec![]
         }
         UiEvent::Frame { width, height } => {
