@@ -6,7 +6,7 @@ A fast, beautiful agentic coding assistant.
 
 ## What it is
 
-ZDX is a TUI coding agent that helps you as a developer be productive. The vision is to be a faster, lightweight tool.
+ZDX is a TUI coding agent that helps you as a developer be productive. The vision is to be a faster, lightweight coding agent.
 
 ## Why it exists
 
