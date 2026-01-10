@@ -94,7 +94,7 @@ impl AppState {
 /// Agent execution state.
 ///
 /// Tracks the current agent task and its event channel.
-/// The task sends events through the channel, including `TurnComplete` when done.
+/// The task sends events through the channel, including `TurnCompleted` when done.
 #[derive(Debug)]
 pub enum AgentState {
     /// No agent task running, ready for input.
@@ -236,34 +236,69 @@ impl TuiState {
         let mut transcript = Vec::new();
 
         for msg in messages {
-            let text = match &msg.content {
-                MessageContent::Text(t) => t.clone(),
-                MessageContent::Blocks(blocks) => {
-                    // Extract text blocks, ignore tool use/result for display
-                    blocks
-                        .iter()
-                        .filter_map(|b| {
-                            if let ChatContentBlock::Text(t) = b {
-                                Some(t.as_str())
-                            } else {
-                                None
-                            }
-                        })
-                        .collect::<Vec<_>>()
-                        .join("\n")
+            match &msg.content {
+                MessageContent::Text(t) => {
+                    if t.is_empty() {
+                        continue;
+                    }
+                    let cell = match msg.role.as_str() {
+                        "user" => HistoryCell::user(t),
+                        "assistant" => HistoryCell::assistant(t),
+                        _ => continue,
+                    };
+                    transcript.push(cell);
                 }
-            };
+                MessageContent::Blocks(blocks) => match msg.role.as_str() {
+                    "assistant" => {
+                        let mut text_buffer = String::new();
+                        let flush_text = |out: &mut Vec<HistoryCell>, buf: &mut String| {
+                            if !buf.is_empty() {
+                                out.push(HistoryCell::assistant(buf.clone()));
+                                buf.clear();
+                            }
+                        };
 
-            if text.is_empty() {
-                continue;
+                        for block in blocks {
+                            match block {
+                                ChatContentBlock::Reasoning(reasoning) => {
+                                    flush_text(&mut transcript, &mut text_buffer);
+                                    if let Some(text) = &reasoning.text
+                                        && !text.is_empty()
+                                    {
+                                        let mut cell = HistoryCell::thinking_streaming(text);
+                                        cell.finalize_thinking(reasoning.replay.clone());
+                                        transcript.push(cell);
+                                    }
+                                }
+                                ChatContentBlock::Text(text) => {
+                                    if !text_buffer.is_empty() {
+                                        text_buffer.push('\n');
+                                    }
+                                    text_buffer.push_str(text);
+                                }
+                                _ => {}
+                            }
+                        }
+
+                        flush_text(&mut transcript, &mut text_buffer);
+                    }
+                    "user" => {
+                        // Extract text blocks, ignore tool use/result for display
+                        let text = blocks
+                            .iter()
+                            .filter_map(|b| match b {
+                                ChatContentBlock::Text(t) => Some(t.as_str()),
+                                _ => None,
+                            })
+                            .collect::<Vec<_>>()
+                            .join("\n");
+                        if !text.is_empty() {
+                            transcript.push(HistoryCell::user(&text));
+                        }
+                    }
+                    _ => {}
+                },
             }
-
-            let cell = match msg.role.as_str() {
-                "user" => HistoryCell::user(&text),
-                "assistant" => HistoryCell::assistant(&text),
-                _ => continue,
-            };
-            transcript.push(cell);
         }
 
         transcript

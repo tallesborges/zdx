@@ -13,8 +13,8 @@ pub mod openrouter;
 pub mod shared;
 
 pub use shared::{
-    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
-    Usage,
+    ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
+    ProviderErrorKind, ReasoningBlock, ReplayToken, StreamEvent, Usage,
 };
 
 /// Provider selection based on model naming.

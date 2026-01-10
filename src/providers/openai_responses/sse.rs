@@ -7,12 +7,40 @@ use anyhow::{Result, anyhow};
 use futures_util::Stream;
 use serde_json::Value;
 
-use crate::providers::{StreamEvent, Usage};
+use crate::providers::{ContentBlockType, StreamEvent, Usage};
+
+/// Extension trait for extracting strings from JSON values.
+trait JsonExt {
+    /// Get a string field, returning empty string if missing or not a string.
+    fn get_str(&self, key: &str) -> &str;
+    /// Get a string field as owned String, returning empty string if missing.
+    fn get_string(&self, key: &str) -> String;
+}
+
+impl JsonExt for Value {
+    fn get_str(&self, key: &str) -> &str {
+        self.get(key).and_then(|v| v.as_str()).unwrap_or("")
+    }
+
+    fn get_string(&self, key: &str) -> String {
+        self.get_str(key).to_string()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum BlockKind {
     Text,
     Tool,
+    Reasoning,
+}
+
+/// State for tracking a reasoning item being streamed.
+#[derive(Debug, Clone)]
+struct ReasoningState {
+    index: usize,
+    id: String,
+    encrypted_content: String,
+    summary: String,
 }
 
 #[derive(Debug)]
@@ -21,6 +49,8 @@ struct StreamState {
     current_index: Option<usize>,
     current_kind: Option<BlockKind>,
     saw_tool: bool,
+    /// Tracks reasoning item being streamed (for encrypted_content replay)
+    current_reasoning: Option<ReasoningState>,
 }
 
 impl StreamState {
@@ -30,6 +60,7 @@ impl StreamState {
             current_index: None,
             current_kind: None,
             saw_tool: false,
+            current_reasoning: None,
         }
     }
 }
@@ -80,12 +111,12 @@ impl<S> ResponsesSseParser<S> {
     }
 
     fn map_event(&mut self, value: Value) -> Result<StreamEvent> {
-        let event_type = value.get("type").and_then(|v| v.as_str()).unwrap_or("");
+        let event_type = value.get_str("type");
 
         match event_type {
             "response.output_item.added" => {
                 let item = value.get("item").unwrap_or(&Value::Null);
-                let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                let item_type = item.get_str("type");
                 match item_type {
                     "message" => {
                         let index = self.state.next_index;
@@ -94,7 +125,7 @@ impl<S> ResponsesSseParser<S> {
                         self.state.current_kind = Some(BlockKind::Text);
                         Ok(StreamEvent::ContentBlockStart {
                             index,
-                            block_type: "text".to_string(),
+                            block_type: ContentBlockType::Text,
                             id: None,
                             name: None,
                         })
@@ -106,9 +137,9 @@ impl<S> ResponsesSseParser<S> {
                         self.state.current_kind = Some(BlockKind::Tool);
                         self.state.saw_tool = true;
 
-                        let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
-                        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                        let call_id = item.get_str("call_id");
+                        let id = item.get_str("id");
+                        let name = item.get_str("name");
                         let tool_id = if !call_id.is_empty() && !id.is_empty() {
                             format!("{}|{}", call_id, id)
                         } else {
@@ -117,9 +148,31 @@ impl<S> ResponsesSseParser<S> {
 
                         Ok(StreamEvent::ContentBlockStart {
                             index,
-                            block_type: "tool_use".to_string(),
+                            block_type: ContentBlockType::ToolUse,
                             id: Some(tool_id),
                             name: Some(name.to_string()),
+                        })
+                    }
+                    "reasoning" => {
+                        // Initialize reasoning state for streaming
+                        let index = self.state.next_index;
+                        self.state.next_index += 1;
+                        self.state.current_index = Some(index);
+                        self.state.current_kind = Some(BlockKind::Reasoning);
+
+                        self.state.current_reasoning = Some(ReasoningState {
+                            index,
+                            id: item.get_string("id"),
+                            encrypted_content: item.get_string("encrypted_content"),
+                            summary: String::new(),
+                        });
+
+                        // Emit ContentBlockStart for reasoning so agent.rs tracks it
+                        Ok(StreamEvent::ContentBlockStart {
+                            index,
+                            block_type: ContentBlockType::Reasoning,
+                            id: None,
+                            name: None,
                         })
                     }
                     _ => Ok(StreamEvent::Ping),
@@ -130,11 +183,7 @@ impl<S> ResponsesSseParser<S> {
                     return Ok(StreamEvent::Ping);
                 }
                 let index = self.state.current_index.unwrap_or(0);
-                let delta = value
-                    .get("delta")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let delta = value.get_string("delta");
                 Ok(StreamEvent::TextDelta { index, text: delta })
             }
             "response.function_call_arguments.delta" => {
@@ -142,20 +191,119 @@ impl<S> ResponsesSseParser<S> {
                     return Ok(StreamEvent::Ping);
                 }
                 let index = self.state.current_index.unwrap_or(0);
-                let delta = value
-                    .get("delta")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
+                let delta = value.get_string("delta");
                 Ok(StreamEvent::InputJsonDelta {
                     index,
                     partial_json: delta,
                 })
             }
+            "response.reasoning_summary_text.delta" => {
+                // Stream reasoning summary text incrementally
+                if let Some(ref mut reasoning) = self.state.current_reasoning {
+                    let delta = value.get_string("delta");
+                    reasoning.summary.push_str(&delta);
+                    Ok(StreamEvent::ReasoningDelta {
+                        index: reasoning.index,
+                        reasoning: delta,
+                    })
+                } else {
+                    Ok(StreamEvent::Ping)
+                }
+            }
             "response.output_item.done" => {
+                // Check if this is a reasoning item with encrypted_content
+                let item = value.get("item").unwrap_or(&Value::Null);
+                let item_type = item.get_str("type");
+
+                if item_type == "reasoning" {
+                    // Extract fields from done event for merging
+                    let done_id = item.get_string("id");
+                    let done_encrypted = item.get_string("encrypted_content");
+                    // Extract summary from done event (array of {type, text} objects)
+                    let done_summary = item
+                        .get("summary")
+                        .and_then(|v| v.as_array())
+                        .map(|arr| {
+                            arr.iter()
+                                .filter_map(|item| item.get("text").and_then(|t| t.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("")
+                        })
+                        .filter(|s| !s.is_empty());
+
+                    // Merge with current_reasoning state if available
+                    let (index, id, encrypted_content, summary, had_streamed_summary) =
+                        if let Some(reasoning) = self.state.current_reasoning.take() {
+                            // Use done event values if current_reasoning has empty values
+                            let id = if reasoning.id.is_empty() {
+                                done_id
+                            } else {
+                                reasoning.id
+                            };
+                            let encrypted_content = if reasoning.encrypted_content.is_empty() {
+                                done_encrypted
+                            } else {
+                                reasoning.encrypted_content
+                            };
+                            // Prefer streamed summary, fall back to done event summary
+                            let had_streamed = !reasoning.summary.is_empty();
+                            let summary = if had_streamed {
+                                Some(reasoning.summary)
+                            } else {
+                                done_summary
+                            };
+                            (
+                                reasoning.index,
+                                id,
+                                encrypted_content,
+                                summary,
+                                had_streamed,
+                            )
+                        } else {
+                            // No current_reasoning state - use done event values directly
+                            // This shouldn't happen in normal flow, but handle it gracefully
+                            let index = self.state.current_index.unwrap_or(0);
+                            (index, done_id, done_encrypted, done_summary, false)
+                        };
+
+                    // Emit ReasoningCompleted for storage/replay if we have valid data
+                    if !id.is_empty() && !encrypted_content.is_empty() {
+                        // Use the reasoning item's stored index for ContentBlockCompleted
+                        self.state.current_index = None;
+                        self.state.current_kind = None;
+
+                        // If summary wasn't streamed but is present in done event,
+                        // emit ReasoningDelta first so downstream can avoid duplicating text.
+                        if !had_streamed_summary && let Some(ref text) = summary {
+                            let reasoning_text = text.clone();
+                            self.pending.push_back(StreamEvent::ReasoningCompleted {
+                                index,
+                                id,
+                                encrypted_content,
+                                summary,
+                            });
+                            self.pending
+                                .push_back(StreamEvent::ContentBlockCompleted { index });
+                            return Ok(StreamEvent::ReasoningDelta {
+                                index,
+                                reasoning: reasoning_text,
+                            });
+                        }
+
+                        self.pending
+                            .push_back(StreamEvent::ContentBlockCompleted { index });
+                        return Ok(StreamEvent::ReasoningCompleted {
+                            index,
+                            id,
+                            encrypted_content,
+                            summary,
+                        });
+                    }
+                }
+
                 if let Some(index) = self.state.current_index.take() {
                     self.state.current_kind = None;
-                    Ok(StreamEvent::ContentBlockStop { index })
+                    Ok(StreamEvent::ContentBlockCompleted { index })
                 } else {
                     Ok(StreamEvent::Ping)
                 }
@@ -185,20 +333,14 @@ impl<S> ResponsesSseParser<S> {
                     cache_creation_input_tokens: 0,
                 };
 
-                let status = response
-                    .get("status")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
-                let stop_reason = match status {
-                    "incomplete" => "max_tokens",
-                    "failed" | "cancelled" => "error",
-                    _ => "stop",
-                };
-
                 let stop_reason = if self.state.saw_tool {
-                    Some("tool_use".to_string())
+                    "tool_use"
                 } else {
-                    Some(stop_reason.to_string())
+                    match response.get_str("status") {
+                        "incomplete" => "max_tokens",
+                        "failed" | "cancelled" => "error",
+                        _ => "stop",
+                    }
                 };
 
                 self.pending.push_back(StreamEvent::MessageStart {
@@ -206,10 +348,10 @@ impl<S> ResponsesSseParser<S> {
                     usage: usage.clone(),
                 });
                 self.pending.push_back(StreamEvent::MessageDelta {
-                    stop_reason,
+                    stop_reason: Some(stop_reason.to_string()),
                     usage: Some(usage),
                 });
-                self.pending.push_back(StreamEvent::MessageStop);
+                self.pending.push_back(StreamEvent::MessageCompleted);
 
                 Ok(self
                     .pending

@@ -339,7 +339,7 @@ mod tests {
         assert!(a < b);
         assert!(b < c);
         assert!(a < c);
-        assert!(!(b < a));
+        assert!(b >= a);
     }
 
     #[test]

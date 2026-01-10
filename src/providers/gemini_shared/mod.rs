@@ -93,7 +93,8 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
                             }
                             parts.push(part);
                         }
-                        ChatContentBlock::Thinking { .. } => {}
+                        // Skip all reasoning blocks for Gemini
+                        ChatContentBlock::Reasoning(_) => {}
                         ChatContentBlock::ToolResult(_) => {}
                     }
                 }

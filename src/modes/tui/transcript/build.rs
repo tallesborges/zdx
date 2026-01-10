@@ -13,7 +13,7 @@ use crate::core::thread_log::ThreadEvent;
 /// Maps thread events to display cells:
 /// - `Message` → `User` or `Assistant` cells
 /// - `ToolUse` + `ToolResult` → `Tool` cells (paired by ID)
-/// - `Thinking` → `Thinking` cells
+/// - `Thinking`/`Reasoning` → `Thinking` cells
 /// - Skips `Meta` and `Interrupted` events
 pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> {
     let mut cells = Vec::new();
@@ -33,15 +33,12 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 };
                 cells.push(cell);
             }
-            ThreadEvent::Thinking {
-                content, signature, ..
-            } => {
-                // Create a finalized thinking cell
-                let mut cell = HistoryCell::thinking_streaming(content);
-                if let Some(sig) = signature {
-                    cell.finalize_thinking(sig.clone());
+            ThreadEvent::Reasoning { text, replay, .. } => {
+                if let Some(content) = text {
+                    let mut cell = HistoryCell::thinking_streaming(content);
+                    cell.finalize_thinking(replay.clone());
+                    cells.push(cell);
                 }
-                cells.push(cell);
             }
             ThreadEvent::ToolUse {
                 id, name, input, ..
@@ -176,10 +173,12 @@ mod tests {
     }
 
     #[test]
-    fn test_build_transcript_from_events_thinking() {
-        let events = vec![ThreadEvent::Thinking {
-            content: "Let me analyze this...".to_string(),
-            signature: Some("sig123".to_string()),
+    fn test_build_transcript_from_events_reasoning() {
+        let events = vec![ThreadEvent::Reasoning {
+            text: Some("Let me analyze this...".to_string()),
+            replay: Some(crate::providers::ReplayToken::Anthropic {
+                signature: "sig123".to_string(),
+            }),
             ts: "2024-01-01T00:00:01Z".to_string(),
         }];
 
@@ -190,12 +189,16 @@ mod tests {
         match &cells[0] {
             HistoryCell::Thinking {
                 content,
-                signature,
+                replay,
                 is_streaming,
                 ..
             } => {
                 assert_eq!(content, "Let me analyze this...");
-                assert_eq!(signature.as_deref(), Some("sig123"));
+                assert!(matches!(
+                    replay,
+                    Some(crate::providers::ReplayToken::Anthropic { signature })
+                        if signature == "sig123"
+                ));
                 assert!(!*is_streaming);
             }
             _ => panic!("Expected Thinking cell"),
@@ -216,9 +219,11 @@ mod tests {
                 text: "Read the file".to_string(),
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
-            ThreadEvent::Thinking {
-                content: "Analyzing...".to_string(),
-                signature: Some("sig".to_string()),
+            ThreadEvent::Reasoning {
+                text: Some("Analyzing...".to_string()),
+                replay: Some(crate::providers::ReplayToken::Anthropic {
+                    signature: "sig".to_string(),
+                }),
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
             ThreadEvent::ToolUse {
@@ -247,7 +252,7 @@ mod tests {
         ];
 
         let cells = build_transcript_from_events(&events);
-        // Meta and Interrupted are skipped: user + thinking + tool + assistant = 4
+        // Meta and Interrupted are skipped: user + reasoning + tool + assistant = 4
         assert_eq!(cells.len(), 4);
 
         assert!(matches!(&cells[0], HistoryCell::User { .. }));

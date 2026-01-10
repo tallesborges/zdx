@@ -8,6 +8,7 @@ use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
 use crate::core::events::ToolOutput;
 use crate::modes::tui::shared::sanitize_for_display;
+use crate::providers::ReplayToken;
 
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -110,15 +111,15 @@ pub enum HistoryCell {
 
     /// Thinking block (extended thinking from the model).
     ///
-    /// During streaming, `content` accumulates deltas and `signature` is None.
-    /// When finalized, `signature` is set (required for API continuity).
+    /// During streaming, `content` accumulates deltas and `replay` is None.
+    /// When finalized, `replay` may be set for provider-specific continuity.
     /// `is_interrupted` indicates if streaming was cancelled by user.
     Thinking {
         id: CellId,
         created_at: DateTime<Utc>,
         content: String,
-        /// Cryptographic signature from the API (None while streaming).
-        signature: Option<String>,
+        /// Provider-specific replay token (None while streaming).
+        replay: Option<ReplayToken>,
         is_streaming: bool,
         is_interrupted: bool,
     },
@@ -202,7 +203,7 @@ impl HistoryCell {
             id: CellId::new(),
             created_at: Utc::now(),
             content: content.into(),
-            signature: None,
+            replay: None,
             is_streaming: true,
             is_interrupted: false,
         }
@@ -244,18 +245,18 @@ impl HistoryCell {
         }
     }
 
-    /// Finalizes a thinking cell with its signature.
+    /// Finalizes a thinking cell with its replay token (if any).
     ///
     /// Panics if called on a non-thinking cell.
-    pub fn finalize_thinking(&mut self, sig: String) {
+    pub fn finalize_thinking(&mut self, replay: Option<ReplayToken>) {
         match self {
             HistoryCell::Thinking {
                 is_streaming,
-                signature,
+                replay: replay_slot,
                 ..
             } => {
                 *is_streaming = false;
-                *signature = Some(sig);
+                *replay_slot = replay;
             }
             _ => panic!("finalize_thinking called on non-thinking cell"),
         }
@@ -263,7 +264,7 @@ impl HistoryCell {
 
     /// Updates the input on a tool cell.
     ///
-    /// Used when ToolInputReady arrives with the complete input after
+    /// Used when ToolInputCompleted arrives with the complete input after
     /// ToolRequested created the cell with empty input.
     ///
     /// Panics if called on a non-tool cell.
@@ -1006,7 +1007,9 @@ mod tests {
     #[test]
     fn test_thinking_final() {
         let mut cell = HistoryCell::thinking_streaming("Done thinking.");
-        cell.finalize_thinking("signature123".to_string());
+        cell.finalize_thinking(Some(ReplayToken::Anthropic {
+            signature: "signature123".to_string(),
+        }));
         let lines = cell.display_lines(80, 0);
 
         // Should NOT have streaming cursor
@@ -1018,11 +1021,15 @@ mod tests {
         match &cell {
             HistoryCell::Thinking {
                 is_streaming,
-                signature,
+                replay,
                 ..
             } => {
                 assert!(!*is_streaming);
-                assert_eq!(signature.as_deref(), Some("signature123"));
+                assert!(matches!(
+                    replay,
+                    Some(ReplayToken::Anthropic { signature })
+                        if signature == "signature123"
+                ));
             }
             _ => panic!("Expected thinking cell"),
         }
@@ -1183,7 +1190,9 @@ mod tests {
 
         // Finalized thinking is cacheable
         let mut thinking = HistoryCell::thinking_streaming("test");
-        thinking.finalize_thinking("sig".to_string());
+        thinking.finalize_thinking(Some(ReplayToken::Anthropic {
+            signature: "sig".to_string(),
+        }));
         assert!(thinking.is_cacheable());
     }
 
@@ -1235,7 +1244,7 @@ mod tests {
         assert_eq!(lines[0].spans[0].text, "Thinking: ");
 
         // All other lines (including blank lines) should have indentation
-        for i in 1..lines.len() {
+        for (i, _) in lines.iter().enumerate().skip(1) {
             assert_eq!(
                 lines[i].spans[0].text, "          ",
                 "Line {} should be indented, not prefixed",

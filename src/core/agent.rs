@@ -27,7 +27,8 @@ use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ProviderError, ProviderKind, StreamEvent, resolve_provider,
+    ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ReasoningBlock,
+    ReplayToken, StreamEvent, resolve_provider,
 };
 use crate::tools::{self, ToolContext, ToolResult};
 
@@ -61,7 +62,7 @@ pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
 ///
 /// Use `send_delta()` for high-volume events (TextDelta) that can be dropped
 /// if the consumer is slow. Use `send_important()` for events that must be
-/// delivered (ToolStarted, ToolFinished, Complete, Error, Interrupted).
+/// delivered (ToolStarted, ToolCompleted, Completed, Error, Interrupted).
 #[derive(Clone)]
 pub struct EventSender {
     tx: AgentEventTx,
@@ -182,6 +183,8 @@ pub struct ThinkingBuilder {
     pub index: usize,
     pub text: String,
     pub signature: String,
+    pub replay: Option<ReplayToken>,
+    pub had_delta: bool,
 }
 
 /// Finalized tool use with parsed input (ready for execution).
@@ -190,6 +193,65 @@ pub struct ToolUse {
     pub id: String,
     pub name: String,
     pub input: Value,
+}
+
+/// Builder for accumulating all assistant turn content from streaming events.
+/// Consolidates thinking, reasoning, text, and tool use into a single struct.
+#[derive(Debug, Default)]
+pub struct AssistantTurnBuilder {
+    pub thinking_blocks: Vec<ThinkingBuilder>,
+    pub text: String,
+    pub tool_uses: Vec<ToolUseBuilder>,
+}
+
+impl AssistantTurnBuilder {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Converts accumulated content into ChatContentBlocks for API messages.
+    pub fn into_blocks(self, finalized_tools: Vec<ToolUse>) -> Vec<ChatContentBlock> {
+        let mut blocks = Vec::with_capacity(self.thinking_blocks.len() + 1 + finalized_tools.len());
+
+        // Add reasoning blocks first (order matters for API)
+        for tb in self.thinking_blocks {
+            let text = if tb.text.is_empty() {
+                None
+            } else {
+                Some(tb.text)
+            };
+            blocks.push(ChatContentBlock::Reasoning(ReasoningBlock {
+                text,
+                replay: tb.replay,
+            }));
+        }
+
+        // Add text block if any
+        if !self.text.is_empty() {
+            blocks.push(ChatContentBlock::Text(self.text));
+        }
+
+        // Add tool_use blocks
+        for tu in finalized_tools {
+            blocks.push(ChatContentBlock::ToolUse {
+                id: tu.id,
+                name: tu.name,
+                input: tu.input,
+            });
+        }
+
+        blocks
+    }
+
+    /// Finds a tool use builder by index.
+    pub fn find_tool_use_mut(&mut self, index: usize) -> Option<&mut ToolUseBuilder> {
+        self.tool_uses.iter_mut().find(|t| t.index == index)
+    }
+
+    /// Finds a thinking block by index.
+    pub fn find_thinking_mut(&mut self, index: usize) -> Option<&mut ThinkingBuilder> {
+        self.thinking_blocks.iter_mut().find(|t| t.index == index)
+    }
 }
 
 impl ToolUseBuilder {
@@ -357,9 +419,7 @@ pub async fn run_turn(
         };
 
         // State for accumulating the current response
-        let mut full_text = String::new();
-        let mut tool_uses: Vec<ToolUseBuilder> = Vec::new();
-        let mut thinking_blocks: Vec<ThinkingBuilder> = Vec::new();
+        let mut turn = AssistantTurnBuilder::new();
         let mut stop_reason: Option<String> = None;
 
         // Process stream events with periodic interrupt checking
@@ -387,8 +447,8 @@ pub async fn run_turn(
             match event {
                 StreamEvent::TextDelta { text, .. } => {
                     if !text.is_empty() {
-                        // Push to full_text first, then move text into event (no clone)
-                        full_text.push_str(&text);
+                        // Push to turn.text first, then move text into event (no clone)
+                        turn.text.push_str(&text);
                         sender.send_delta(AgentEvent::AssistantDelta { text });
                     }
                 }
@@ -398,7 +458,7 @@ pub async fn run_turn(
                     id,
                     name,
                 } => {
-                    if block_type == "tool_use" {
+                    if block_type == ContentBlockType::ToolUse {
                         let tool_id = id.unwrap_or_default();
                         let tool_name = name.unwrap_or_default().to_ascii_lowercase();
 
@@ -413,17 +473,19 @@ pub async fn run_turn(
                             })
                             .await;
 
-                        tool_uses.push(ToolUseBuilder {
+                        turn.tool_uses.push(ToolUseBuilder {
                             index,
                             id: tool_id,
                             name: tool_name,
                             input_json: String::new(),
                         });
-                    } else if block_type == "thinking" {
-                        thinking_blocks.push(ThinkingBuilder {
+                    } else if block_type == ContentBlockType::Reasoning {
+                        turn.thinking_blocks.push(ThinkingBuilder {
                             index,
                             text: String::new(),
                             signature: String::new(),
+                            replay: None,
+                            had_delta: false,
                         });
                     }
                 }
@@ -431,41 +493,55 @@ pub async fn run_turn(
                     index,
                     partial_json,
                 } => {
-                    if let Some(tu) = tool_uses.iter_mut().find(|t| t.index == index) {
+                    if let Some(tu) = turn.find_tool_use_mut(index) {
                         tu.input_json.push_str(&partial_json);
                     }
                 }
-                StreamEvent::ThinkingDelta { index, thinking } => {
-                    if let Some(tb) = thinking_blocks.iter_mut().find(|t| t.index == index) {
-                        tb.text.push_str(&thinking);
-                        sender.send_delta(AgentEvent::ThinkingDelta { text: thinking });
+                StreamEvent::ReasoningDelta { index, reasoning } => {
+                    if let Some(tb) = turn.find_thinking_mut(index) {
+                        if !reasoning.is_empty() {
+                            tb.had_delta = true;
+                        }
+                        tb.text.push_str(&reasoning);
+                        sender.send_delta(AgentEvent::ReasoningDelta { text: reasoning });
                     }
                 }
-                StreamEvent::SignatureDelta { index, signature } => {
-                    if let Some(tb) = thinking_blocks.iter_mut().find(|t| t.index == index) {
+                StreamEvent::ReasoningSignatureDelta { index, signature } => {
+                    if let Some(tb) = turn.find_thinking_mut(index) {
                         tb.signature.push_str(&signature);
                     }
                 }
-                StreamEvent::ContentBlockStop { index } => {
+                StreamEvent::ContentBlockCompleted { index } => {
                     // Check if this is a thinking block finishing
-                    if let Some(tb) = thinking_blocks.iter().find(|t| t.index == index) {
-                        sender
-                            .send_important(AgentEvent::ThinkingComplete {
-                                text: tb.text.clone(),
+                    if let Some(tb) = turn.find_thinking_mut(index) {
+                        if tb.replay.is_none() && !tb.signature.is_empty() {
+                            tb.replay = Some(ReplayToken::Anthropic {
                                 signature: tb.signature.clone(),
-                            })
+                            });
+                        }
+                        let text = if tb.text.is_empty() {
+                            None
+                        } else {
+                            Some(tb.text.clone())
+                        };
+                        let block = ReasoningBlock {
+                            text,
+                            replay: tb.replay.clone(),
+                        };
+                        sender
+                            .send_important(AgentEvent::ReasoningCompleted { block })
                             .await;
                     }
 
-                    // Check if this is a tool_use block finishing - emit ToolInputReady
+                    // Check if this is a tool_use block finishing - emit ToolInputCompleted
                     // with the complete input for thread persistence.
-                    if let Some(tu) = tool_uses.iter().find(|t| t.index == index) {
+                    if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
                         // Try to parse the input JSON; if it fails, use empty object
                         // (the full error will be handled later when finalizing)
                         let input: Value = serde_json::from_str(&tu.input_json)
                             .unwrap_or_else(|_| serde_json::json!({}));
                         sender
-                            .send_important(AgentEvent::ToolInputReady {
+                            .send_important(AgentEvent::ToolInputCompleted {
                                 id: tu.id.clone(),
                                 name: tu.name.clone(),
                                 input,
@@ -517,16 +593,38 @@ pub async fn run_turn(
                         })
                         .await;
                 }
-                // Ignore other events (Ping, MessageStop)
+                StreamEvent::ReasoningCompleted {
+                    index,
+                    id,
+                    encrypted_content,
+                    summary,
+                } => {
+                    // Attach OpenAI replay data to the corresponding thinking builder
+                    if let Some(tb) = turn.find_thinking_mut(index) {
+                        // Use summary as fallback text if we didn't get any reasoning deltas
+                        if !tb.had_delta
+                            && tb.text.is_empty()
+                            && let Some(s) = summary
+                        {
+                            tb.text = s;
+                        }
+
+                        tb.replay = Some(ReplayToken::OpenAI {
+                            id: id.clone(),
+                            encrypted_content: encrypted_content.clone(),
+                        });
+                    }
+                }
+                // Ignore other events (Ping, MessageCompleted)
                 _ => {}
             }
         }
 
         // Check if we have tool use to process
-        if stop_reason.as_deref() == Some("tool_use") && !tool_uses.is_empty() {
+        if stop_reason.as_deref() == Some("tool_use") && !turn.tool_uses.is_empty() {
             // Finalize all tool uses (parse JSON once)
-            let mut finalized = Vec::with_capacity(tool_uses.len());
-            for tu in tool_uses.drain(..) {
+            let mut finalized = Vec::with_capacity(turn.tool_uses.len());
+            for tu in turn.tool_uses.drain(..) {
                 match tu.clone().finalize() {
                     Ok(tool_use) => finalized.push(tool_use),
                     Err(e) => {
@@ -543,12 +641,12 @@ pub async fn run_turn(
                 }
             }
 
-            // Emit AssistantComplete to signal this message is complete
+            // Emit AssistantCompleted to signal this message is complete
             // This allows the TUI to finalize the current streaming cell before tools
-            if !full_text.is_empty() {
+            if !turn.text.is_empty() {
                 sender
-                    .send_important(AgentEvent::AssistantComplete {
-                        text: full_text.clone(),
+                    .send_important(AgentEvent::AssistantCompleted {
+                        text: turn.text.clone(),
                     })
                     .await;
             }
@@ -556,8 +654,9 @@ pub async fn run_turn(
             // Note: ToolRequested events are already emitted during streaming
             // (at ContentBlockStart for each tool_use block) for immediate UI feedback.
 
-            // Build the assistant response with thinking + tool_use blocks
-            let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &finalized);
+            // Build the assistant response with thinking + reasoning + tool_use blocks
+            let turn_text = turn.text.clone();
+            let assistant_blocks = turn.into_blocks(finalized.clone());
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results (may be partial on interrupt)
@@ -566,11 +665,11 @@ pub async fn run_turn(
 
             // Check if interrupted during tool execution
             if interrupt::is_interrupted() {
-                // Emit TurnComplete with partial messages before Interrupted
+                // Emit TurnCompleted with partial messages before Interrupted
                 // This ensures the TUI has the complete thread state
                 sender
-                    .send_important(AgentEvent::TurnComplete {
-                        final_text: full_text.clone(),
+                    .send_important(AgentEvent::TurnCompleted {
+                        final_text: turn_text.clone(),
                         messages: messages.clone(),
                     })
                     .await;
@@ -583,29 +682,30 @@ pub async fn run_turn(
         }
 
         // Emit final assistant text
-        if !full_text.is_empty() {
+        if !turn.text.is_empty() {
             sender
-                .send_important(AgentEvent::AssistantComplete {
-                    text: full_text.clone(),
+                .send_important(AgentEvent::AssistantCompleted {
+                    text: turn.text.clone(),
                 })
                 .await;
         }
 
-        // Build final assistant message with thinking + text blocks
-        let assistant_blocks = build_assistant_blocks(&thinking_blocks, &full_text, &[]);
+        // Build final assistant message with thinking + reasoning + text blocks
+        let final_text = turn.text.clone();
+        let assistant_blocks = turn.into_blocks(vec![]);
         if !assistant_blocks.is_empty() {
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
         }
 
         // Emit turn complete with final result
         sender
-            .send_important(AgentEvent::TurnComplete {
-                final_text: full_text.clone(),
+            .send_important(AgentEvent::TurnCompleted {
+                final_text: final_text.clone(),
                 messages: messages.clone(),
             })
             .await;
 
-        return Ok((full_text, messages));
+        return Ok((final_text, messages));
     }
 }
 
@@ -623,7 +723,7 @@ fn map_thinking_to_reasoning(level: crate::config::ThinkingLevel) -> Option<Stri
 ///
 /// Tools are spawned concurrently using `tokio::JoinSet`. ToolStarted events
 /// are emitted sequentially before spawning to preserve CLI output order.
-/// ToolFinished events are emitted as each task completes.
+/// ToolCompleted events are emitted as each task completes.
 ///
 /// On interrupt, aborts all remaining tasks and emits abort results for
 /// incomplete tools. The caller should check `is_interrupted()` after this
@@ -670,7 +770,7 @@ async fn execute_tools_async(
                         && !completed.contains(&idx)
                     {
                         completed.insert(idx);
-                        sender.send_important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolCompleted {
                             id,
                             result: output.clone(),
                         })
@@ -683,7 +783,7 @@ async fn execute_tools_async(
                 for (i, tu) in tool_uses.iter().enumerate() {
                     if !completed.contains(&i) {
                         let abort_output = ToolOutput::canceled("Interrupted by user");
-                        sender.send_important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolCompleted {
                             id: tu.id.clone(),
                             result: abort_output.clone(),
                         })
@@ -700,7 +800,7 @@ async fn execute_tools_async(
                 match task_result {
                     Some(Ok((idx, id, output, result))) => {
                         completed.insert(idx);
-                        sender.send_important(AgentEvent::ToolFinished {
+                        sender.send_important(AgentEvent::ToolCompleted {
                             id,
                             result: output.clone(),
                         })
@@ -727,46 +827,14 @@ async fn execute_tools_async(
         .collect()
 }
 
-/// Builds assistant content blocks from accumulated thinking, text, and tool uses.
-fn build_assistant_blocks(
-    thinking_blocks: &[ThinkingBuilder],
-    text: &str,
-    tool_uses: &[ToolUse],
-) -> Vec<ChatContentBlock> {
-    let mut blocks = Vec::with_capacity(thinking_blocks.len() + 1 + tool_uses.len());
-
-    // Add thinking blocks first (order matters for API)
-    for tb in thinking_blocks {
-        blocks.push(ChatContentBlock::Thinking {
-            thinking: tb.text.clone(),
-            signature: tb.signature.clone(),
-        });
-    }
-
-    // Add text block if any
-    if !text.is_empty() {
-        blocks.push(ChatContentBlock::Text(text.to_string()));
-    }
-
-    // Add tool_use blocks
-    for tu in tool_uses {
-        blocks.push(ChatContentBlock::ToolUse {
-            id: tu.id.clone(),
-            name: tu.name.clone(),
-            input: tu.input.clone(),
-        });
-    }
-
-    blocks
-}
-
+/// Builds assistant content blocks from accumulated thinking, reasoning, text, and tool uses.
 #[cfg(test)]
 mod tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
 
-    /// Verifies agent emits ToolStarted and ToolFinished events (SPEC §7).
+    /// Verifies agent emits ToolStarted and ToolCompleted events (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_emits_events() {
         use tempfile::TempDir;
@@ -802,12 +870,12 @@ mod tests {
 
         let results = handle.await.unwrap();
         assert_eq!(results.len(), 1);
-        assert_eq!(received.len(), 2); // ToolStarted, ToolFinished
+        assert_eq!(received.len(), 2); // ToolStarted, ToolCompleted
 
         assert!(matches!(&received[0], AgentEvent::ToolStarted { id, name }
             if id == "tool1" && name == "read"));
         assert!(
-            matches!(&received[1], AgentEvent::ToolFinished { id, result }
+            matches!(&received[1], AgentEvent::ToolCompleted { id, result }
             if id == "tool1" && result.is_ok())
         );
     }

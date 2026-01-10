@@ -10,6 +10,7 @@
 //! { "type": "message", "role": "user", "text": "...", "ts": "..." }
 //! { "type": "tool_use", "id": "...", "name": "read", "input": { "path": "..." }, "ts": "..." }
 //! { "type": "tool_result", "tool_use_id": "...", "output": { ... }, "ok": true, "ts": "..." }
+//! { "type": "reasoning", "text": "...", "replay": { "provider": "openai", "id": "...", "encrypted_content": "..." }, "ts": "..." }
 //! { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
 //! ```
 
@@ -156,13 +157,12 @@ pub enum ThreadEvent {
         ts: String,
     },
 
-    /// Thinking event: extended thinking block from the assistant.
-    Thinking {
-        content: String,
-        /// Cryptographic signature from the API.
-        /// None/missing if thinking was aborted (will be converted to text block on replay).
-        #[serde(default)]
-        signature: Option<String>,
+    /// Reasoning event: provider-agnostic reasoning block with replay data.
+    Reasoning {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        replay: Option<crate::providers::ReplayToken>,
         ts: String,
     },
 
@@ -234,11 +234,11 @@ impl ThreadEvent {
         }
     }
 
-    /// Creates a new thinking event.
-    pub fn thinking(content: impl Into<String>, signature: Option<String>) -> Self {
-        Self::Thinking {
-            content: content.into(),
-            signature,
+    /// Creates a new reasoning event.
+    pub fn reasoning(text: Option<String>, replay: Option<crate::providers::ReplayToken>) -> Self {
+        Self::Reasoning {
+            text,
+            replay,
             ts: chrono_timestamp(),
         }
     }
@@ -259,29 +259,29 @@ impl ThreadEvent {
     /// Not all agent events are persisted. This returns `None` for events
     /// that don't need to be saved (e.g., `AssistantDelta`, `ToolStarted`).
     ///
-    /// Note: `AssistantComplete` and user messages are handled separately by the
+    /// Note: `AssistantCompleted` and user messages are handled separately by the
     /// chat/agent modules since they have additional context.
     pub fn from_agent(event: &crate::core::events::AgentEvent) -> Option<Self> {
         use crate::core::events::AgentEvent;
 
         match event {
-            // ToolInputReady has the complete input (ToolRequested is emitted early with empty input)
-            AgentEvent::ToolInputReady { id, name, input } => {
+            // ToolInputCompleted has the complete input (ToolRequested is emitted early with empty input)
+            AgentEvent::ToolInputCompleted { id, name, input } => {
                 Some(Self::tool_use(id.clone(), name.clone(), input.clone()))
             }
-            AgentEvent::ToolFinished { id, result } => {
+            AgentEvent::ToolCompleted { id, result } => {
                 let output = serde_json::to_value(result).unwrap_or_default();
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
             AgentEvent::Interrupted => Some(Self::interrupted()),
-            AgentEvent::ThinkingComplete { text, signature } => {
-                Some(Self::thinking(text.clone(), Some(signature.clone())))
+            AgentEvent::ReasoningCompleted { block } => {
+                Some(Self::reasoning(block.text.clone(), block.replay.clone()))
             }
             // These are not persisted via this path:
             // - AssistantDelta: streamed chunks, not final
-            // - AssistantComplete: handled by caller with full context
-            // - ThinkingDelta: streamed chunks, not final
-            // - ToolRequested: early notification with empty input (ToolInputReady has full input)
+            // - AssistantCompleted: handled by caller with full context
+            // - ReasoningDelta: streamed chunks, not final
+            // - ToolRequested: early notification with empty input (ToolInputCompleted has full input)
             // - ToolStarted: UI-only, not persisted
             // - Error: not persisted (may be in future)
             _ => None,
@@ -801,13 +801,13 @@ pub fn set_thread_title(id: &str, title: Option<String>) -> Result<Option<String
 
 /// Converts thread events to chat messages for API replay.
 pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::providers::ChatMessage> {
-    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock};
 
     let mut messages: Vec<ChatMessage> = Vec::new();
 
     // Track pending assistant content to group into single messages
-    // (thinking blocks + tool uses belong to the same assistant turn)
-    let mut pending_thinking: Vec<(String, Option<String>)> = Vec::new(); // (content, signature)
+    // (reasoning blocks + tool uses belong to the same assistant turn)
+    let mut pending_reasoning: Vec<ReasoningBlock> = Vec::new();
     let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
     let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
     let mut open_tool_uses: Vec<String> = Vec::new();
@@ -815,22 +815,17 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
     /// Flushes pending assistant content (thinking + tool_use) and tool results into messages.
     fn flush_pending_assistant(
         messages: &mut Vec<ChatMessage>,
-        pending_thinking: &mut Vec<(String, Option<String>)>,
+        pending_reasoning: &mut Vec<ReasoningBlock>,
         pending_tool_uses: &mut Vec<(String, String, Value)>,
         pending_tool_results: &mut Vec<crate::tools::ToolResult>,
     ) {
         // First, flush any pending thinking/tool_use as an assistant message
-        if !pending_thinking.is_empty() || !pending_tool_uses.is_empty() {
+        if !pending_reasoning.is_empty() || !pending_tool_uses.is_empty() {
             let mut blocks: Vec<ChatContentBlock> = Vec::new();
 
-            // Add thinking blocks first
-            for (content, signature) in std::mem::take(pending_thinking) {
-                blocks.push(ChatContentBlock::Thinking {
-                    thinking: content,
-                    // Use empty string if signature is missing (aborted thinking)
-                    // The API serialization will convert this to a text block
-                    signature: signature.unwrap_or_default(),
-                });
+            // Add reasoning blocks first
+            for reasoning in std::mem::take(pending_reasoning) {
+                blocks.push(ChatContentBlock::Reasoning(reasoning));
             }
 
             // Add tool_use blocks
@@ -859,14 +854,14 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                 // Skip meta events
             }
             ThreadEvent::Message { role, text, .. } => {
-                // For assistant messages with pending thinking (but no pending tool uses),
-                // combine them into one message. The API requires thinking blocks and
+                // For assistant messages with pending reasoning (but no pending tool uses),
+                // combine them into one message. The API requires reasoning blocks and
                 // subsequent content in the same turn.
                 //
-                // If there are pending tool uses, the thinking belongs with those,
-                // so we flush normally (thinking + tool_use go together).
+                // If there are pending tool uses, the reasoning belongs with those,
+                // so we flush normally (reasoning + tool_use go together).
                 if role == "assistant"
-                    && !pending_thinking.is_empty()
+                    && !pending_reasoning.is_empty()
                     && pending_tool_uses.is_empty()
                 {
                     // First, flush any pending tool results as a user message
@@ -879,14 +874,9 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
 
                     let mut blocks: Vec<ChatContentBlock> = Vec::new();
 
-                    // Add thinking blocks first
-                    for (content, signature) in std::mem::take(&mut pending_thinking) {
-                        blocks.push(ChatContentBlock::Thinking {
-                            thinking: content,
-                            // Use empty string if signature is missing (aborted thinking)
-                            // The API serialization will convert this to a text block
-                            signature: signature.unwrap_or_default(),
-                        });
+                    // Add reasoning blocks first
+                    for reasoning in std::mem::take(&mut pending_reasoning) {
+                        blocks.push(ChatContentBlock::Reasoning(reasoning));
                     }
 
                     // Add the text block
@@ -899,7 +889,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                     // Flush any pending assistant content before adding a new message
                     flush_pending_assistant(
                         &mut messages,
-                        &mut pending_thinking,
+                        &mut pending_reasoning,
                         &mut pending_tool_uses,
                         &mut pending_tool_results,
                     );
@@ -910,10 +900,8 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                     });
                 }
             }
-            ThreadEvent::Thinking {
-                content, signature, ..
-            } => {
-                pending_thinking.push((content, signature));
+            ThreadEvent::Reasoning { text, replay, .. } => {
+                pending_reasoning.push(ReasoningBlock { text, replay });
             }
             ThreadEvent::ToolUse {
                 id, name, input, ..
@@ -928,12 +916,12 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                 ..
             } => {
                 open_tool_uses.retain(|id| id != &tool_use_id);
-                // Flush pending assistant content (thinking + tool_use) before adding results.
+                // Flush pending assistant content (reasoning + tool_use) before adding results.
                 // This ensures the tool_use assistant message is closed, so any subsequent
                 // thinking blocks belong to the next assistant turn, not the tool_use turn.
                 flush_pending_assistant(
                     &mut messages,
-                    &mut pending_thinking,
+                    &mut pending_reasoning,
                     &mut pending_tool_uses,
                     &mut pending_tool_results,
                 );
@@ -958,7 +946,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
     // Flush any remaining pending assistant content
     flush_pending_assistant(
         &mut messages,
-        &mut pending_thinking,
+        &mut pending_reasoning,
         &mut pending_tool_uses,
         &mut pending_tool_results,
     );
@@ -984,7 +972,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
 
         flush_pending_assistant(
             &mut messages,
-            &mut pending_thinking,
+            &mut pending_reasoning,
             &mut pending_tool_uses,
             &mut pending_tool_results,
         );
@@ -1094,16 +1082,17 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
                 output.push_str(text);
                 output.push_str("\n\n");
             }
-            ThreadEvent::Thinking { content, .. } => {
-                output.push_str("### Thinking\n");
-                // Truncate long thinking content for display
-                if content.len() > 500 {
-                    output.push_str(truncate_str(content, 500));
-                    output.push_str("...");
-                } else {
-                    output.push_str(content);
+            ThreadEvent::Reasoning { text, .. } => {
+                if let Some(content) = text {
+                    output.push_str("### Thinking\n");
+                    if content.len() > 500 {
+                        output.push_str(truncate_str(content, 500));
+                        output.push_str("...");
+                    } else {
+                        output.push_str(content);
+                    }
+                    output.push_str("\n\n");
                 }
-                output.push_str("\n\n");
             }
             ThreadEvent::ToolUse { name, input, .. } => {
                 output.push_str(&format!("### Tool: {}\n", name));
@@ -1176,6 +1165,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+    use crate::providers::ReplayToken;
 
     fn setup_temp_zdx_home() -> &'static TempDir {
         static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
@@ -1273,6 +1263,20 @@ mod tests {
         assert!(json.contains("\"type\":\"interrupted\""));
         assert!(json.contains("\"role\":\"system\""));
         assert!(json.contains("\"text\":\"Interrupted\""));
+
+        let reasoning = ThreadEvent::reasoning(
+            Some("summary".to_string()),
+            Some(crate::providers::ReplayToken::OpenAI {
+                id: "r1".to_string(),
+                encrypted_content: "encrypted".to_string(),
+            }),
+        );
+        let json = serde_json::to_string(&reasoning).unwrap();
+        assert!(json.contains("\"type\":\"reasoning\""));
+        assert!(json.contains("\"provider\":\"openai\""));
+        assert!(json.contains("\"id\":\"r1\""));
+        assert!(json.contains("\"encrypted_content\":\"encrypted\""));
+        assert!(json.contains("\"text\":\"summary\""));
     }
 
     #[test]
@@ -1296,6 +1300,44 @@ mod tests {
         assert_eq!(messages[2].role, "user");
         // Fourth is final assistant message
         assert_eq!(messages[3].role, "assistant");
+    }
+
+    #[test]
+    fn test_events_to_messages_with_openai_reasoning() {
+        use crate::providers::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
+
+        let events = vec![
+            ThreadEvent::user_message("explain this"),
+            ThreadEvent::reasoning(
+                Some("summary".to_string()),
+                Some(ReplayToken::OpenAI {
+                    id: "r1".to_string(),
+                    encrypted_content: "enc".to_string(),
+                }),
+            ),
+            ThreadEvent::assistant_message("Here is the answer."),
+        ];
+
+        let messages = thread_events_to_messages(events);
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+
+        match &messages[1].content {
+            MessageContent::Blocks(blocks) => {
+                assert!(matches!(
+                    blocks.first(),
+                    Some(ChatContentBlock::Reasoning(ReasoningBlock {
+                        replay: Some(ReplayToken::OpenAI { id, .. }),
+                        ..
+                    })) if id == "r1"
+                ));
+                assert!(matches!(
+                    blocks.last(),
+                    Some(ChatContentBlock::Text(text)) if text == "Here is the answer."
+                ));
+            }
+            _ => panic!("Expected assistant message with blocks"),
+        }
     }
 
     #[test]
@@ -1343,56 +1385,35 @@ mod tests {
     }
 
     #[test]
-    fn test_thinking_event_serialization() {
-        // Test thinking with signature
-        let thinking = ThreadEvent::thinking("Let me analyze this...", Some("sig123".to_string()));
-        let json = serde_json::to_string(&thinking).unwrap();
-        assert!(json.contains("\"type\":\"thinking\""));
-        assert!(json.contains("\"content\":\"Let me analyze this...\""));
-        assert!(json.contains("\"signature\":\"sig123\""));
-
-        // Test thinking without signature (aborted)
-        let aborted = ThreadEvent::thinking("Partial thought...", None);
-        let json = serde_json::to_string(&aborted).unwrap();
-        assert!(json.contains("\"type\":\"thinking\""));
-        assert!(json.contains("\"signature\":null"));
-    }
-
-    #[test]
-    fn test_thinking_event_deserialization() {
-        // Test deserialization with signature
-        let json = r#"{"type":"thinking","content":"Deep analysis","signature":"abc123","ts":"2024-01-01T00:00:00Z"}"#;
+    fn test_reasoning_event_deserialization() {
+        let json = r#"{"type":"reasoning","text":"sum","replay":{"provider":"openai","id":"r1","encrypted_content":"enc"},"ts":"2024-01-01T00:00:00Z"}"#;
         let event: ThreadEvent = serde_json::from_str(json).unwrap();
         match event {
-            ThreadEvent::Thinking {
-                content, signature, ..
-            } => {
-                assert_eq!(content, "Deep analysis");
-                assert_eq!(signature, Some("abc123".to_string()));
+            ThreadEvent::Reasoning { text, replay, .. } => {
+                assert_eq!(text, Some("sum".to_string()));
+                assert_eq!(
+                    replay,
+                    Some(crate::providers::ReplayToken::OpenAI {
+                        id: "r1".to_string(),
+                        encrypted_content: "enc".to_string(),
+                    })
+                );
             }
-            _ => panic!("Expected Thinking event"),
-        }
-
-        // Test deserialization without signature (backward compat)
-        let json_no_sig = r#"{"type":"thinking","content":"Partial","ts":"2024-01-01T00:00:00Z"}"#;
-        let event: ThreadEvent = serde_json::from_str(json_no_sig).unwrap();
-        match event {
-            ThreadEvent::Thinking { signature, .. } => {
-                assert_eq!(signature, None);
-            }
-            _ => panic!("Expected Thinking event"),
+            _ => panic!("Expected Reasoning event"),
         }
     }
 
     #[test]
-    fn test_events_to_messages_with_thinking() {
-        use crate::providers::{ChatContentBlock, MessageContent};
+    fn test_events_to_messages_with_reasoning() {
+        use crate::providers::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
 
         let events = vec![
             ThreadEvent::user_message("solve this problem"),
-            ThreadEvent::thinking(
-                "Let me think about this...".to_string(),
-                Some("sig123".to_string()),
+            ThreadEvent::reasoning(
+                Some("Let me think about this...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig123".to_string(),
+                }),
             ),
             ThreadEvent::tool_use("t1", "bash", json!({"command": "echo test"})),
             ThreadEvent::tool_result("t1", json!({"stdout": "test\n"}), true),
@@ -1409,11 +1430,13 @@ mod tests {
         assert_eq!(messages[1].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[1].content {
             assert_eq!(blocks.len(), 2);
-            assert!(
-                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
-                    if thinking == "Let me think about this..." && signature == "sig123"
-                )
-            );
+            assert!(matches!(
+                &blocks[0],
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some(thinking),
+                    replay: Some(ReplayToken::Anthropic { signature }),
+                }) if thinking == "Let me think about this..." && signature == "sig123"
+            ));
             assert!(matches!(&blocks[1], ChatContentBlock::ToolUse { .. }));
         } else {
             panic!("Expected Blocks content");
@@ -1421,16 +1444,21 @@ mod tests {
     }
 
     #[test]
-    fn test_events_to_messages_thinking_then_text() {
-        // Test case for the bug: thinking followed directly by assistant text (no tool use)
-        // This should produce a SINGLE assistant message with [thinking, text] blocks,
+    fn test_events_to_messages_reasoning_then_text() {
+        // Test case for the bug: reasoning followed directly by assistant text (no tool use)
+        // This should produce a SINGLE assistant message with [reasoning, text] blocks,
         // NOT two separate messages. The API rejects modifications to thinking blocks
         // in the latest assistant message, so they must be in the same message.
-        use crate::providers::{ChatContentBlock, MessageContent};
+        use crate::providers::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
 
         let events = vec![
             ThreadEvent::user_message("explain this"),
-            ThreadEvent::thinking("Let me analyze...".to_string(), Some("sig456".to_string())),
+            ThreadEvent::reasoning(
+                Some("Let me analyze...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig456".to_string(),
+                }),
+            ),
             ThreadEvent::assistant_message("Here's my explanation."),
         ];
 
@@ -1443,12 +1471,16 @@ mod tests {
         // Second message should be assistant with BOTH thinking AND text blocks
         assert_eq!(messages[1].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[1].content {
-            assert_eq!(blocks.len(), 2, "Should have 2 blocks: thinking + text");
+            assert_eq!(blocks.len(), 2, "Should have 2 blocks: reasoning + text");
             assert!(
-                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
-                    if thinking == "Let me analyze..." && signature == "sig456"
+                matches!(
+                    &blocks[0],
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some(thinking),
+                        replay: Some(ReplayToken::Anthropic { signature }),
+                    }) if thinking == "Let me analyze..." && signature == "sig456"
                 ),
-                "First block should be thinking"
+                "First block should be reasoning"
             );
             assert!(
                 matches!(&blocks[1], ChatContentBlock::Text(text) if text == "Here's my explanation."),
@@ -1460,48 +1492,59 @@ mod tests {
     }
 
     #[test]
-    fn test_events_to_messages_tool_use_then_thinking() {
-        // Regression test for the bug: when a tool call is followed by another thinking block,
-        // the second thinking must belong to the FINAL assistant message, not the tool_use message.
+    fn test_events_to_messages_tool_use_then_reasoning() {
+        // Regression test for the bug: when a tool call is followed by another reasoning block,
+        // the second reasoning must belong to the FINAL assistant message, not the tool_use message.
         //
-        // Sequence: user → thinking1 → tool_use → tool_result → thinking2 → assistant_text
+        // Sequence: user → reasoning1 → tool_use → tool_result → reasoning2 → assistant_text
         //
         // Expected messages:
         // 1. User: "question"
-        // 2. Assistant: [Thinking1, ToolUse]
+        // 2. Assistant: [Reasoning1, ToolUse]
         // 3. User: [ToolResult]
-        // 4. Assistant: [Thinking2, Text]
-        use crate::providers::{ChatContentBlock, MessageContent};
+        // 4. Assistant: [Reasoning2, Text]
+        use crate::providers::{ChatContentBlock, MessageContent, ReasoningBlock, ReplayToken};
 
         let events = vec![
             ThreadEvent::user_message("run a command"),
-            ThreadEvent::thinking("Let me run this...".to_string(), Some("sig1".to_string())),
+            ThreadEvent::reasoning(
+                Some("Let me run this...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig1".to_string(),
+                }),
+            ),
             ThreadEvent::tool_use("t1", "bash", json!({"command": "echo hello"})),
             ThreadEvent::tool_result("t1", json!({"stdout": "hello\n"}), true),
-            ThreadEvent::thinking(
-                "Now let me explain...".to_string(),
-                Some("sig2".to_string()),
+            ThreadEvent::reasoning(
+                Some("Now let me explain...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig2".to_string(),
+                }),
             ),
             ThreadEvent::assistant_message("The command output was 'hello'."),
         ];
 
         let messages = thread_events_to_messages(events);
 
-        // user + assistant(thinking1 + tool_use) + user(tool_result) + assistant(thinking2 + text) = 4
+        // user + assistant(reasoning1 + tool_use) + user(tool_result) + assistant(reasoning2 + text) = 4
         assert_eq!(messages.len(), 4, "Should have 4 messages");
 
         // Message 0: User
         assert_eq!(messages[0].role, "user");
 
-        // Message 1: Assistant with thinking1 + tool_use
+        // Message 1: Assistant with reasoning1 + tool_use
         assert_eq!(messages[1].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[1].content {
             assert_eq!(blocks.len(), 2, "First assistant should have 2 blocks");
             assert!(
-                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
-                    if thinking == "Let me run this..." && signature == "sig1"
+                matches!(
+                    &blocks[0],
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some(thinking),
+                        replay: Some(ReplayToken::Anthropic { signature }),
+                    }) if thinking == "Let me run this..." && signature == "sig1"
                 ),
-                "First block should be thinking1"
+                "First block should be reasoning1"
             );
             assert!(
                 matches!(&blocks[1], ChatContentBlock::ToolUse { name, .. } if name == "bash"),
@@ -1514,19 +1557,23 @@ mod tests {
         // Message 2: User with tool_result
         assert_eq!(messages[2].role, "user");
 
-        // Message 3: Assistant with thinking2 + text (THE KEY ASSERTION)
+        // Message 3: Assistant with reasoning2 + text (THE KEY ASSERTION)
         assert_eq!(messages[3].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[3].content {
             assert_eq!(
                 blocks.len(),
                 2,
-                "Final assistant should have 2 blocks: thinking2 + text"
+                "Final assistant should have 2 blocks: reasoning2 + text"
             );
             assert!(
-                matches!(&blocks[0], ChatContentBlock::Thinking { thinking, signature }
-                    if thinking == "Now let me explain..." && signature == "sig2"
+                matches!(
+                    &blocks[0],
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some(thinking),
+                        replay: Some(ReplayToken::Anthropic { signature }),
+                    }) if thinking == "Now let me explain..." && signature == "sig2"
                 ),
-                "First block should be thinking2 (not attached to tool_use message!)"
+                "First block should be reasoning2 (not attached to tool_use message!)"
             );
             assert!(
                 matches!(&blocks[1], ChatContentBlock::Text(text)
@@ -1543,17 +1590,19 @@ mod tests {
     }
 
     #[test]
-    fn test_thread_thinking_roundtrip() {
+    fn test_thread_reasoning_roundtrip() {
         let _temp = setup_temp_zdx_home();
 
-        let mut thread = ThreadLog::with_id(unique_thread_id("thinking-roundtrip")).unwrap();
+        let mut thread = ThreadLog::with_id(unique_thread_id("reasoning-roundtrip")).unwrap();
         thread
             .append(&ThreadEvent::user_message("explain"))
             .unwrap();
         thread
-            .append(&ThreadEvent::thinking(
-                "Deep analysis here...",
-                Some("signature456".to_string()),
+            .append(&ThreadEvent::reasoning(
+                Some("Deep analysis here...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "signature456".to_string(),
+                }),
             ))
             .unwrap();
         thread
@@ -1561,26 +1610,29 @@ mod tests {
             .unwrap();
 
         let events = thread.read_events().unwrap();
-        // meta + user + thinking + assistant = 4 events
+        // meta + user + reasoning + assistant = 4 events
         assert_eq!(events.len(), 4);
         assert!(matches!(events[0], ThreadEvent::Meta { .. }));
         assert!(matches!(events[1], ThreadEvent::Message { ref role, .. } if role == "user"));
         assert!(
-            matches!(events[2], ThreadEvent::Thinking { ref content, ref signature, .. }
-                if content == "Deep analysis here..." && signature == &Some("signature456".to_string())
+            matches!(events[2], ThreadEvent::Reasoning { ref text, ref replay, .. }
+                if text == &Some("Deep analysis here...".to_string())
+                    && replay == &Some(ReplayToken::Anthropic { signature: "signature456".to_string() })
             )
         );
         assert!(matches!(events[3], ThreadEvent::Message { ref role, .. } if role == "assistant"));
     }
 
     #[test]
-    fn test_format_transcript_with_thinking() {
+    fn test_format_transcript_with_reasoning() {
         let events = vec![
             ThreadEvent::meta_with_root(None),
             ThreadEvent::user_message("explain this"),
-            ThreadEvent::thinking(
-                "Analyzing the request...".to_string(),
-                Some("sig".to_string()),
+            ThreadEvent::reasoning(
+                Some("Analyzing the request...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig".to_string(),
+                }),
             ),
             ThreadEvent::assistant_message("Here's my explanation."),
         ];

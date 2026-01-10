@@ -8,7 +8,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::providers::{ChatMessage, ProviderErrorKind};
+use crate::providers::{ChatMessage, ProviderErrorKind, ReasoningBlock};
 
 /// Events emitted by the agent during execution.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,20 +17,20 @@ pub enum AgentEvent {
     /// Turn has started processing.
     TurnStarted,
 
-    /// Incremental thinking chunk from the assistant (extended thinking).
-    ThinkingDelta { text: String },
+    /// Incremental reasoning chunk from the assistant (extended thinking).
+    ReasoningDelta { text: String },
 
-    /// Complete thinking block from the assistant (extended thinking).
-    ThinkingComplete { text: String, signature: String },
+    /// Complete reasoning block from the assistant (persisted in thread logs).
+    ReasoningCompleted { block: ReasoningBlock },
 
     /// Incremental text chunk from the assistant.
     AssistantDelta { text: String },
 
     /// Complete response from the assistant.
-    AssistantComplete { text: String },
+    AssistantCompleted { text: String },
 
     /// Model has decided to call a tool (emitted early for UI feedback).
-    /// The input may be empty at this point; ToolInputReady follows with full input.
+    /// The input may be empty at this point; ToolInputCompleted follows with full input.
     ToolRequested {
         id: String,
         name: String,
@@ -39,7 +39,7 @@ pub enum AgentEvent {
 
     /// Tool input JSON is fully received (for thread persistence).
     /// Emitted after ToolRequested once all input JSON has been streamed.
-    ToolInputReady {
+    ToolInputCompleted {
         id: String,
         name: String,
         input: Value,
@@ -52,7 +52,7 @@ pub enum AgentEvent {
     ToolOutputDelta { id: String, chunk: String },
 
     /// A tool invocation has completed.
-    ToolFinished { id: String, result: ToolOutput },
+    ToolCompleted { id: String, result: ToolOutput },
 
     /// An error occurred during execution.
     Error {
@@ -69,7 +69,7 @@ pub enum AgentEvent {
     Interrupted,
 
     /// Turn completed successfully with final result.
-    TurnComplete {
+    TurnCompleted {
         /// Final accumulated text from the assistant.
         final_text: String,
         /// Updated message history (includes assistant responses and tool results).

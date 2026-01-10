@@ -1,7 +1,9 @@
 use serde::Serialize;
 use serde_json::Value;
 
-use crate::providers::shared::{ChatContentBlock, ChatMessage, MessageContent};
+use crate::providers::shared::{
+    ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken,
+};
 use crate::tools::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
 // === API Request Types ===
@@ -181,46 +183,61 @@ impl ApiMessage {
             MessageContent::Blocks(blocks) => {
                 let api_blocks: Vec<ApiContentBlock> = blocks
                     .iter()
-                    .map(|b| match b {
-                        ChatContentBlock::Thinking {
-                            thinking,
-                            signature,
-                        } => {
-                            // If signature is missing or empty (aborted thinking),
-                            // convert to text block to avoid API rejection.
-                            // This follows the pi-mono pattern.
-                            if signature.is_empty() {
-                                ApiContentBlock::Text {
+                    .filter_map(|b| match b {
+                        ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
+                            match replay.as_ref() {
+                                Some(ReplayToken::Anthropic { signature }) => {
+                                    let thinking = text.clone().unwrap_or_default();
+                                    // If signature is missing or empty (aborted thinking),
+                                    // convert to text block to avoid API rejection.
+                                    // This follows the pi-mono pattern.
+                                    if signature.is_empty() {
+                                        Some(ApiContentBlock::Text {
+                                            text: format!("<thinking>\n{}\n</thinking>", thinking),
+                                            cache_control: None,
+                                        })
+                                    } else if thinking.is_empty() {
+                                        None
+                                    } else {
+                                        Some(ApiContentBlock::Thinking {
+                                            thinking,
+                                            signature: signature.clone(),
+                                        })
+                                    }
+                                }
+                                // Skip OpenAI-specific reasoning blocks
+                                Some(ReplayToken::OpenAI { .. }) => None,
+                                // No replay data; treat as text-only thinking for compatibility
+                                None => text.as_ref().map(|thinking| ApiContentBlock::Text {
                                     text: format!("<thinking>\n{}\n</thinking>", thinking),
                                     cache_control: None,
-                                }
-                            } else {
-                                ApiContentBlock::Thinking {
-                                    thinking: thinking.clone(),
-                                    signature: signature.clone(),
-                                }
+                                }),
                             }
                         }
-                        ChatContentBlock::Text(text) => ApiContentBlock::Text {
+                        ChatContentBlock::Text(text) => Some(ApiContentBlock::Text {
                             text: text.clone(),
                             cache_control: if use_cache_control {
                                 Some(CacheControl::ephemeral())
                             } else {
                                 None
                             },
-                        },
-                        ChatContentBlock::Image { mime_type, data } => ApiContentBlock::Image {
-                            source: ApiImageSource {
-                                source_type: "base64",
-                                media_type: mime_type.clone(),
-                                data: data.clone(),
-                            },
-                        },
-                        ChatContentBlock::ToolUse { id, name, input } => ApiContentBlock::ToolUse {
-                            id: id.clone(),
-                            name: name.clone(),
-                            input: input.clone(),
-                        },
+                        }),
+                        ChatContentBlock::Image { mime_type, data } => {
+                            Some(ApiContentBlock::Image {
+                                source: ApiImageSource {
+                                    source_type: "base64",
+                                    media_type: mime_type.clone(),
+                                    data: data.clone(),
+                                },
+                            })
+                        }
+                        ChatContentBlock::ToolUse { id, name, input } => {
+                            Some(ApiContentBlock::ToolUse {
+                                id: id.clone(),
+                                name: name.clone(),
+                                input: input.clone(),
+                            })
+                        }
                         ChatContentBlock::ToolResult(result) => {
                             let content = match &result.content {
                                 ToolResultContent::Text(text) => {
@@ -248,12 +265,12 @@ impl ApiMessage {
                                 }
                             };
 
-                            ApiContentBlock::ToolResult {
+                            Some(ApiContentBlock::ToolResult {
                                 tool_use_id: result.tool_use_id.clone(),
                                 content,
                                 is_error: result.is_error,
                                 cache_control: None,
-                            }
+                            })
                         }
                     })
                     .collect();
