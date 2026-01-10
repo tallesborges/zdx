@@ -94,6 +94,7 @@ pub async fn run_exec(
     let renderer_handle = spawn_exec_renderer_task(render_rx);
 
     // Spawn persist task if thread exists
+    let thread_id = thread.as_ref().map(|t| t.id.clone());
     let persist_handle = if let Some(thread_log_handle) = thread.clone() {
         let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
         let broadcaster =
@@ -112,6 +113,7 @@ pub async fn run_exec(
         config,
         &agent_opts,
         effective.prompt.as_deref(),
+        thread_id.as_deref(),
         agent_tx,
     )
     .await;

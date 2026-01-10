@@ -239,6 +239,7 @@ pub async fn run_turn(
     config: &Config,
     options: &AgentOptions,
     system_prompt: Option<&str>,
+    thread_id: Option<&str>,
     tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
@@ -282,8 +283,12 @@ pub async fn run_turn(
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let openai_config =
-                OpenAICodexConfig::new(selection.model.clone(), max_tokens, reasoning_effort);
+            let openai_config = OpenAICodexConfig::new(
+                selection.model.clone(),
+                max_tokens,
+                reasoning_effort,
+                thread_id.map(|s| s.to_string()),
+            );
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
         }
         ProviderKind::OpenAI => {
@@ -291,6 +296,7 @@ pub async fn run_turn(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.openai.effective_base_url(),
+                thread_id.map(|s| s.to_string()),
             )?;
             ProviderClient::OpenAI(OpenAIClient::new(openai_config))
         }

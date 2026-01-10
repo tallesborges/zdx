@@ -20,6 +20,7 @@ pub struct OpenAIConfig {
     pub base_url: String,
     pub model: String,
     pub max_output_tokens: u32,
+    pub prompt_cache_key: Option<String>,
 }
 
 impl OpenAIConfig {
@@ -32,6 +33,7 @@ impl OpenAIConfig {
         model: String,
         max_output_tokens: u32,
         config_base_url: Option<&str>,
+        prompt_cache_key: Option<String>,
     ) -> Result<Self> {
         let api_key = std::env::var("OPENAI_API_KEY")
             .context("OPENAI_API_KEY is not set. Set it to use OpenAI API.")?;
@@ -43,6 +45,7 @@ impl OpenAIConfig {
             base_url,
             model,
             max_output_tokens,
+            prompt_cache_key,
         })
     }
 }
@@ -77,6 +80,8 @@ impl OpenAIClient {
             instructions: None,
             store: Some(false),
             include: None,
+            prompt_cache_key: self.config.prompt_cache_key.clone(),
+            parallel_tool_calls: Some(true),
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await

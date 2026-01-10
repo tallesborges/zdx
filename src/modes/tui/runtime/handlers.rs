@@ -309,6 +309,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let config = tui.config.clone();
     let agent_opts = tui.agent_opts.clone();
     let system_prompt = tui.system_prompt.clone();
+    let thread_id = tui.thread.thread_log.as_ref().map(|h| h.id.clone());
 
     let (tui_tx, tui_rx) = crate::core::agent::create_event_channel();
 
@@ -328,6 +329,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
             &config,
             &agent_opts,
             system_prompt.as_deref(),
+            thread_id.as_deref(),
             agent_tx,
         )
         .await;
