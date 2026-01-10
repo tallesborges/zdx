@@ -220,13 +220,17 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 encrypted_content,
                             }) = replay.as_ref()
                             {
-                                // Summary is optional when replaying reasoning items
-                                let summary_items = text.as_ref().map(|text| {
-                                    vec![SummaryItem {
-                                        item_type: "summary_text",
-                                        text: text.clone(),
-                                    }]
-                                });
+                                // Summary is REQUIRED when replaying reasoning items.
+                                // Use the text if available and non-empty, otherwise use a placeholder.
+                                let summary_text = text
+                                    .as_ref()
+                                    .filter(|t| !t.trim().is_empty())
+                                    .cloned()
+                                    .unwrap_or_else(|| "(reasoning)".to_string());
+                                let summary_items = vec![SummaryItem {
+                                    item_type: "summary_text",
+                                    text: summary_text,
+                                }];
                                 input.push(InputItem {
                                     id: Some(id.clone()),
                                     item_type: "reasoning".to_string(),
@@ -237,7 +241,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                     arguments: None,
                                     output: None,
                                     encrypted_content: Some(encrypted_content.clone()),
-                                    summary: summary_items,
+                                    summary: Some(summary_items),
                                 });
                             }
                         }
@@ -478,7 +482,7 @@ mod tests {
         // Should have 2 items: reasoning + text message
         assert_eq!(input.len(), 2);
 
-        // First item should be the reasoning item (summary not sent for replay)
+        // First item should be the reasoning item with summary
         assert_eq!(input[0].item_type, "reasoning");
         assert_eq!(input[0].id.as_deref(), Some("reasoning-123"));
         assert_eq!(
@@ -487,10 +491,73 @@ mod tests {
         );
         assert!(input[0].role.is_none());
         assert!(input[0].content.is_none());
+        // Summary is required for reasoning items
+        assert!(input[0].summary.is_some());
+        let summary = input[0].summary.as_ref().unwrap();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].text, "**Thinking about the problem**");
 
         // Second item should be the text message
         assert_eq!(input[1].item_type, "message");
         assert_eq!(input[1].role.as_deref(), Some("assistant"));
+    }
+
+    #[test]
+    fn build_input_reasoning_without_text_uses_placeholder() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: None, // No text provided
+                    replay: Some(ReplayToken::OpenAI {
+                        id: "reasoning-456".to_string(),
+                        encrypted_content: "encrypted-data-xyz".to_string(),
+                    }),
+                }),
+                ChatContentBlock::Text("Response text".to_string()),
+            ]),
+        }];
+
+        let input = build_input(&messages, None).unwrap();
+
+        // Should have 2 items: reasoning + text message
+        assert_eq!(input.len(), 2);
+
+        // First item should be the reasoning item with placeholder summary
+        assert_eq!(input[0].item_type, "reasoning");
+        assert!(input[0].summary.is_some());
+        let summary = input[0].summary.as_ref().unwrap();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].text, "(reasoning)"); // Placeholder text
+    }
+
+    #[test]
+    fn build_input_reasoning_with_empty_text_uses_placeholder() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("   ".to_string()), // Whitespace-only text
+                    replay: Some(ReplayToken::OpenAI {
+                        id: "reasoning-789".to_string(),
+                        encrypted_content: "encrypted-data-123".to_string(),
+                    }),
+                }),
+                ChatContentBlock::Text("Response text".to_string()),
+            ]),
+        }];
+
+        let input = build_input(&messages, None).unwrap();
+
+        // Should have 2 items: reasoning + text message
+        assert_eq!(input.len(), 2);
+
+        // First item should be the reasoning item with placeholder summary
+        assert_eq!(input[0].item_type, "reasoning");
+        assert!(input[0].summary.is_some());
+        let summary = input[0].summary.as_ref().unwrap();
+        assert_eq!(summary.len(), 1);
+        assert_eq!(summary[0].text, "(reasoning)"); // Placeholder for empty/whitespace text
     }
 
     #[test]
