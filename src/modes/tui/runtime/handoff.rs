@@ -17,7 +17,7 @@ use crate::modes::tui::events::UiEvent;
 
 /// Model to use for handoff generation (fast, cheap).
 /// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
-const HANDOFF_MODEL: &str = "claude-cli:claude-haiku-4-5";
+const HANDOFF_MODEL: &str = "gemini-cli:gemini-2.5-flash";
 
 /// Thinking level for handoff generation (minimal reasoning).
 const HANDOFF_THINKING: &str = "minimal";
