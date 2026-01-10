@@ -280,7 +280,6 @@ impl ScrollAccumulator {
     }
 
     /// Returns the current pending delta without consuming it.
-    #[cfg(test)]
     pub fn peek_delta(&self) -> i32 {
         self.pending_delta
     }
