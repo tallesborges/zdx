@@ -810,6 +810,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
     let mut pending_thinking: Vec<(String, Option<String>)> = Vec::new(); // (content, signature)
     let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
     let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
+    let mut open_tool_uses: Vec<String> = Vec::new();
 
     /// Flushes pending assistant content (thinking + tool_use) and tool results into messages.
     fn flush_pending_assistant(
@@ -917,6 +918,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
             ThreadEvent::ToolUse {
                 id, name, input, ..
             } => {
+                open_tool_uses.push(id.clone());
                 pending_tool_uses.push((id, name, input));
             }
             ThreadEvent::ToolResult {
@@ -925,6 +927,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                 ok,
                 ..
             } => {
+                open_tool_uses.retain(|id| id != &tool_use_id);
                 // Flush pending assistant content (thinking + tool_use) before adding results.
                 // This ensures the tool_use assistant message is closed, so any subsequent
                 // thinking blocks belong to the next assistant turn, not the tool_use turn.
@@ -959,6 +962,33 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
         &mut pending_tool_uses,
         &mut pending_tool_results,
     );
+
+    // If the thread ends with open tool uses, synthesize error results for resume.
+    if !open_tool_uses.is_empty() {
+        for tool_use_id in open_tool_uses.drain(..) {
+            let output = serde_json::json!({
+                "ok": false,
+                "error": {
+                    "code": "interrupted",
+                    "message": "Tool call was interrupted; no result recorded."
+                }
+            });
+            pending_tool_results.push(crate::tools::ToolResult {
+                tool_use_id,
+                content: crate::tools::ToolResultContent::Text(
+                    serde_json::to_string(&output).unwrap_or_default(),
+                ),
+                is_error: true,
+            });
+        }
+
+        flush_pending_assistant(
+            &mut messages,
+            &mut pending_thinking,
+            &mut pending_tool_uses,
+            &mut pending_tool_results,
+        );
+    }
 
     messages
 }
