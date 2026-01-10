@@ -10,7 +10,7 @@ use futures_util::Stream;
 use serde_json::Value;
 use uuid::Uuid;
 
-use crate::providers::{StreamEvent, Usage};
+use crate::providers::{ContentBlockType, StreamEvent, Usage};
 
 /// Gemini SSE stream parser.
 ///
@@ -163,7 +163,7 @@ impl<S> GeminiSseParser<S> {
                         self.text_index = Some(index);
                         self.pending.push_back(StreamEvent::ContentBlockStart {
                             index,
-                            block_type: "text".to_string(),
+                            block_type: ContentBlockType::Text,
                             id: None,
                             name: None,
                         });
@@ -203,7 +203,7 @@ impl<S> GeminiSseParser<S> {
 
                         self.pending.push_back(StreamEvent::ContentBlockStart {
                             index,
-                            block_type: "tool_use".to_string(),
+                            block_type: ContentBlockType::ToolUse,
                             id: Some(tool_id.clone()),
                             name: Some(name.to_string()),
                         });
@@ -218,7 +218,7 @@ impl<S> GeminiSseParser<S> {
                             partial_json: args_json,
                         });
                         self.pending
-                            .push_back(StreamEvent::ContentBlockStop { index });
+                            .push_back(StreamEvent::ContentBlockCompleted { index });
                     }
                 }
             }
@@ -231,7 +231,7 @@ impl<S> GeminiSseParser<S> {
 
             if let Some(index) = self.text_index.take() {
                 self.pending
-                    .push_back(StreamEvent::ContentBlockStop { index });
+                    .push_back(StreamEvent::ContentBlockCompleted { index });
             }
 
             let usage = self.final_usage.clone().unwrap_or_default();
@@ -249,7 +249,7 @@ impl<S> GeminiSseParser<S> {
                 stop_reason,
                 usage: Some(usage),
             });
-            self.pending.push_back(StreamEvent::MessageStop);
+            self.pending.push_back(StreamEvent::MessageCompleted);
         }
 
         Ok(())

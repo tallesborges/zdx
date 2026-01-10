@@ -1,18 +1,68 @@
 //! Provider-agnostic types shared across LLM backends.
 
 use std::fmt;
+use std::str::FromStr;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tools::ToolResult;
 
+/// Provider-specific replay token for reasoning/thinking blocks.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "provider")]
+pub enum ReplayToken {
+    /// Anthropic extended thinking - requires signature for replay
+    #[serde(rename = "anthropic")]
+    Anthropic { signature: String },
+    /// OpenAI Responses API reasoning - requires id + encrypted content for cache replay
+    #[serde(rename = "openai")]
+    OpenAI {
+        id: String,
+        encrypted_content: String,
+    },
+}
+
+/// Provider-agnostic reasoning/thinking content with optional replay token.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReasoningBlock {
+    /// Human-readable text (thinking or summary) for display.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub text: Option<String>,
+    /// Provider-specific replay data.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub replay: Option<ReplayToken>,
+}
+
+/// Content block kinds emitted by streaming APIs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentBlockType {
+    Text,
+    ToolUse,
+    Reasoning,
+}
+
+impl FromStr for ContentBlockType {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "text" => Ok(Self::Text),
+            "tool_use" => Ok(Self::ToolUse),
+            "thinking" | "reasoning" => Ok(Self::Reasoning),
+            _ => Err(format!("Unknown content block type: {}", value)),
+        }
+    }
+}
+
 /// Content block in a chat message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ChatContentBlock {
-    #[serde(rename = "thinking")]
-    Thinking { thinking: String, signature: String },
+    /// Model reasoning/thinking content (provider-specific)
+    #[serde(rename = "reasoning")]
+    Reasoning(ReasoningBlock),
     #[serde(rename = "text")]
     Text(String),
     #[serde(rename = "image")]
@@ -192,10 +242,10 @@ pub struct Usage {
 pub enum StreamEvent {
     /// Message started, contains model info and initial usage
     MessageStart { model: String, usage: Usage },
-    /// A content block has started (text or tool_use or thinking)
+    /// A content block has started (text, tool_use, reasoning)
     ContentBlockStart {
         index: usize,
-        block_type: String,
+        block_type: ContentBlockType,
         /// For tool_use blocks: the tool use ID
         id: Option<String>,
         /// For tool_use blocks: the tool name
@@ -205,19 +255,27 @@ pub enum StreamEvent {
     TextDelta { index: usize, text: String },
     /// Partial JSON delta for tool input
     InputJsonDelta { index: usize, partial_json: String },
-    /// Thinking delta within a thinking content block
-    ThinkingDelta { index: usize, thinking: String },
-    /// Signature delta within a thinking content block
-    SignatureDelta { index: usize, signature: String },
+    /// Reasoning delta within a reasoning content block
+    ReasoningDelta { index: usize, reasoning: String },
+    /// Signature delta within a reasoning content block
+    ReasoningSignatureDelta { index: usize, signature: String },
+    /// OpenAI reasoning item with encrypted content (for caching/replay)
+    ReasoningCompleted {
+        index: usize,
+        id: String,
+        encrypted_content: String,
+        /// Human-readable summary of the reasoning (for display)
+        summary: Option<String>,
+    },
     /// A content block has ended
-    ContentBlockStop { index: usize },
+    ContentBlockCompleted { index: usize },
     /// Message delta (e.g., stop_reason update, final usage)
     MessageDelta {
         stop_reason: Option<String>,
         usage: Option<Usage>,
     },
     /// Message completed
-    MessageStop,
+    MessageCompleted,
     /// Ping event (keepalive)
     Ping,
     /// Error event from API

@@ -273,9 +273,12 @@ fn cells_to_events(cells: &[HistoryCell]) -> Vec<ThreadEvent> {
                 events.push(ThreadEvent::assistant_message(content));
             }
             HistoryCell::Thinking {
-                content, signature, ..
+                content, replay, ..
             } => {
-                events.push(ThreadEvent::thinking(content, signature.clone()));
+                events.push(ThreadEvent::reasoning(
+                    Some(content.clone()),
+                    replay.clone(),
+                ));
             }
             HistoryCell::Tool {
                 tool_use_id,

@@ -112,7 +112,7 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 - First line is `meta` with `schema_version` and optional `title`.
 - Timestamps are RFC3339 UTC.
-- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `thinking`.
+- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`.
 - Threads remain readable even if interrupted mid-stream.
 
 ### Metadata Updates

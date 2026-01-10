@@ -10,8 +10,8 @@ use serde::Serialize;
 use serde_json::Value;
 
 use crate::providers::{
-    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, StreamEvent,
-    Usage,
+    ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
+    ProviderErrorKind, StreamEvent, Usage,
 };
 use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
 
@@ -328,7 +328,8 @@ impl ChatCompletionRequest {
                                     },
                                 });
                             }
-                            ChatContentBlock::Thinking { .. } => {}
+                            // Skip all reasoning blocks for OpenRouter
+                            ChatContentBlock::Reasoning(_) => {}
                             ChatContentBlock::ToolResult(_) => {}
                             // OpenRouter doesn't support images in assistant messages
                             ChatContentBlock::Image { .. } => {}
@@ -606,7 +607,7 @@ impl<S> ChatCompletionsSseParser<S> {
                     self.text_index = Some(index);
                     self.pending.push_back(StreamEvent::ContentBlockStart {
                         index,
-                        block_type: "text".to_string(),
+                        block_type: ContentBlockType::Text,
                         id: None,
                         name: None,
                     });
@@ -646,7 +647,7 @@ impl<S> ChatCompletionsSseParser<S> {
                         self.saw_tool = true;
                         self.pending.push_back(StreamEvent::ContentBlockStart {
                             index: stream_index,
-                            block_type: "tool_use".to_string(),
+                            block_type: ContentBlockType::ToolUse,
                             id: Some(tool_id.clone()),
                             name: Some(name.clone()),
                         });
@@ -670,7 +671,7 @@ impl<S> ChatCompletionsSseParser<S> {
 
             if let Some(index) = self.text_index.take() {
                 self.pending
-                    .push_back(StreamEvent::ContentBlockStop { index });
+                    .push_back(StreamEvent::ContentBlockCompleted { index });
             }
 
             let tool_indices: Vec<usize> = self
@@ -680,7 +681,7 @@ impl<S> ChatCompletionsSseParser<S> {
                 .collect();
             for index in tool_indices {
                 self.pending
-                    .push_back(StreamEvent::ContentBlockStop { index });
+                    .push_back(StreamEvent::ContentBlockCompleted { index });
             }
 
             let usage = self.final_usage.clone().unwrap_or_default();
@@ -698,7 +699,7 @@ impl<S> ChatCompletionsSseParser<S> {
                 stop_reason,
                 usage: Some(usage),
             });
-            self.pending.push_back(StreamEvent::MessageStop);
+            self.pending.push_back(StreamEvent::MessageCompleted);
         }
 
         Ok(())

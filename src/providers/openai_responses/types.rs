@@ -53,6 +53,20 @@ pub struct InputItem {
     pub arguments: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
+    /// Encrypted reasoning content for replay (OpenAI Responses API caching)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub encrypted_content: Option<String>,
+    /// Summary for reasoning items (required when replaying reasoning)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<Vec<SummaryItem>>,
+}
+
+/// Summary item for reasoning replay
+#[derive(Debug, Serialize)]
+pub struct SummaryItem {
+    #[serde(rename = "type")]
+    pub item_type: &'static str,
+    pub text: String,
 }
 
 #[derive(Debug, Serialize)]

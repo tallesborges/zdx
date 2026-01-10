@@ -322,7 +322,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
         let _broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
 
-    // Spawn the agent task - it will send TurnComplete when done
+    // Spawn the agent task - it will send TurnCompleted when done
     tokio::spawn(async move {
         let _ = crate::core::agent::run_turn(
             messages,

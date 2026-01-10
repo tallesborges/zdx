@@ -224,7 +224,8 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
         assert!(overlay.is_some());
 
-        let scroll = crate::modes::tui::transcript::ScrollState::default();
+        use crate::modes::tui::transcript::ScrollState;
+        let scroll = ScrollState::default();
         let (timeline, _, _) = TimelineState::open(&[], &scroll, ScrollMode::FollowLatest);
         let overlay: Option<Overlay> = Some(Overlay::Timeline(timeline));
         assert!(overlay.is_some());

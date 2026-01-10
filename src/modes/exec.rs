@@ -139,14 +139,14 @@ pub async fn run_exec(
 /// CLI renderer that writes agent events to stdout/stderr.
 ///
 /// # Output contract
-/// - `AssistantDelta` and `AssistantComplete` → stdout
-/// - `ToolStarted`, `ToolFinished`, `Error`, etc. → stderr
+/// - `AssistantDelta` and `AssistantCompleted` → stdout
+/// - `ToolStarted`, `ToolCompleted`, `Error`, etc. → stderr
 pub struct ExecRenderer {
     stdout: Stdout,
     stderr: Stderr,
     /// Whether the final newline has been printed after assistant output.
     needs_final_newline: bool,
-    /// Tracks tool_use id -> name for ToolFinished rendering.
+    /// Tracks tool_use id -> name for ToolCompleted rendering.
     tool_names: HashMap<String, String>,
     /// Tracks tool start times for duration calculation.
     tool_start_times: HashMap<String, Instant>,
@@ -180,7 +180,7 @@ impl ExecRenderer {
                     self.needs_final_newline = true;
                 }
             }
-            AgentEvent::AssistantComplete { text } => {
+            AgentEvent::AssistantCompleted { text } => {
                 // Final text is already streamed via deltas; track newline state
                 if !text.is_empty() {
                     self.needs_final_newline = true;
@@ -194,10 +194,10 @@ impl ExecRenderer {
                     self.needs_final_newline = false;
                 }
 
-                // Track tool name for ToolFinished rendering
+                // Track tool name for ToolCompleted rendering
                 self.tool_names.insert(id.clone(), name.clone());
             }
-            AgentEvent::ToolInputReady { id, name, input } => {
+            AgentEvent::ToolInputCompleted { id, name, input } => {
                 // Emit debug line for bash tool (per SPEC §10)
                 // This is emitted here (not ToolRequested) because we now have the full input
                 if name == "bash"
@@ -206,7 +206,7 @@ impl ExecRenderer {
                     let _ = writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
                 }
 
-                // Track tool name for ToolFinished rendering (if not already tracked)
+                // Track tool name for ToolCompleted rendering (if not already tracked)
                 self.tool_names.entry(id.clone()).or_insert(name.clone());
             }
             AgentEvent::ToolStarted { id, name } => {
@@ -214,7 +214,7 @@ impl ExecRenderer {
                 let _ = write!(self.stderr, "⚙ Running {}...", name);
                 let _ = self.stderr.flush();
             }
-            AgentEvent::ToolFinished { id, result } => {
+            AgentEvent::ToolCompleted { id, result } => {
                 // Calculate duration if we have a start time
                 let duration_str = self
                     .tool_start_times
@@ -247,19 +247,19 @@ impl ExecRenderer {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
-            AgentEvent::TurnComplete { .. } => {
+            AgentEvent::TurnCompleted { .. } => {
                 // Turn complete - no action needed in exec mode.
                 // The caller handles the final result from run_turn.
             }
-            AgentEvent::ThinkingDelta { text } => {
+            AgentEvent::ReasoningDelta { text } => {
                 // In exec mode, stream thinking text to stderr (no styling)
                 if !text.is_empty() {
                     let _ = write!(self.stderr, "{}", text);
                     let _ = self.stderr.flush();
                 }
             }
-            AgentEvent::ThinkingComplete { .. } => {
-                // Thinking complete - ensure newline after thinking output
+            AgentEvent::ReasoningCompleted { .. } => {
+                // Reasoning complete - ensure newline after reasoning output
                 let _ = writeln!(self.stderr);
                 let _ = self.stderr.flush();
             }
@@ -271,7 +271,7 @@ impl ExecRenderer {
             }
             AgentEvent::ToolOutputDelta { .. } => {
                 // TODO: Stream tool output in real-time
-                // For now, we only show final output in ToolFinished
+                // For now, we only show final output in ToolCompleted
             }
         }
     }

@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use futures_util::Stream;
 use serde::Deserialize;
 
-use crate::providers::shared::{StreamEvent, Usage};
+use crate::providers::shared::{ContentBlockType, StreamEvent, Usage};
 
 /// SSE parser that converts a byte stream into StreamEvents.
 pub struct SseParser<S> {
@@ -120,9 +120,14 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
             let data = data.context("Missing data for content_block_start event")?;
             let parsed: SseContentBlockStart =
                 serde_json::from_str(data).context("Failed to parse content_block_start")?;
+            let block_type = parsed
+                .content_block
+                .block_type
+                .parse::<ContentBlockType>()
+                .map_err(|e| anyhow::anyhow!(e))?;
             Ok(StreamEvent::ContentBlockStart {
                 index: parsed.index,
-                block_type: parsed.content_block.block_type,
+                block_type,
                 id: parsed.content_block.id,
                 name: parsed.content_block.name,
             })
@@ -140,11 +145,11 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
                     index: parsed.index,
                     partial_json: parsed.delta.partial_json.unwrap_or_default(),
                 }),
-                "thinking_delta" => Ok(StreamEvent::ThinkingDelta {
+                "thinking_delta" => Ok(StreamEvent::ReasoningDelta {
                     index: parsed.index,
-                    thinking: parsed.delta.thinking.unwrap_or_default(),
+                    reasoning: parsed.delta.thinking.unwrap_or_default(),
                 }),
-                "signature_delta" => Ok(StreamEvent::SignatureDelta {
+                "signature_delta" => Ok(StreamEvent::ReasoningSignatureDelta {
                     index: parsed.index,
                     signature: parsed.delta.signature.unwrap_or_default(),
                 }),
@@ -153,9 +158,9 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
         }
         "content_block_stop" => {
             let data = data.context("Missing data for content_block_stop event")?;
-            let parsed: SseContentBlockStop =
+            let parsed: SseContentBlockCompleted =
                 serde_json::from_str(data).context("Failed to parse content_block_stop")?;
-            Ok(StreamEvent::ContentBlockStop {
+            Ok(StreamEvent::ContentBlockCompleted {
                 index: parsed.index,
             })
         }
@@ -168,7 +173,7 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
                 usage: parsed.usage.map(|u| u.into()),
             })
         }
-        "message_stop" => Ok(StreamEvent::MessageStop),
+        "message_stop" => Ok(StreamEvent::MessageCompleted),
         "error" => {
             let data = data.context("Missing data for error event")?;
             let parsed: SseError = serde_json::from_str(data).context("Failed to parse error")?;
@@ -256,7 +261,7 @@ struct SseDelta {
 }
 
 #[derive(Debug, Deserialize)]
-struct SseContentBlockStop {
+struct SseContentBlockCompleted {
     index: usize,
 }
 
@@ -410,7 +415,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 index: 0,
                 block_type,
                 ..
-            } if block_type == "text"
+            } if *block_type == ContentBlockType::Text
         ));
         assert_eq!(events[2], StreamEvent::Ping);
         assert_eq!(
@@ -434,7 +439,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 text: "!".to_string()
             }
         );
-        assert_eq!(events[6], StreamEvent::ContentBlockStop { index: 0 });
+        assert_eq!(events[6], StreamEvent::ContentBlockCompleted { index: 0 });
         assert!(matches!(
             &events[7],
             StreamEvent::MessageDelta {
@@ -442,7 +447,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 ..
             } if reason == "end_turn"
         ));
-        assert_eq!(events[8], StreamEvent::MessageStop);
+        assert_eq!(events[8], StreamEvent::MessageCompleted);
     }
 
     #[tokio::test]
@@ -466,7 +471,9 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 block_type,
                 id: Some(id),
                 name: Some(name),
-            } if block_type == "tool_use" && id == "toolu_abc123" && name == "get_weather"
+            } if *block_type == ContentBlockType::ToolUse
+                && id == "toolu_abc123"
+                && name == "get_weather"
         ));
 
         // Check input_json_delta events
@@ -548,7 +555,7 @@ data: {"type":"message_stop"}
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], StreamEvent::Ping);
-        assert_eq!(events[1], StreamEvent::MessageStop);
+        assert_eq!(events[1], StreamEvent::MessageCompleted);
     }
 
     #[tokio::test]
@@ -565,7 +572,7 @@ data: {"type":"message_stop"}
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], StreamEvent::Ping);
-        assert_eq!(events[1], StreamEvent::MessageStop);
+        assert_eq!(events[1], StreamEvent::MessageCompleted);
     }
 
     #[tokio::test]
@@ -582,7 +589,7 @@ data: {"type":"message_stop"}
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], StreamEvent::Ping);
-        assert_eq!(events[1], StreamEvent::MessageStop);
+        assert_eq!(events[1], StreamEvent::MessageCompleted);
     }
 
     #[tokio::test]
@@ -689,36 +696,36 @@ data: {"type":"message_stop"}
                 index: 0,
                 block_type,
                 ..
-            } if block_type == "thinking"
+            } if *block_type == ContentBlockType::Reasoning
         ));
 
         // Check thinking deltas
         assert_eq!(
             events[2],
-            StreamEvent::ThinkingDelta {
+            StreamEvent::ReasoningDelta {
                 index: 0,
-                thinking: "Let me think".to_string()
+                reasoning: "Let me think".to_string()
             }
         );
         assert_eq!(
             events[3],
-            StreamEvent::ThinkingDelta {
+            StreamEvent::ReasoningDelta {
                 index: 0,
-                thinking: " about this...".to_string()
+                reasoning: " about this...".to_string()
             }
         );
 
         // Check signature delta
         assert_eq!(
             events[4],
-            StreamEvent::SignatureDelta {
+            StreamEvent::ReasoningSignatureDelta {
                 index: 0,
                 signature: "abc123sig".to_string()
             }
         );
 
         // Check thinking block stop
-        assert_eq!(events[5], StreamEvent::ContentBlockStop { index: 0 });
+        assert_eq!(events[5], StreamEvent::ContentBlockCompleted { index: 0 });
 
         // Check text block start
         assert!(matches!(
@@ -727,7 +734,7 @@ data: {"type":"message_stop"}
                 index: 1,
                 block_type,
                 ..
-            } if block_type == "text"
+            } if *block_type == ContentBlockType::Text
         ));
 
         // Check text delta
@@ -740,7 +747,7 @@ data: {"type":"message_stop"}
         );
 
         // Check text block stop
-        assert_eq!(events[8], StreamEvent::ContentBlockStop { index: 1 });
+        assert_eq!(events[8], StreamEvent::ContentBlockCompleted { index: 1 });
 
         // Check message delta and stop
         assert!(matches!(
@@ -750,7 +757,7 @@ data: {"type":"message_stop"}
                 ..
             } if reason == "end_turn"
         ));
-        assert_eq!(events[10], StreamEvent::MessageStop);
+        assert_eq!(events[10], StreamEvent::MessageCompleted);
 
         // Log actual events for debugging if needed
         // for (i, e) in events.iter().enumerate() {

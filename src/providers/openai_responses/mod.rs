@@ -7,7 +7,8 @@ use futures_util::Stream;
 use reqwest::header::HeaderMap;
 
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, StreamEvent,
+    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ReasoningBlock, ReplayToken,
+    StreamEvent,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
 
@@ -15,7 +16,7 @@ mod sse;
 mod types;
 
 pub use sse::ResponsesSseParser;
-pub use types::{FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody};
+pub use types::{FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, SummaryItem};
 
 /// Shared configuration for Responses API requests.
 #[derive(Debug, Clone)]
@@ -127,6 +128,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
             name: None,
             arguments: None,
             output: None,
+            encrypted_content: None,
+            summary: None,
         });
     }
 
@@ -142,6 +145,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                     name: None,
                     arguments: None,
                     output: None,
+                    encrypted_content: None,
+                    summary: None,
                 });
             }
             ("assistant", MessageContent::Text(text)) => {
@@ -154,6 +159,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                     name: None,
                     arguments: None,
                     output: None,
+                    encrypted_content: None,
+                    summary: None,
                 });
             }
             ("assistant", MessageContent::Blocks(blocks)) => {
@@ -171,6 +178,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 name: None,
                                 arguments: None,
                                 output: None,
+                                encrypted_content: None,
+                                summary: None,
                             });
                         }
                         ChatContentBlock::Image { .. } => {
@@ -200,10 +209,37 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 name: Some(name.clone()),
                                 arguments: Some(arguments),
                                 output: None,
+                                encrypted_content: None,
+                                summary: None,
                             });
                         }
-                        ChatContentBlock::Thinking { .. } => {
-                            // Skip thinking blocks for OpenAI-compatible providers.
+                        // Only replay reasoning blocks with OpenAI replay tokens
+                        ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
+                            if let Some(ReplayToken::OpenAI {
+                                id,
+                                encrypted_content,
+                            }) = replay.as_ref()
+                            {
+                                // Summary is optional when replaying reasoning items
+                                let summary_items = text.as_ref().map(|text| {
+                                    vec![SummaryItem {
+                                        item_type: "summary_text",
+                                        text: text.clone(),
+                                    }]
+                                });
+                                input.push(InputItem {
+                                    id: Some(id.clone()),
+                                    item_type: "reasoning".to_string(),
+                                    role: None,
+                                    content: None,
+                                    call_id: None,
+                                    name: None,
+                                    arguments: None,
+                                    output: None,
+                                    encrypted_content: Some(encrypted_content.clone()),
+                                    summary: summary_items,
+                                });
+                            }
                         }
                         ChatContentBlock::ToolResult(result) => {
                             let (output, has_image) =
@@ -230,6 +266,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 name: None,
                                 arguments: None,
                                 output: Some(output),
+                                encrypted_content: None,
+                                summary: None,
                             });
 
                             // If there's an image, add it as a separate user message
@@ -248,6 +286,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                     name: None,
                                     arguments: None,
                                     output: None,
+                                    encrypted_content: None,
+                                    summary: None,
                                 });
                             }
                         }
@@ -282,6 +322,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                     name: None,
                                     arguments: None,
                                     output: None,
+                                    encrypted_content: None,
+                                    summary: None,
                                 });
                                 content_parts = Vec::new();
                             }
@@ -309,6 +351,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 name: None,
                                 arguments: None,
                                 output: Some(output),
+                                encrypted_content: None,
+                                summary: None,
                             });
 
                             // If there's an image, add it as a separate user message
@@ -326,6 +370,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                     name: None,
                                     arguments: None,
                                     output: None,
+                                    encrypted_content: None,
+                                    summary: None,
                                 });
                             }
                         }
@@ -344,6 +390,8 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                         name: None,
                         arguments: None,
                         output: None,
+                        encrypted_content: None,
+                        summary: None,
                     });
                 }
             }
@@ -387,7 +435,9 @@ mod tests {
     use serde_json::json;
 
     use super::build_input;
-    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+    use crate::providers::{
+        ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken,
+    };
 
     #[test]
     fn build_input_skips_empty_tool_id() {
@@ -405,5 +455,64 @@ mod tests {
         assert_eq!(input[0].item_type, "function_call");
         assert_eq!(input[0].id, None);
         assert_eq!(input[0].call_id.as_deref(), Some("anthropic-tool-1"));
+    }
+
+    #[test]
+    fn build_input_includes_reasoning_items_for_replay() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("**Thinking about the problem**".to_string()),
+                    replay: Some(ReplayToken::OpenAI {
+                        id: "reasoning-123".to_string(),
+                        encrypted_content: "encrypted-data-abc".to_string(),
+                    }),
+                }),
+                ChatContentBlock::Text("Hello, world!".to_string()),
+            ]),
+        }];
+
+        let input = build_input(&messages, None).unwrap();
+
+        // Should have 2 items: reasoning + text message
+        assert_eq!(input.len(), 2);
+
+        // First item should be the reasoning item (summary not sent for replay)
+        assert_eq!(input[0].item_type, "reasoning");
+        assert_eq!(input[0].id.as_deref(), Some("reasoning-123"));
+        assert_eq!(
+            input[0].encrypted_content.as_deref(),
+            Some("encrypted-data-abc")
+        );
+        assert!(input[0].role.is_none());
+        assert!(input[0].content.is_none());
+
+        // Second item should be the text message
+        assert_eq!(input[1].item_type, "message");
+        assert_eq!(input[1].role.as_deref(), Some("assistant"));
+    }
+
+    #[test]
+    fn build_input_skips_thinking_blocks() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("Let me think about this...".to_string()),
+                    replay: Some(ReplayToken::Anthropic {
+                        signature: "sig123".to_string(),
+                    }),
+                }),
+                ChatContentBlock::Text("Here's my answer.".to_string()),
+            ]),
+        }];
+
+        let input = build_input(&messages, None).unwrap();
+
+        // Should only have 1 item (text message), thinking should be skipped
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0].item_type, "message");
+        assert_eq!(input[0].role.as_deref(), Some("assistant"));
     }
 }
