@@ -252,16 +252,23 @@ impl ScrollState {
     }
 }
 
-/// Accumulator for mouse scroll deltas.
+/// Accumulator for mouse scroll deltas with acceleration.
 ///
 /// Coalesces rapid scroll events (especially from trackpads) into a single
 /// scroll operation per frame, improving smoothness and reducing jitter.
+///
+/// Features scroll acceleration: starts slow (1 line) for precision,
+/// then speeds up if the user keeps scrolling in the same direction.
 ///
 /// Convention: positive delta = scroll down, negative delta = scroll up.
 #[derive(Debug, Clone, Default)]
 pub struct ScrollAccumulator {
     /// Accumulated scroll delta (positive = down, negative = up).
     pending_delta: i32,
+    /// Consecutive frames scrolling in the same direction.
+    consecutive_frames: u8,
+    /// Direction of last scroll (-1 = up, 0 = none, 1 = down).
+    last_direction: i8,
 }
 
 impl ScrollAccumulator {
@@ -272,11 +279,48 @@ impl ScrollAccumulator {
         self.pending_delta += delta;
     }
 
-    /// Takes the accumulated delta, resetting it to zero.
+    /// Takes the accumulated delta and returns the lines to scroll.
     ///
-    /// Returns the delta to apply (positive = down, negative = up).
+    /// Implements acceleration: starts at 1 line, increases with consecutive
+    /// frames scrolling in the same direction, resets on direction change.
     pub fn take_delta(&mut self) -> i32 {
-        std::mem::take(&mut self.pending_delta)
+        let raw_delta = std::mem::take(&mut self.pending_delta);
+        if raw_delta == 0 {
+            // No scroll this frame - reset acceleration
+            self.consecutive_frames = 0;
+            self.last_direction = 0;
+            return 0;
+        }
+
+        let current_direction = raw_delta.signum() as i8;
+
+        // Check if direction changed
+        if current_direction != self.last_direction {
+            self.consecutive_frames = 1;
+            self.last_direction = current_direction;
+        } else {
+            self.consecutive_frames = self.consecutive_frames.saturating_add(1);
+        }
+
+        // Acceleration curve: 1, 1, 2, 3, 5, 8, ... (capped)
+        let multiplier = match self.consecutive_frames {
+            0..=2 => 1,
+            3..=4 => 2,
+            5..=6 => 3,
+            7..=8 => 5,
+            _ => 8,
+        };
+
+        // Apply multiplier but cap at the raw delta magnitude
+        let max_lines = raw_delta.unsigned_abs().max(1);
+        let lines = multiplier.min(max_lines);
+
+        // Return with correct sign
+        if raw_delta < 0 {
+            -(lines as i32)
+        } else {
+            lines as i32
+        }
     }
 
     /// Returns the current pending delta without consuming it.
@@ -539,19 +583,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_scroll_accumulator_coalesces_and_resets() {
+    fn test_scroll_accumulator_acceleration() {
         let mut acc = ScrollAccumulator::default();
 
-        // Accumulate mixed directions
-        acc.accumulate(5); // down
-        acc.accumulate(-3); // up
-        acc.accumulate(1); // down
-        assert_eq!(acc.peek_delta(), 3); // net: down 3
+        // First frame: starts at 1 line
+        acc.accumulate(5);
+        assert_eq!(acc.take_delta(), 1);
 
-        // Take consumes and resets
-        let delta = acc.take_delta();
-        assert_eq!(delta, 3);
-        assert_eq!(acc.take_delta(), 0); // Already taken
+        // Second frame same direction: still 1 line
+        acc.accumulate(5);
+        assert_eq!(acc.take_delta(), 1);
+
+        // Third frame same direction: accelerates to 2
+        acc.accumulate(5);
+        assert_eq!(acc.take_delta(), 2);
+
+        // Direction change resets acceleration
+        acc.accumulate(-5);
+        assert_eq!(acc.take_delta(), -1);
+
+        // No scroll resets acceleration
+        assert_eq!(acc.take_delta(), 0);
+        acc.accumulate(5);
+        assert_eq!(acc.take_delta(), 1); // Back to 1
     }
 
     // ========================================================================
