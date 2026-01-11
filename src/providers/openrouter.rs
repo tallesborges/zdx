@@ -667,17 +667,17 @@ impl<S> ChatCompletionsSseParser<S> {
         }
 
         // Parse choices (may be absent in usage-only chunks)
-        if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
-            if let Some(choice) = choices.first() {
-                // Extract finish_reason if present
-                if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-                    self.final_finish_reason = Some(finish_reason.to_string());
-                }
+        if let Some(choices) = value.get("choices").and_then(|v| v.as_array())
+            && let Some(choice) = choices.first()
+        {
+            // Extract finish_reason if present
+            if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                self.final_finish_reason = Some(finish_reason.to_string());
+            }
 
-                // Process delta content
-                if let Some(delta) = choice.get("delta") {
-                    self.process_delta(delta);
-                }
+            // Process delta content
+            if let Some(delta) = choice.get("delta") {
+                self.process_delta(delta);
             }
         }
 
