@@ -325,6 +325,7 @@ pub async fn run_turn(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.anthropic.effective_base_url(),
+                config.providers.anthropic.effective_api_key(),
                 thinking_enabled,
                 thinking_budget_tokens,
             )?;
@@ -358,6 +359,7 @@ pub async fn run_turn(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.openai.effective_base_url(),
+                config.providers.openai.effective_api_key(),
                 thread_id.map(|s| s.to_string()),
             )?;
             ProviderClient::OpenAI(OpenAIClient::new(openai_config))
@@ -367,6 +369,7 @@ pub async fn run_turn(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.openrouter.effective_base_url(),
+                config.providers.openrouter.effective_api_key(),
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
         }
@@ -375,6 +378,7 @@ pub async fn run_turn(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.gemini.effective_base_url(),
+                config.providers.gemini.effective_api_key(),
             )?;
             ProviderClient::Gemini(GeminiClient::new(gemini_config))
         }

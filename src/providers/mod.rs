@@ -43,6 +43,33 @@ pub struct ProviderSelection {
 }
 
 impl ProviderKind {
+    /// Returns all provider kinds.
+    pub fn all() -> &'static [ProviderKind] {
+        &[
+            ProviderKind::Anthropic,
+            ProviderKind::ClaudeCli,
+            ProviderKind::OpenAICodex,
+            ProviderKind::OpenAI,
+            ProviderKind::OpenRouter,
+            ProviderKind::Gemini,
+            ProviderKind::GeminiCli,
+        ]
+    }
+
+    /// Returns the string identifier used in config files and model registry.
+    pub fn id(&self) -> &'static str {
+        match self {
+            ProviderKind::Anthropic => "anthropic",
+            ProviderKind::ClaudeCli => "claude-cli",
+            ProviderKind::OpenAICodex => "openai-codex",
+            ProviderKind::OpenAI => "openai",
+            ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::Gemini => "gemini",
+            ProviderKind::GeminiCli => "gemini-cli",
+        }
+    }
+
+    /// Returns the human-readable label for display.
     pub fn label(&self) -> &'static str {
         match self {
             ProviderKind::Anthropic => "Anthropic",

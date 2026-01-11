@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -6,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::OverlayUpdate;
+use crate::config::ProvidersConfig;
 use crate::models::{ModelOption, available_models};
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
@@ -16,16 +19,27 @@ use crate::providers::{ProviderKind, resolve_provider};
 pub struct ModelPickerState {
     pub selected: usize,
     pub filter: String,
+    /// Set of enabled provider IDs (captured at open time from config).
+    enabled_providers: HashSet<String>,
 }
 
 impl ModelPickerState {
-    pub fn open(current_model: &str) -> (Self, Vec<UiEffect>) {
-        let selected = available_models()
+    pub fn open(current_model: &str, providers: &ProvidersConfig) -> (Self, Vec<UiEffect>) {
+        // Collect enabled providers
+        let enabled_providers = collect_enabled_providers(providers);
+
+        // Filter available models by enabled providers, then find selection
+        let enabled_models: Vec<_> = available_models()
+            .iter()
+            .filter(|m| enabled_providers.contains(m.provider))
+            .collect();
+
+        let selected = enabled_models
             .iter()
             .position(|m| m.id == current_model)
             .or_else(|| {
                 let target = resolve_provider(current_model);
-                available_models().iter().position(|m| {
+                enabled_models.iter().position(|m| {
                     let candidate = resolve_provider(m.id);
                     candidate.kind == target.kind && candidate.model == target.model
                 })
@@ -35,6 +49,7 @@ impl ModelPickerState {
             Self {
                 selected,
                 filter: String::new(),
+                enabled_providers,
             },
             vec![],
         )
@@ -110,14 +125,11 @@ impl ModelPickerState {
     }
 
     fn filtered_models(&self) -> Vec<&'static ModelOption> {
-        if self.filter.is_empty() {
-            available_models().iter().collect()
-        } else {
-            available_models()
-                .iter()
-                .filter(|model| model_matches_filter(model, &self.filter))
-                .collect()
-        }
+        available_models()
+            .iter()
+            .filter(|model| self.enabled_providers.contains(model.provider))
+            .filter(|model| self.filter.is_empty() || model_matches_filter(model, &self.filter))
+            .collect()
     }
 
     fn clamp_selection(&mut self) {
@@ -140,7 +152,8 @@ pub fn render_model_picker(
         InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
     };
 
-    let max_label_len = available_models()
+    let filtered = picker.filtered_models();
+    let max_label_len = filtered
         .iter()
         .map(|model| model_label(model).len() as u16)
         .max()
@@ -152,7 +165,7 @@ pub fn render_model_picker(
     } else {
         base_width.min(max_width)
     };
-    let picker_height = (available_models().len() as u16 + 7).max(7);
+    let picker_height = (filtered.len() as u16 + 7).max(7);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     render_overlay_container(frame, picker_area, "Select Model", Color::Magenta);
@@ -189,7 +202,6 @@ pub fn render_model_picker(
         list_height,
     );
 
-    let filtered = picker.filtered_models();
     let items: Vec<ListItem> = if filtered.is_empty() {
         vec![ListItem::new(Line::from(Span::styled(
             "  No matches",
@@ -405,13 +417,18 @@ fn model_matches_filter(model: &ModelOption, filter: &str) -> bool {
 }
 
 fn provider_label(provider_id: &str) -> String {
-    match provider_id {
-        "anthropic" => ProviderKind::Anthropic.label().to_string(),
-        "claude-cli" => ProviderKind::ClaudeCli.label().to_string(),
-        "openai" => ProviderKind::OpenAI.label().to_string(),
-        "openrouter" => ProviderKind::OpenRouter.label().to_string(),
-        "gemini" => ProviderKind::Gemini.label().to_string(),
-        "openai-codex" => ProviderKind::OpenAICodex.label().to_string(),
-        _ => provider_id.to_string(),
-    }
+    ProviderKind::all()
+        .iter()
+        .find(|kind| kind.id() == provider_id)
+        .map(|kind| kind.label().to_string())
+        .unwrap_or_else(|| provider_id.to_string())
+}
+
+/// Collects the set of enabled provider IDs from the config.
+fn collect_enabled_providers(providers: &ProvidersConfig) -> HashSet<String> {
+    ProviderKind::all()
+        .iter()
+        .filter(|kind| providers.is_enabled(kind.id()))
+        .map(|kind| kind.id().to_string())
+        .collect()
 }

@@ -25,16 +25,20 @@ pub struct GeminiConfig {
 impl GeminiConfig {
     /// Creates a new config from environment.
     ///
+    /// Authentication resolution order:
+    /// 1. `config_api_key` parameter (from config file)
+    /// 2. `GEMINI_API_KEY` environment variable
+    ///
     /// Environment variables:
-    /// - `GEMINI_API_KEY` (required)
+    /// - `GEMINI_API_KEY` (fallback if not in config)
     /// - `GEMINI_BASE_URL` (optional)
     pub fn from_env(
         model: String,
         max_output_tokens: u32,
         config_base_url: Option<&str>,
+        config_api_key: Option<&str>,
     ) -> Result<Self> {
-        let api_key = std::env::var("GEMINI_API_KEY")
-            .context("GEMINI_API_KEY is not set. Set it to use Gemini.")?;
+        let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
 
         Ok(Self {
@@ -117,6 +121,21 @@ fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
 fn validate_url(url: &str) -> Result<()> {
     url::Url::parse(url).with_context(|| format!("Invalid Gemini base URL: {}", url))?;
     Ok(())
+}
+
+/// Resolves API key with precedence: config > env.
+fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
+    // Try config value first
+    if let Some(key) = config_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Fall back to env var
+    std::env::var("GEMINI_API_KEY")
+        .context("No API key available. Set GEMINI_API_KEY or api_key in [providers.gemini].")
 }
 
 fn build_headers(api_key: &str) -> HeaderMap {

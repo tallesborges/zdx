@@ -178,7 +178,10 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
     let provider = record
         .provider
         .unwrap_or_else(|| {
-            provider_id_for_kind(crate::providers::resolve_provider(&id).kind).to_string()
+            crate::providers::resolve_provider(&id)
+                .kind
+                .id()
+                .to_string()
         })
         .trim()
         .to_lowercase();
@@ -214,16 +217,4 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
 
 fn leak_string(value: String) -> &'static str {
     Box::leak(value.into_boxed_str())
-}
-
-fn provider_id_for_kind(kind: crate::providers::ProviderKind) -> &'static str {
-    match kind {
-        crate::providers::ProviderKind::Anthropic => "anthropic",
-        crate::providers::ProviderKind::ClaudeCli => "claude-cli",
-        crate::providers::ProviderKind::OpenAICodex => "openai-codex",
-        crate::providers::ProviderKind::OpenAI => "openai",
-        crate::providers::ProviderKind::OpenRouter => "openrouter",
-        crate::providers::ProviderKind::Gemini => "gemini",
-        crate::providers::ProviderKind::GeminiCli => "gemini-cli",
-    }
 }

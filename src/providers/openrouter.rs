@@ -30,14 +30,22 @@ pub struct OpenRouterConfig {
 impl OpenRouterConfig {
     /// Creates a new config from environment.
     ///
+    /// Authentication resolution order:
+    /// 1. `config_api_key` parameter (from config file)
+    /// 2. `OPENROUTER_API_KEY` environment variable
+    ///
     /// Environment variables:
-    /// - `OPENROUTER_API_KEY` (required)
+    /// - `OPENROUTER_API_KEY` (fallback if not in config)
     /// - `OPENROUTER_BASE_URL` (optional)
     /// - `OPENROUTER_SITE_URL` (optional)
     /// - `OPENROUTER_APP_NAME` (optional)
-    pub fn from_env(model: String, max_tokens: u32, config_base_url: Option<&str>) -> Result<Self> {
-        let api_key = std::env::var("OPENROUTER_API_KEY")
-            .context("OPENROUTER_API_KEY is not set. Set it to use OpenRouter.")?;
+    pub fn from_env(
+        model: String,
+        max_tokens: u32,
+        config_base_url: Option<&str>,
+        config_api_key: Option<&str>,
+    ) -> Result<Self> {
+        let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
 
         Ok(Self {
@@ -124,6 +132,22 @@ fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
 fn validate_url(url: &str) -> Result<()> {
     url::Url::parse(url).with_context(|| format!("Invalid OpenRouter base URL: {}", url))?;
     Ok(())
+}
+
+/// Resolves API key with precedence: config > env.
+fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
+    // Try config value first
+    if let Some(key) = config_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Fall back to env var
+    std::env::var("OPENROUTER_API_KEY").context(
+        "No API key available. Set OPENROUTER_API_KEY or api_key in [providers.openrouter].",
+    )
 }
 
 fn build_headers(api_key: &str) -> HeaderMap {
