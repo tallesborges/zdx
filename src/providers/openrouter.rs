@@ -25,6 +25,7 @@ pub struct OpenRouterConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: u32,
+    pub reasoning_effort: Option<String>,
 }
 
 impl OpenRouterConfig {
@@ -44,6 +45,7 @@ impl OpenRouterConfig {
         max_tokens: u32,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
+        reasoning_effort: Option<String>,
     ) -> Result<Self> {
         let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
@@ -53,6 +55,7 @@ impl OpenRouterConfig {
             base_url,
             model,
             max_tokens,
+            reasoning_effort,
         })
     }
 }
@@ -83,6 +86,7 @@ impl OpenRouterClient {
             messages,
             tools,
             system,
+            self.config.reasoning_effort.clone(),
         )?;
 
         let url = format!("{}{}", self.config.base_url, CHAT_COMPLETIONS_PATH);
@@ -209,6 +213,13 @@ struct ChatCompletionRequest {
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning: Option<ReasoningConfig>,
+}
+
+#[derive(Debug, Serialize)]
+struct ReasoningConfig {
+    effort: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -303,6 +314,7 @@ impl ChatCompletionRequest {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
+        reasoning_effort: Option<String>,
     ) -> Result<Self> {
         let mut out_messages = Vec::new();
 
@@ -483,6 +495,7 @@ impl ChatCompletionRequest {
             stream_options: Some(StreamOptions {
                 include_usage: true,
             }),
+            reasoning: reasoning_effort.map(|effort| ReasoningConfig { effort }),
         })
     }
 }
