@@ -456,8 +456,9 @@ impl TuiRuntime {
             }
             UiEffect::SuggestThreadTitle { thread_id, message } => {
                 let root = self.state.tui.agent_opts.root.clone();
+                let title_model = self.state.tui.config.title_model.clone();
                 self.spawn_effect(None, move || {
-                    thread_title::suggest_thread_title(thread_id, message, root)
+                    thread_title::suggest_thread_title(thread_id, message, title_model, root)
                 });
             }
             UiEffect::CreateNewThread => {
@@ -516,8 +517,13 @@ impl TuiRuntime {
                 if let Some(ref thread_log) = self.state.tui.thread.thread_log {
                     let thread_id = thread_log.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
-                    let (started, fut) =
-                        handoff::handoff_generation(&thread_id, &goal, root.as_path());
+                    let handoff_model = self.state.tui.config.handoff_model.clone();
+                    let (started, fut) = handoff::handoff_generation(
+                        &thread_id,
+                        &goal,
+                        handoff_model,
+                        root.as_path(),
+                    );
                     self.spawn_effect_pair(started, fut);
                 } else {
                     self.dispatch_event(UiEvent::HandoffResult(Err(

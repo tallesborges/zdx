@@ -214,6 +214,16 @@ pub mod paths {
     }
 }
 
+/// Default value for serde when handoff_model is missing.
+fn default_handoff_model() -> String {
+    Config::DEFAULT_HANDOFF_MODEL.to_string()
+}
+
+/// Default value for serde when title_model is missing.
+fn default_title_model() -> String {
+    Config::DEFAULT_TITLE_MODEL.to_string()
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -237,6 +247,14 @@ pub struct Config {
     #[serde(default)]
     pub providers: ProvidersConfig,
 
+    /// Model to use for handoff generation subagent.
+    #[serde(default = "default_handoff_model")]
+    pub handoff_model: String,
+
+    /// Model to use for auto-title generation subagent.
+    #[serde(default = "default_title_model")]
+    pub title_model: String,
+
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
@@ -247,6 +265,8 @@ impl Config {
     const DEFAULT_MAX_TOKENS: u32 = 12288;
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
+    const DEFAULT_HANDOFF_MODEL: &str = "gemini-cli:gemini-2.5-flash";
+    const DEFAULT_TITLE_MODEL: &str = "gemini-cli:gemini-2.5-flash";
 
     /// Loads configuration from the default config path.
     pub fn load() -> Result<Self> {
@@ -434,6 +454,8 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
+            handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
+            title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             providers: ProvidersConfig::default(),
             thinking_level: ThinkingLevel::default(),
         }
