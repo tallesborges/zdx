@@ -186,20 +186,26 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.input.handoff = HandoffState::Generating { goal, cancel };
             vec![]
         }
-        UiEvent::HandoffThreadCreated { thread_log } => {
-            let thread_path = thread_log.path().display().to_string();
-            app.tui.thread.thread_log = Some(thread_log);
-            app.tui
-                .transcript
-                .push_cell(HistoryCell::system(format!("Thread path: {}", thread_path)));
-            vec![UiEffect::StartAgentTurn]
+        UiEvent::HandoffThreadCreated {
+            thread_log,
+            context_paths,
+            prompt,
+        } => {
+            let (effects, mutations, _action) =
+                thread::handle_thread_event(ThreadUiEvent::Created {
+                    thread_log,
+                    context_paths,
+                });
+            apply_mutations(&mut app.tui, mutations);
+            app.tui.input.set_text(&prompt);
+            effects
         }
         UiEvent::HandoffThreadCreateFailed { error } => {
             app.tui.transcript.push_cell(HistoryCell::system(format!(
                 "Warning: Failed to create thread: {}",
                 error
             )));
-            vec![UiEffect::StartAgentTurn]
+            vec![]
         }
         UiEvent::FileDiscoveryStarted { cancel } => {
             if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {

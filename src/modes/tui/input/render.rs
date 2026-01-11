@@ -268,7 +268,7 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
     } else if state.input.handoff.is_ready() {
         // Generated prompt is ready for review
         (
-            " handoff (review and Enter to start, Esc to cancel) ",
+            " handoff (review and Enter to start new thread, Esc to cancel) ",
             Color::Green,
         )
     } else {

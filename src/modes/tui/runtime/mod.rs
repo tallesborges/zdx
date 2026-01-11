@@ -491,9 +491,14 @@ impl TuiRuntime {
             }
             UiEffect::HandoffSubmit { prompt } => {
                 let root = &self.state.tui.agent_opts.root;
-                match handoff::execute_handoff_submit(&prompt, root) {
-                    Ok(thread_log) => {
-                        self.dispatch_event(UiEvent::HandoffThreadCreated { thread_log });
+                let config = self.state.tui.config.clone();
+                match handoff::execute_handoff_submit(&config, root) {
+                    Ok((thread_log, context_paths)) => {
+                        self.dispatch_event(UiEvent::HandoffThreadCreated {
+                            thread_log,
+                            context_paths,
+                            prompt,
+                        });
                     }
                     Err(error) => {
                         self.dispatch_event(UiEvent::HandoffThreadCreateFailed { error });

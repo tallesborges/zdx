@@ -12,7 +12,8 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio::sync::oneshot;
 
-use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
+use crate::config::Config;
+use crate::core::thread_log::{self, ThreadLog};
 use crate::modes::tui::events::UiEvent;
 
 const HANDOFF_PROMPT_TEMPLATE: &str = crate::prompt_str!("handoff_prompt.md");
@@ -118,18 +119,23 @@ async fn run_subagent(
     UiEvent::HandoffResult(result)
 }
 
-/// Executes a handoff submit: creates a new thread and persists the prompt.
+/// Executes a handoff submit: creates a new thread.
 ///
 /// Returns the new thread for the reducer to store, or an error string.
-pub fn execute_handoff_submit(prompt: &str, root: &Path) -> Result<ThreadLog, String> {
-    let mut thread_log_handle =
+pub fn execute_handoff_submit(
+    config: &Config,
+    root: &Path,
+) -> Result<(ThreadLog, Vec<PathBuf>), String> {
+    let thread_log_handle =
         thread_log::ThreadLog::new_with_root(root).map_err(|e| e.to_string())?;
 
-    if let Err(_err) = thread_log_handle.append(&ThreadEvent::user_message(prompt)) {
-        // Errors are silently ignored for thread persistence
-    }
+    let context_paths =
+        match crate::core::context::build_effective_system_prompt_with_paths(config, root) {
+            Ok(effective) => effective.loaded_agents_paths,
+            Err(_) => Vec::new(),
+        };
 
-    Ok(thread_log_handle)
+    Ok((thread_log_handle, context_paths))
 }
 
 /// Prepares handoff generation with cancellation support.
