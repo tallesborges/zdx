@@ -14,10 +14,6 @@ use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 
 const TITLE_PROMPT_TEMPLATE: &str = crate::prompt_str!("thread_title_prompt.md");
 
-/// Model to use for auto-title generation (fast, cheap).
-/// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
-const TITLE_MODEL: &str = "claude-cli:claude-haiku-4-5";
-
 /// Thinking level for auto-title generation (minimal reasoning).
 const TITLE_THINKING: &str = "minimal";
 
@@ -54,7 +50,11 @@ fn sanitize_title(raw: &str) -> Option<String> {
     }
 }
 
-async fn run_subagent(prompt: String, root: PathBuf) -> Result<String, String> {
+async fn run_subagent(
+    prompt: String,
+    title_model: String,
+    root: PathBuf,
+) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {}", e))?;
 
     let child = Command::new(exe)
@@ -62,7 +62,7 @@ async fn run_subagent(prompt: String, root: PathBuf) -> Result<String, String> {
             "--no-thread",
             "exec",
             "-m",
-            TITLE_MODEL,
+            &title_model,
             "-t",
             TITLE_THINKING,
             "-p",
@@ -99,10 +99,15 @@ async fn run_subagent(prompt: String, root: PathBuf) -> Result<String, String> {
 /// Generates a thread title and persists it (if still unset).
 ///
 /// Returns UiEvent::Thread(ThreadUiEvent::TitleSuggested) (title None on failure or skip).
-pub async fn suggest_thread_title(thread_id: String, message: String, root: PathBuf) -> UiEvent {
+pub async fn suggest_thread_title(
+    thread_id: String,
+    message: String,
+    title_model: String,
+    root: PathBuf,
+) -> UiEvent {
     let prompt = build_title_prompt(&message);
 
-    let title = match run_subagent(prompt, root).await {
+    let title = match run_subagent(prompt, title_model, root).await {
         Ok(output) => sanitize_title(&output),
         Err(_) => None,
     };

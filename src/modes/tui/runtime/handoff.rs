@@ -19,10 +19,6 @@ use crate::modes::tui::events::UiEvent;
 
 const HANDOFF_PROMPT_TEMPLATE: &str = crate::prompt_str!("handoff_prompt.md");
 
-/// Model to use for handoff generation (fast, cheap).
-/// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
-const HANDOFF_MODEL: &str = "gemini-cli:gemini-2.5-flash";
-
 /// Thinking level for handoff generation (minimal reasoning).
 const HANDOFF_THINKING: &str = "minimal";
 
@@ -69,6 +65,7 @@ fn process_subagent_output(output: std::process::Output) -> Result<String, Strin
 /// Uses `CancellationToken` for unified cancellation.
 async fn run_subagent(
     cancel: CancellationToken,
+    handoff_model: String,
     generation_prompt: String,
     root: PathBuf,
 ) -> UiEvent {
@@ -84,7 +81,7 @@ async fn run_subagent(
             "--no-thread",
             "exec",
             "-m",
-            HANDOFF_MODEL,
+            &handoff_model,
             "-t",
             HANDOFF_THINKING,
             "-p",
@@ -146,6 +143,7 @@ pub fn execute_handoff_submit(
 pub fn handoff_generation(
     thread_id: &str,
     goal: &str,
+    handoff_model: String,
     root: &Path,
 ) -> (
     UiEvent,
@@ -171,7 +169,7 @@ pub fn handoff_generation(
         };
 
         let generation_prompt = build_handoff_prompt(&content, &goal_string);
-        run_subagent(cancel_clone, generation_prompt, root).await
+        run_subagent(cancel_clone, handoff_model, generation_prompt, root).await
     };
 
     (started, future)

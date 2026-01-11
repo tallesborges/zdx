@@ -26,6 +26,14 @@ tool_timeout_secs = 0
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
 
+# Model used for handoff generation subagent.
+# Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
+# handoff_model = "gemini-cli:gemini-2.5-flash"
+
+# Model used for auto-title generation subagent.
+# Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
+# title_model = "gemini-cli:gemini-2.5-flash"
+
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 
