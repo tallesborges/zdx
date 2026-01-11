@@ -144,10 +144,9 @@ pub async fn update(config: &config::Config) -> Result<()> {
     let mut seen_keys = HashSet::new();
 
     for (provider_id, api_id, prefix, provider_cfg) in providers {
-        if !provider_cfg.enabled.unwrap_or(true) {
-            continue;
-        }
-
+        // Include all providers in the registry regardless of enabled status.
+        // The registry is used for model lookups (e.g., checking reasoning support)
+        // which should work even if the provider isn't currently enabled.
         if provider_cfg.models.is_empty() {
             eprintln!(
                 "Warning: providers.{}.models is empty; skipping.",
@@ -442,10 +441,7 @@ fn append_codex_records(
     seen_keys: &mut HashSet<String>,
 ) -> Result<()> {
     let cfg = &config.providers.openai_codex;
-    if !cfg.enabled.unwrap_or(true) {
-        return Ok(());
-    }
-
+    // Include Codex models in registry regardless of enabled status.
     if cfg.models.is_empty() {
         eprintln!("Warning: providers.openai_codex.models is empty; skipping.");
         return Ok(());

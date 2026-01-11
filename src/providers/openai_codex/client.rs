@@ -93,15 +93,15 @@ fn build_headers(
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    if let Some(value) = conversation_id {
-        if let Ok(header_value) = HeaderValue::from_str(value) {
-            headers.insert(HEADER_CONVERSATION_ID, header_value);
-        }
+    if let Some(value) = conversation_id
+        && let Ok(header_value) = HeaderValue::from_str(value)
+    {
+        headers.insert(HEADER_CONVERSATION_ID, header_value);
     }
-    if let Some(value) = session_id {
-        if let Ok(header_value) = HeaderValue::from_str(value) {
-            headers.insert(HEADER_SESSION_ID, header_value);
-        }
+    if let Some(value) = session_id
+        && let Ok(header_value) = HeaderValue::from_str(value)
+    {
+        headers.insert(HEADER_SESSION_ID, header_value);
     }
     headers
 }
