@@ -12,7 +12,7 @@ use tokio::process::Command;
 use crate::core::thread_log;
 use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 
-const TITLE_PROMPT_TEMPLATE: &str = crate::prompt_str!("thread_title.md");
+const TITLE_PROMPT_TEMPLATE: &str = crate::prompt_str!("thread_title_prompt.md");
 
 /// Model to use for auto-title generation (fast, cheap).
 /// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
