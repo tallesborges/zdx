@@ -27,7 +27,8 @@ pub fn definition() -> ToolDefinition {
                     "description": "The shell command to execute"
                 }
             },
-            "required": ["command"]
+            "required": ["command"],
+            "additionalProperties": false
         }),
     }
 }

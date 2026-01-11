@@ -31,6 +31,11 @@ pub struct ResponsesConfig {
     pub include: Option<Vec<String>>,
     pub prompt_cache_key: Option<String>,
     pub parallel_tool_calls: Option<bool>,
+    /// Tool selection strategy: "auto" (default), "required", or "none"
+    pub tool_choice: Option<String>,
+    /// Truncation strategy: "auto" or "disabled" (default)
+    /// "auto" drops items from conversation start if context is exceeded
+    pub truncation: Option<String>,
 }
 
 /// Sends a Responses API request and returns a stream of normalized events.
@@ -69,6 +74,8 @@ pub async fn send_responses_stream(
         include: config.include.clone(),
         input,
         tools: tool_defs,
+        tool_choice: config.tool_choice.clone(),
+        truncation: config.truncation.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
         parallel_tool_calls: config.parallel_tool_calls,
     };
