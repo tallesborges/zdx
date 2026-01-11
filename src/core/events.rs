@@ -134,32 +134,119 @@ impl fmt::Display for ErrorKind {
 /// Structured envelope for tool outputs (per SPEC §6).
 ///
 /// All tool outputs must use this format:
-/// - Success: `{ "ok": true, "data": { ... } }`
-/// - Failure: `{ "ok": false, "error": { "code": "...", "message": "..." } }`
-/// - Canceled: serializes as failure (for API compatibility) but is semantically distinct
+/// - Success: `{"ok": true, "data": { ... }}`
+/// - Failure: `{"ok": false, "error": { "code": "...", "message": "...", "details": "..." (optional) }}`
+/// - Canceled: serializes as failure with `code: "canceled"` but deserializes back to Canceled variant
 ///
 /// The optional `image` field is not serialized to JSON - it's handled
 /// separately when building API requests for vision-capable models.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(untagged)]
+///
+/// Note: The `details` field in ToolError is optional and will be omitted during
+/// JSON serialization if empty. In the TUI, it's displayed to provide additional
+/// debugging context for failed tool executions.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ToolOutput {
     Success {
         ok: bool,
         data: Value,
         /// Optional image content (not serialized to JSON).
-        #[serde(skip)]
         image: Option<ImageContent>,
     },
     Failure {
         ok: bool,
         error: ToolError,
     },
-    /// User canceled tool execution (serializes as failure for API, but semantically distinct).
+    /// User canceled tool execution (serializes as failure with code="canceled").
     Canceled {
         /// User-facing message.
-        #[serde(skip)]
         message: String,
     },
+}
+
+/// Special error code that indicates a canceled operation.
+const CANCELED_ERROR_CODE: &str = "canceled";
+
+impl Serialize for ToolOutput {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+
+        match self {
+            ToolOutput::Success { ok, data, .. } => {
+                // image is not serialized
+                let mut state = serializer.serialize_struct("ToolOutput", 2)?;
+                state.serialize_field("ok", ok)?;
+                state.serialize_field("data", data)?;
+                state.end()
+            }
+            ToolOutput::Failure { ok, error } => {
+                let mut state = serializer.serialize_struct("ToolOutput", 2)?;
+                state.serialize_field("ok", ok)?;
+                state.serialize_field("error", error)?;
+                state.end()
+            }
+            ToolOutput::Canceled { message } => {
+                // Serialize as a failure with code="canceled"
+                let error = ToolError {
+                    code: CANCELED_ERROR_CODE.to_string(),
+                    message: message.clone(),
+                    details: None,
+                };
+                let mut state = serializer.serialize_struct("ToolOutput", 2)?;
+                state.serialize_field("ok", &false)?;
+                state.serialize_field("error", &error)?;
+                state.end()
+            }
+        }
+    }
+}
+
+impl<'de> Deserialize<'de> for ToolOutput {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        struct RawToolOutput {
+            ok: bool,
+            #[serde(default)]
+            data: Option<Value>,
+            #[serde(default)]
+            error: Option<ToolError>,
+        }
+
+        let raw = RawToolOutput::deserialize(deserializer)?;
+
+        if raw.ok {
+            // Success case
+            Ok(ToolOutput::Success {
+                ok: true,
+                data: raw.data.unwrap_or(Value::Null),
+                image: None, // image is never serialized
+            })
+        } else if let Some(error) = raw.error {
+            // Check if this is a canceled operation
+            if error.code == CANCELED_ERROR_CODE {
+                Ok(ToolOutput::Canceled {
+                    message: error.message,
+                })
+            } else {
+                Ok(ToolOutput::Failure { ok: false, error })
+            }
+        } else {
+            // Fallback to failure with unknown error
+            Ok(ToolOutput::Failure {
+                ok: false,
+                error: ToolError {
+                    code: "unknown".to_string(),
+                    message: "Unknown error".to_string(),
+                    details: None,
+                },
+            })
+        }
+    }
 }
 
 impl ToolOutput {
@@ -182,14 +269,30 @@ impl ToolOutput {
     }
 
     /// Creates a failed tool output.
-    pub fn failure(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn failure(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        details: Option<String>,
+    ) -> Self {
         ToolOutput::Failure {
             ok: false,
             error: ToolError {
                 code: code.into(),
                 message: message.into(),
+                details,
             },
         }
+    }
+
+    /// Creates a failed tool output with additional context.
+    ///
+    /// Convenience method equivalent to `failure(code, message, Some(details))`.
+    pub fn failure_with_details(
+        code: impl Into<String>,
+        message: impl Into<String>,
+        details: impl Into<String>,
+    ) -> Self {
+        Self::failure(code, message, Some(details.into()))
     }
 
     /// Creates a canceled tool output (user interrupt).
@@ -220,20 +323,24 @@ impl ToolOutput {
         }
     }
 
+    /// Returns the error code and message if this is a failure.
+    pub fn error_info(&self) -> Option<(&str, &str, Option<&str>)> {
+        match self {
+            ToolOutput::Failure { error, .. } => Some((
+                error.code.as_str(),
+                error.message.as_str(),
+                error.details.as_deref(),
+            )),
+            _ => None,
+        }
+    }
+
     /// Converts the tool output to a JSON string for sending to the model.
     pub fn to_json_string(&self) -> String {
-        // For Canceled, serialize as a failure-like structure for API compatibility
-        if let ToolOutput::Canceled { message } = self {
-            return serde_json::to_string(&ToolOutput::Failure {
-                ok: false,
-                error: ToolError {
-                    code: "canceled".to_string(),
-                    message: message.clone(),
-                },
-            })
-            .unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string());
-        }
-        serde_json::to_string(self).unwrap_or_else(|_| r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string())
+        // Custom Serialize impl handles all variants including Canceled
+        serde_json::to_string(self).unwrap_or_else(|_| {
+            r#"{"ok":false,"error":{"code":"serialize_error","message":"Failed to serialize tool output"}}"#.to_string()
+        })
     }
 }
 
@@ -242,6 +349,10 @@ impl ToolOutput {
 pub struct ToolError {
     pub code: String,
     pub message: String,
+    /// Optional additional context for debugging (e.g., stack traces, file paths, suggested fixes).
+    /// This field is optional and will be omitted if empty during serialization.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
 }
 
 /// Image content for vision-capable models.
@@ -254,4 +365,68 @@ pub struct ImageContent {
     pub mime_type: String,
     /// Base64-encoded image data
     pub data: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn test_tool_output_success_roundtrip() {
+        let output = ToolOutput::success(json!({"key": "value"}));
+        let json_str = output.to_json_string();
+        let parsed: ToolOutput = serde_json::from_str(&json_str).unwrap();
+
+        assert!(parsed.is_ok());
+        assert_eq!(parsed.data(), Some(&json!({"key": "value"})));
+    }
+
+    #[test]
+    fn test_tool_output_failure_roundtrip() {
+        let output = ToolOutput::failure(
+            "test_code",
+            "test message",
+            Some("test details".to_string()),
+        );
+        let json_str = output.to_json_string();
+        let parsed: ToolOutput = serde_json::from_str(&json_str).unwrap();
+
+        assert!(!parsed.is_ok());
+        let (code, message, details) = parsed.error_info().unwrap();
+        assert_eq!(code, "test_code");
+        assert_eq!(message, "test message");
+        assert_eq!(details, Some("test details"));
+    }
+
+    #[test]
+    fn test_tool_output_canceled_roundtrip() {
+        let output = ToolOutput::canceled("User interrupted");
+        let json_str = output.to_json_string();
+
+        // Verify it serializes as a failure with code="canceled"
+        assert!(json_str.contains(r#""code":"canceled""#));
+        assert!(json_str.contains(r#""message":"User interrupted""#));
+
+        // Verify it deserializes back to Canceled variant
+        let parsed: ToolOutput = serde_json::from_str(&json_str).unwrap();
+        assert!(matches!(parsed, ToolOutput::Canceled { .. }));
+
+        if let ToolOutput::Canceled { message } = parsed {
+            assert_eq!(message, "User interrupted");
+        } else {
+            panic!("Expected Canceled variant");
+        }
+    }
+
+    #[test]
+    fn test_tool_output_canceled_not_confused_with_failure() {
+        // A regular failure with a different code should NOT become Canceled
+        let output = ToolOutput::failure("other_error", "some message", None);
+        let json_str = output.to_json_string();
+        let parsed: ToolOutput = serde_json::from_str(&json_str).unwrap();
+
+        assert!(matches!(parsed, ToolOutput::Failure { .. }));
+    }
 }

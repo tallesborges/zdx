@@ -3,12 +3,11 @@
 //! Allows the agent to perform exact string replacements in files.
 
 use std::fs;
-use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition};
+use super::{ToolContext, ToolDefinition, resolve_existing_path};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the edit tool.
@@ -63,29 +62,31 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "invalid_input",
-                format!("Invalid input for edit tool: {}", e),
+                "Invalid input for edit tool",
+                Some(format!("Parse error: {}", e)),
             );
         }
     };
 
     // Validate input
     if input.old.is_empty() {
-        return ToolOutput::failure("invalid_input", "'old' text cannot be empty");
+        return ToolOutput::failure("invalid_input", "'old' text cannot be empty", None);
     }
 
     if input.expected_replacements < 1 {
         return ToolOutput::failure(
             "invalid_input",
             "'expected_replacements' must be at least 1",
+            None,
         );
     }
 
     let expected = input.expected_replacements as usize;
 
     // Resolve path
-    let file_path = match resolve_path(&input.path, &ctx.root) {
+    let file_path = match resolve_existing_path(&input.path, &ctx.root) {
         Ok(p) => p,
-        Err(e) => return ToolOutput::failure("path_error", e),
+        Err(e) => return e,
     };
 
     // Read file content
@@ -94,7 +95,8 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
-                format!("Failed to read file '{}': {}", file_path.display(), e),
+                format!("Failed to read file '{}'", file_path.display()),
+                Some(format!("OS error: {}", e)),
             );
         }
     };
@@ -109,6 +111,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
                 "No occurrences of the specified text found in '{}'",
                 file_path.display()
             ),
+            Some(format!("Searched for: {}", input.old)),
         );
     }
 
@@ -116,11 +119,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure(
             "replacement_count_mismatch",
             format!(
-                "Expected {} replacement(s), but found {} occurrence(s) of the text in '{}'",
-                expected,
-                count,
-                file_path.display()
+                "Expected {} replacement(s), but found {} occurrence(s)",
+                expected, count
             ),
+            Some(format!("File: {}", file_path.display())),
         );
     }
 
@@ -135,28 +137,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         })),
         Err(e) => ToolOutput::failure(
             "write_error",
-            format!("Failed to write file '{}': {}", file_path.display(), e),
+            format!("Failed to write file '{}'", file_path.display()),
+            Some(format!("OS error: {}", e)),
         ),
     }
-}
-
-/// Resolves a path relative to the root directory.
-fn resolve_path(path: &str, root: &Path) -> Result<std::path::PathBuf, String> {
-    let requested = Path::new(path);
-
-    // Join with root (handles both absolute and relative paths)
-    let full_path = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
-    };
-
-    // Canonicalize to resolve any .. or symlinks
-    let canonical = full_path
-        .canonicalize()
-        .map_err(|e| format!("Path does not exist '{}': {}", full_path.display(), e))?;
-
-    Ok(canonical)
 }
 
 #[cfg(test)]

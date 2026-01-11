@@ -61,8 +61,12 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                     // Deserialize the stored JSON back to ToolOutput
                     // (it was serialized via serde_json::to_value in ThreadEvent::from_agent)
                     let tool_output: ToolOutput = serde_json::from_value(output.clone())
-                        .unwrap_or_else(|_| {
-                            ToolOutput::failure("parse_error", "Failed to parse tool result")
+                        .unwrap_or_else(|e| {
+                            ToolOutput::failure(
+                                "parse_error",
+                                "Failed to parse tool result",
+                                Some(format!("Deserialization error: {}", e)),
+                            )
                         });
                     cell.set_tool_result(tool_output);
                 }
