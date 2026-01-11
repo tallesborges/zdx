@@ -45,7 +45,12 @@ impl OpenAICodexClient {
 
         let normalized_model = normalize_model(&self.config.model);
         let instructions = Some(get_codex_instructions(&normalized_model));
-        let headers = build_headers(&creds.account_id, &creds.access);
+        let headers = build_headers(
+            &creds.account_id,
+            &creds.access,
+            self.config.prompt_cache_key.as_deref(),
+            self.config.prompt_cache_key.as_deref(),
+        );
         let config = ResponsesConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             path: RESPONSES_PATH.to_string(),
@@ -65,7 +70,12 @@ impl OpenAICodexClient {
     }
 }
 
-fn build_headers(account_id: &str, access_token: &str) -> HeaderMap {
+fn build_headers(
+    account_id: &str,
+    access_token: &str,
+    conversation_id: Option<&str>,
+    session_id: Option<&str>,
+) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
@@ -83,7 +93,15 @@ fn build_headers(account_id: &str, access_token: &str) -> HeaderMap {
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    headers.remove(HEADER_SESSION_ID);
-    headers.remove(HEADER_CONVERSATION_ID);
+    if let Some(value) = conversation_id {
+        if let Ok(header_value) = HeaderValue::from_str(value) {
+            headers.insert(HEADER_CONVERSATION_ID, header_value);
+        }
+    }
+    if let Some(value) = session_id {
+        if let Ok(header_value) = HeaderValue::from_str(value) {
+            headers.insert(HEADER_SESSION_ID, header_value);
+        }
+    }
     headers
 }
