@@ -4,11 +4,12 @@
 //! https://raw.githubusercontent.com/openai/codex/rust-v0.79.0/codex-rs/core/<prompt_file>
 //! Keep files byte-for-byte identical; Codex validates instructions strictly.
 
-const PROMPT_GPT_5_CODEX: &str = include_str!("gpt_5_codex_prompt.md");
-const PROMPT_GPT_5_1: &str = include_str!("gpt_5_1_prompt.md");
-const PROMPT_GPT_5_2: &str = include_str!("gpt_5_2_prompt.md");
-const PROMPT_GPT_5_1_CODEX_MAX: &str = include_str!("gpt-5.1-codex-max_prompt.md");
-const PROMPT_GPT_5_2_CODEX: &str = include_str!("gpt-5.2-codex_prompt.md");
+const PROMPT_GPT_5_CODEX: &str = crate::prompt_str!("openai_codex/gpt_5_codex_prompt.md");
+const PROMPT_GPT_5_1: &str = crate::prompt_str!("openai_codex/gpt_5_1_prompt.md");
+const PROMPT_GPT_5_2: &str = crate::prompt_str!("openai_codex/gpt_5_2_prompt.md");
+const PROMPT_GPT_5_1_CODEX_MAX: &str =
+    crate::prompt_str!("openai_codex/gpt-5.1-codex-max_prompt.md");
+const PROMPT_GPT_5_2_CODEX: &str = crate::prompt_str!("openai_codex/gpt-5.2-codex_prompt.md");
 
 const MODEL_MAP: &[(&str, &str)] = &[
     ("gpt-5.1-codex", "gpt-5.1-codex"),

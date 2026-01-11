@@ -15,6 +15,8 @@ use tokio::sync::oneshot;
 use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
 use crate::modes::tui::events::UiEvent;
 
+const HANDOFF_PROMPT_TEMPLATE: &str = crate::prompt_str!("handoff_prompt.md");
+
 /// Model to use for handoff generation (fast, cheap).
 /// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
 const HANDOFF_MODEL: &str = "gemini-cli:gemini-2.5-flash";
@@ -27,25 +29,9 @@ const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
 /// Builds the prompt for handoff generation.
 fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
-    format!(
-        r#"Based on the following thread transcript, generate a focused handoff prompt for the given goal.
-
-<thread>
-{thread_content}
-</thread>
-
-<goal>
-{goal}
-</goal>
-
-Include:
-- Relevant context and decisions made
-- Key files or code discussed
-- The specific goal/direction
-
-Output ONLY the handoff prompt text, nothing else. The prompt should be
-written as if the user is starting a fresh thread with a new agent."#
-    )
+    HANDOFF_PROMPT_TEMPLATE
+        .replace("{{THREAD_CONTENT}}", thread_content)
+        .replace("{{GOAL}}", goal)
 }
 
 /// Loads and validates thread content for handoff.
