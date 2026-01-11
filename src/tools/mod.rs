@@ -8,13 +8,44 @@ pub mod edit;
 pub mod read;
 pub mod write;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::core::events::ToolOutput;
+
+// ============================================================================
+// Path Resolution Helpers
+// ============================================================================
+
+/// Resolves a path for reading/editing an existing file.
+///
+/// - Joins relative paths with root
+/// - Canonicalizes the path (resolves symlinks, `..`, etc.)
+/// - Returns error if the file doesn't exist
+///
+/// Use this for `read` and `edit` tools where the file must exist.
+pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
+    let requested = Path::new(path);
+
+    // Join with root (handles both absolute and relative paths)
+    let full_path = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    };
+
+    // Canonicalize to resolve any .. or symlinks (requires file to exist)
+    full_path.canonicalize().map_err(|e| {
+        ToolOutput::failure(
+            "path_error",
+            format!("Path does not exist '{}'", full_path.display()),
+            Some(format!("OS error: {}", e)),
+        )
+    })
+}
 
 /// Tool definition for the Anthropic API.
 #[derive(Debug, Clone, Serialize)]
@@ -158,7 +189,11 @@ pub async fn execute_tool(
         "edit" => execute_edit(input, ctx).await,
         "read" => execute_read(input, ctx).await,
         "write" => execute_write(input, ctx).await,
-        _ => ToolOutput::failure("unknown_tool", format!("Unknown tool: {}", name)),
+        _ => ToolOutput::failure_with_details(
+            "unknown_tool",
+            format!("Unknown tool: {}", name),
+            "Available tools: bash, edit, read, write",
+        ),
     };
 
     let result = ToolResult::from_output(tool_use_id.to_string(), &output);
@@ -202,7 +237,11 @@ where
     match timeout {
         Some(timeout) => match tokio::time::timeout(timeout, &mut handle).await {
             Ok(Ok(output)) => output,
-            Ok(Err(_)) => ToolOutput::failure("panic", "Tool execution panicked"),
+            Ok(Err(_)) => ToolOutput::failure(
+                "panic",
+                "Tool execution panicked",
+                Some("The tool task panicked during execution".to_string()),
+            ),
             Err(_) => {
                 handle.abort();
                 ToolOutput::failure(
@@ -211,12 +250,17 @@ where
                         "Tool execution timed out after {} seconds",
                         timeout.as_secs()
                     ),
+                    Some("Consider breaking up large tasks or increasing the timeout".to_string()),
                 )
             }
         },
         None => match handle.await {
             Ok(output) => output,
-            Err(_) => ToolOutput::failure("panic", "Tool execution panicked"),
+            Err(_) => ToolOutput::failure(
+                "panic",
+                "Tool execution panicked",
+                Some("The tool task panicked or was cancelled".to_string()),
+            ),
         },
     }
 }

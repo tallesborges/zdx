@@ -3,7 +3,6 @@
 //! Allows the agent to write content to files on the filesystem.
 
 use std::fs;
-use std::path::Path;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -49,12 +48,18 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "invalid_input",
-                format!("Invalid input for write tool: {}", e),
+                "Invalid input for write tool",
+                Some(format!("Parse error: {}", e)),
             );
         }
     };
 
-    let file_path = resolve_path(&input.path, &ctx.root);
+    // Resolve path (relative to root, or absolute as-is)
+    let file_path = if std::path::Path::new(&input.path).is_absolute() {
+        std::path::PathBuf::from(&input.path)
+    } else {
+        ctx.root.join(&input.path)
+    };
 
     // Create parent directories if needed (mkdir -p behavior)
     if let Some(parent) = file_path.parent()
@@ -63,7 +68,8 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     {
         return ToolOutput::failure(
             "mkdir_error",
-            format!("Failed to create directory '{}': {}", parent.display(), e),
+            format!("Failed to create directory '{}'", parent.display()),
+            Some(format!("OS error: {}", e)),
         );
     }
 
@@ -80,20 +86,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         })),
         Err(e) => ToolOutput::failure(
             "write_error",
-            format!("Failed to write file '{}': {}", file_path.display(), e),
+            format!("Failed to write file '{}'", file_path.display()),
+            Some(format!("OS error: {}", e)),
         ),
-    }
-}
-
-/// Resolves a path relative to the root directory.
-fn resolve_path(path: &str, root: &Path) -> std::path::PathBuf {
-    let requested = Path::new(path);
-
-    // Join with root (handles both absolute and relative paths)
-    if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
     }
 }
 

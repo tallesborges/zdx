@@ -578,12 +578,41 @@ impl HistoryCell {
 
                 // Status line (only show when failed - spinner indicates running)
                 if *state == ToolState::Error {
-                    lines.push(StyledLine {
-                        spans: vec![StyledSpan {
-                            text: "Failed".to_string(),
-                            style: Style::ToolError,
-                        }],
-                    });
+                    if let Some(res) = result {
+                        if let Some((code, message, details)) = res.error_info() {
+                            // Show error code and message
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: format!("Error [{}]: {}", code, message),
+                                    style: Style::ToolError,
+                                }],
+                            });
+
+                            // Show additional details if available
+                            if let Some(detail_text) = details {
+                                // Split details by newlines and wrap each line
+                                for detail_line in detail_text.lines() {
+                                    let wrapped = wrap_text(detail_line, width.saturating_sub(2));
+                                    for line in wrapped {
+                                        lines.push(StyledLine {
+                                            spans: vec![StyledSpan {
+                                                text: format!("  {}", line),
+                                                style: Style::ToolOutput,
+                                            }],
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        // Fallback if result is somehow missing
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: "Failed".to_string(),
+                                style: Style::ToolError,
+                            }],
+                        });
+                    }
                 }
 
                 lines
@@ -844,19 +873,20 @@ mod tests {
     #[test]
     fn test_tool_failure() {
         let mut cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
-        cell.set_tool_result(ToolOutput::failure("not_found", "File not found"));
+            HistoryCell::tool_running("123", "read", serde_json::json!({ "path": "test.txt" }));
+        cell.set_tool_result(ToolOutput::failure("not_found", "File not found", None));
 
         let lines = cell.display_lines(80, 0);
-        // Last line should show "Failed"
-        let last_line: String = lines
-            .last()
-            .unwrap()
-            .spans
+        // Should have error line with code and message
+        let all_text: String = lines
             .iter()
-            .map(|s| s.text.as_str())
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
             .collect();
-        assert!(last_line.contains("Failed"));
+
+        // New format: "Error [not_found]: File not found"
+        assert!(all_text.contains("Error"));
+        assert!(all_text.contains("not_found"));
+        assert!(all_text.contains("File not found"));
 
         // State should be Error
         match cell {

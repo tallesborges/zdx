@@ -590,8 +590,11 @@ mod tests {
 
     #[test]
     fn test_create_default_candidate_preserves_full_id() {
-        let candidate =
-            create_default_candidate("openrouter", Some("openrouter"), "xiaomi/mimo-v2-flash:free");
+        let candidate = create_default_candidate(
+            "openrouter",
+            Some("openrouter"),
+            "xiaomi/mimo-v2-flash:free",
+        );
 
         assert_eq!(candidate.full_id, "openrouter:xiaomi/mimo-v2-flash:free");
         assert_eq!(candidate.display_name, "xiaomi/mimo-v2-flash:free (custom)");

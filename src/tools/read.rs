@@ -6,14 +6,14 @@
 use std::fs;
 use std::fs::File;
 use std::io::Read;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition};
+use super::{ToolContext, ToolDefinition, resolve_existing_path};
 use crate::core::events::{ImageContent, ToolOutput};
 
 /// Maximum text file size before truncation (50KB).
@@ -86,14 +86,15 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "invalid_input",
-                format!("Invalid input for read tool: {}", e),
+                "Invalid input for read tool",
+                Some(format!("Parse error: {}", e)),
             );
         }
     };
 
-    let file_path = match resolve_path(&input.path, &ctx.root) {
+    let file_path = match resolve_existing_path(&input.path, &ctx.root) {
         Ok(p) => p,
-        Err(e) => return ToolOutput::failure("path_error", e),
+        Err(e) => return e,
     };
 
     // Check if this is an image file
@@ -113,7 +114,8 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
-                format!("Failed to read file metadata '{}': {}", path.display(), e),
+                format!("Failed to read metadata for '{}'", path.display()),
+                Some(format!("OS error: {}", e)),
             );
         }
     };
@@ -122,11 +124,11 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
     if file_size > MAX_IMAGE_BYTES {
         return ToolOutput::failure(
             "image_too_large",
-            format!(
-                "Image file '{}' is too large ({:.2} MB). Maximum size is 3.75 MB.",
-                path.display(),
+            format!("Image file '{}' is too large", path.display()),
+            Some(format!(
+                "Size: {:.2} MB, Maximum: 3.75 MB",
                 file_size as f64 / (1024.0 * 1024.0)
-            ),
+            )),
         );
     }
 
@@ -136,7 +138,8 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
-                format!("Failed to read image file '{}': {}", path.display(), e),
+                format!("Failed to read image file '{}'", path.display()),
+                Some(format!("OS error: {}", e)),
             );
         }
     };
@@ -167,7 +170,8 @@ fn read_text(path: &Path) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
-                format!("Failed to read file '{}': {}", path.display(), e),
+                format!("Failed to read file '{}'", path.display()),
+                Some(format!("OS error: {}", e)),
             );
         }
     };
@@ -185,25 +189,6 @@ fn read_text(path: &Path) -> ToolOutput {
         "truncated": truncated,
         "bytes": bytes
     }))
-}
-
-/// Resolves a path relative to the root directory.
-fn resolve_path(path: &str, root: &Path) -> Result<PathBuf, String> {
-    let requested = Path::new(path);
-
-    // Join with root (handles both absolute and relative paths)
-    let full_path = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
-    };
-
-    // Canonicalize to resolve any .. or symlinks
-    let canonical = full_path
-        .canonicalize()
-        .map_err(|e| format!("Path does not exist '{}': {}", full_path.display(), e))?;
-
-    Ok(canonical)
 }
 
 #[cfg(test)]
@@ -559,7 +544,8 @@ mod tests {
 
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"image_too_large""#));
-        assert!(json_str.contains("Maximum size is 3.75 MB"));
+        // Details now contains the size information
+        assert!(json_str.contains("3.75 MB"));
     }
 
     #[test]

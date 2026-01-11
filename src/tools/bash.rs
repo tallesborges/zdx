@@ -67,6 +67,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
             return ToolOutput::failure(
                 "invalid_input",
                 format!("Invalid input for bash tool: {}", e),
+                None,
             );
         }
     };
@@ -105,7 +106,8 @@ async fn run_command(
         .map_err(|e| {
             ToolOutput::failure(
                 "spawn_error",
-                format!("Failed to execute command '{}': {}", command, e),
+                format!("Failed to execute command '{}'", command),
+                Some(format!("Error: {}", e)),
             )
         })?;
 
@@ -127,7 +129,8 @@ async fn run_command(
     .map_err(|e| {
         ToolOutput::failure(
             "exec_error",
-            format!("Failed to execute command '{}': {}", command, e),
+            format!("Failed to execute command '{}'", command),
+            Some(format!("Error: {}", e)),
         )
     })?;
 
