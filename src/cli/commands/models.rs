@@ -11,6 +11,9 @@ use crate::config;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
+/// Default context limit for unknown models (128k tokens).
+const DEFAULT_CONTEXT_LIMIT: u64 = 128_000;
+
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
     #[serde(flatten)]
@@ -64,7 +67,7 @@ struct ModelEntry {
     modalities: ModalitiesEntry,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 struct ModelCandidate {
     full_id: String,
     display_name: String,
@@ -91,7 +94,7 @@ struct ModelRecord {
     capabilities: ModelCapabilitiesRecord,
 }
 
-#[derive(Debug, Serialize, Deserialize, Clone)]
+#[derive(Debug, Serialize, Deserialize, Clone, Default)]
 struct ModelPricingRecord {
     input: f64,
     output: f64,
@@ -162,9 +165,20 @@ pub async fn update(config: &config::Config) -> Result<()> {
         };
 
         let candidates = build_candidates(provider_id, prefix, models_map);
-        let selected = select_candidates(provider_id, &provider_cfg.models, &candidates);
+        let select_result = select_candidates(provider_id, &provider_cfg.models, &candidates);
 
-        if selected.is_empty() {
+        // Create default candidates for unmatched patterns
+        let mut all_selected: Vec<ModelCandidate> = select_result.matched;
+        for pattern in &select_result.unmatched_patterns {
+            let default_candidate = create_default_candidate(provider_id, prefix, pattern);
+            eprintln!(
+                "Info: creating default entry for '{}' (not found in models.dev)",
+                default_candidate.full_id
+            );
+            all_selected.push(default_candidate);
+        }
+
+        if all_selected.is_empty() {
             eprintln!(
                 "Warning: no models matched providers.{}.models",
                 provider_id
@@ -172,7 +186,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
             continue;
         }
 
-        for candidate in selected {
+        for candidate in all_selected {
             let record = ModelRecord {
                 id: candidate.full_id,
                 provider: provider_id.to_string(),
@@ -262,12 +276,21 @@ fn build_candidates(
         .collect()
 }
 
+/// Result of selecting candidates from patterns.
+struct SelectResult {
+    /// Candidates that matched patterns in the API response.
+    matched: Vec<ModelCandidate>,
+    /// Patterns that didn't match any model in the API (non-wildcard only).
+    unmatched_patterns: Vec<String>,
+}
+
 fn select_candidates(
     provider_id: &str,
     patterns: &[String],
     candidates: &[ModelCandidate],
-) -> Vec<ModelCandidate> {
-    let mut selected = Vec::new();
+) -> SelectResult {
+    let mut matched = Vec::new();
+    let mut unmatched_patterns = Vec::new();
 
     for pattern in patterns {
         let pattern = pattern.trim();
@@ -281,17 +304,53 @@ fn select_candidates(
             .collect();
 
         if matches.is_empty() {
-            eprintln!(
-                "Warning: pattern '{}' for provider '{}' matched no models",
-                pattern, provider_id
-            );
+            // Only track as unmatched if it's not a pure wildcard pattern
+            // Patterns like "xiaomi/mimo-v2-flash" or "gpt-5*" are candidates for defaults
+            // Pure "*" wildcards are not - they just mean "all models" which matched nothing
+            if !is_pure_wildcard(pattern) {
+                unmatched_patterns.push(pattern.to_string());
+            } else {
+                eprintln!(
+                    "Warning: wildcard pattern '{}' for provider '{}' matched no models",
+                    pattern, provider_id
+                );
+            }
             continue;
         }
 
-        selected.extend(matches.into_iter().cloned());
+        matched.extend(matches.into_iter().cloned());
     }
 
-    selected
+    SelectResult {
+        matched,
+        unmatched_patterns,
+    }
+}
+
+/// Returns true if the pattern is a pure wildcard that shouldn't create default entries.
+fn is_pure_wildcard(pattern: &str) -> bool {
+    pattern == "*"
+}
+
+/// Creates a default ModelCandidate for a model ID not found in the API.
+fn create_default_candidate(
+    provider_id: &str,
+    prefix: Option<&str>,
+    model_id: &str,
+) -> ModelCandidate {
+    // Use the pattern as-is for the model ID - don't try to parse it
+    // OpenRouter models have IDs like "xiaomi/mimo-v2-flash:free" which should stay intact
+    let full_id = format_model_id(prefix, model_id);
+    let display_name = format!("{} (custom)", model_id);
+    let match_targets = build_match_targets(provider_id, model_id, &full_id);
+
+    ModelCandidate {
+        full_id,
+        display_name,
+        context_limit: DEFAULT_CONTEXT_LIMIT,
+        match_targets,
+        ..Default::default()
+    }
 }
 
 fn build_match_targets(provider_id: &str, raw_id: &str, full_id: &str) -> Vec<String> {
@@ -523,4 +582,41 @@ fn write_models_file(path: &Path, models: &[ModelRecord]) -> Result<()> {
     })?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_create_default_candidate_preserves_full_id() {
+        let candidate =
+            create_default_candidate("openrouter", Some("openrouter"), "xiaomi/mimo-v2-flash:free");
+
+        assert_eq!(candidate.full_id, "openrouter:xiaomi/mimo-v2-flash:free");
+        assert_eq!(candidate.display_name, "xiaomi/mimo-v2-flash:free (custom)");
+        assert_eq!(candidate.context_limit, DEFAULT_CONTEXT_LIMIT);
+    }
+
+    #[test]
+    fn test_select_candidates_tracks_unmatched_patterns() {
+        let candidates = vec![ModelCandidate {
+            full_id: "openrouter:gpt-4".to_string(),
+            match_targets: vec!["openrouter:gpt-4".to_string(), "gpt-4".to_string()],
+            ..Default::default()
+        }];
+
+        let result = select_candidates(
+            "openrouter",
+            &[
+                "gpt-4".to_string(),
+                "xiaomi/mimo-v2-flash".to_string(), // unmatched - should create default
+                "*".to_string(),                    // pure wildcard - should NOT create default
+            ],
+            &candidates,
+        );
+
+        assert_eq!(result.matched.len(), 2); // gpt-4 matched twice (pattern + wildcard)
+        assert_eq!(result.unmatched_patterns, vec!["xiaomi/mimo-v2-flash"]);
+    }
 }
