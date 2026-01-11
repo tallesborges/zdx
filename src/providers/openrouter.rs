@@ -550,6 +550,55 @@ impl<S> ChatCompletionsSseParser<S> {
         }
     }
 
+    /// Emit completion events. Called either when we have both finish_reason + usage,
+    /// or when the stream ends (force=true).
+    fn emit_completion_if_pending(&mut self, force: bool) {
+        if self.emitted_done {
+            return;
+        }
+
+        // In normal mode, require finish_reason. In force mode (stream end), emit anyway.
+        let reason = match &self.final_finish_reason {
+            Some(r) => r.clone(),
+            None if force => "stop".to_string(), // Default stop reason on stream end
+            None => return,
+        };
+
+        self.emitted_done = true;
+
+        if let Some(index) = self.text_index.take() {
+            self.pending
+                .push_back(StreamEvent::ContentBlockCompleted { index });
+        }
+
+        let tool_indices: Vec<usize> = self
+            .tool_calls
+            .values()
+            .map(|state| state.stream_index)
+            .collect();
+        for index in tool_indices {
+            self.pending
+                .push_back(StreamEvent::ContentBlockCompleted { index });
+        }
+
+        let usage = self.final_usage.clone().unwrap_or_default();
+        let stop_reason = if self.saw_tool || reason == "tool_calls" {
+            Some("tool_use".to_string())
+        } else {
+            Some(map_finish_reason(&reason))
+        };
+
+        self.pending.push_back(StreamEvent::MessageStart {
+            model: self.model.clone(),
+            usage: usage.clone(),
+        });
+        self.pending.push_back(StreamEvent::MessageDelta {
+            stop_reason,
+            usage: Some(usage),
+        });
+        self.pending.push_back(StreamEvent::MessageCompleted);
+    }
+
     fn try_next_event(&mut self) -> Option<Result<StreamEvent>> {
         if let Some(event) = self.pending.pop_front() {
             return Some(Ok(event));
@@ -576,6 +625,7 @@ impl<S> ChatCompletionsSseParser<S> {
     }
 
     fn handle_chunk(&mut self, value: Value) -> Result<()> {
+        // Handle errors first - these are terminal, no completion should follow
         if let Some(error) = value.get("error") {
             let error_type = error
                 .get("type")
@@ -591,9 +641,12 @@ impl<S> ChatCompletionsSseParser<S> {
                 error_type,
                 message,
             });
+            // Mark as done to prevent completion events after error
+            self.emitted_done = true;
             return Ok(());
         }
 
+        // Parse usage (can arrive in any chunk, often in a separate final chunk)
         if let Some(usage) = value.get("usage") {
             let prompt = usage
                 .get("prompt_tokens")
@@ -611,122 +664,96 @@ impl<S> ChatCompletionsSseParser<S> {
             });
         }
 
-        let Some(choices) = value.get("choices").and_then(|v| v.as_array()) else {
-            return Ok(());
-        };
-
-        let Some(choice) = choices.first() else {
-            return Ok(());
-        };
-
-        if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
-            self.final_finish_reason = Some(finish_reason.to_string());
-        }
-
-        if let Some(delta) = choice.get("delta") {
-            if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
-                if self.text_index.is_none() {
-                    let index = self.next_index;
-                    self.next_index += 1;
-                    self.text_index = Some(index);
-                    self.pending.push_back(StreamEvent::ContentBlockStart {
-                        index,
-                        block_type: ContentBlockType::Text,
-                        id: None,
-                        name: None,
-                    });
+        // Parse choices (may be absent in usage-only chunks)
+        if let Some(choices) = value.get("choices").and_then(|v| v.as_array()) {
+            if let Some(choice) = choices.first() {
+                // Extract finish_reason if present
+                if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
+                    self.final_finish_reason = Some(finish_reason.to_string());
                 }
-                if !text.is_empty() {
-                    self.pending.push_back(StreamEvent::TextDelta {
-                        index: self.text_index.unwrap_or(0),
-                        text: text.to_string(),
-                    });
-                }
-            }
 
-            if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
-                for tool_call in tool_calls {
-                    let idx = tool_call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
-                    let id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                    let function = tool_call.get("function").unwrap_or(&Value::Null);
-                    let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                    let args = function
-                        .get("arguments")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
-
-                    let entry = self.tool_calls.entry(idx).or_insert_with(|| {
-                        let stream_index = self.next_index;
-                        self.next_index += 1;
-                        let tool_id = if id.is_empty() {
-                            format!("toolcall-{}", idx)
-                        } else {
-                            id.to_string()
-                        };
-                        let name = if name.is_empty() {
-                            "".to_string()
-                        } else {
-                            name.to_string()
-                        };
-                        self.saw_tool = true;
-                        self.pending.push_back(StreamEvent::ContentBlockStart {
-                            index: stream_index,
-                            block_type: ContentBlockType::ToolUse,
-                            id: Some(tool_id.clone()),
-                            name: Some(name.clone()),
-                        });
-                        ToolCallState { stream_index }
-                    });
-
-                    if !args.is_empty() {
-                        self.pending.push_back(StreamEvent::InputJsonDelta {
-                            index: entry.stream_index,
-                            partial_json: args.to_string(),
-                        });
-                    }
+                // Process delta content
+                if let Some(delta) = choice.get("delta") {
+                    self.process_delta(delta);
                 }
             }
         }
 
-        if let Some(reason) = self.final_finish_reason.clone()
-            && !self.emitted_done
-        {
-            self.emitted_done = true;
-
-            if let Some(index) = self.text_index.take() {
-                self.pending
-                    .push_back(StreamEvent::ContentBlockCompleted { index });
-            }
-
-            let tool_indices: Vec<usize> = self
-                .tool_calls
-                .values()
-                .map(|state| state.stream_index)
-                .collect();
-            for index in tool_indices {
-                self.pending
-                    .push_back(StreamEvent::ContentBlockCompleted { index });
-            }
-
-            let usage = self.final_usage.clone().unwrap_or_default();
-            let stop_reason = if self.saw_tool || reason == "tool_calls" {
-                Some("tool_use".to_string())
-            } else {
-                Some(map_finish_reason(&reason))
-            };
-
-            self.pending.push_back(StreamEvent::MessageStart {
-                model: self.model.clone(),
-                usage: usage.clone(),
-            });
-            self.pending.push_back(StreamEvent::MessageDelta {
-                stop_reason,
-                usage: Some(usage),
-            });
-            self.pending.push_back(StreamEvent::MessageCompleted);
+        // Emit completion when we have BOTH finish_reason AND usage
+        // (OpenRouter sends usage in a separate chunk after finish_reason when
+        // stream_options.include_usage is true)
+        if self.final_finish_reason.is_some() && self.final_usage.is_some() && !self.emitted_done {
+            self.emit_completion_if_pending(false);
         }
 
         Ok(())
+    }
+
+    fn process_delta(&mut self, delta: &Value) {
+        // Handle text content
+        if let Some(text) = delta.get("content").and_then(|v| v.as_str()) {
+            if self.text_index.is_none() {
+                let index = self.next_index;
+                self.next_index += 1;
+                self.text_index = Some(index);
+                self.pending.push_back(StreamEvent::ContentBlockStart {
+                    index,
+                    block_type: ContentBlockType::Text,
+                    id: None,
+                    name: None,
+                });
+            }
+            if !text.is_empty() {
+                self.pending.push_back(StreamEvent::TextDelta {
+                    index: self.text_index.unwrap_or(0),
+                    text: text.to_string(),
+                });
+            }
+        }
+
+        // Handle tool calls
+        if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
+            for tool_call in tool_calls {
+                let idx = tool_call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let function = tool_call.get("function").unwrap_or(&Value::Null);
+                let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let args = function
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let entry = self.tool_calls.entry(idx).or_insert_with(|| {
+                    let stream_index = self.next_index;
+                    self.next_index += 1;
+                    let tool_id = if id.is_empty() {
+                        format!("toolcall-{}", idx)
+                    } else {
+                        id.to_string()
+                    };
+                    let name = if name.is_empty() {
+                        "".to_string()
+                    } else {
+                        name.to_string()
+                    };
+                    self.saw_tool = true;
+                    self.pending.push_back(StreamEvent::ContentBlockStart {
+                        index: stream_index,
+                        block_type: ContentBlockType::ToolUse,
+                        id: Some(tool_id.clone()),
+                        name: Some(name.clone()),
+                    });
+                    ToolCallState { stream_index }
+                });
+
+                if !args.is_empty() {
+                    self.pending.push_back(StreamEvent::InputJsonDelta {
+                        index: entry.stream_index,
+                        partial_json: args.to_string(),
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -757,12 +784,26 @@ where
                     return Poll::Ready(Some(Err(anyhow!("Stream error: {}", e))));
                 }
                 Poll::Ready(None) => {
+                    // Try to drain any remaining buffered data
                     let is_empty = self.buffer.iter().all(|b| b.is_ascii_whitespace());
-                    if is_empty {
-                        return Poll::Ready(None);
+                    if !is_empty {
+                        if let Some(event) = self.try_next_event() {
+                            return Poll::Ready(Some(event));
+                        }
+                        // Handle trailing data without final delimiter
+                        if !self.buffer.is_empty() {
+                            let chunk_text = String::from_utf8_lossy(&self.buffer);
+                            if let Ok(Some(value)) = parse_sse_data(&chunk_text) {
+                                self.buffer.clear();
+                                let _ = self.handle_chunk(value);
+                            }
+                        }
                     }
-                    if let Some(event) = self.try_next_event() {
-                        return Poll::Ready(Some(event));
+                    // Stream ended - force emit completion if we haven't yet
+                    // (handles providers that don't send usage data or finish_reason)
+                    self.emit_completion_if_pending(true);
+                    if let Some(event) = self.pending.pop_front() {
+                        return Poll::Ready(Some(Ok(event)));
                     }
                     return Poll::Ready(None);
                 }
