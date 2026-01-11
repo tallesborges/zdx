@@ -4,6 +4,9 @@
 
 ## Where things are
 
+- `prompts/`: prompt templates (included via `crate::prompt_str!` macro)
+  - `prompts/handoff_prompt.md`: handoff generation prompt template
+  - `prompts/openai_codex/`: OpenAI Codex instruction prompts (byte-for-byte copies)
 - `src/main.rs`: binary entrypoint (delegates to `src/cli/`)
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
@@ -20,6 +23,7 @@
   - `src/cli/commands/models.rs`: models update handler (models.dev → models.toml)
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for TUI model picker
+- `src/prompts.rs`: `prompt_str!` macro for including prompts from `prompts/`
 - `src/core/`: UI-agnostic domain + runtime
   - `src/core/mod.rs`: core module exports
   - `src/core/events.rs`: agent event types for streaming
@@ -119,11 +123,6 @@
     - `src/providers/openai_codex/auth.rs`: OAuth credential resolution + config
     - `src/providers/openai_codex/client.rs`: OpenAICodexClient + request wiring
     - `src/providers/openai_codex/prompts/mod.rs`: Codex instruction loading and model normalization
-    - `src/providers/openai_codex/prompts/gpt_5_codex_prompt.md`: Codex instructions (gpt-5 codex)
-    - `src/providers/openai_codex/prompts/gpt-5.2-codex_prompt.md`: Codex instructions (gpt-5.2 codex)
-    - `src/providers/openai_codex/prompts/gpt-5.1-codex-max_prompt.md`: Codex instructions (gpt-5.1 codex max)
-    - `src/providers/openai_codex/prompts/gpt_5_2_prompt.md`: Instructions (gpt-5.2)
-    - `src/providers/openai_codex/prompts/gpt_5_1_prompt.md`: Instructions (gpt-5.1)
   - `src/providers/openai_api.rs`: OpenAI API key provider (Responses API)
   - `src/providers/openrouter.rs`: OpenRouter provider (OpenAI-compatible chat completions)
   - `src/providers/gemini.rs`: Gemini provider (Generative Language API)
