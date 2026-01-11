@@ -9,13 +9,21 @@
 //! Events follow the "inbox" pattern where async operations send events directly
 //! to the runtime's event inbox. `*Started` events are now simple markers (no rx fields)
 //! that indicate an operation has begun. Results arrive as separate events.
+//!
+//! ## Cancellation Convention
+//!
+//! Cancelable operations use `tokio_util::sync::CancellationToken` uniformly:
+//! - `*Started` events carry the token for the reducer to store
+//! - The runtime spawns tasks that `select!` on `token.cancelled()` vs work
+//! - Cancellation is initiated via `UiEffect::Cancel*` which calls `token.cancel()`
+//! - This keeps the runtime as a "dumb executor" and reducer as the source of truth
 
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 
 use crossterm::event::Event as CrosstermEvent;
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
@@ -59,7 +67,10 @@ pub enum ThreadUiEvent {
     LoadFailed { error: String },
 
     /// Thread preview load started (operation in progress).
-    PreviewStarted,
+    ///
+    /// Includes the request ID for consistency with PreviewLoaded/PreviewFailed.
+    /// The reducer uses this to track which preview request is active.
+    PreviewStarted { req: RequestId },
 
     /// Thread preview loaded (for thread picker navigation).
     PreviewLoaded {
@@ -163,9 +174,12 @@ pub enum UiEvent {
     HandoffResult(Result<String, String>),
 
     /// Handoff generation spawned; reducer should set handoff generating state.
+    ///
+    /// The cancel token is stored in HandoffState::Generating for cancellation
+    /// via UiEffect::CancelHandoff.
     HandoffGenerationStarted {
         goal: String,
-        cancel: oneshot::Sender<()>,
+        cancel: CancellationToken,
     },
 
     /// Handoff thread creation succeeded.
@@ -179,7 +193,10 @@ pub enum UiEvent {
     HandoffThreadCreateFailed { error: String },
 
     /// File discovery started (with cancel token for reducer to store).
-    FileDiscoveryStarted { cancel: Arc<AtomicBool> },
+    ///
+    /// The cancel token is stored in FilePickerState::discovery_cancel for
+    /// cancellation via UiEffect::CancelFileDiscovery (or overlay close).
+    FileDiscoveryStarted { cancel: CancellationToken },
 
     /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),
@@ -188,10 +205,13 @@ pub enum UiEvent {
     ClipboardCopied,
 
     /// Direct bash execution started (with cancel token for reducer to store).
+    ///
+    /// The cancel token is stored in TuiState::bash_cancel for cancellation
+    /// via UiEffect::CancelBash.
     BashExecutionStarted {
         id: String,
         command: String,
-        cancel: oneshot::Sender<()>,
+        cancel: CancellationToken,
     },
 
     /// Direct bash execution completed.

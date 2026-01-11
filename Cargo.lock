@@ -3020,6 +3020,7 @@ dependencies = [
  "sha2",
  "tempfile",
  "tokio",
+ "tokio-util",
  "toml",
  "toml_edit",
  "tui-textarea",
