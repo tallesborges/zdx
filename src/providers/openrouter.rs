@@ -283,12 +283,14 @@ struct ChatToolFunction {
 
 impl From<&ToolDefinition> for ChatToolDefinition {
     fn from(tool: &ToolDefinition) -> Self {
+        // Use lowercase tool names for OpenRouter (Anthropic requires PascalCase, others prefer lowercase)
+        let tool = tool.with_lowercase_name();
         Self {
             tool_type: "function",
             function: ChatToolFunction {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.input_schema.clone(),
+                name: tool.name,
+                description: tool.description,
+                parameters: tool.input_schema,
             },
         }
     }

@@ -194,6 +194,8 @@ pub fn build_tools(tools: &[ToolDefinition]) -> Option<Value> {
                 "function_declarations": tools
                     .iter()
                     .map(|tool| {
+                        // Use lowercase tool names for Gemini (Anthropic requires PascalCase, others prefer lowercase)
+                        let tool = tool.with_lowercase_name();
                         json!({
                             "name": tool.name,
                             "description": tool.description,

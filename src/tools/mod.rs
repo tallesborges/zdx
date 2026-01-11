@@ -24,6 +24,19 @@ pub struct ToolDefinition {
     pub input_schema: Value,
 }
 
+impl ToolDefinition {
+    /// Returns a copy with the name lowercased.
+    ///
+    /// Anthropic requires PascalCase tool names, but other providers
+    /// (OpenAI, Gemini, OpenRouter) work better with lowercase.
+    pub fn with_lowercase_name(&self) -> Self {
+        Self {
+            name: self.name.to_ascii_lowercase(),
+            ..self.clone()
+        }
+    }
+}
+
 /// Content block within a tool result.
 ///
 /// Anthropic API requires tool_result content to be an array of blocks
