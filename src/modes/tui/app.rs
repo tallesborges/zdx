@@ -197,8 +197,7 @@ impl TuiState {
             .collect();
 
         // Create transcript state with history
-        let mut transcript = TranscriptState::new();
-        transcript.cells = transcript_cells;
+        let transcript = TranscriptState::with_cells(transcript_cells);
 
         // Create input state with command history
         let mut input = InputState::new();

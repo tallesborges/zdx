@@ -451,7 +451,7 @@ impl TuiRuntime {
             UiEffect::OpenThreadPicker => {
                 // Only spawn if not already loading and no overlay is open
                 if !self.state.tui.thread_ops.list_loading && self.state.overlay.is_none() {
-                    let original_cells = self.state.tui.transcript.cells.clone();
+                    let original_cells = self.state.tui.transcript.cells().to_vec();
                     self.spawn_effect(
                         Some(UiEvent::Thread(ThreadUiEvent::ListStarted)),
                         move || handlers::thread_list_load(original_cells),

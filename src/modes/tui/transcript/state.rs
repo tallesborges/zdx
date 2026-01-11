@@ -335,8 +335,8 @@ impl ScrollAccumulator {
 /// layout dimensions, selection, and rendering cache.
 #[derive(Debug)]
 pub struct TranscriptState {
-    /// Transcript cells (in-memory display).
-    pub cells: Vec<super::HistoryCell>,
+    /// Transcript cells (private to enforce mutation API).
+    cells: Vec<super::HistoryCell>,
 
     /// Scroll state (mode, offset, cached line count).
     pub scroll: ScrollState,
@@ -382,8 +382,22 @@ impl Default for TranscriptState {
 
 impl TranscriptState {
     /// Creates a new TranscriptState with default values.
+    #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Creates a TranscriptState with pre-loaded cells.
+    pub fn with_cells(cells: Vec<super::HistoryCell>) -> Self {
+        Self {
+            cells,
+            ..Self::default()
+        }
+    }
+
+    /// Read-only access to cells.
+    pub fn cells(&self) -> &[super::HistoryCell] {
+        &self.cells
     }
 
     /// Resets transcript to empty state (for /new, handoff submit).
@@ -395,15 +409,133 @@ impl TranscriptState {
         self.wrap_cache.clear();
     }
 
+    /// Pushes a cell and invalidates line info.
+    pub fn push_cell(&mut self, cell: super::HistoryCell) {
+        self.cells.push(cell);
+        self.scroll.cell_line_info.clear();
+    }
+
+    /// Invalidates cell line info to force full rendering.
+    pub fn invalidate_line_info(&mut self) {
+        self.scroll.cell_line_info.clear();
+    }
+
+    // ========================================================================
+    // Cell Mutation Methods (auto-invalidate line info)
+    // ========================================================================
+
+    /// Sets tool result for a cell by tool_use_id.
+    pub fn set_tool_result_for(&mut self, tool_id: &str, result: crate::core::events::ToolOutput) {
+        if let Some(cell) = self.cells.iter_mut().find(
+            |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
+        ) {
+            cell.set_tool_result(result);
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Sets tool input for a cell by tool_use_id.
+    pub fn set_tool_input_for(&mut self, tool_id: &str, input: serde_json::Value) {
+        if let Some(cell) = self.cells.iter_mut().find(
+            |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
+        ) {
+            cell.set_tool_input(input);
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Finalizes an assistant cell by cell_id (streaming → complete).
+    pub fn finalize_assistant_cell(&mut self, cell_id: super::CellId) {
+        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
+            cell.finalize_assistant();
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Appends delta to a streaming assistant cell by cell_id.
+    pub fn append_to_streaming_cell(&mut self, cell_id: super::CellId, delta: &str) {
+        if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
+            cell.append_assistant_delta(delta);
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Appends delta to the last thinking cell.
+    pub fn append_thinking_delta_to_last(&mut self, delta: &str) {
+        if let Some(cell) = self.cells.last_mut() {
+            cell.append_thinking_delta(delta);
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Finalizes the last streaming thinking cell.
+    pub fn finalize_last_thinking_cell(&mut self, replay: Option<crate::providers::ReplayToken>) {
+        if let Some(cell) = self.cells.iter_mut().rev().find(|c| {
+            matches!(
+                c,
+                super::HistoryCell::Thinking {
+                    is_streaming: true,
+                    ..
+                }
+            )
+        }) {
+            cell.finalize_thinking(replay);
+            self.invalidate_line_info();
+        }
+    }
+
+    /// Marks all running/streaming cells as cancelled.
+    pub fn mark_interrupted(&mut self) {
+        let mut any_marked = false;
+        for cell in &mut self.cells {
+            let was_active = matches!(
+                cell,
+                super::HistoryCell::Assistant {
+                    is_streaming: true,
+                    ..
+                } | super::HistoryCell::Thinking {
+                    is_streaming: true,
+                    ..
+                } | super::HistoryCell::Tool {
+                    state: super::ToolState::Running,
+                    ..
+                }
+            );
+            cell.mark_cancelled();
+            if was_active {
+                any_marked = true;
+            }
+        }
+
+        // If no streaming/running cells were marked, mark the last user cell
+        if !any_marked
+            && let Some(last_user) = self
+                .cells
+                .iter_mut()
+                .rev()
+                .find(|c| matches!(c, super::HistoryCell::User { .. }))
+        {
+            last_user.mark_request_interrupted();
+        }
+
+        self.invalidate_line_info();
+    }
+
     /// Applies a cross-slice transcript mutation.
     pub fn apply(&mut self, mutation: TranscriptMutation) {
         match mutation {
-            TranscriptMutation::AppendCell(cell) => self.cells.push(cell),
+            TranscriptMutation::AppendCell(cell) => {
+                self.push_cell(cell);
+            }
             TranscriptMutation::AppendSystemMessage(message) => {
-                self.cells.push(super::HistoryCell::system(message));
+                self.push_cell(super::HistoryCell::system(message));
             }
             TranscriptMutation::Clear => self.reset(),
-            TranscriptMutation::ReplaceCells(cells) => self.cells = cells,
+            TranscriptMutation::ReplaceCells(cells) => {
+                self.cells = cells;
+                // Invalidate cell line info so visible_range() falls back to full render
+                self.scroll.cell_line_info.clear();
+            }
             TranscriptMutation::ResetScroll => self.scroll.reset(),
             TranscriptMutation::ClearWrapCache => self.wrap_cache.clear(),
             TranscriptMutation::SetScrollOffset { offset } => self.set_scroll_offset(offset),
