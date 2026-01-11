@@ -125,7 +125,19 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     frame.render_widget(transcript, transcript_area);
 
     // Render scrollbar if there's content to scroll
-    let scroll_offset = state.transcript.scroll.get_offset(transcript_height);
+    // We recalculate offset here to ensure it matches total_lines (which might be fresher than
+    // the cached state during streaming/lazy-render fallback)
+    let scroll_offset = if state.transcript.scroll.is_following() {
+        total_lines.saturating_sub(transcript_height)
+    } else {
+        let max_offset = total_lines.saturating_sub(transcript_height);
+        state
+            .transcript
+            .scroll
+            .get_offset(transcript_height)
+            .min(max_offset)
+    };
+
     frame.render_widget(
         Scrollbar::new(total_lines, transcript_height, scroll_offset),
         chunks[0],
