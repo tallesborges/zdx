@@ -3,6 +3,7 @@ mod config;
 mod core;
 mod models;
 mod modes;
+mod prompts;
 mod providers;
 mod tools;
 
