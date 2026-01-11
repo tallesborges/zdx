@@ -134,6 +134,7 @@ fn execute_command(
 ) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateMutation>) {
     match cmd_name {
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
+        "models" => (None, vec![UiEffect::OpenModelsConfig], vec![]),
         "copy-id" => {
             let (effects, mutations) = execute_copy_id(tui);
             (None, effects, mutations)
