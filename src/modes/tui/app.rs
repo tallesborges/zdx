@@ -162,6 +162,16 @@ pub struct TuiState {
     /// Stored here when `BashExecutionStarted` arrives. Cancelled via
     /// `UiEffect::CancelBash` or `UiEffect::InterruptBash`.
     pub bash_cancel: Option<CancellationToken>,
+    /// Cancel token for file discovery in the file picker.
+    ///
+    /// Stored when `FileDiscoveryStarted` arrives. Cancelled via
+    /// `UiEffect::CancelFileDiscovery`.
+    pub file_discovery_cancel: Option<CancellationToken>,
+    /// Cancel token for handoff generation.
+    ///
+    /// Stored when `HandoffGenerationStarted` arrives. Cancelled via
+    /// `UiEffect::CancelHandoff`.
+    pub handoff_cancel: Option<CancellationToken>,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
@@ -227,6 +237,8 @@ impl TuiState {
             spinner_frame: 0,
             bash_running: None,
             bash_cancel: None,
+            file_discovery_cancel: None,
+            handoff_cancel: None,
             git_branch,
             display_path,
         }

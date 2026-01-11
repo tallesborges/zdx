@@ -20,8 +20,6 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
 use tokio::sync::mpsc;
@@ -560,21 +558,8 @@ pub fn file_discovery(
     let cancel_clone = cancel.clone();
     let started = UiEvent::FileDiscoveryStarted { cancel };
 
-    // Use an AtomicBool internally for the blocking task since
-    // CancellationToken::is_cancelled() can be checked periodically.
-    let cancel_flag = Arc::new(AtomicBool::new(false));
-    let flag_clone = cancel_flag.clone();
-
     let future = async move {
-        // Spawn a task to monitor the token and set the flag
-        let flag_for_monitor = cancel_flag.clone();
-        let token_for_monitor = cancel_clone.clone();
-        tokio::spawn(async move {
-            token_for_monitor.cancelled().await;
-            flag_for_monitor.store(true, std::sync::atomic::Ordering::Relaxed);
-        });
-
-        let files = tokio::task::spawn_blocking(move || discover_files(&root, &flag_clone))
+        let files = tokio::task::spawn_blocking(move || discover_files(&root, &cancel_clone))
             .await
             .unwrap_or_default();
         UiEvent::FilesDiscovered(files)
@@ -631,8 +616,9 @@ pub fn bash_execution(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::time::Duration;
+
+    use super::*;
 
     /// Tests that CancellationToken can stop a handler loop.
     ///
@@ -640,6 +626,7 @@ mod tests {
     /// Real handlers use `tokio::select!` to race cancellation against work.
     #[tokio::test]
     async fn test_cancellation_token_stops_handler() {
+        tokio::time::pause();
         let token = CancellationToken::new();
         let token_clone = token.clone();
 
@@ -655,7 +642,9 @@ mod tests {
         token.cancel();
 
         // Task should return "cancelled" quickly
-        let result = tokio::time::timeout(Duration::from_millis(100), handle)
+        let result = tokio::time::timeout(Duration::from_millis(100), handle);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let result = result
             .await
             .expect("should complete within timeout")
             .expect("task should not panic");

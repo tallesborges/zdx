@@ -178,11 +178,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             effects
         }
         UiEvent::HandoffResult(result) => {
+            app.tui.handoff_cancel = None;
             let mutations = input::handle_handoff_result(&mut app.tui.input, result);
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }
         UiEvent::HandoffGenerationStarted { goal, cancel } => {
+            app.tui.handoff_cancel = Some(cancel.clone());
             app.tui.input.handoff = HandoffState::Generating { goal, cancel };
             vec![]
         }
@@ -208,12 +210,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::FileDiscoveryStarted { cancel } => {
+            app.tui.file_discovery_cancel = Some(cancel.clone());
             if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
                 picker.discovery_cancel = Some(cancel);
             }
             vec![]
         }
         UiEvent::FilesDiscovered(files) => {
+            app.tui.file_discovery_cancel = None;
             if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
                 picker.discovery_cancel = None;
             }
@@ -633,6 +637,9 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
     match update.transition {
         overlays::OverlayTransition::Stay => {}
         overlays::OverlayTransition::Close => {
+            if matches!(app.overlay.as_ref(), Some(overlays::Overlay::FilePicker(_))) {
+                effects.push(UiEffect::CancelFileDiscovery);
+            }
             app.overlay = None;
         }
         overlays::OverlayTransition::Open(request) => {
@@ -750,6 +757,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         app.tui.input.textarea.input(key);
         if picker.update_from_input(&app.tui.input) {
             app.overlay = None;
+            return vec![UiEffect::CancelFileDiscovery];
         }
         return vec![];
     }

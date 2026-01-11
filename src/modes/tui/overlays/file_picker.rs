@@ -1,13 +1,12 @@
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use tokio_util::sync::CancellationToken;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use tokio_util::sync::CancellationToken;
 
 use super::OverlayUpdate;
 use crate::modes::tui::input::InputState;
@@ -266,7 +265,7 @@ impl FilePickerState {
 }
 
 /// Discovers project files, respecting .gitignore.
-pub fn discover_files(root: &std::path::Path, cancel: &AtomicBool) -> Vec<PathBuf> {
+pub fn discover_files(root: &std::path::Path, cancel: &CancellationToken) -> Vec<PathBuf> {
     use ignore::WalkBuilder;
 
     let mut files = Vec::new();
@@ -277,7 +276,7 @@ pub fn discover_files(root: &std::path::Path, cancel: &AtomicBool) -> Vec<PathBu
         .build();
 
     for entry in walker.flatten() {
-        if cancel.load(Ordering::Relaxed) {
+        if cancel.is_cancelled() {
             return files;
         }
 

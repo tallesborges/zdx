@@ -370,10 +370,8 @@ impl TuiRuntime {
             // in-progress operations. The runtime just calls cancel() on
             // the stored token.
             UiEffect::CancelFileDiscovery => {
-                if let Some(Overlay::FilePicker(picker)) = &mut self.state.overlay {
-                    if let Some(cancel) = picker.discovery_cancel.take() {
-                        cancel.cancel();
-                    }
+                if let Some(cancel) = self.state.tui.file_discovery_cancel.take() {
+                    cancel.cancel();
                 }
             }
             UiEffect::CancelBash => {
@@ -382,9 +380,7 @@ impl TuiRuntime {
                 }
             }
             UiEffect::CancelHandoff => {
-                if let crate::modes::tui::input::HandoffState::Generating { cancel, .. } =
-                    &self.state.tui.input.handoff
-                {
+                if let Some(cancel) = self.state.tui.handoff_cancel.take() {
                     cancel.cancel();
                 }
                 // Note: The reducer should also reset handoff state to Idle
