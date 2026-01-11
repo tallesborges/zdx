@@ -78,6 +78,9 @@ pub enum UiEffect {
     /// Open config file in default system editor/app.
     OpenConfig,
 
+    /// Open models config file in default system editor/app.
+    OpenModelsConfig,
+
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
 

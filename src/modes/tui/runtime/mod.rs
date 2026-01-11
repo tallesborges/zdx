@@ -418,6 +418,18 @@ impl TuiRuntime {
                     // Could add an event for error reporting if needed
                 }
             }
+            UiEffect::OpenModelsConfig => {
+                let models_path = self.state.tui.config.models_path();
+                if !models_path.exists() {
+                    if let Some(parent) = models_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
+                    let _ = std::fs::write(&models_path, crate::models::default_models_toml());
+                }
+                let _ = open::that(&models_path);
+                // Note: errors are silently ignored for simplicity
+                // Could add an event for error reporting if needed
+            }
             UiEffect::PersistModel { model } => {
                 let _ = crate::config::Config::save_model(&model);
                 // Errors are silently ignored - model is already set in state
