@@ -374,8 +374,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
-            ThreadUiEvent::PreviewStarted => {
-                app.tui.thread_ops.preview_loading = true;
+            ThreadUiEvent::PreviewStarted { req } => {
+                // Request-id gating: Only mark loading if this is still the active request.
+                // This prevents stale "loading" state if user navigated away quickly.
+                let is_active = match app.overlay.as_ref() {
+                    Some(overlays::Overlay::ThreadPicker(picker)) => {
+                        picker.preview_request.is_active(req)
+                    }
+                    _ => false,
+                };
+                if is_active {
+                    app.tui.thread_ops.preview_loading = true;
+                }
                 vec![]
             }
             ThreadUiEvent::PreviewLoaded { req, cells } => {

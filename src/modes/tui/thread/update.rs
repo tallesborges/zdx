@@ -34,7 +34,7 @@ pub fn handle_thread_event(
     let effects = match event {
         ThreadUiEvent::ListStarted
         | ThreadUiEvent::LoadStarted
-        | ThreadUiEvent::PreviewStarted
+        | ThreadUiEvent::PreviewStarted { .. }
         | ThreadUiEvent::CreateStarted
         | ThreadUiEvent::ForkStarted
         | ThreadUiEvent::RenameStarted => vec![],

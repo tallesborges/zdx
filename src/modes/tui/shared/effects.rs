@@ -5,6 +5,12 @@
 //!
 //! This keeps the reducer pure: it only mutates state and returns effects,
 //! never performs I/O or spawns tasks directly.
+//!
+//! ## Cancellation Effects
+//!
+//! Cancellation is initiated from the reducer via `UiEffect::Cancel*` variants.
+//! The runtime executes these by calling `token.cancel()` on the stored token.
+//! This preserves the architecture: reducer decides when to cancel, runtime executes.
 
 use crate::config::ThinkingLevel;
 use crate::core::thread_log::ThreadEvent;
@@ -106,4 +112,20 @@ pub enum UiEffect {
 
     /// Execute a bash command directly (user `!` shortcut).
     ExecuteBash { command: String },
+
+    // ========================================================================
+    // Cancellation Effects
+    // ========================================================================
+    // These effects trigger cancellation of in-progress async operations.
+    // The reducer emits these when user presses Esc or otherwise cancels.
+    // The runtime executes by calling `token.cancel()` on the stored token.
+
+    /// Cancel in-progress file discovery.
+    CancelFileDiscovery,
+
+    /// Cancel in-progress bash command execution.
+    CancelBash,
+
+    /// Cancel in-progress handoff generation.
+    CancelHandoff,
 }

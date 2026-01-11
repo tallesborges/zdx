@@ -31,7 +31,8 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
@@ -156,8 +157,11 @@ pub struct TuiState {
     pub spinner_frame: usize,
     /// Currently running bash command info (id, command) - results come via inbox.
     pub bash_running: Option<(String, String)>,
-    /// Cancel sender for direct bash command execution.
-    pub bash_cancel: Option<oneshot::Sender<()>>,
+    /// Cancel token for direct bash command execution.
+    ///
+    /// Stored here when `BashExecutionStarted` arrives. Cancelled via
+    /// `UiEffect::CancelBash` or `UiEffect::InterruptBash`.
+    pub bash_cancel: Option<CancellationToken>,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).

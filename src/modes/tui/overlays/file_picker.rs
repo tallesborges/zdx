@@ -1,8 +1,8 @@
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use tokio_util::sync::CancellationToken;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -22,7 +22,7 @@ const MAX_DEPTH: usize = 15;
 /// File picker state.
 ///
 /// With the inbox pattern, file discovery results arrive via the inbox.
-/// The `discovery_cancel` flag is used to cancel the background file walk.
+/// The `discovery_cancel` token is used to cancel the background file walk.
 #[derive(Debug)]
 pub struct FilePickerState {
     pub trigger_pos: usize,
@@ -31,14 +31,17 @@ pub struct FilePickerState {
     pub selected: usize,
     pub offset: usize,
     pub loading: bool,
-    /// Set to true on Drop to stop the background file walk.
-    pub discovery_cancel: Option<Arc<AtomicBool>>,
+    /// Token to cancel the background file walk.
+    ///
+    /// Stored when `FileDiscoveryStarted` arrives. Cancelled on Drop or via
+    /// `UiEffect::CancelFileDiscovery`.
+    pub discovery_cancel: Option<CancellationToken>,
 }
 
 impl Drop for FilePickerState {
     fn drop(&mut self) {
         if let Some(cancel) = &self.discovery_cancel {
-            cancel.store(true, Ordering::Relaxed);
+            cancel.cancel();
         }
     }
 }
