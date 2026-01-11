@@ -43,11 +43,6 @@ pub const COMMANDS: &[Command] = &[
         description: "Open config file in default editor",
     },
     Command {
-        name: "models",
-        aliases: &["models-config"],
-        description: "Open models config in default editor",
-    },
-    Command {
         name: "copy-id",
         aliases: &["copyid"],
         description: "Copy current thread ID to clipboard",
@@ -76,6 +71,11 @@ pub const COMMANDS: &[Command] = &[
         name: "model",
         aliases: &[],
         description: "Switch model",
+    },
+    Command {
+        name: "models",
+        aliases: &["models-config"],
+        description: "Open models config in default editor",
     },
     Command {
         name: "new",
@@ -139,16 +139,16 @@ mod tests {
     #[test]
     fn test_command_display_name() {
         assert_eq!(find_command("config").display_name(), "/config (settings)");
-        assert_eq!(
-            find_command("models").display_name(),
-            "/models (models-config)"
-        );
         assert_eq!(find_command("copy-id").display_name(), "/copy-id (copyid)");
         assert_eq!(find_command("handoff").display_name(), "/handoff");
         assert_eq!(find_command("login").display_name(), "/login");
         assert_eq!(find_command("logout").display_name(), "/logout");
         assert_eq!(find_command("rename").display_name(), "/rename");
         assert_eq!(find_command("model").display_name(), "/model");
+        assert_eq!(
+            find_command("models").display_name(),
+            "/models (models-config)"
+        );
         assert_eq!(find_command("new").display_name(), "/new (clear)");
         assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");
         assert_eq!(find_command("threads").display_name(), "/threads (history)");
