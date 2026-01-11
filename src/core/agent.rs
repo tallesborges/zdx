@@ -315,11 +315,19 @@ pub async fn run_turn(
         crate::config::ThinkingLevel::Off
     };
 
+    // Get model output limit for budget calculation
+    let model_output_limit = crate::models::ModelOption::find_by_id(&config.model)
+        .map(|m| m.capabilities.output_limit)
+        .filter(|&limit| limit > 0)
+        .and_then(|limit| u32::try_from(limit).ok());
+
     let client = match provider {
         ProviderKind::Anthropic => {
             // Translate ThinkingLevel to raw API values
             let thinking_enabled = thinking_level.is_enabled();
-            let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
+            let thinking_budget_tokens = thinking_level
+                .compute_reasoning_budget(max_tokens, model_output_limit)
+                .unwrap_or(0);
 
             let anthropic_config = AnthropicConfig::from_env(
                 selection.model.clone(),
@@ -333,7 +341,9 @@ pub async fn run_turn(
         }
         ProviderKind::ClaudeCli => {
             let thinking_enabled = thinking_level.is_enabled();
-            let thinking_budget_tokens = thinking_level.budget_tokens().unwrap_or(0);
+            let thinking_budget_tokens = thinking_level
+                .compute_reasoning_budget(max_tokens, model_output_limit)
+                .unwrap_or(0);
 
             let claude_cli_config = ClaudeCliConfig::new(
                 selection.model.clone(),
@@ -365,11 +375,13 @@ pub async fn run_turn(
             ProviderClient::OpenAI(OpenAIClient::new(openai_config))
         }
         ProviderKind::OpenRouter => {
+            let reasoning_effort = map_thinking_to_reasoning(thinking_level);
             let openrouter_config = OpenRouterConfig::from_env(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.openrouter.effective_base_url(),
                 config.providers.openrouter.effective_api_key(),
+                reasoning_effort,
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
         }
@@ -714,13 +726,7 @@ pub async fn run_turn(
 }
 
 fn map_thinking_to_reasoning(level: crate::config::ThinkingLevel) -> Option<String> {
-    match level {
-        crate::config::ThinkingLevel::Off => None,
-        crate::config::ThinkingLevel::Minimal => Some("low".to_string()),
-        crate::config::ThinkingLevel::Low => Some("low".to_string()),
-        crate::config::ThinkingLevel::Medium => Some("medium".to_string()),
-        crate::config::ThinkingLevel::High => Some("high".to_string()),
-    }
+    level.effort_label().map(|s| s.to_string())
 }
 
 /// Executes all tool uses in parallel and emits events via async channel.

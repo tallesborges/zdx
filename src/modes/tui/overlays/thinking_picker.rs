@@ -104,6 +104,12 @@ pub fn render_thinking_picker(
         .map(|level| {
             let name_width = 10;
             let name = format!("{:<width$}", level.display_name(), width = name_width);
+            let desc = level.description();
+
+            // Calculate available width for description (account for borders, highlight symbol, name, right padding)
+            // inner_area.width - 2 (highlight "▶ ") - name_width - 1 (right padding)
+            let desc_width = inner_area.width.saturating_sub(2 + name_width as u16 + 1) as usize;
+            let desc_padded = format!("{:>width$}", desc, width = desc_width);
 
             let line = Line::from(vec![
                 Span::styled(
@@ -112,7 +118,7 @@ pub fn render_thinking_picker(
                         .fg(Color::Cyan)
                         .add_modifier(Modifier::BOLD),
                 ),
-                Span::styled(level.description(), Style::default().fg(Color::DarkGray)),
+                Span::styled(desc_padded, Style::default().fg(Color::DarkGray)),
             ]);
             ListItem::new(line)
         })

@@ -19,26 +19,41 @@ pub enum ThinkingLevel {
     /// No reasoning (default)
     #[default]
     Off,
-    /// Very brief reasoning (~1k tokens)
+    /// Very brief reasoning (~10% of max tokens)
     Minimal,
-    /// Light reasoning (~2k tokens)
+    /// Light reasoning (~20% of max tokens)
     Low,
-    /// Moderate reasoning (~8k tokens)
+    /// Moderate reasoning (~50% of max tokens)
     Medium,
-    /// Deep reasoning (~16k tokens)
+    /// Deep reasoning (~80% of max tokens)
     High,
+    /// Very deep reasoning (~95% of max tokens)
+    XHigh,
 }
 
 impl ThinkingLevel {
-    /// Returns the token budget for this thinking level.
+    /// Returns the effort percentage of max tokens for this thinking level.
     /// Returns None for Off (thinking disabled).
-    pub fn budget_tokens(&self) -> Option<u32> {
+    pub fn effort_percent(&self) -> Option<u32> {
         match self {
             ThinkingLevel::Off => None,
-            ThinkingLevel::Minimal => Some(1024),
-            ThinkingLevel::Low => Some(2048),
-            ThinkingLevel::Medium => Some(8192),
-            ThinkingLevel::High => Some(16384),
+            ThinkingLevel::Minimal => Some(5),
+            ThinkingLevel::Low => Some(20),
+            ThinkingLevel::Medium => Some(50),
+            ThinkingLevel::High => Some(80),
+            ThinkingLevel::XHigh => Some(95),
+        }
+    }
+
+    /// Returns the normalized effort label for this level.
+    pub fn effort_label(&self) -> Option<&'static str> {
+        match self {
+            ThinkingLevel::Off => None,
+            ThinkingLevel::Minimal => Some("minimal"),
+            ThinkingLevel::Low => Some("low"),
+            ThinkingLevel::Medium => Some("medium"),
+            ThinkingLevel::High => Some("high"),
+            ThinkingLevel::XHigh => Some("xhigh"),
         }
     }
 
@@ -51,10 +66,11 @@ impl ThinkingLevel {
     pub fn description(&self) -> &'static str {
         match self {
             ThinkingLevel::Off => "No reasoning",
-            ThinkingLevel::Minimal => "Very brief reasoning (~1k tokens)",
-            ThinkingLevel::Low => "Light reasoning (~2k tokens)",
-            ThinkingLevel::Medium => "Moderate reasoning (~8k tokens)",
-            ThinkingLevel::High => "Deep reasoning (~16k tokens)",
+            ThinkingLevel::Minimal => "Very brief (~5%)",
+            ThinkingLevel::Low => "Light (~20%)",
+            ThinkingLevel::Medium => "Moderate (~50%)",
+            ThinkingLevel::High => "Deep (~80%)",
+            ThinkingLevel::XHigh => "Very deep (~95%)",
         }
     }
 
@@ -66,6 +82,7 @@ impl ThinkingLevel {
             ThinkingLevel::Low => "low",
             ThinkingLevel::Medium => "medium",
             ThinkingLevel::High => "high",
+            ThinkingLevel::XHigh => "xhigh",
         }
     }
 
@@ -77,7 +94,33 @@ impl ThinkingLevel {
             ThinkingLevel::Low,
             ThinkingLevel::Medium,
             ThinkingLevel::High,
+            ThinkingLevel::XHigh,
         ]
+    }
+
+    /// Computes the reasoning budget in tokens based on effort percent and max_tokens.
+    ///
+    /// Uses min 1024 tokens to ensure meaningful reasoning.
+    /// Returns None if thinking is Off.
+    pub fn compute_reasoning_budget(
+        &self,
+        max_tokens: u32,
+        model_output_limit: Option<u32>,
+    ) -> Option<u32> {
+        let percent = self.effort_percent()?;
+
+        // Base for calculation: min of max_tokens and model output limit
+        let base = match model_output_limit {
+            Some(limit) if limit > 0 => max_tokens.min(limit),
+            _ => max_tokens,
+        };
+
+        // Calculate raw budget from percentage
+        let raw_budget = (base as u64 * percent as u64 / 100) as u32;
+
+        // Ensure minimum budget for meaningful reasoning
+        const MIN_BUDGET: u32 = 1024;
+        Some(raw_budget.max(MIN_BUDGET))
     }
 }
 
@@ -204,8 +247,6 @@ impl Config {
     const DEFAULT_MAX_TOKENS: u32 = 12288;
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
-    /// Minimum buffer above thinking budget for response tokens.
-    const THINKING_RESPONSE_BUFFER: u32 = 4096;
 
     /// Loads configuration from the default config path.
     pub fn load() -> Result<Self> {
@@ -330,9 +371,6 @@ impl Config {
     /// 1) Explicit config max_tokens (if set)
     /// 2) Model output limit from the registry (exclusive, minus 1)
     /// 3) Fallback default
-    ///
-    /// When thinking is enabled and max_tokens is explicitly set, ensures
-    /// max_tokens >= thinking_budget + buffer to leave room for the response.
     pub fn effective_max_tokens_for(&self, model_id: &str) -> u32 {
         let configured = self.max_tokens;
         let output_limit = crate::models::ModelOption::find_by_id(model_id)
@@ -343,26 +381,16 @@ impl Config {
             .and_then(|limit| limit.checked_sub(1))
             .filter(|limit| *limit > 0);
 
-        let mut max_tokens = configured
+        let max_tokens = configured
             .or(output_limit_exclusive)
             .unwrap_or(Self::DEFAULT_MAX_TOKENS);
 
-        if let Some(thinking_budget) = self.thinking_level.budget_tokens() {
-            let min_required = thinking_budget + Self::THINKING_RESPONSE_BUFFER;
-            if let Some(configured) = configured {
-                if configured < min_required {
-                    max_tokens = min_required;
-                }
-            } else if output_limit_exclusive.is_none() && max_tokens < min_required {
-                max_tokens = min_required;
-            }
-        }
-
+        // Clamp to output limit if available
         if let Some(limit) = output_limit_exclusive {
-            max_tokens = max_tokens.min(limit);
+            max_tokens.min(limit)
+        } else {
+            max_tokens
         }
-
-        max_tokens
     }
 
     /// Creates a default config file at the given path.
@@ -803,14 +831,61 @@ max_tokens = 2048
         assert!(!config.thinking_level.is_enabled());
     }
 
-    /// ThinkingLevel: budget_tokens returns correct values.
+    /// ThinkingLevel: effort_percent returns correct values.
     #[test]
-    fn test_thinking_level_budget_tokens() {
-        assert_eq!(ThinkingLevel::Off.budget_tokens(), None);
-        assert_eq!(ThinkingLevel::Minimal.budget_tokens(), Some(1024));
-        assert_eq!(ThinkingLevel::Low.budget_tokens(), Some(2048));
-        assert_eq!(ThinkingLevel::Medium.budget_tokens(), Some(8192));
-        assert_eq!(ThinkingLevel::High.budget_tokens(), Some(16384));
+    fn test_thinking_level_effort_percent() {
+        assert_eq!(ThinkingLevel::Off.effort_percent(), None);
+        assert_eq!(ThinkingLevel::Minimal.effort_percent(), Some(5));
+        assert_eq!(ThinkingLevel::Low.effort_percent(), Some(20));
+        assert_eq!(ThinkingLevel::Medium.effort_percent(), Some(50));
+        assert_eq!(ThinkingLevel::High.effort_percent(), Some(80));
+        assert_eq!(ThinkingLevel::XHigh.effort_percent(), Some(95));
+    }
+
+    /// ThinkingLevel: compute_reasoning_budget returns correct values.
+    #[test]
+    fn test_thinking_level_compute_reasoning_budget() {
+        // Off returns None
+        assert_eq!(
+            ThinkingLevel::Off.compute_reasoning_budget(10000, None),
+            None
+        );
+
+        // Medium (50%) of 10000 = 5000
+        assert_eq!(
+            ThinkingLevel::Medium.compute_reasoning_budget(10000, None),
+            Some(5000)
+        );
+
+        // High (80%) of 10000 = 8000
+        assert_eq!(
+            ThinkingLevel::High.compute_reasoning_budget(10000, None),
+            Some(8000)
+        );
+
+        // XHigh (95%) of 10000 = 9500
+        assert_eq!(
+            ThinkingLevel::XHigh.compute_reasoning_budget(10000, None),
+            Some(9500)
+        );
+
+        // Minimal (5%) of 5000 = 250, but clamped to min 1024
+        assert_eq!(
+            ThinkingLevel::Minimal.compute_reasoning_budget(5000, None),
+            Some(1024)
+        );
+
+        // Uses min of max_tokens and model_output_limit
+        assert_eq!(
+            ThinkingLevel::Medium.compute_reasoning_budget(20000, Some(10000)),
+            Some(5000) // 50% of min(20000, 10000) = 5000
+        );
+
+        // No max clamp - XHigh (95%) of 200000 = 190000
+        assert_eq!(
+            ThinkingLevel::XHigh.compute_reasoning_budget(200000, None),
+            Some(190_000)
+        );
     }
 
     /// ThinkingLevel: display_name returns short names.
@@ -825,9 +900,9 @@ max_tokens = 2048
     #[test]
     fn test_thinking_level_all() {
         let all = ThinkingLevel::all();
-        assert_eq!(all.len(), 5);
+        assert_eq!(all.len(), 6);
         assert_eq!(all[0], ThinkingLevel::Off);
-        assert_eq!(all[4], ThinkingLevel::High);
+        assert_eq!(all[5], ThinkingLevel::XHigh);
     }
 
     /// Thinking: effective_max_tokens returns raw value when thinking disabled.
@@ -843,17 +918,14 @@ max_tokens = 2048
 
     /// Thinking: effective_max_tokens auto-adjusts when thinking enabled and max_tokens too low.
     #[test]
-    fn test_effective_max_tokens_auto_adjusts_when_thinking_enabled() {
+    fn test_effective_max_tokens_returns_configured_value() {
         let config = Config {
-            max_tokens: Some(1024),                // too low for thinking
-            thinking_level: ThinkingLevel::Medium, // 8192 budget
+            max_tokens: Some(1024),
+            thinking_level: ThinkingLevel::Medium, // doesn't affect max_tokens anymore
             ..Default::default()
         };
-        // Should be thinking_budget (8192) + buffer (4096) = 12288
-        assert_eq!(
-            config.effective_max_tokens_for("claude-haiku-4-5"),
-            8192 + 4096
-        );
+        // Now just returns configured value (no auto-adjustment)
+        assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 1024);
     }
 
     /// Thinking: effective_max_tokens respects user value when sufficient.

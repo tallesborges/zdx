@@ -20,9 +20,9 @@ tool_timeout_secs = 0
 # system_prompt_file = "/path/to/system_prompt.md"
 
 # Extended thinking level
-# Controls how much reasoning Claude shows before responding.
-# Higher levels use more tokens but provide deeper reasoning.
-# Options: off, minimal, low, medium, high
+# Controls how much reasoning the model shows before responding.
+# Higher levels allocate more output tokens to reasoning.
+# Options: off, minimal (~5%), low (~20%), medium (~50%), high (~80%), xhigh (~95%)
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
 
