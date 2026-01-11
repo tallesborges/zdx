@@ -12,6 +12,8 @@ use tokio::process::Command;
 use crate::core::thread_log;
 use crate::modes::tui::events::{ThreadUiEvent, UiEvent};
 
+const TITLE_PROMPT_TEMPLATE: &str = crate::prompt_str!("thread_title.md");
+
 /// Model to use for auto-title generation (fast, cheap).
 /// Uses claude-cli prefix to route through OAuth auth (Claude CLI).
 const TITLE_MODEL: &str = "claude-cli:claude-haiku-4-5";
@@ -23,19 +25,7 @@ const TITLE_THINKING: &str = "minimal";
 const TITLE_TIMEOUT_SECS: u64 = 60;
 
 fn build_title_prompt(message: &str) -> String {
-    format!(
-        r#"Generate a short, descriptive thread title based only on the user's first message.
-
-<message>
-{message}
-</message>
-
-Rules:
-- 2 to 6 words
-- Title case
-- No quotes, punctuation, or emoji
-- Output ONLY the title"#
-    )
+    TITLE_PROMPT_TEMPLATE.replace("{{MESSAGE}}", message)
 }
 
 fn sanitize_title(raw: &str) -> Option<String> {

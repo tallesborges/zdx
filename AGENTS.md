@@ -6,6 +6,7 @@
 
 - `prompts/`: prompt templates (included via `crate::prompt_str!` macro)
   - `prompts/handoff_prompt.md`: handoff generation prompt template
+  - `prompts/thread_title.md`: auto thread title generation prompt template
   - `prompts/openai_codex/`: OpenAI Codex instruction prompts (byte-for-byte copies)
 - `src/main.rs`: binary entrypoint (delegates to `src/cli/`)
 - `default_config.toml`: default configuration template
