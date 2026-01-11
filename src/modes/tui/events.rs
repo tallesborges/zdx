@@ -169,7 +169,11 @@ pub enum UiEvent {
     },
 
     /// Handoff thread creation succeeded.
-    HandoffThreadCreated { thread_log: ThreadLog },
+    HandoffThreadCreated {
+        thread_log: ThreadLog,
+        context_paths: Vec<PathBuf>,
+        prompt: String,
+    },
 
     /// Handoff thread creation failed.
     HandoffThreadCreateFailed { error: String },

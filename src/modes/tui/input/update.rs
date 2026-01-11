@@ -331,12 +331,7 @@ fn submit_input(
 
         return (
             vec![UiEffect::StartHandoff { goal: text.clone() }],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(format!(
-                    "Generating handoff for goal: \"{}\"...",
-                    text
-                )),
-            )],
+            vec![],
             None,
         );
     }
@@ -356,9 +351,7 @@ fn submit_input(
             );
         }
         input.handoff = HandoffState::Idle;
-        input.clear();
         input.clear_history();
-        input.history.push(text.clone());
 
         return (
             vec![UiEffect::HandoffSubmit {
@@ -368,8 +361,6 @@ fn submit_input(
                 StateMutation::Transcript(TranscriptMutation::Clear),
                 StateMutation::Thread(ThreadMutation::ClearMessages),
                 StateMutation::Thread(ThreadMutation::ResetUsage),
-                StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
-                StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
             ],
             None,
         );
@@ -430,12 +421,7 @@ pub fn handle_handoff_result(
             // Transition to Ready state
             input.handoff = HandoffState::Ready;
 
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(
-                    "Handoff ready. Edit and press Enter to start new thread, or Esc to cancel."
-                        .to_string(),
-                ),
-            )]
+            vec![]
         }
         Err(error) => {
             let mut mutations = vec![StateMutation::Transcript(
