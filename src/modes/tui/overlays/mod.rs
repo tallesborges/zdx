@@ -207,7 +207,8 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 
-        let (picker, _) = ModelPickerState::open("test");
+        let providers = crate::config::ProvidersConfig::default();
+        let (picker, _) = ModelPickerState::open("test", &providers);
         let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
         assert!(overlay.is_some());
 

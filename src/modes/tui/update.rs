@@ -662,7 +662,8 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::ModelPicker => {
-            let (state, effects) = overlays::ModelPickerState::open(&app.tui.config.model);
+            let (state, effects) =
+                overlays::ModelPickerState::open(&app.tui.config.model, &app.tui.config.providers);
             app.overlay = Some(overlays::Overlay::ModelPicker(state));
             effects
         }

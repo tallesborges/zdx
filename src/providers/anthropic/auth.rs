@@ -21,10 +21,11 @@ impl AnthropicConfig {
     /// Creates a new config from environment.
     ///
     /// Authentication resolution order:
-    /// 1. `ANTHROPIC_API_KEY` environment variable
+    /// 1. `config_api_key` parameter (from config file)
+    /// 2. `ANTHROPIC_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `ANTHROPIC_API_KEY`: API key
+    /// - `ANTHROPIC_API_KEY`: API key (fallback if not in config)
     /// - `ANTHROPIC_BASE_URL`: Optional base URL override
     ///
     /// Base URL resolution order:
@@ -35,11 +36,11 @@ impl AnthropicConfig {
         model: String,
         max_tokens: u32,
         config_base_url: Option<&str>,
+        config_api_key: Option<&str>,
         thinking_enabled: bool,
         thinking_budget_tokens: u32,
     ) -> Result<Self> {
-        let api_key = std::env::var("ANTHROPIC_API_KEY")
-            .context("No authentication available. Set ANTHROPIC_API_KEY environment variable.")?;
+        let api_key = resolve_api_key(config_api_key)?;
 
         // Resolution order: env > config > default
         let base_url = Self::resolve_base_url(config_base_url)?;
@@ -84,4 +85,19 @@ impl AnthropicConfig {
         url::Url::parse(url).with_context(|| format!("Invalid Anthropic base URL: {}", url))?;
         Ok(())
     }
+}
+
+/// Resolves API key with precedence: config > env.
+fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
+    // Try config value first
+    if let Some(key) = config_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Fall back to env var
+    std::env::var("ANTHROPIC_API_KEY")
+        .context("No API key available. Set ANTHROPIC_API_KEY or api_key in [providers.anthropic].")
 }

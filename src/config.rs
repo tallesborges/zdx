@@ -83,134 +83,59 @@ impl ThinkingLevel {
 
 /// Returns the default config template with comments.
 ///
-/// This is the source of truth for default_config.toml.
-fn default_config_template() -> String {
-    fn format_models(models: &[String]) -> String {
-        models
-            .iter()
-            .map(|model| format!("\"{}\"", model))
-            .collect::<Vec<_>>()
-            .join(", ")
+/// This is embedded from default_config.toml at compile time.
+/// To update, edit default_config.toml directly.
+fn default_config_template() -> &'static str {
+    include_str!("../default_config.toml")
+}
+
+/// Merges user config values into the default template.
+///
+/// This ensures new comments/sections from the template are always present,
+/// while preserving user's customized values.
+fn merge_with_template(user_config: &str) -> Result<String> {
+    use toml_edit::DocumentMut;
+
+    // Parse the template as the base
+    let mut doc: DocumentMut = default_config_template()
+        .parse()
+        .context("Failed to parse default config template")?;
+
+    // Parse user's existing config
+    let user_doc: DocumentMut = user_config.parse().context("Failed to parse user config")?;
+
+    // Overlay user values onto template
+    merge_items(doc.as_table_mut(), user_doc.as_table());
+
+    Ok(doc.to_string())
+}
+
+/// Recursively merges items from source table into target table.
+fn merge_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
+    use toml_edit::Item;
+
+    for (key, value) in source.iter() {
+        match value {
+            Item::Value(v) => {
+                // Scalar value: override in target
+                target[key] = Item::Value(v.clone());
+            }
+            Item::Table(src_table) => {
+                // Nested table: recursively merge
+                if let Some(Item::Table(target_table)) = target.get_mut(key) {
+                    merge_items(target_table, src_table);
+                } else {
+                    // Target doesn't have this table, copy it
+                    target[key] = Item::Table(src_table.clone());
+                }
+            }
+            Item::ArrayOfTables(src_arr) => {
+                // Array of tables: replace entirely with user's version
+                target[key] = Item::ArrayOfTables(src_arr.clone());
+            }
+            Item::None => {}
+        }
     }
-
-    let providers = ProvidersConfig::default();
-    let thinking_default = ThinkingLevel::default();
-    let mut out = String::new();
-
-    out.push_str("# ZDX Configuration\n");
-    out.push_str("#\n");
-    out.push_str("# This file is auto-generated. Edit as needed.\n");
-    out.push_str("# Documentation: https://github.com/tallesborges/zdx#configuration\n\n");
-
-    out.push_str("# The Claude model to use\n");
-    out.push_str(&format!("model = \"{}\"\n\n", Config::DEFAULT_MODEL));
-
-    out.push_str("# Maximum tokens for responses (optional)\n");
-    out.push_str("# Defaults to the model's output limit (exclusive, minus 1) when unset.\n");
-    out.push_str(&format!(
-        "# max_tokens = {}\n\n",
-        Config::DEFAULT_MAX_TOKENS
-    ));
-
-    out.push_str("# Timeout for tool execution in seconds (0 disables timeout)\n");
-    out.push_str(&format!(
-        "tool_timeout_secs = {}\n\n",
-        Config::DEFAULT_TOOL_TIMEOUT_SECS
-    ));
-
-    out.push_str("# System prompt (inline)\n");
-    out.push_str("# system_prompt = \"You are a helpful coding assistant.\"\n\n");
-
-    out.push_str("# System prompt from file (takes precedence over inline)\n");
-    out.push_str("# system_prompt_file = \"/path/to/system_prompt.md\"\n\n");
-
-    out.push_str("# Extended thinking level\n");
-    out.push_str("# Controls how much reasoning Claude shows before responding.\n");
-    out.push_str("# Higher levels use more tokens but provide deeper reasoning.\n");
-    out.push_str("# Options: off, minimal, low, medium, high\n");
-    out.push_str(
-        "# Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.\n",
-    );
-    out.push_str(&format!(
-        "thinking_level = \"{}\"\n\n",
-        thinking_default.display_name()
-    ));
-
-    out.push_str("# OpenAI reasoning effort (used by Codex models).\n");
-    out.push_str("# Options: low, medium, high, xhigh\n\n");
-
-    out.push_str("# Provider base URLs (for proxies or test rigs).\n");
-
-    out.push_str("[providers.anthropic]\n");
-    if let Some(enabled) = providers.anthropic.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://api.anthropic.com\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n\n",
-        format_models(&providers.anthropic.models)
-    ));
-
-    out.push_str("[providers.claude_cli]\n");
-    if let Some(enabled) = providers.claude_cli.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://api.anthropic.com\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n\n",
-        format_models(&providers.claude_cli.models)
-    ));
-
-    out.push_str("[providers.openai]\n");
-    if let Some(enabled) = providers.openai.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://api.openai.com/v1\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n\n",
-        format_models(&providers.openai.models)
-    ));
-
-    out.push_str("[providers.openai_codex]\n");
-    if let Some(enabled) = providers.openai_codex.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str(&format!(
-        "models = [{}]\n\n",
-        format_models(&providers.openai_codex.models)
-    ));
-
-    out.push_str("[providers.openrouter]\n");
-    if let Some(enabled) = providers.openrouter.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://openrouter.ai/api/v1\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n\n",
-        format_models(&providers.openrouter.models)
-    ));
-
-    out.push_str("[providers.gemini]\n");
-    if let Some(enabled) = providers.gemini.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://generativelanguage.googleapis.com/v1beta\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n",
-        format_models(&providers.gemini.models)
-    ));
-
-    out.push_str("\n[providers.gemini_cli]\n");
-    if let Some(enabled) = providers.gemini_cli.enabled {
-        out.push_str(&format!("enabled = {}\n", enabled));
-    }
-    out.push_str("# base_url = \"https://cloudcode-pa.googleapis.com\"\n");
-    out.push_str(&format!(
-        "models = [{}]\n",
-        format_models(&providers.gemini_cli.models)
-    ));
-
-    out
 }
 
 pub mod paths {
@@ -311,19 +236,20 @@ impl Config {
     /// Saves only the model field to a specific config file path.
     ///
     /// Creates the file with default template if it doesn't exist.
-    /// Preserves existing fields and comments using toml_edit.
+    /// If file exists, merges user values into the latest template.
     pub fn save_model_to(path: &Path, model: &str) -> Result<()> {
         use toml_edit::{DocumentMut, value};
 
-        // Read existing file or use default template
+        // Start from template, merge user values if file exists
         let contents = if path.exists() {
-            fs::read_to_string(path)
-                .with_context(|| format!("Failed to read config from {}", path.display()))?
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
         } else {
-            default_config_template()
+            default_config_template().to_string()
         };
 
-        // Parse as editable document (preserves comments and formatting)
+        // Parse as editable document
         let mut doc: DocumentMut = contents
             .parse()
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
@@ -345,19 +271,20 @@ impl Config {
     /// Saves only the thinking_level field to a specific config file path.
     ///
     /// Creates the file with default template if it doesn't exist.
-    /// Preserves existing fields and comments using toml_edit.
+    /// If file exists, merges user values into the latest template.
     pub fn save_thinking_level_to(path: &Path, level: ThinkingLevel) -> Result<()> {
         use toml_edit::{DocumentMut, value};
 
-        // Read existing file or use default template
+        // Start from template, merge user values if file exists
         let contents = if path.exists() {
-            fs::read_to_string(path)
-                .with_context(|| format!("Failed to read config from {}", path.display()))?
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
         } else {
-            default_config_template()
+            default_config_template().to_string()
         };
 
-        // Parse as editable document (preserves comments and formatting)
+        // Parse as editable document
         let mut doc: DocumentMut = contents
             .parse()
             .with_context(|| format!("Failed to parse config from {}", path.display()))?;
@@ -445,7 +372,7 @@ impl Config {
             anyhow::bail!("Config file already exists at {}", path.display());
         }
 
-        Self::write_config(path, &default_config_template())
+        Self::write_config(path, default_config_template())
     }
 
     /// Writes config content to a file, creating parent directories as needed.
@@ -503,6 +430,28 @@ pub struct ProvidersConfig {
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
     pub gemini_cli: ProviderConfig,
+}
+
+impl ProvidersConfig {
+    /// Returns whether a provider is enabled by its string identifier.
+    ///
+    /// Provider IDs match the model registry format (e.g., "anthropic", "openai", "gemini-cli").
+    /// Returns true if the provider is not found (unknown providers default to enabled).
+    pub fn is_enabled(&self, provider_id: &str) -> bool {
+        use crate::providers::ProviderKind;
+
+        let config = match provider_id {
+            id if id == ProviderKind::Anthropic.id() => &self.anthropic,
+            id if id == ProviderKind::ClaudeCli.id() => &self.claude_cli,
+            id if id == ProviderKind::OpenAI.id() => &self.openai,
+            id if id == ProviderKind::OpenAICodex.id() => &self.openai_codex,
+            id if id == ProviderKind::OpenRouter.id() => &self.openrouter,
+            id if id == ProviderKind::Gemini.id() => &self.gemini,
+            id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
+            _ => return true, // Unknown providers default to enabled
+        };
+        config.enabled.unwrap_or(true)
+    }
 }
 
 impl Default for ProvidersConfig {
@@ -610,6 +559,8 @@ fn default_gemini_cli_provider() -> ProviderConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct ProviderConfig {
+    /// Optional API key (overrides environment variable).
+    pub api_key: Option<String>,
     /// Optional API base URL (for proxies).
     pub base_url: Option<String>,
     /// Whether this provider is enabled for `zdx models update`.
@@ -619,6 +570,14 @@ pub struct ProviderConfig {
 }
 
 impl ProviderConfig {
+    /// Returns the effective API key if set and non-empty.
+    pub fn effective_api_key(&self) -> Option<&str> {
+        self.api_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+    }
+
     /// Returns the effective base URL if set and non-empty.
     pub fn effective_base_url(&self) -> Option<&str> {
         self.base_url
@@ -795,18 +754,16 @@ tool_timeout_secs = 60
         assert_eq!(config.tool_timeout_secs, 60); // preserved
     }
 
-    /// save_model: preserves comments in config file.
+    /// save_model: uses template structure but preserves user values.
     #[test]
-    fn test_save_model_preserves_comments() {
+    fn test_save_model_merges_with_template() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        // Create config with comments
+        // Create config with user values (old format, no template comments)
         fs::write(
             &config_path,
-            r#"# My config file
-model = "old-model"
-# This is important
+            r#"model = "old-model"
 max_tokens = 2048
 "#,
         )
@@ -815,9 +772,14 @@ max_tokens = 2048
         Config::save_model_to(&config_path, "new-model").unwrap();
 
         let contents = fs::read_to_string(&config_path).unwrap();
-        assert!(contents.contains("# My config file"));
-        assert!(contents.contains("# This is important"));
+        // Template comments should now be present
+        assert!(contents.contains("# ZDX Configuration"));
+        assert!(contents.contains("# Maximum tokens"));
+        // User value should be preserved
         assert!(contents.contains("new-model"));
+        // User's max_tokens value should be preserved
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.max_tokens, Some(2048));
     }
 
     /// save_model: creates parent directories if needed.
@@ -995,19 +957,18 @@ thinking_level = "off"
         assert_eq!(config.max_tokens, Some(4096)); // preserved
     }
 
-    /// save_thinking_level: preserves comments in config file.
+    /// save_thinking_level: uses template structure but preserves user values.
     #[test]
-    fn test_save_thinking_level_preserves_comments() {
+    fn test_save_thinking_level_merges_with_template() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
 
-        // Create config with comments
+        // Create config with user values (old format, no template comments)
         fs::write(
             &config_path,
-            r#"# My custom config
-model = "claude-sonnet-4"
-# Thinking configuration
+            r#"model = "claude-sonnet-4"
 thinking_level = "off"
+max_tokens = 4096
 "#,
         )
         .unwrap();
@@ -1015,9 +976,14 @@ thinking_level = "off"
         Config::save_thinking_level_to(&config_path, ThinkingLevel::High).unwrap();
 
         let contents = fs::read_to_string(&config_path).unwrap();
-        assert!(contents.contains("# My custom config"));
-        assert!(contents.contains("# Thinking configuration"));
+        // Template comments should now be present
+        assert!(contents.contains("# ZDX Configuration"));
+        assert!(contents.contains("# Extended thinking level"));
         assert!(contents.contains("thinking_level = \"high\""));
+        // User values should be preserved
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.model, "claude-sonnet-4");
+        assert_eq!(config.max_tokens, Some(4096));
     }
 
     /// save_thinking_level: roundtrip - save and reload works correctly.

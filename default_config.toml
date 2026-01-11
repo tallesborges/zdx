@@ -29,9 +29,12 @@ thinking_level = "off"
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 
-# Provider base URLs (for proxies or test rigs).
+# Provider configuration.
+# api_key: Optional API key (overrides environment variable)
+# base_url: Optional base URL (for proxies or test rigs)
 [providers.anthropic]
 enabled = true
+# api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
 models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
@@ -42,6 +45,7 @@ models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.openai]
 enabled = true
+# api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
 models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
 
@@ -51,11 +55,13 @@ models = ["gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.2"]
 
 [providers.openrouter]
 enabled = true
+# api_key = "sk-or-..."  # Overrides OPENROUTER_API_KEY env var
 # base_url = "https://openrouter.ai/api/v1"
 models = ["*:exacto"]
 
 [providers.gemini]
 enabled = true
+# api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
 models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 

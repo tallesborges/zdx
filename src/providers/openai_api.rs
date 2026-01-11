@@ -26,17 +26,21 @@ pub struct OpenAIConfig {
 impl OpenAIConfig {
     /// Creates a new config from environment.
     ///
+    /// Authentication resolution order:
+    /// 1. `config_api_key` parameter (from config file)
+    /// 2. `OPENAI_API_KEY` environment variable
+    ///
     /// Environment variables:
-    /// - `OPENAI_API_KEY` (required)
+    /// - `OPENAI_API_KEY` (fallback if not in config)
     /// - `OPENAI_BASE_URL` (optional)
     pub fn from_env(
         model: String,
         max_output_tokens: u32,
         config_base_url: Option<&str>,
+        config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = std::env::var("OPENAI_API_KEY")
-            .context("OPENAI_API_KEY is not set. Set it to use OpenAI API.")?;
+        let api_key = resolve_api_key(config_api_key)?;
 
         let base_url = resolve_base_url(config_base_url)?;
 
@@ -113,6 +117,21 @@ fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
 fn validate_url(url: &str) -> Result<()> {
     url::Url::parse(url).with_context(|| format!("Invalid OpenAI base URL: {}", url))?;
     Ok(())
+}
+
+/// Resolves API key with precedence: config > env.
+fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
+    // Try config value first
+    if let Some(key) = config_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Fall back to env var
+    std::env::var("OPENAI_API_KEY")
+        .context("No API key available. Set OPENAI_API_KEY or api_key in [providers.openai].")
 }
 
 fn build_headers(api_key: &str) -> HeaderMap {
