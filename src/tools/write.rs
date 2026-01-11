@@ -30,7 +30,8 @@ pub fn definition() -> ToolDefinition {
                     "description": "Content to write to the file"
                 }
             },
-            "required": ["path", "content"]
+            "required": ["path", "content"],
+            "additionalProperties": false
         }),
     }
 }

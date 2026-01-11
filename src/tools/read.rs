@@ -68,7 +68,8 @@ pub fn definition() -> ToolDefinition {
                     "description": "Path to the file to read (relative to root directory)"
                 }
             },
-            "required": ["path"]
+            "required": ["path"],
+            "additionalProperties": false
         }),
     }
 }

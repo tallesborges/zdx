@@ -23,6 +23,10 @@ pub struct RequestBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tools: Option<Vec<FunctionTool>>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_choice: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub truncation: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_cache_key: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub parallel_tool_calls: Option<bool>,
@@ -97,7 +101,8 @@ pub struct FunctionTool {
     pub name: String,
     pub description: String,
     pub parameters: serde_json::Value,
-    pub strict: Option<()>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub strict: Option<bool>,
 }
 
 impl From<&ToolDefinition> for FunctionTool {
@@ -107,6 +112,8 @@ impl From<&ToolDefinition> for FunctionTool {
             name: tool.name.clone(),
             description: tool.description.clone(),
             parameters: tool.input_schema.clone(),
+            // Disabled: strict mode requires all properties in `required` with nullable types,
+            // but Gemini doesn't support `["type", "null"]` syntax. Cross-provider compatibility wins.
             strict: None,
         }
     }

@@ -57,6 +57,8 @@ impl OpenAICodexClient {
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
             prompt_cache_key: self.config.prompt_cache_key.clone(),
             parallel_tool_calls: Some(true),
+            tool_choice: Some("auto".to_string()),
+            truncation: None, // Default: "disabled" - fail if context exceeded
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await

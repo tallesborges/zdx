@@ -37,7 +37,8 @@ pub fn definition() -> ToolDefinition {
                     "default": 1
                 }
             },
-            "required": ["path", "old", "new"]
+            "required": ["path", "old", "new"],
+            "additionalProperties": false
         }),
     }
 }
