@@ -11,8 +11,8 @@ use crate::config;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
-/// Default context limit for unknown models (128k tokens).
-const DEFAULT_CONTEXT_LIMIT: u64 = 128_000;
+/// Default context limit for unknown models (136k tokens).
+const DEFAULT_CONTEXT_LIMIT: u64 = 136_000;
 
 #[derive(Debug, Deserialize)]
 struct ApiResponse {
