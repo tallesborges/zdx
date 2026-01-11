@@ -2,7 +2,7 @@
 //!
 //! Manages the text area, command history, and history navigation.
 
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::modes::tui::shared::internal::InputMutation;
 
@@ -25,8 +25,8 @@ pub enum HandoffState {
     Generating {
         /// The goal text (preserved for retry on failure).
         goal: String,
-        /// Handle to cancel the background operation (send or drop to cancel).
-        cancel: oneshot::Sender<()>,
+        /// Token to cancel the background operation via `UiEffect::CancelHandoff`.
+        cancel: CancellationToken,
     },
 
     /// Generated prompt is in textarea, ready for user to review and submit.
@@ -55,9 +55,12 @@ impl HandoffState {
     }
 
     /// Cancels any in-progress generation and resets to Idle.
+    ///
+    /// Note: This is called from InputMutation::SetHandoffState. For explicit
+    /// cancellation via hotkey, the reducer should emit `UiEffect::CancelHandoff`.
     pub fn cancel(&mut self) {
         if let HandoffState::Generating { cancel, .. } = std::mem::take(self) {
-            let _ = cancel.send(()); // Signal the spawned task to abort
+            cancel.cancel(); // Signal the spawned task to abort
         }
         *self = HandoffState::Idle;
     }

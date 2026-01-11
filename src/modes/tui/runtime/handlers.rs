@@ -20,11 +20,10 @@
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::time::Duration;
 
-use tokio::sync::{mpsc, oneshot};
+use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::core::thread_log::ThreadEvent;
 use crate::core::{interrupt, thread_log};
@@ -545,7 +544,8 @@ fn oauth_error_response() -> String {
 /// File discovery with cancellation support.
 ///
 /// Returns (started_event, future) - started event contains cancel token,
-/// future does the discovery work.
+/// future does the discovery work. Uses `CancellationToken` for unified
+/// cancellation model.
 pub fn file_discovery(
     root: PathBuf,
 ) -> (
@@ -554,7 +554,7 @@ pub fn file_discovery(
 ) {
     use crate::modes::tui::overlays::discover_files;
 
-    let cancel = Arc::new(AtomicBool::new(false));
+    let cancel = CancellationToken::new();
     let cancel_clone = cancel.clone();
     let started = UiEvent::FileDiscoveryStarted { cancel };
 
@@ -575,7 +575,7 @@ pub fn file_discovery(
 /// Bash execution with cancellation support.
 ///
 /// Returns (started_event, future) - started event contains cancel token,
-/// future runs the command.
+/// future runs the command. Uses `CancellationToken` for unified cancellation.
 pub fn bash_execution(
     id: String,
     command: String,
@@ -587,14 +587,15 @@ pub fn bash_execution(
     use crate::core::events::ToolOutput;
     use crate::tools::{ToolContext, bash};
 
-    let (cancel_tx, mut cancel_rx) = oneshot::channel::<()>();
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
     let cmd = command.clone();
     let result_id = id.clone();
 
     let started = UiEvent::BashExecutionStarted {
         id,
         command,
-        cancel: cancel_tx,
+        cancel,
     };
 
     let future = async move {
@@ -602,7 +603,7 @@ pub fn bash_execution(
         let run_fut = bash::run(&cmd, &ctx, None);
         let result = tokio::select! {
             result = run_fut => result,
-            _ = &mut cancel_rx => ToolOutput::canceled("Interrupted by user"),
+            _ = cancel_clone.cancelled() => ToolOutput::canceled("Interrupted by user"),
         };
         UiEvent::BashExecuted {
             id: result_id,
@@ -611,4 +612,64 @@ pub fn bash_execution(
     };
 
     (started, future)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use super::*;
+
+    /// Tests that CancellationToken can stop a handler loop.
+    ///
+    /// This is a simplified test showing the cancellation pattern used in handlers.
+    /// Real handlers use `tokio::select!` to race cancellation against work.
+    #[tokio::test]
+    async fn test_cancellation_token_stops_handler() {
+        tokio::time::pause();
+        let token = CancellationToken::new();
+        let token_clone = token.clone();
+
+        // Spawn a task that waits for cancellation or sleeps forever
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = token_clone.cancelled() => "cancelled",
+                _ = tokio::time::sleep(Duration::from_secs(60)) => "timeout",
+            }
+        });
+
+        // Cancel immediately
+        token.cancel();
+
+        // Task should return "cancelled" quickly
+        let result = tokio::time::timeout(Duration::from_millis(100), handle);
+        tokio::time::advance(Duration::from_millis(100)).await;
+        let result = result
+            .await
+            .expect("should complete within timeout")
+            .expect("task should not panic");
+
+        assert_eq!(result, "cancelled");
+    }
+
+    /// Tests that multiple clones of the same token all observe cancellation.
+    #[tokio::test]
+    async fn test_cancellation_token_clones_are_connected() {
+        let original = CancellationToken::new();
+        let clone1 = original.clone();
+        let clone2 = original.clone();
+
+        // None should be cancelled yet
+        assert!(!original.is_cancelled());
+        assert!(!clone1.is_cancelled());
+        assert!(!clone2.is_cancelled());
+
+        // Cancel the original
+        original.cancel();
+
+        // All clones should observe cancellation
+        assert!(original.is_cancelled());
+        assert!(clone1.is_cancelled());
+        assert!(clone2.is_cancelled());
+    }
 }

@@ -357,9 +357,33 @@ impl TuiRuntime {
                 handlers::interrupt_agent(&self.state.tui);
             }
             UiEffect::InterruptBash => {
+                // Unified cancellation: call cancel() on the token
                 if let Some(cancel) = self.state.tui.bash_cancel.take() {
-                    let _ = cancel.send(());
+                    cancel.cancel();
                 }
+            }
+
+            // ================================================================
+            // Cancellation Effects
+            // ================================================================
+            // These are emitted by the reducer (e.g., on Esc key) to cancel
+            // in-progress operations. The runtime just calls cancel() on
+            // the stored token.
+            UiEffect::CancelFileDiscovery => {
+                if let Some(cancel) = self.state.tui.file_discovery_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            UiEffect::CancelBash => {
+                if let Some(cancel) = self.state.tui.bash_cancel.take() {
+                    cancel.cancel();
+                }
+            }
+            UiEffect::CancelHandoff => {
+                if let Some(cancel) = self.state.tui.handoff_cancel.take() {
+                    cancel.cancel();
+                }
+                // Note: The reducer should also reset handoff state to Idle
             }
 
             // Auth effects (pure async handlers)
@@ -470,7 +494,7 @@ impl TuiRuntime {
             }
             UiEffect::PreviewThread { thread_id, req } => {
                 self.spawn_effect(
-                    Some(UiEvent::Thread(ThreadUiEvent::PreviewStarted)),
+                    Some(UiEvent::Thread(ThreadUiEvent::PreviewStarted { req })),
                     move || handlers::thread_preview(thread_id, req),
                 );
             }

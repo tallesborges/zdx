@@ -4,13 +4,14 @@
 //!
 //! Uses the spawn_effect_pair pattern: returns (started_event, future) where
 //! the started event contains the cancel token and the future does the work.
+//! Uses `CancellationToken` for unified cancellation model.
 
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::process::Command;
-use tokio::sync::oneshot;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::core::thread_log::{self, ThreadLog};
@@ -65,8 +66,9 @@ fn process_subagent_output(output: std::process::Output) -> Result<String, Strin
 /// Runs the subagent process with timeout and cancellation support.
 ///
 /// Pure async function - returns UiEvent::HandoffResult directly.
+/// Uses `CancellationToken` for unified cancellation.
 async fn run_subagent(
-    mut cancel_rx: oneshot::Receiver<()>,
+    cancel: CancellationToken,
     generation_prompt: String,
     root: PathBuf,
 ) -> UiEvent {
@@ -100,11 +102,9 @@ async fn run_subagent(
         }
     };
 
-    // Cancel fires on explicit send(()) OR when cancel handle is dropped
+    // Use select! to race cancellation against the subagent completion
     let result = tokio::select! {
-        cancelled = &mut cancel_rx => match cancelled {
-            Ok(()) | Err(_) => Err("Handoff cancelled".to_string()),
-        },
+        _ = cancel.cancelled() => Err("Handoff cancelled".to_string()),
         output = tokio::time::timeout(
             Duration::from_secs(HANDOFF_TIMEOUT_SECS),
             child.wait_with_output()
@@ -142,6 +142,7 @@ pub fn execute_handoff_submit(
 ///
 /// Returns (started_event, future) - started event contains cancel token,
 /// future runs the subagent and returns HandoffResult.
+/// Uses `CancellationToken` for unified cancellation.
 pub fn handoff_generation(
     thread_id: &str,
     goal: &str,
@@ -150,12 +151,13 @@ pub fn handoff_generation(
     UiEvent,
     impl std::future::Future<Output = UiEvent> + Send + 'static,
 ) {
-    let (cancel_tx, cancel_rx) = oneshot::channel::<()>();
+    let cancel = CancellationToken::new();
+    let cancel_clone = cancel.clone();
     let goal_string = goal.to_string();
 
     let started = UiEvent::HandoffGenerationStarted {
         goal: goal_string.clone(),
-        cancel: cancel_tx,
+        cancel,
     };
 
     // Load thread content synchronously (it's quick I/O)
@@ -169,7 +171,7 @@ pub fn handoff_generation(
         };
 
         let generation_prompt = build_handoff_prompt(&content, &goal_string);
-        run_subagent(cancel_rx, generation_prompt, root).await
+        run_subagent(cancel_clone, generation_prompt, root).await
     };
 
     (started, future)

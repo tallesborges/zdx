@@ -72,6 +72,7 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
 ### Async & Concurrency
 - **Receivers in State:** Receivers for async workflows live in `AppState`. The runtime polls them and emits `UiEvent`s.
 - **Receiver lifecycle:** `*Started` event → reducer stores receiver → runtime polls → result event → reducer clears receiver.
+- **Cancellation pattern:** `*Started` events carry a `CancellationToken` stored in state; reducer emits `UiEffect::Cancel*`; runtime calls `token.cancel()`; background tasks cooperatively check the token and exit.
 
 ### Performance
 - **Delta Coalescing:** High-frequency events (streaming text, scrolling) are buffered and applied once per frame (`UiEvent::Frame`).

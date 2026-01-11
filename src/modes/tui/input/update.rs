@@ -112,15 +112,19 @@ pub fn handle_main_key(
             (vec![], vec![], None)
         }
         KeyCode::Esc => {
-            if input.handoff.is_active() {
+            if input.handoff.is_generating() {
+                input.handoff = HandoffState::Idle;
+                input.clear();
+                (vec![UiEffect::CancelHandoff], vec![], None)
+            } else if input.handoff.is_active() {
                 // Cancel handoff mode
-                input.handoff.cancel();
+                input.handoff = HandoffState::Idle;
                 input.clear();
                 (vec![], vec![], None)
             } else if agent_state.is_running() {
                 (vec![UiEffect::InterruptAgent], vec![], None)
             } else if bash_running {
-                (vec![UiEffect::InterruptBash], vec![], None)
+                (vec![UiEffect::CancelBash], vec![], None)
             } else {
                 input.clear();
                 (vec![], vec![], None)
