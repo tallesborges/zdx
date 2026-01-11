@@ -102,8 +102,7 @@ pub async fn run_interactive_chat_with_history(
             .state
             .tui
             .transcript
-            .cells
-            .push(HistoryCell::system(message));
+            .push_cell(HistoryCell::system(message));
     }
 
     // Add system message for thread path
@@ -113,8 +112,7 @@ pub async fn run_interactive_chat_with_history(
             .state
             .tui
             .transcript
-            .cells
-            .push(HistoryCell::system(thread_path_msg));
+            .push_cell(HistoryCell::system(thread_path_msg));
     }
 
     // Add system message for loaded AGENTS.md files to transcript
@@ -129,8 +127,7 @@ pub async fn run_interactive_chat_with_history(
             .state
             .tui
             .transcript
-            .cells
-            .push(HistoryCell::system(message));
+            .push_cell(HistoryCell::system(message));
     }
 
     runtime.run()?;

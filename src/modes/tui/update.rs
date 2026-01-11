@@ -191,12 +191,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.thread.thread_log = Some(thread_log);
             app.tui
                 .transcript
-                .cells
-                .push(HistoryCell::system(format!("Thread path: {}", thread_path)));
+                .push_cell(HistoryCell::system(format!("Thread path: {}", thread_path)));
             vec![UiEffect::StartAgentTurn]
         }
         UiEvent::HandoffThreadCreateFailed { error } => {
-            app.tui.transcript.cells.push(HistoryCell::system(format!(
+            app.tui.transcript.push_cell(HistoryCell::system(format!(
                 "Warning: Failed to create thread: {}",
                 error
             )));
@@ -236,7 +235,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             // Create a running tool cell immediately (shows spinner)
             let input = serde_json::json!({ "command": command });
             let cell = HistoryCell::tool_running(&id, "bash", input);
-            app.tui.transcript.cells.push(cell);
+            app.tui.transcript.push_cell(cell);
 
             // Don't add to messages yet - wait for result so we can send
             // a single user message with command + output
@@ -249,13 +248,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.bash_cancel = None;
 
             // Find the existing tool cell and set the result
-            if let Some(cell) =
-                app.tui.transcript.cells.iter_mut().find(
-                    |c| matches!(c, HistoryCell::Tool { tool_use_id, .. } if tool_use_id == &id),
-                )
-            {
-                cell.set_tool_result(result.clone());
-            }
+            app.tui.transcript.set_tool_result_for(&id, result.clone());
 
             // Persist to thread and add to messages for LLM context
             let mut effects = vec![];
@@ -671,7 +664,7 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
         }
         overlays::OverlayRequest::Timeline => {
             let (state, effects, mutations) = overlays::TimelineState::open(
-                &app.tui.transcript.cells,
+                app.tui.transcript.cells(),
                 &app.tui.transcript.scroll,
                 app.tui.transcript.scroll.mode.clone(),
             );

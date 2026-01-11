@@ -57,7 +57,7 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
     // Clear and rebuild the position map
     state.transcript.position_map.clear();
 
-    for cell in &state.transcript.cells {
+    for cell in state.transcript.cells() {
         let styled_lines = cell.display_lines_cached(
             width,
             state.spinner_frame / SPINNER_SPEED_DIVISOR,
@@ -125,7 +125,7 @@ fn render_transcript_lazy(
     // This is the line index in the full transcript
     let mut global_line_idx = visible.lines_before;
 
-    for (cell_idx, cell) in state.transcript.cells[visible.cell_range.clone()]
+    for (cell_idx, cell) in state.transcript.cells()[visible.cell_range.clone()]
         .iter()
         .enumerate()
     {
@@ -199,7 +199,7 @@ pub fn calculate_cell_line_counts(
 
     state
         .transcript
-        .cells
+        .cells()
         .iter()
         .map(|cell| {
             let lines = cell.display_lines_cached(
