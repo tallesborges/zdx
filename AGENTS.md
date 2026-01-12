@@ -24,24 +24,27 @@
 - `zdx-tui/`: full-screen interactive TUI library
   - `zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)
   - `zdx-tui/src/terminal.rs`: terminal setup, restore, panic hooks
-  - `zdx-tui/src/modes/tui/`: full-screen TUI (Elm-like architecture)
-    - `zdx-tui/src/modes/tui/mod.rs`: entry points + module declarations
-    - `zdx-tui/src/modes/tui/app.rs`: AppState + TuiState + AgentState
-    - `zdx-tui/src/modes/tui/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop
-    - `zdx-tui/src/modes/tui/runtime/inbox.rs`: inbox channel types
-    - `zdx-tui/src/modes/tui/runtime/handlers/`: effect handlers (thread ops, agent spawn, auth)
-    - `zdx-tui/src/modes/tui/runtime/handoff.rs`: handoff generation handlers
-    - `zdx-tui/src/modes/tui/runtime/thread_title.rs`: auto-title handlers
-    - `zdx-tui/src/modes/tui/update.rs`: reducer
-    - `zdx-tui/src/modes/tui/render.rs`: pure render functions
-    - `zdx-tui/src/modes/tui/events.rs`: UiEvent + SessionUiEvent
-    - `zdx-tui/src/modes/tui/shared/`: shared leaf types (no feature deps)
-    - `zdx-tui/src/modes/tui/auth/`: auth feature slice
-    - `zdx-tui/src/modes/tui/input/`: input feature slice
-    - `zdx-tui/src/modes/tui/thread/`: thread feature slice
-    - `zdx-tui/src/modes/tui/overlays/`: overlay feature slice
-    - `zdx-tui/src/modes/tui/markdown/`: markdown parsing + wrapping
-    - `zdx-tui/src/modes/tui/transcript/`: transcript feature slice
+  - `zdx-tui/src/`: full-screen TUI (Elm-like architecture)
+    - `zdx-tui/src/state.rs`: AppState + TuiState + AgentState
+    - `zdx-tui/src/events.rs`: UiEvent + SessionUiEvent
+    - `zdx-tui/src/update.rs`: reducer
+    - `zdx-tui/src/render.rs`: pure render functions
+    - `zdx-tui/src/effects.rs`: UiEffect definitions (side-effect descriptions)
+    - `zdx-tui/src/mutations.rs`: StateMutation + cross-slice mutations
+    - `zdx-tui/src/runtime/`: runtime + effect dispatch
+      - `zdx-tui/src/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop
+      - `zdx-tui/src/runtime/inbox.rs`: inbox channel types
+      - `zdx-tui/src/runtime/handlers/`: effect handlers (thread ops, agent spawn, auth)
+      - `zdx-tui/src/runtime/handoff.rs`: handoff generation handlers
+      - `zdx-tui/src/runtime/thread_title.rs`: auto-title handlers
+    - `zdx-tui/src/common/`: shared leaf types (no feature deps)
+    - `zdx-tui/src/features/`: feature slices (state/update/render per slice)
+      - `zdx-tui/src/features/auth/`: auth feature slice
+      - `zdx-tui/src/features/input/`: input feature slice
+      - `zdx-tui/src/features/thread/`: thread feature slice
+      - `zdx-tui/src/features/transcript/`: transcript feature slice
+        - `zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
+    - `zdx-tui/src/overlays/`: overlay feature slice
 - `src/`: zdx binary (CLI/router)
   - `src/main.rs`: binary entrypoint (delegates to `src/cli/`)
   - `src/cli/`: CLI arguments + command dispatch
