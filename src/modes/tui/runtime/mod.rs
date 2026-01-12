@@ -228,6 +228,12 @@ impl TuiRuntime {
             &self.state.overlay,
             Some(Overlay::FilePicker(picker)) if picker.discovery_cancel.is_some()
         );
+
+        let thread_picker_pending = matches!(
+            &self.state.overlay,
+            Some(Overlay::ThreadPicker(picker)) if picker.preview_request.has_active()
+        );
+
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.bash_running.is_some()
             || self.state.tui.transcript.selection.has_pending_clear()
@@ -235,7 +241,8 @@ impl TuiRuntime {
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
             || file_discovery_pending
-            || self.state.tui.thread_ops.is_loading();
+            || self.state.tui.thread_ops.is_loading()
+            || thread_picker_pending;
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
@@ -506,10 +513,7 @@ impl TuiRuntime {
                 }
             }
             UiEffect::PreviewThread { thread_id, req } => {
-                self.spawn_effect(
-                    Some(UiEvent::Thread(ThreadUiEvent::PreviewStarted { req })),
-                    move || handlers::thread_preview(thread_id, req),
-                );
+                self.spawn_effect(None, move || handlers::thread_preview(thread_id, req));
             }
 
             // Handoff effects (returns started event + future for cancel support)

@@ -66,12 +66,6 @@ pub enum ThreadUiEvent {
     /// Thread load failed.
     LoadFailed { error: String },
 
-    /// Thread preview load started (operation in progress).
-    ///
-    /// Includes the request ID for consistency with PreviewLoaded/PreviewFailed.
-    /// The reducer uses this to track which preview request is active.
-    PreviewStarted { req: RequestId },
-
     /// Thread preview loaded (for thread picker navigation).
     PreviewLoaded {
         req: RequestId,
