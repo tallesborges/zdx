@@ -2,10 +2,9 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
-
-use crate::config;
-use crate::core::interrupt;
-use crate::core::thread_log::ThreadPersistenceOptions;
+use zdx_core::config;
+use zdx_core::core::interrupt;
+use zdx_core::core::thread_log::ThreadPersistenceOptions;
 
 mod commands;
 

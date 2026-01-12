@@ -1,8 +1,7 @@
 //! Config command handlers.
 
 use anyhow::{Context, Result};
-
-use crate::config;
+use zdx_core::config;
 
 pub fn path() -> Result<()> {
     println!("{}", config::paths::config_path().display());

@@ -1,42 +1,69 @@
-[package]
-name = "zdx"
-version = "0.1.0"
+[workspace]
+members = [".", "xtask", "zdx-core", "zdx-tui"]
+resolver = "2"
+
+[workspace.package]
 edition = "2024"
-default-run = "zdx"
+version = "0.1.0"
 license = "MIT"
 
-[dependencies]
-anyhow = { workspace = true }
+[workspace.dependencies]
+anyhow = "1.0.100"
+arboard = { version = "3", default-features = false }
 base64 = "0.22"
 bytes = "1.11.0"
 chrono = "0.4.42"
-clap = { workspace = true, features = ["env"] }
+clap = { version = "4.5.53", features = ["derive"] }
+comfy-table = "7"
 crossterm = "0.28"
-ratatui = "0.29"
-tui-textarea = "0.7"
 ctrlc = "3.4"
 dirs = "6.0"
-tempfile = { workspace = true }
-infer = "0.19"
 futures-util = "0.3.31"
+ignore = "0.4"
+infer = "0.19"
 open = "5"
+pulldown-cmark = "0.13"
+ratatui = "0.29"
 reqwest = { version = "0.12.25", features = ["json", "stream"] }
-rpassword = "7"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 sha2 = "0.10"
+tempfile = "3.23.0"
 tokio = { version = "1.48.0", features = ["rt-multi-thread", "time", "process", "macros", "sync"] }
 tokio-util = "0.7"
 toml = "0.8"
-unicode-width = "0.2"
-unicode-segmentation = "1.12"
-arboard = { version = "3", default-features = false }
-pulldown-cmark = "0.13"
-comfy-table = "7"
 toml_edit = "0.22"
+tui-textarea = "0.7"
+unicode-segmentation = "1.12"
+unicode-width = "0.2"
 url = "2.5"
 uuid = { version = "1.19.0", features = ["v4"] }
-ignore = "0.4"
+
+[package]
+name = "zdx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+default-run = "zdx"
+publish = false
+
+[features]
+default = ["tui"]
+tui = ["dep:zdx-tui"]
+
+[dependencies]
+zdx-core = { path = "zdx-core" }
+zdx-tui = { path = "zdx-tui", optional = true }
+
+anyhow.workspace = true
+clap = { workspace = true, features = ["env"] }
+open.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tokio.workspace = true
+toml.workspace = true
+url.workspace = true
+uuid.workspace = true
 
 [lints.clippy]
 absolute_paths = "warn"
@@ -44,15 +71,7 @@ absolute_paths = "warn"
 [dev-dependencies]
 assert_cmd = "2.1.1"
 predicates = "3.1.3"
-serde_json = "1.0.145"
-tempfile = { workspace = true }
-tokio = { version = "1.48.0", features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }
 wiremock = "0.6.5"
-
-[workspace]
-members = ["xtask"]
-
-[workspace.dependencies]
-anyhow = "1.0.100"
-clap = { version = "4.5.53", features = ["derive"] }
-tempfile = "3.23.0"

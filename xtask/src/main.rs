@@ -69,7 +69,7 @@ fn update_default_models() -> Result<()> {
         bail!("models update did not produce {}", models_path.display());
     }
 
-    let dest = root.join("default_models.toml");
+    let dest = root.join("zdx-core").join("default_models.toml");
     fs::copy(&models_path, &dest)
         .with_context(|| format!("copy {} to {}", models_path.display(), dest.display()))?;
 
@@ -102,7 +102,7 @@ fn update_default_config() -> Result<()> {
         bail!("config init did not produce {}", config_path.display());
     }
 
-    let dest = root.join("default_config.toml");
+    let dest = root.join("zdx-core").join("default_config.toml");
     fs::copy(&config_path, &dest)
         .with_context(|| format!("copy {} to {}", config_path.display(), dest.display()))?;
 

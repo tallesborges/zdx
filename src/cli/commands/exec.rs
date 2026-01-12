@@ -3,9 +3,9 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use zdx_core::config::{self, ThinkingLevel};
+use zdx_core::core::thread_log::ThreadPersistenceOptions;
 
-use crate::config::{self, ThinkingLevel};
-use crate::core::thread_log::ThreadPersistenceOptions;
 use crate::modes;
 
 pub async fn run(
