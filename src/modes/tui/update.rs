@@ -312,10 +312,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
         // Thread async result events - delegate to thread feature
         UiEvent::Thread(thread_event) => match thread_event {
-            ThreadUiEvent::ListStarted => {
-                app.tui.thread_ops.list_loading = true;
-                vec![]
-            }
             ThreadUiEvent::ListLoaded {
                 threads,
                 original_cells,
@@ -351,10 +347,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
                 apply_mutations(&mut app.tui, mutations);
                 effects
-            }
-            ThreadUiEvent::LoadStarted => {
-                app.tui.thread_ops.load_loading = true;
-                vec![]
             }
             ThreadUiEvent::Loaded {
                 thread_id,
@@ -454,14 +446,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
-            ThreadUiEvent::CreateStarted => {
-                app.tui.thread_ops.create_loading = true;
-                vec![]
-            }
-            ThreadUiEvent::ForkStarted => {
-                app.tui.thread_ops.fork_loading = true;
-                vec![]
-            }
             ThreadUiEvent::Created {
                 thread_log,
                 context_paths,
@@ -545,10 +529,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
                 apply_mutations(&mut app.tui, mutations);
                 effects
-            }
-            ThreadUiEvent::RenameStarted => {
-                app.tui.thread_ops.rename_loading = true;
-                vec![]
             }
             ThreadUiEvent::Renamed { thread_id, title } => {
                 app.tui.thread_ops.rename_loading = false;
