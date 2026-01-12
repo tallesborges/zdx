@@ -5,6 +5,8 @@ use std::process::Command;
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
 
+mod codebase;
+
 #[derive(Debug, Parser)]
 #[command(name = "xtask", about = "ZDX maintainer tasks")]
 struct Cli {
@@ -20,6 +22,8 @@ enum CommandName {
     UpdateDefaultConfig,
     /// Update both default_config.toml and default_models.toml.
     UpdateDefaults,
+    /// Generate codebase.txt with all source files.
+    Codebase,
 }
 
 impl Default for CommandName {
@@ -36,6 +40,7 @@ fn main() -> Result<()> {
         CommandName::UpdateDefaultModels => update_default_models(),
         CommandName::UpdateDefaultConfig => update_default_config(),
         CommandName::UpdateDefaults => update_defaults(),
+        CommandName::Codebase => codebase::run(),
     }
 }
 
