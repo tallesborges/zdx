@@ -34,7 +34,6 @@ pub fn handle_thread_event(
     let effects = match event {
         ThreadUiEvent::ListStarted
         | ThreadUiEvent::LoadStarted
-        | ThreadUiEvent::PreviewStarted { .. }
         | ThreadUiEvent::CreateStarted
         | ThreadUiEvent::ForkStarted
         | ThreadUiEvent::RenameStarted => vec![],
@@ -178,6 +177,7 @@ fn handle_thread_loaded(
         latest,
     }));
     mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
+    mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
     // Show confirmation message
     let short_id = if thread_id.len() > 8 {
@@ -211,6 +211,7 @@ fn handle_thread_created(
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
+    mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
     // Show thread path
     mutations.push(StateMutation::Transcript(
@@ -258,6 +259,7 @@ fn handle_thread_forked(
         latest,
     }));
     mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
+    mutations.push(StateMutation::Input(InputMutation::ClearQueue));
     mutations.push(StateMutation::Input(InputMutation::Clear));
     if let Some(text) = user_input {
         mutations.push(StateMutation::Input(InputMutation::SetText(text)));

@@ -307,6 +307,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         StateMutation::Thread(ThreadMutation::ClearMessages),
         StateMutation::Thread(ThreadMutation::ResetUsage),
         StateMutation::Input(InputMutation::ClearHistory),
+        StateMutation::Input(InputMutation::ClearQueue),
     ];
 
     if tui.thread.thread_log.is_some() {

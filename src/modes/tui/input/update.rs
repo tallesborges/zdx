@@ -10,7 +10,9 @@ use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{StateMutation, ThreadMutation, TranscriptMutation};
+use crate::modes::tui::shared::internal::{
+    InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
+};
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::ChatMessage;
@@ -232,10 +234,6 @@ fn submit_input(
     thread_id: Option<String>,
     thread_is_empty: bool,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
-    if !matches!(agent_state, AgentState::Idle) || bash_running {
-        return (vec![], vec![], None);
-    }
-
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
         return (
@@ -250,9 +248,48 @@ fn submit_input(
     }
 
     let text = input.get_text();
+    let trimmed = text.trim();
+
+    let agent_running = agent_state.is_running();
+    if agent_running {
+        if trimmed.is_empty() {
+            return (vec![], vec![], None);
+        }
+        if input.handoff.is_active() {
+            return (
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Finish or cancel handoff before queueing.".to_string(),
+                    ),
+                )],
+                None,
+            );
+        }
+        if trimmed.starts_with('/') || trimmed.starts_with('!') {
+            return (
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Commands can't be queued while streaming.".to_string(),
+                    ),
+                )],
+                None,
+            );
+        }
+
+        input.history.push(text.clone());
+        input.reset_navigation();
+        input.enqueue_prompt(text.clone());
+        input.clear();
+        return (vec![], vec![], None);
+    }
+
+    if bash_running {
+        return (vec![], vec![], None);
+    }
 
     // Slash command: /rename <title>
-    let trimmed = text.trim();
     if let Some(rest) = trimmed.strip_prefix("/rename") {
         let title = rest.trim();
         if title.is_empty() {
@@ -265,11 +302,11 @@ fn submit_input(
                 None,
             );
         }
-        if let Some(thread_id) = thread_id {
+        if let Some(thread_id) = thread_id.as_ref() {
             input.clear();
             return (
                 vec![UiEffect::RenameThread {
-                    thread_id,
+                    thread_id: thread_id.clone(),
                     title: Some(title.to_string()),
                 }],
                 vec![],
@@ -365,6 +402,7 @@ fn submit_input(
                 StateMutation::Transcript(TranscriptMutation::Clear),
                 StateMutation::Thread(ThreadMutation::ClearMessages),
                 StateMutation::Thread(ThreadMutation::ResetUsage),
+                StateMutation::Input(InputMutation::ClearQueue),
             ],
             None,
         );
@@ -377,11 +415,21 @@ fn submit_input(
 
     input.history.push(text.clone());
     input.reset_navigation();
+    input.clear();
+    let (effects, mutations) = build_send_effects(&text, thread_id, thread_is_empty);
 
+    (effects, mutations, None)
+}
+
+pub fn build_send_effects(
+    text: &str,
+    thread_id: Option<String>,
+    thread_is_empty: bool,
+) -> (Vec<UiEffect>, Vec<StateMutation>) {
     let mut effects = if thread_id.is_some() {
         vec![
             UiEffect::SaveThread {
-                event: ThreadEvent::user_message(&text),
+                event: ThreadEvent::user_message(text),
             },
             UiEffect::StartAgentTurn,
         ]
@@ -389,20 +437,19 @@ fn submit_input(
         vec![UiEffect::StartAgentTurn]
     };
 
-    input.clear();
     let mutations = vec![
-        StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(&text))),
-        StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(&text))),
+        StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(text))),
+        StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(text))),
     ];
 
     if thread_is_empty && let Some(thread_id) = thread_id {
         effects.push(UiEffect::SuggestThreadTitle {
             thread_id,
-            message: text.clone(),
+            message: text.to_string(),
         });
     }
 
-    (effects, mutations, None)
+    (effects, mutations)
 }
 
 /// Handles the handoff generation result.

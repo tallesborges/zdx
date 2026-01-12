@@ -362,6 +362,12 @@ pub struct TranscriptState {
 
     /// Last click info for double-click detection.
     last_click: Option<ClickInfo>,
+
+    /// User cell ID for the most recently appended prompt awaiting agent start.
+    pending_user_cell_id: Option<super::CellId>,
+
+    /// User cell ID for the currently running agent turn.
+    active_user_cell_id: Option<super::CellId>,
 }
 
 impl Default for TranscriptState {
@@ -376,6 +382,8 @@ impl Default for TranscriptState {
             selection: SelectionState::new(),
             position_map: PositionMap::new(),
             last_click: None,
+            pending_user_cell_id: None,
+            active_user_cell_id: None,
         }
     }
 }
@@ -407,12 +415,29 @@ impl TranscriptState {
         self.cells.clear();
         self.scroll.reset();
         self.wrap_cache.clear();
+        self.pending_user_cell_id = None;
+        self.active_user_cell_id = None;
     }
 
     /// Pushes a cell and invalidates line info.
     pub fn push_cell(&mut self, cell: super::HistoryCell) {
+        if let super::HistoryCell::User { id, .. } = &cell {
+            self.pending_user_cell_id = Some(*id);
+        }
         self.cells.push(cell);
         self.scroll.cell_line_info.clear();
+    }
+
+    /// Activates the pending user cell for the current turn.
+    pub fn activate_pending_user_cell(&mut self) {
+        if let Some(id) = self.pending_user_cell_id.take() {
+            self.active_user_cell_id = Some(id);
+        }
+    }
+
+    /// Returns true if a prompt is pending agent start.
+    pub fn has_pending_user_cell(&self) -> bool {
+        self.pending_user_cell_id.is_some()
     }
 
     /// Invalidates cell line info to force full rendering.
@@ -508,7 +533,18 @@ impl TranscriptState {
         }
 
         // If no streaming/running cells were marked, mark the last user cell
-        if !any_marked
+        if !any_marked && let Some(active_id) = self.active_user_cell_id {
+            if let Some(active_user) = self.cells.iter_mut().find(|c| c.id() == active_id) {
+                active_user.mark_request_interrupted();
+            } else if let Some(last_user) = self
+                .cells
+                .iter_mut()
+                .rev()
+                .find(|c| matches!(c, super::HistoryCell::User { .. }))
+            {
+                last_user.mark_request_interrupted();
+            }
+        } else if !any_marked
             && let Some(last_user) = self
                 .cells
                 .iter_mut()
@@ -518,6 +554,7 @@ impl TranscriptState {
             last_user.mark_request_interrupted();
         }
 
+        self.active_user_cell_id = None;
         self.invalidate_line_info();
     }
 
@@ -535,6 +572,8 @@ impl TranscriptState {
                 self.cells = cells;
                 // Invalidate cell line info so visible_range() falls back to full render
                 self.scroll.cell_line_info.clear();
+                self.pending_user_cell_id = None;
+                self.active_user_cell_id = None;
             }
             TranscriptMutation::ResetScroll => self.scroll.reset(),
             TranscriptMutation::ClearWrapCache => self.wrap_cache.clear(),

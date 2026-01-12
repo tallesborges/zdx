@@ -49,6 +49,7 @@ pub enum InputMutation {
     },
     SetHistory(Vec<String>),
     ClearHistory,
+    ClearQueue,
     SetHandoffState(HandoffState),
 }
 
