@@ -85,9 +85,6 @@ pub struct ThreadOpsState {
     /// Whether thread loading (full switch) is in progress.
     pub load_loading: bool,
 
-    /// Whether thread preview loading is in progress.
-    pub preview_loading: bool,
-
     /// Whether thread creation is in progress.
     pub create_loading: bool,
 
@@ -108,7 +105,6 @@ impl ThreadOpsState {
     pub fn is_loading(&self) -> bool {
         self.list_loading
             || self.load_loading
-            || self.preview_loading
             || self.create_loading
             || self.fork_loading
             || self.rename_loading
