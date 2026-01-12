@@ -12,7 +12,8 @@ use crate::modes::tui::shared::clipboard::Clipboard;
 use crate::modes::tui::shared::commands::{COMMANDS, Command, command_available};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
-    AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
+    AuthMutation, InputMutation, StateMutation, ThreadMutation, ThreadOpsMutation,
+    TranscriptMutation,
 };
 
 #[derive(Debug, Clone)]
@@ -149,7 +150,16 @@ fn execute_command(
             (None, effects, mutations)
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
-        "threads" => (None, vec![UiEffect::OpenThreadPicker], vec![]),
+        "threads" => {
+            if tui.thread_ops.list_loading {
+                return (None, vec![], vec![]);
+            }
+            (
+                None,
+                vec![UiEffect::OpenThreadPicker],
+                vec![StateMutation::ThreadOps(ThreadOpsMutation::List(true))],
+            )
+        }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {
@@ -302,6 +312,10 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         );
     }
 
+    if tui.thread_ops.create_loading {
+        return (vec![], vec![]);
+    }
+
     let mut mutations = vec![
         StateMutation::Transcript(TranscriptMutation::Clear),
         StateMutation::Thread(ThreadMutation::ClearMessages),
@@ -311,6 +325,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     ];
 
     if tui.thread.thread_log.is_some() {
+        mutations.push(StateMutation::ThreadOps(ThreadOpsMutation::Create(true)));
         (vec![UiEffect::CreateNewThread], mutations)
     } else {
         mutations.push(StateMutation::Transcript(

@@ -4,7 +4,7 @@
 
 use crate::core::thread_log::{ThreadLog, Usage};
 use crate::models::ModelPricing;
-use crate::modes::tui::shared::internal::ThreadMutation;
+use crate::modes::tui::shared::internal::{ThreadMutation, ThreadOpsMutation};
 use crate::providers::ChatMessage;
 
 /// Thread state.
@@ -108,6 +108,17 @@ impl ThreadOpsState {
             || self.create_loading
             || self.fork_loading
             || self.rename_loading
+    }
+
+    /// Applies a thread ops mutation.
+    pub fn apply(&mut self, mutation: ThreadOpsMutation) {
+        match mutation {
+            ThreadOpsMutation::List(v) => self.list_loading = v,
+            ThreadOpsMutation::Load(v) => self.load_loading = v,
+            ThreadOpsMutation::Create(v) => self.create_loading = v,
+            ThreadOpsMutation::Fork(v) => self.fork_loading = v,
+            ThreadOpsMutation::Rename(v) => self.rename_loading = v,
+        }
     }
 }
 

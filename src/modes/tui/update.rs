@@ -580,6 +580,7 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Transcript(mutation) => tui.transcript.apply(mutation),
             StateMutation::Input(mutation) => tui.input.apply(mutation),
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
+            StateMutation::ThreadOps(mutation) => tui.thread_ops.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
         }
@@ -767,6 +768,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         app.tui.bash_running.is_some(),
         thread_id,
         thread_is_empty,
+        app.tui.thread_ops.rename_loading,
         &app.tui.config.model,
         key,
     );

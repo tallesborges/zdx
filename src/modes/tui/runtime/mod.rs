@@ -454,10 +454,7 @@ impl TuiRuntime {
                 }
             }
             UiEffect::RenameThread { thread_id, title } => {
-                if !self.state.tui.thread_ops.rename_loading {
-                    self.state.tui.thread_ops.rename_loading = true;
-                    self.spawn_effect(None, move || handlers::thread_rename(thread_id, title));
-                }
+                self.spawn_effect(None, move || handlers::thread_rename(thread_id, title));
             }
             UiEffect::SuggestThreadTitle { thread_id, message } => {
                 let root = self.state.tui.agent_opts.root.clone();
@@ -467,42 +464,27 @@ impl TuiRuntime {
                 });
             }
             UiEffect::CreateNewThread => {
-                // Only spawn if not already loading
-                if !self.state.tui.thread_ops.create_loading {
-                    self.state.tui.thread_ops.create_loading = true;
-                    let config = self.state.tui.config.clone();
-                    let root = self.state.tui.agent_opts.root.clone();
-                    self.spawn_effect(None, move || handlers::thread_create(config, root));
-                }
+                let config = self.state.tui.config.clone();
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_effect(None, move || handlers::thread_create(config, root));
             }
             UiEffect::ForkThread {
                 events,
                 user_input,
                 turn_number,
             } => {
-                if !self.state.tui.thread_ops.fork_loading {
-                    self.state.tui.thread_ops.fork_loading = true;
-                    let root = self.state.tui.agent_opts.root.clone();
-                    self.spawn_effect(None, move || {
-                        handlers::thread_fork(events, user_input, turn_number, root)
-                    });
-                }
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_effect(None, move || {
+                    handlers::thread_fork(events, user_input, turn_number, root)
+                });
             }
             UiEffect::OpenThreadPicker => {
-                // Only spawn if not already loading and no overlay is open
-                if !self.state.tui.thread_ops.list_loading && self.state.overlay.is_none() {
-                    self.state.tui.thread_ops.list_loading = true;
-                    let original_cells = self.state.tui.transcript.cells().to_vec();
-                    self.spawn_effect(None, move || handlers::thread_list_load(original_cells));
-                }
+                let original_cells = self.state.tui.transcript.cells().to_vec();
+                self.spawn_effect(None, move || handlers::thread_list_load(original_cells));
             }
             UiEffect::LoadThread { thread_id } => {
-                // Only spawn if not already loading
-                if !self.state.tui.thread_ops.load_loading {
-                    self.state.tui.thread_ops.load_loading = true;
-                    let root = self.state.tui.agent_opts.root.clone();
-                    self.spawn_effect(None, move || handlers::thread_load(thread_id, root));
-                }
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_effect(None, move || handlers::thread_load(thread_id, root));
             }
             UiEffect::PreviewThread { thread_id, req } => {
                 self.spawn_effect(None, move || handlers::thread_preview(thread_id, req));
