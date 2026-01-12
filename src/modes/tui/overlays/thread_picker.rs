@@ -9,7 +9,7 @@ use crate::core::thread_log::ThreadSummary;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::LatestOnly;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
+use crate::modes::tui::shared::internal::{StateMutation, ThreadOpsMutation, TranscriptMutation};
 use crate::modes::tui::thread::render_thread_picker;
 use crate::modes::tui::transcript::HistoryCell;
 
@@ -125,9 +125,16 @@ impl ThreadPickerState {
                 }
 
                 if let Some(thread) = self.selected_thread() {
-                    OverlayUpdate::close().with_ui_effects(vec![UiEffect::LoadThread {
-                        thread_id: thread.id.clone(),
-                    }])
+                    if tui.thread_ops.load_loading {
+                        return OverlayUpdate::stay();
+                    }
+                    OverlayUpdate::close()
+                        .with_ui_effects(vec![UiEffect::LoadThread {
+                            thread_id: thread.id.clone(),
+                        }])
+                        .with_mutations(vec![StateMutation::ThreadOps(ThreadOpsMutation::Load(
+                            true,
+                        ))])
                 } else {
                     OverlayUpdate::close()
                 }

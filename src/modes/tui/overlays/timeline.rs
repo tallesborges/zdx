@@ -10,7 +10,7 @@ use super::OverlayUpdate;
 use crate::core::thread_log::ThreadEvent;
 use crate::modes::tui::app::TuiState;
 use crate::modes::tui::shared::effects::UiEffect;
-use crate::modes::tui::shared::internal::{StateMutation, TranscriptMutation};
+use crate::modes::tui::shared::internal::{StateMutation, ThreadOpsMutation, TranscriptMutation};
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::{HistoryCell, ScrollMode, ScrollState};
 
@@ -155,8 +155,16 @@ impl TimelineState {
                     )]);
                 }
 
+                if tui.thread_ops.fork_loading {
+                    return OverlayUpdate::stay();
+                }
+
                 match self.fork_effect(tui) {
-                    Some(effect) => OverlayUpdate::close().with_ui_effects(vec![effect]),
+                    Some(effect) => OverlayUpdate::close()
+                        .with_ui_effects(vec![effect])
+                        .with_mutations(vec![StateMutation::ThreadOps(ThreadOpsMutation::Fork(
+                            true,
+                        ))]),
                     None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(
                             "No timeline entry selected.".to_string(),

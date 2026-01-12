@@ -11,7 +11,7 @@ use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
-    InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
+    InputMutation, StateMutation, ThreadMutation, ThreadOpsMutation, TranscriptMutation,
 };
 use crate::modes::tui::shared::sanitize_for_display;
 use crate::modes::tui::transcript::HistoryCell;
@@ -36,6 +36,7 @@ pub fn handle_main_key(
     bash_running: bool,
     thread_id: Option<String>,
     thread_is_empty: bool,
+    rename_loading: bool,
     model_id: &str,
     key: crossterm::event::KeyEvent,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
@@ -107,7 +108,14 @@ pub fn handle_main_key(
             }
         }
         KeyCode::Enter if !shift && !alt => {
-            return submit_input(input, agent_state, bash_running, thread_id, thread_is_empty);
+            return submit_input(
+                input,
+                agent_state,
+                bash_running,
+                thread_id,
+                thread_is_empty,
+                rename_loading,
+            );
         }
         KeyCode::Char('j') if ctrl => {
             input.textarea.insert_newline();
@@ -233,6 +241,7 @@ fn submit_input(
     bash_running: bool,
     thread_id: Option<String>,
     thread_is_empty: bool,
+    rename_loading: bool,
 ) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -302,6 +311,10 @@ fn submit_input(
                 None,
             );
         }
+        if rename_loading {
+            input.clear();
+            return (vec![], vec![], None);
+        }
         if let Some(thread_id) = thread_id.as_ref() {
             input.clear();
             return (
@@ -309,7 +322,7 @@ fn submit_input(
                     thread_id: thread_id.clone(),
                     title: Some(title.to_string()),
                 }],
-                vec![],
+                vec![StateMutation::ThreadOps(ThreadOpsMutation::Rename(true))],
                 None,
             );
         } else {
