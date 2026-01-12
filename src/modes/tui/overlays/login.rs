@@ -178,7 +178,20 @@ impl LoginState {
                         .unwrap_or(ProviderKind::OpenAICodex);
                     let (state, effects) = Self::open_with_provider(provider, None);
                     *self = state;
-                    OverlayUpdate::stay().with_ui_effects(effects)
+                    // Set callback_in_progress when emitting StartLocalAuthCallback
+                    let has_callback = effects
+                        .iter()
+                        .any(|e| matches!(e, UiEffect::StartLocalAuthCallback { .. }));
+                    let mutations = if has_callback {
+                        vec![StateMutation::Auth(AuthMutation::SetCallbackInProgress(
+                            true,
+                        ))]
+                    } else {
+                        vec![]
+                    };
+                    OverlayUpdate::stay()
+                        .with_ui_effects(effects)
+                        .with_mutations(mutations)
                 }
                 _ => OverlayUpdate::stay(),
             },

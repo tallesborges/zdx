@@ -2,8 +2,6 @@
 //!
 //! Handles spawning a subagent to generate handoff prompts from thread context.
 //!
-//! Uses the spawn_effect_pair pattern: returns (started_event, future) where
-//! the started event contains the cancel token and the future does the work.
 //! Uses `CancellationToken` for unified cancellation model.
 
 use std::path::{Path, PathBuf};
@@ -135,42 +133,26 @@ pub fn execute_handoff_submit(
     Ok((thread_log_handle, context_paths))
 }
 
-/// Prepares handoff generation with cancellation support.
+/// Runs handoff generation with cancellation support.
 ///
-/// Returns (started_event, future) - started event contains cancel token,
-/// future runs the subagent and returns HandoffResult.
-/// Uses `CancellationToken` for unified cancellation.
-pub fn handoff_generation(
-    thread_id: &str,
-    goal: &str,
+/// Returns HandoffResult; cancellation is cooperative via token.
+pub async fn handoff_generation(
+    thread_id: String,
+    goal: String,
     handoff_model: String,
-    root: &Path,
-) -> (
-    UiEvent,
-    impl std::future::Future<Output = UiEvent> + Send + 'static,
-) {
-    let cancel = CancellationToken::new();
-    let cancel_clone = cancel.clone();
-    let goal_string = goal.to_string();
-
-    let started = UiEvent::HandoffGenerationStarted {
-        goal: goal_string.clone(),
-        cancel,
-    };
+    root: PathBuf,
+    cancel: Option<CancellationToken>,
+) -> UiEvent {
+    let cancel = cancel.unwrap_or_default();
 
     // Load thread content synchronously (it's quick I/O)
-    let thread_content = load_thread_content(thread_id);
-    let root = root.to_path_buf();
+    let thread_content = load_thread_content(&thread_id);
 
-    let future = async move {
-        let content = match thread_content {
-            Ok(content) => content,
-            Err(e) => return UiEvent::HandoffResult(Err(e)),
-        };
-
-        let generation_prompt = build_handoff_prompt(&content, &goal_string);
-        run_subagent(cancel_clone, handoff_model, generation_prompt, root).await
+    let content = match thread_content {
+        Ok(content) => content,
+        Err(e) => return UiEvent::HandoffResult(Err(e)),
     };
 
-    (started, future)
+    let generation_prompt = build_handoff_prompt(&content, &goal);
+    run_subagent(cancel, handoff_model, generation_prompt, root).await
 }

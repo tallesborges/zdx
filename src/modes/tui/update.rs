@@ -13,6 +13,7 @@ use crate::modes::tui::input::HandoffState;
 use crate::modes::tui::overlays::{self, FilePickerState, Overlay};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{ConfigMutation, StateMutation};
+use crate::modes::tui::shared::{TaskId, TaskKind, TaskMeta};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::modes::tui::{auth, input, render, thread, transcript};
 
@@ -21,7 +22,7 @@ use crate::modes::tui::{auth, input, render, thread, transcript};
 /// Takes the current state and an event, mutates state, and returns effects
 /// for the runtime to execute.
 pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
-    match event {
+    let effects = match event {
         UiEvent::Tick => {
             // Advance spinner animation
             app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
@@ -109,34 +110,34 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::LoginResult { req, result } => {
             if !app.tui.auth.login_request.finish_if_active(req) {
-                return vec![];
-            }
+                vec![]
+            } else {
+                let provider = match &app.overlay {
+                    Some(overlays::Overlay::Login(overlays::LoginState::Exchanging {
+                        provider,
+                    })) => *provider,
+                    Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
+                        provider,
+                        ..
+                    })) => *provider,
+                    _ => crate::providers::provider_for_model(&app.tui.config.model),
+                };
+                let (mutations, overlay_action) =
+                    auth::handle_login_result(&mut app.tui.auth, result, provider);
+                apply_mutations(&mut app.tui, mutations);
 
-            let provider = match &app.overlay {
-                Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
-                    *provider
+                match overlay_action {
+                    auth::LoginOverlayAction::Close => {
+                        app.overlay = None;
+                    }
+                    auth::LoginOverlayAction::Reopen { error } => {
+                        app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
+                            provider, error,
+                        )));
+                    }
                 }
-                Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
-                    provider,
-                    ..
-                })) => *provider,
-                _ => crate::providers::provider_for_model(&app.tui.config.model),
-            };
-            let (mutations, overlay_action) =
-                auth::handle_login_result(&mut app.tui.auth, result, provider);
-            apply_mutations(&mut app.tui, mutations);
-
-            match overlay_action {
-                auth::LoginOverlayAction::Close => {
-                    app.overlay = None;
-                }
-                auth::LoginOverlayAction::Reopen { error } => {
-                    app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
-                        provider, error,
-                    )));
-                }
+                vec![]
             }
-            vec![]
         }
         UiEvent::LoginCallbackResult(code) => {
             // Clear in-progress flag
@@ -199,15 +200,48 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             effects
         }
-        UiEvent::HandoffResult(result) => {
-            app.tui.handoff_cancel = None;
-            let mutations = input::handle_handoff_result(&mut app.tui.input, result);
-            apply_mutations(&mut app.tui, mutations);
+        UiEvent::TaskStarted { kind, started } => {
+            app.tui.tasks.state_mut(kind).on_started(&started);
+            match kind {
+                TaskKind::Handoff => {
+                    if let TaskMeta::Handoff { goal } = &started.meta {
+                        app.tui.input.handoff = HandoffState::Generating { goal: goal.clone() };
+                    }
+                }
+                TaskKind::Bash => {
+                    if let TaskMeta::Bash { id, command } = &started.meta {
+                        app.tui.bash_running = Some((id.clone(), command.clone()));
+
+                        // Create a running tool cell immediately (shows spinner)
+                        let input = serde_json::json!({ "command": command });
+                        let cell = HistoryCell::tool_running(id, "bash", input);
+                        app.tui.transcript.push_cell(cell);
+                    }
+                }
+                TaskKind::FileDiscovery
+                | TaskKind::ThreadList
+                | TaskKind::ThreadLoad
+                | TaskKind::ThreadRename
+                | TaskKind::ThreadPreview
+                | TaskKind::ThreadCreate
+                | TaskKind::ThreadFork => {}
+            }
             vec![]
         }
-        UiEvent::HandoffGenerationStarted { goal, cancel } => {
-            app.tui.handoff_cancel = Some(cancel.clone());
-            app.tui.input.handoff = HandoffState::Generating { goal, cancel };
+        UiEvent::TaskCompleted { kind, completed } => {
+            let ok = {
+                let state = app.tui.tasks.state_mut(kind);
+                state.finish_if_active(completed.id)
+            };
+            if !ok {
+                vec![]
+            } else {
+                update(app, *completed.result)
+            }
+        }
+        UiEvent::HandoffResult(result) => {
+            let mutations = input::handle_handoff_result(&mut app.tui.input, result);
+            apply_mutations(&mut app.tui, mutations);
             vec![]
         }
         UiEvent::HandoffThreadCreated {
@@ -231,18 +265,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             )));
             vec![]
         }
-        UiEvent::FileDiscoveryStarted { cancel } => {
-            app.tui.file_discovery_cancel = Some(cancel.clone());
-            if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
-                picker.discovery_cancel = Some(cancel);
-            }
-            vec![]
-        }
         UiEvent::FilesDiscovered(files) => {
-            app.tui.file_discovery_cancel = None;
-            if let Some(overlays::Overlay::FilePicker(picker)) = &mut app.overlay {
-                picker.discovery_cancel = None;
-            }
             overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
         }
@@ -256,28 +279,10 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
 
         // Direct bash execution events
-        UiEvent::BashExecutionStarted {
-            id,
-            command,
-            cancel,
-        } => {
-            app.tui.bash_running = Some((id.clone(), command.clone()));
-            app.tui.bash_cancel = Some(cancel);
-
-            // Create a running tool cell immediately (shows spinner)
-            let input = serde_json::json!({ "command": command });
-            let cell = HistoryCell::tool_running(&id, "bash", input);
-            app.tui.transcript.push_cell(cell);
-
-            // Don't add to messages yet - wait for result so we can send
-            // a single user message with command + output
-            vec![]
-        }
         UiEvent::BashExecuted { id, result } => {
             // Get command from bash_running before clearing
             let command = app.tui.bash_running.as_ref().map(|(_, cmd)| cmd.clone());
             app.tui.bash_running = None;
-            app.tui.bash_cancel = None;
 
             // Find the existing tool cell and set the result
             app.tui.transcript.set_tool_result_for(&id, result.clone());
@@ -316,7 +321,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 threads,
                 original_cells,
             } => {
-                app.tui.thread_ops.list_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ListLoaded {
                         threads,
@@ -342,7 +346,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::ListFailed { error } => {
-                app.tui.thread_ops.list_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
                 apply_mutations(&mut app.tui, mutations);
@@ -356,7 +359,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 thread_log,
                 usage,
             } => {
-                app.tui.thread_ops.load_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Loaded {
                         thread_id,
@@ -386,7 +388,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::LoadFailed { error } => {
-                app.tui.thread_ops.load_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::LoadFailed { error });
                 apply_mutations(&mut app.tui, mutations);
@@ -397,60 +398,55 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     Some(overlays::Overlay::ThreadPicker(picker)) => {
                         picker.preview_request.finish_if_active(req)
                     }
-                    _ => {
-                        return vec![];
-                    }
+                    _ => false,
                 };
 
                 if !allow {
-                    return vec![];
-                }
+                    vec![]
+                } else {
+                    let (mut effects, mutations, overlay_action) =
+                        thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
+                    apply_mutations(&mut app.tui, mutations);
 
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
-                apply_mutations(&mut app.tui, mutations);
-
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                    if let thread::ThreadOverlayAction::OpenThreadPicker {
                         threads,
                         original_cells,
-                        &app.tui.agent_opts.root,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+                    } = overlay_action
+                        && app.overlay.is_none()
+                    {
+                        let (state, overlay_effects) = overlays::ThreadPickerState::open(
+                            threads,
+                            original_cells,
+                            &app.tui.agent_opts.root,
+                        );
+                        app.overlay = Some(overlays::Overlay::ThreadPicker(state));
+                        effects.extend(overlay_effects);
+                    }
 
-                effects
+                    effects
+                }
             }
             ThreadUiEvent::PreviewFailed { req } => {
                 let allow = match app.overlay.as_mut() {
                     Some(overlays::Overlay::ThreadPicker(picker)) => {
                         picker.preview_request.finish_if_active(req)
                     }
-                    _ => {
-                        return vec![];
-                    }
+                    _ => false,
                 };
 
                 if !allow {
-                    return vec![];
+                    vec![]
+                } else {
+                    let (effects, mutations, _) =
+                        thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
+                    apply_mutations(&mut app.tui, mutations);
+                    effects
                 }
-
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
-                apply_mutations(&mut app.tui, mutations);
-                effects
             }
             ThreadUiEvent::Created {
                 thread_log,
                 context_paths,
             } => {
-                app.tui.thread_ops.create_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Created {
                         thread_log,
@@ -485,7 +481,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 user_input,
                 turn_number,
             } => {
-                app.tui.thread_ops.fork_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ForkedLoaded {
                         thread_id,
@@ -517,21 +512,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::CreateFailed { error } => {
-                app.tui.thread_ops.create_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::CreateFailed { error });
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::ForkFailed { error } => {
-                app.tui.thread_ops.fork_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
             ThreadUiEvent::Renamed { thread_id, title } => {
-                app.tui.thread_ops.rename_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Renamed { thread_id, title });
                 apply_mutations(&mut app.tui, mutations);
@@ -560,14 +552,120 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::RenameFailed { error } => {
-                app.tui.thread_ops.rename_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::RenameFailed { error });
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
         },
+    };
+    taskify_effects(&mut app.tui, effects)
+}
+
+fn ensure_task_id(tui: &mut TuiState, task: Option<TaskId>) -> TaskId {
+    task.unwrap_or_else(|| tui.task_seq.next())
+}
+
+fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> {
+    let mut out = Vec::with_capacity(effects.len());
+    for effect in effects {
+        match effect {
+            UiEffect::RenameThread {
+                task,
+                thread_id,
+                title,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::RenameThread {
+                    task: Some(task),
+                    thread_id,
+                    title,
+                });
+            }
+            UiEffect::StartHandoff { task, goal } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::StartHandoff {
+                    task: Some(task),
+                    goal,
+                });
+            }
+            UiEffect::OpenThreadPicker { task } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::OpenThreadPicker { task: Some(task) });
+            }
+            UiEffect::CreateNewThread { task } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::CreateNewThread { task: Some(task) });
+            }
+            UiEffect::LoadThread { task, thread_id } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::LoadThread {
+                    task: Some(task),
+                    thread_id,
+                });
+            }
+            UiEffect::PreviewThread {
+                task,
+                thread_id,
+                req,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::PreviewThread {
+                    task: Some(task),
+                    thread_id,
+                    req,
+                });
+            }
+            UiEffect::DiscoverFiles { task } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::DiscoverFiles { task: Some(task) });
+            }
+            UiEffect::ExecuteBash { task, command } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::ExecuteBash {
+                    task: Some(task),
+                    command,
+                });
+            }
+            UiEffect::ForkThread {
+                task,
+                events,
+                user_input,
+                turn_number,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::ForkThread {
+                    task: Some(task),
+                    events,
+                    user_input,
+                    turn_number,
+                });
+            }
+            UiEffect::CancelTask { kind, token } => {
+                if let Some(token) = token {
+                    out.push(UiEffect::CancelTask {
+                        kind,
+                        token: Some(token),
+                    });
+                } else {
+                    let token = {
+                        let state = tui.tasks.state_mut(kind);
+                        let token = state.cancel.clone();
+                        state.clear();
+                        token
+                    };
+                    if let Some(token) = token {
+                        out.push(UiEffect::CancelTask {
+                            kind,
+                            token: Some(token),
+                        });
+                    }
+                }
+            }
+            other => out.push(other),
+        }
     }
+    out
 }
 
 // ============================================================================
@@ -580,7 +678,6 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Transcript(mutation) => tui.transcript.apply(mutation),
             StateMutation::Input(mutation) => tui.input.apply(mutation),
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
-            StateMutation::ThreadOps(mutation) => tui.thread_ops.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
         }
@@ -623,11 +720,20 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
         overlays::OverlayTransition::Stay => {}
         overlays::OverlayTransition::Close => {
             if matches!(app.overlay.as_ref(), Some(overlays::Overlay::FilePicker(_))) {
-                effects.push(UiEffect::CancelFileDiscovery);
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::FileDiscovery,
+                    token: None,
+                });
             }
             app.overlay = None;
         }
         overlays::OverlayTransition::Open(request) => {
+            if matches!(app.overlay.as_ref(), Some(overlays::Overlay::FilePicker(_))) {
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::FileDiscovery,
+                    token: None,
+                });
+            }
             effects.extend(open_overlay_request(app, request));
         }
     }
@@ -743,7 +849,10 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         app.tui.input.textarea.input(key);
         if picker.update_from_input(&app.tui.input) {
             app.overlay = None;
-            return vec![UiEffect::CancelFileDiscovery];
+            return vec![UiEffect::CancelTask {
+                kind: TaskKind::FileDiscovery,
+                token: None,
+            }];
         }
         return vec![];
     }
@@ -768,7 +877,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         app.tui.bash_running.is_some(),
         thread_id,
         thread_is_empty,
-        app.tui.thread_ops.rename_loading,
+        app.tui.tasks.thread_rename.is_running(),
         &app.tui.config.model,
         key,
     );

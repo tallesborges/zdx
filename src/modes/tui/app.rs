@@ -13,7 +13,8 @@
 //! │   ├── input: InputState      (user input, command history)
 //! │   ├── transcript: TranscriptState (cells, scroll, layout)
 //! │   ├── thread: ThreadState (messages, usage)
-//! │   ├── thread_ops: ThreadOpsState (async operations)
+//! │   ├── task_seq: TaskSeq (async task id generator)
+//! │   ├── tasks: Tasks (task lifecycle state)
 //! │   ├── auth: AuthState        (authentication status)
 //! │   └── agent_state: AgentState (execution state)
 //! └── overlay: Option<Overlay>   (modal overlays)
@@ -32,7 +33,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::core::agent::AgentOptions;
@@ -42,7 +42,8 @@ use crate::core::thread_log::ThreadLog;
 use crate::modes::tui::auth::AuthState;
 use crate::modes::tui::input::InputState;
 use crate::modes::tui::overlays::Overlay;
-use crate::modes::tui::thread::{ThreadOpsState, ThreadState};
+use crate::modes::tui::shared::{TaskSeq, Tasks};
+use crate::modes::tui::thread::ThreadState;
 use crate::modes::tui::transcript::{CellId, HistoryCell, TranscriptState};
 use crate::providers::{ChatContentBlock, ChatMessage};
 
@@ -141,8 +142,10 @@ pub struct TuiState {
     pub transcript: TranscriptState,
     /// Thread and thread state (thread log, messages, usage).
     pub thread: ThreadState,
-    /// Thread async operations state (loading, creating, previewing).
-    pub thread_ops: ThreadOpsState,
+    /// Task id sequence for async operations.
+    pub task_seq: TaskSeq,
+    /// Task lifecycle state for async operations.
+    pub tasks: Tasks,
     /// Authentication state (auth type, login flow).
     pub auth: AuthState,
     /// Agent configuration.
@@ -157,21 +160,6 @@ pub struct TuiState {
     pub spinner_frame: usize,
     /// Currently running bash command info (id, command) - results come via inbox.
     pub bash_running: Option<(String, String)>,
-    /// Cancel token for direct bash command execution.
-    ///
-    /// Stored here when `BashExecutionStarted` arrives. Cancelled via
-    /// `UiEffect::CancelBash` or `UiEffect::InterruptBash`.
-    pub bash_cancel: Option<CancellationToken>,
-    /// Cancel token for file discovery in the file picker.
-    ///
-    /// Stored when `FileDiscoveryStarted` arrives. Cancelled via
-    /// `UiEffect::CancelFileDiscovery`.
-    pub file_discovery_cancel: Option<CancellationToken>,
-    /// Cancel token for handoff generation.
-    ///
-    /// Stored when `HandoffGenerationStarted` arrives. Cancelled via
-    /// `UiEffect::CancelHandoff`.
-    pub handoff_cancel: Option<CancellationToken>,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
@@ -228,7 +216,8 @@ impl TuiState {
             input,
             transcript,
             thread,
-            thread_ops: ThreadOpsState::new(),
+            task_seq: TaskSeq::default(),
+            tasks: Tasks::default(),
             auth,
             config,
             agent_opts,
@@ -236,9 +225,6 @@ impl TuiState {
             agent_state: AgentState::Idle,
             spinner_frame: 0,
             bash_running: None,
-            bash_cancel: None,
-            file_discovery_cancel: None,
-            handoff_cancel: None,
             git_branch,
             display_path,
         }

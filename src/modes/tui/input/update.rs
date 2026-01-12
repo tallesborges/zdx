@@ -11,9 +11,9 @@ use crate::modes::tui::app::AgentState;
 use crate::modes::tui::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::modes::tui::shared::effects::UiEffect;
 use crate::modes::tui::shared::internal::{
-    InputMutation, StateMutation, ThreadMutation, ThreadOpsMutation, TranscriptMutation,
+    InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
-use crate::modes::tui::shared::sanitize_for_display;
+use crate::modes::tui::shared::{TaskKind, sanitize_for_display};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::ChatMessage;
 
@@ -30,6 +30,7 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 }
 
 /// Handles main key input when no overlay is active.
+#[allow(clippy::too_many_arguments)]
 pub fn handle_main_key(
     input: &mut InputState,
     agent_state: &AgentState,
@@ -125,7 +126,14 @@ pub fn handle_main_key(
             if input.handoff.is_generating() {
                 input.handoff = HandoffState::Idle;
                 input.clear();
-                (vec![UiEffect::CancelHandoff], vec![], None)
+                (
+                    vec![UiEffect::CancelTask {
+                        kind: TaskKind::Handoff,
+                        token: None,
+                    }],
+                    vec![],
+                    None,
+                )
             } else if input.handoff.is_active() {
                 // Cancel handoff mode
                 input.handoff = HandoffState::Idle;
@@ -134,7 +142,14 @@ pub fn handle_main_key(
             } else if agent_state.is_running() {
                 (vec![UiEffect::InterruptAgent], vec![], None)
             } else if bash_running {
-                (vec![UiEffect::CancelBash], vec![], None)
+                (
+                    vec![UiEffect::CancelTask {
+                        kind: TaskKind::Bash,
+                        token: None,
+                    }],
+                    vec![],
+                    None,
+                )
             } else {
                 input.clear();
                 (vec![], vec![], None)
@@ -319,10 +334,11 @@ fn submit_input(
             input.clear();
             return (
                 vec![UiEffect::RenameThread {
+                    task: None,
                     thread_id: thread_id.clone(),
                     title: Some(title.to_string()),
                 }],
-                vec![StateMutation::ThreadOps(ThreadOpsMutation::Rename(true))],
+                vec![],
                 None,
             );
         } else {
@@ -359,6 +375,7 @@ fn submit_input(
         input.clear();
         return (
             vec![UiEffect::ExecuteBash {
+                task: None,
                 command: command.to_string(),
             }],
             vec![],
@@ -384,7 +401,10 @@ fn submit_input(
         input.clear();
 
         return (
-            vec![UiEffect::StartHandoff { goal: text.clone() }],
+            vec![UiEffect::StartHandoff {
+                task: None,
+                goal: text.clone(),
+            }],
             vec![],
             None,
         );
@@ -471,7 +491,7 @@ pub fn handle_handoff_result(
     result: Result<String, String>,
 ) -> Vec<StateMutation> {
     // Extract goal from Generating state before transitioning
-    let goal = if let HandoffState::Generating { goal, .. } = &input.handoff {
+    let goal = if let HandoffState::Generating { goal } = &input.handoff {
         Some(goal.clone())
     } else {
         None

@@ -4,7 +4,7 @@
 
 use crate::core::thread_log::{ThreadLog, Usage};
 use crate::models::ModelPricing;
-use crate::modes::tui::shared::internal::{ThreadMutation, ThreadOpsMutation};
+use crate::modes::tui::shared::internal::ThreadMutation;
 use crate::providers::ChatMessage;
 
 /// Thread state.
@@ -64,60 +64,6 @@ impl ThreadState {
                 cache_read,
                 cache_write,
             } => self.usage.add(input, output, cache_read, cache_write),
-        }
-    }
-}
-
-// ============================================================================
-// Thread Operations State (async workflow tracking)
-// ============================================================================
-
-/// Tracks async thread operations (loading, creating, previewing).
-///
-/// With the inbox pattern, this uses simple boolean flags instead of receivers.
-/// Operations send events directly to the inbox, and these flags indicate
-/// whether an operation is in progress.
-#[derive(Default)]
-pub struct ThreadOpsState {
-    /// Whether thread list loading is in progress.
-    pub list_loading: bool,
-
-    /// Whether thread loading (full switch) is in progress.
-    pub load_loading: bool,
-
-    /// Whether thread creation is in progress.
-    pub create_loading: bool,
-
-    /// Whether thread fork is in progress.
-    pub fork_loading: bool,
-
-    /// Whether thread rename is in progress.
-    pub rename_loading: bool,
-}
-
-impl ThreadOpsState {
-    /// Creates a new empty ThreadOpsState.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Returns true if any async operation is in progress.
-    pub fn is_loading(&self) -> bool {
-        self.list_loading
-            || self.load_loading
-            || self.create_loading
-            || self.fork_loading
-            || self.rename_loading
-    }
-
-    /// Applies a thread ops mutation.
-    pub fn apply(&mut self, mutation: ThreadOpsMutation) {
-        match mutation {
-            ThreadOpsMutation::List(v) => self.list_loading = v,
-            ThreadOpsMutation::Load(v) => self.load_loading = v,
-            ThreadOpsMutation::Create(v) => self.create_loading = v,
-            ThreadOpsMutation::Fork(v) => self.fork_loading = v,
-            ThreadOpsMutation::Rename(v) => self.rename_loading = v,
         }
     }
 }

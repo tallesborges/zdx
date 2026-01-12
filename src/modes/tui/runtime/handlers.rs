@@ -543,29 +543,16 @@ fn oauth_error_response() -> String {
 
 /// File discovery with cancellation support.
 ///
-/// Returns (started_event, future) - started event contains cancel token,
-/// future does the discovery work. Uses `CancellationToken` for unified
-/// cancellation model.
-pub fn file_discovery(
-    root: PathBuf,
-) -> (
-    UiEvent,
-    impl std::future::Future<Output = UiEvent> + Send + 'static,
-) {
+/// Returns a result event directly; cancellation is cooperative via token.
+pub async fn file_discovery(root: PathBuf, cancel: Option<CancellationToken>) -> UiEvent {
     use crate::modes::tui::overlays::discover_files;
 
-    let cancel = CancellationToken::new();
+    let cancel = cancel.unwrap_or_default();
     let cancel_clone = cancel.clone();
-    let started = UiEvent::FileDiscoveryStarted { cancel };
-
-    let future = async move {
-        let files = tokio::task::spawn_blocking(move || discover_files(&root, &cancel_clone))
-            .await
-            .unwrap_or_default();
-        UiEvent::FilesDiscovered(files)
-    };
-
-    (started, future)
+    let files = tokio::task::spawn_blocking(move || discover_files(&root, &cancel_clone))
+        .await
+        .unwrap_or_default();
+    UiEvent::FilesDiscovered(files)
 }
 
 // ============================================================================
@@ -574,44 +561,34 @@ pub fn file_discovery(
 
 /// Bash execution with cancellation support.
 ///
-/// Returns (started_event, future) - started event contains cancel token,
-/// future runs the command. Uses `CancellationToken` for unified cancellation.
-pub fn bash_execution(
+/// Returns a result event directly; cancellation is cooperative via token.
+pub async fn bash_execution(
     id: String,
     command: String,
     root: PathBuf,
-) -> (
-    UiEvent,
-    impl std::future::Future<Output = UiEvent> + Send + 'static,
-) {
+    cancel: Option<CancellationToken>,
+) -> UiEvent {
     use crate::core::events::ToolOutput;
     use crate::tools::{ToolContext, bash};
 
-    let cancel = CancellationToken::new();
-    let cancel_clone = cancel.clone();
     let cmd = command.clone();
     let result_id = id.clone();
 
-    let started = UiEvent::BashExecutionStarted {
-        id,
-        command,
-        cancel,
-    };
-
-    let future = async move {
-        let ctx = ToolContext::with_timeout(root, None);
-        let run_fut = bash::run(&cmd, &ctx, None);
-        let result = tokio::select! {
+    let ctx = ToolContext::with_timeout(root, None);
+    let run_fut = bash::run(&cmd, &ctx, None);
+    let result = if let Some(cancel) = cancel {
+        let cancel_clone = cancel.clone();
+        tokio::select! {
             result = run_fut => result,
             _ = cancel_clone.cancelled() => ToolOutput::canceled("Interrupted by user"),
-        };
-        UiEvent::BashExecuted {
-            id: result_id,
-            result,
         }
+    } else {
+        run_fut.await
     };
-
-    (started, future)
+    UiEvent::BashExecuted {
+        id: result_id,
+        result,
+    }
 }
 
 #[cfg(test)]

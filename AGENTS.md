@@ -54,6 +54,7 @@
       - `src/modes/tui/shared/clipboard.rs`: clipboard I/O (OSC 52 + arboard fallback)
       - `src/modes/tui/shared/request_id.rs`: request id + latest-only helper for async result gating
       - `src/modes/tui/shared/scrollbar.rs`: custom scrollbar widget with stable thumb size
+      - `src/modes/tui/shared/task.rs`: task lifecycle types (TaskId, TaskState, TaskStarted/Completed)
       - `src/modes/tui/shared/text.rs`: text utilities (tab expansion, display sanitization)
     - `src/modes/tui/auth/`: auth feature slice (authentication state, login handling)
       - `src/modes/tui/auth/mod.rs`: module exports
@@ -67,7 +68,7 @@
       - `src/modes/tui/input/render.rs`: input area rendering (normal + handoff modes)
     - `src/modes/tui/thread/`: thread feature slice (thread state, thread operations)
       - `src/modes/tui/thread/mod.rs`: module exports
-      - `src/modes/tui/thread/state.rs`: ThreadState, ThreadOpsState, ThreadUsage
+      - `src/modes/tui/thread/state.rs`: ThreadState, ThreadUsage
       - `src/modes/tui/thread/update.rs`: thread event handlers (loading, switching, creating, renaming)
       - `src/modes/tui/thread/render.rs`: thread picker overlay rendering
     - `src/modes/tui/overlays/`: overlay feature slice (modal UI components)
