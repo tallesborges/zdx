@@ -8,13 +8,15 @@
 //!
 //! ## Cancellation Effects
 //!
-//! Cancellation is initiated from the reducer via `UiEffect::Cancel*` variants.
-//! The runtime executes these by calling `token.cancel()` on the stored token.
+//! Cancellation is initiated from the reducer via `UiEffect::CancelTask`.
+//! The runtime executes these by calling `token.cancel()` on the provided token.
 //! This preserves the architecture: reducer decides when to cancel, runtime executes.
+
+use tokio_util::sync::CancellationToken;
 
 use crate::config::ThinkingLevel;
 use crate::core::thread_log::ThreadEvent;
-use crate::modes::tui::shared::RequestId;
+use crate::modes::tui::shared::{RequestId, TaskId, TaskKind};
 use crate::providers::ProviderKind;
 
 /// Effects returned by the reducer for the runtime to execute.
@@ -59,6 +61,7 @@ pub enum UiEffect {
 
     /// Rename the current thread.
     RenameThread {
+        task: Option<TaskId>,
         thread_id: String,
         title: Option<String>,
     },
@@ -73,7 +76,7 @@ pub enum UiEffect {
     PersistThinking { level: ThinkingLevel },
 
     /// Create a new thread (for /new command).
-    CreateNewThread,
+    CreateNewThread { task: Option<TaskId> },
 
     /// Open config file in default system editor/app.
     OpenConfig,
@@ -82,23 +85,30 @@ pub enum UiEffect {
     OpenModelsConfig,
 
     /// Start handoff generation with a goal.
-    StartHandoff { goal: String },
+    StartHandoff { task: Option<TaskId>, goal: String },
 
     /// Submit handoff prompt: create new thread and send prompt as first message.
     HandoffSubmit { prompt: String },
 
     /// Open the thread picker overlay (loads thread list via I/O).
-    OpenThreadPicker,
+    OpenThreadPicker { task: Option<TaskId> },
 
     /// Load a thread by ID (switch to that thread).
-    LoadThread { thread_id: String },
+    LoadThread {
+        task: Option<TaskId>,
+        thread_id: String,
+    },
 
     /// Preview a thread (show transcript without full switch).
     /// Used during thread picker navigation.
-    PreviewThread { thread_id: String, req: RequestId },
+    PreviewThread {
+        task: Option<TaskId>,
+        thread_id: String,
+        req: RequestId,
+    },
 
     /// Discover project files for the file picker.
-    DiscoverFiles,
+    DiscoverFiles { task: Option<TaskId> },
 
     /// Copy text to clipboard.
     CopyToClipboard {
@@ -108,13 +118,17 @@ pub enum UiEffect {
 
     /// Create a new thread from a truncated set of events.
     ForkThread {
+        task: Option<TaskId>,
         events: Vec<ThreadEvent>,
         user_input: Option<String>,
         turn_number: usize,
     },
 
     /// Execute a bash command directly (user `!` shortcut).
-    ExecuteBash { command: String },
+    ExecuteBash {
+        task: Option<TaskId>,
+        command: String,
+    },
 
     // ========================================================================
     // Cancellation Effects
@@ -122,12 +136,9 @@ pub enum UiEffect {
     // These effects trigger cancellation of in-progress async operations.
     // The reducer emits these when user presses Esc or otherwise cancels.
     // The runtime executes by calling `token.cancel()` on the stored token.
-    /// Cancel in-progress file discovery.
-    CancelFileDiscovery,
-
-    /// Cancel in-progress bash command execution.
-    CancelBash,
-
-    /// Cancel in-progress handoff generation.
-    CancelHandoff,
+    /// Cancel an in-progress task.
+    CancelTask {
+        kind: TaskKind,
+        token: Option<CancellationToken>,
+    },
 }

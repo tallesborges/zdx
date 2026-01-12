@@ -30,6 +30,7 @@ use handlers::{UiEventReceiver, UiEventSender};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 
 use crate::config::Config;
 use crate::core::interrupt;
@@ -38,6 +39,7 @@ use crate::modes::tui::app::{AgentState, AppState};
 use crate::modes::tui::events::UiEvent;
 use crate::modes::tui::overlays::Overlay;
 use crate::modes::tui::shared::effects::UiEffect;
+use crate::modes::tui::shared::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskStarted};
 use crate::modes::tui::{render, terminal, update};
 use crate::providers::ChatMessage;
 
@@ -224,10 +226,7 @@ impl TuiRuntime {
         // - Selection clear is pending (visual feedback timer)
         // - Any async operations are in progress
         // Otherwise use slow polling to save CPU.
-        let file_discovery_pending = matches!(
-            &self.state.overlay,
-            Some(Overlay::FilePicker(picker)) if picker.discovery_cancel.is_some()
-        );
+        let file_discovery_pending = self.state.tui.tasks.file_discovery.is_running();
 
         let thread_picker_pending = matches!(
             &self.state.overlay,
@@ -241,7 +240,7 @@ impl TuiRuntime {
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
             || file_discovery_pending
-            || self.state.tui.thread_ops.is_loading()
+            || self.state.tui.tasks.is_any_running()
             || thread_picker_pending;
 
         let poll_duration = if needs_fast_poll {
@@ -326,25 +325,34 @@ impl TuiRuntime {
         });
     }
 
-    /// Spawns an effect that returns both a started event and a future.
-    ///
-    /// Used for handlers with cancel tokens where the started event contains
-    /// shared state (the cancel token) that the future also needs.
-    fn spawn_effect_pair<Fut>(&self, started: UiEvent, fut: Fut)
+    /// Spawns an async task with a uniform TaskStarted/TaskCompleted lifecycle.
+    fn spawn_task<F, Fut>(&self, kind: TaskKind, id: TaskId, meta: TaskMeta, cancelable: bool, f: F)
     where
+        F: FnOnce(Option<CancellationToken>) -> Fut + Send + 'static,
         Fut: Future<Output = UiEvent> + Send + 'static,
     {
         let tx = self.inbox_tx.clone();
-        let _ = tx.send(started);
+        let cancel = cancelable.then(CancellationToken::new);
+        let started = TaskStarted {
+            id,
+            cancel: cancel.clone(),
+            meta,
+        };
+        let _ = tx.send(UiEvent::TaskStarted { kind, started });
         tokio::spawn(async move {
-            let _ = tx.send(fut.await);
+            let inner = f(cancel).await;
+            let completed = TaskCompleted {
+                id,
+                result: Box::new(inner),
+            };
+            let _ = tx.send(UiEvent::TaskCompleted { kind, completed });
         });
     }
 
     /// Executes a single effect by dispatching to the appropriate handler.
     ///
     /// Uses `spawn_effect` for pure async handlers (thread ops, auth) and
-    /// `spawn_effect_pair` for handlers with cancel tokens (file discovery, bash).
+    /// `spawn_task` for async task lifecycles.
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
             // Simple effects (inline)
@@ -365,7 +373,7 @@ impl TuiRuntime {
             }
             UiEffect::InterruptBash => {
                 // Unified cancellation: call cancel() on the token
-                if let Some(cancel) = self.state.tui.bash_cancel.take() {
+                if let Some(cancel) = self.state.tui.tasks.bash.cancel.clone() {
                     cancel.cancel();
                 }
             }
@@ -375,22 +383,11 @@ impl TuiRuntime {
             // ================================================================
             // These are emitted by the reducer (e.g., on Esc key) to cancel
             // in-progress operations. The runtime just calls cancel() on
-            // the stored token.
-            UiEffect::CancelFileDiscovery => {
-                if let Some(cancel) = self.state.tui.file_discovery_cancel.take() {
+            // the provided token.
+            UiEffect::CancelTask { token, .. } => {
+                if let Some(cancel) = token {
                     cancel.cancel();
                 }
-            }
-            UiEffect::CancelBash => {
-                if let Some(cancel) = self.state.tui.bash_cancel.take() {
-                    cancel.cancel();
-                }
-            }
-            UiEffect::CancelHandoff => {
-                if let Some(cancel) = self.state.tui.handoff_cancel.take() {
-                    cancel.cancel();
-                }
-                // Note: The reducer should also reset handoff state to Idle
             }
 
             // Auth effects (pure async handlers)
@@ -410,7 +407,7 @@ impl TuiRuntime {
                 state,
                 port,
             } => {
-                self.state.tui.auth.callback_in_progress = true;
+                // Note: callback_in_progress is set by reducer via mutation when emitting this effect
                 self.spawn_effect(None, move || {
                     handlers::local_auth_callback(provider, state, port)
                 });
@@ -453,8 +450,21 @@ impl TuiRuntime {
                     // Errors are silently ignored for thread persistence
                 }
             }
-            UiEffect::RenameThread { thread_id, title } => {
-                self.spawn_effect(None, move || handlers::thread_rename(thread_id, title));
+            UiEffect::RenameThread {
+                task,
+                thread_id,
+                title,
+            } => {
+                let Some(task) = task else {
+                    return;
+                };
+                self.spawn_task(
+                    TaskKind::ThreadRename,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_rename(thread_id, title),
+                );
             }
             UiEffect::SuggestThreadTitle { thread_id, message } => {
                 let root = self.state.tui.agent_opts.root.clone();
@@ -463,46 +473,94 @@ impl TuiRuntime {
                     thread_title::suggest_thread_title(thread_id, message, title_model, root)
                 });
             }
-            UiEffect::CreateNewThread => {
+            UiEffect::CreateNewThread { task } => {
+                let Some(task) = task else {
+                    return;
+                };
                 let config = self.state.tui.config.clone();
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_effect(None, move || handlers::thread_create(config, root));
+                self.spawn_task(
+                    TaskKind::ThreadCreate,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_create(config, root),
+                );
             }
             UiEffect::ForkThread {
+                task,
                 events,
                 user_input,
                 turn_number,
             } => {
+                let Some(task) = task else {
+                    return;
+                };
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_effect(None, move || {
-                    handlers::thread_fork(events, user_input, turn_number, root)
-                });
+                self.spawn_task(
+                    TaskKind::ThreadFork,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_fork(events, user_input, turn_number, root),
+                );
             }
-            UiEffect::OpenThreadPicker => {
+            UiEffect::OpenThreadPicker { task } => {
+                let Some(task) = task else {
+                    return;
+                };
                 let original_cells = self.state.tui.transcript.cells().to_vec();
-                self.spawn_effect(None, move || handlers::thread_list_load(original_cells));
+                self.spawn_task(
+                    TaskKind::ThreadList,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_list_load(original_cells),
+                );
             }
-            UiEffect::LoadThread { thread_id } => {
+            UiEffect::LoadThread { task, thread_id } => {
+                let Some(task) = task else {
+                    return;
+                };
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_effect(None, move || handlers::thread_load(thread_id, root));
+                self.spawn_task(
+                    TaskKind::ThreadLoad,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_load(thread_id, root),
+                );
             }
-            UiEffect::PreviewThread { thread_id, req } => {
-                self.spawn_effect(None, move || handlers::thread_preview(thread_id, req));
+            UiEffect::PreviewThread {
+                task,
+                thread_id,
+                req,
+            } => {
+                let Some(task) = task else {
+                    return;
+                };
+                self.spawn_task(
+                    TaskKind::ThreadPreview,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::thread_preview(thread_id, req),
+                );
             }
 
-            // Handoff effects (returns started event + future for cancel support)
-            UiEffect::StartHandoff { goal } => {
+            // Handoff effects
+            UiEffect::StartHandoff { task, goal } => {
+                let Some(task) = task else {
+                    return;
+                };
                 if let Some(ref thread_log) = self.state.tui.thread.thread_log {
                     let thread_id = thread_log.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let handoff_model = self.state.tui.config.handoff_model.clone();
-                    let (started, fut) = handoff::handoff_generation(
-                        &thread_id,
-                        &goal,
-                        handoff_model,
-                        root.as_path(),
-                    );
-                    self.spawn_effect_pair(started, fut);
+                    let meta = TaskMeta::Handoff { goal: goal.clone() };
+                    self.spawn_task(TaskKind::Handoff, task, meta, true, move |cancel| {
+                        handoff::handoff_generation(thread_id, goal, handoff_model, root, cancel)
+                    });
                 } else {
                     self.dispatch_event(UiEvent::HandoffResult(Err(
                         "Handoff requires an active thread.".to_string(),
@@ -526,11 +584,19 @@ impl TuiRuntime {
                 }
             }
 
-            // File picker effects (returns started event + future for cancel support)
-            UiEffect::DiscoverFiles => {
+            // File picker effects
+            UiEffect::DiscoverFiles { task } => {
+                let Some(task) = task else {
+                    return;
+                };
                 let root = self.state.tui.agent_opts.root.clone();
-                let (started, fut) = handlers::file_discovery(root);
-                self.spawn_effect_pair(started, fut);
+                self.spawn_task(
+                    TaskKind::FileDiscovery,
+                    task,
+                    TaskMeta::None,
+                    true,
+                    move |cancel| handlers::file_discovery(root, cancel),
+                );
             }
 
             // Clipboard effects
@@ -541,14 +607,22 @@ impl TuiRuntime {
                 }
             }
 
-            // Direct bash execution effects (returns started event + future for cancel support)
-            UiEffect::ExecuteBash { command } => {
+            // Direct bash execution effects
+            UiEffect::ExecuteBash { task, command } => {
+                let Some(task) = task else {
+                    return;
+                };
                 // Only spawn if not already running a bash command
                 if self.state.tui.bash_running.is_none() {
                     let id = format!("user-bash-{}", chrono::Utc::now().timestamp_millis());
                     let root = self.state.tui.agent_opts.root.clone();
-                    let (started, fut) = handlers::bash_execution(id, command, root);
-                    self.spawn_effect_pair(started, fut);
+                    let meta = TaskMeta::Bash {
+                        id: id.clone(),
+                        command: command.clone(),
+                    };
+                    self.spawn_task(TaskKind::Bash, task, meta, true, move |cancel| {
+                        handlers::bash_execution(id, command, root, cancel)
+                    });
                 }
             }
         }

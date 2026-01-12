@@ -13,6 +13,17 @@
 //! - Preview is low-cost I/O, wasted work is acceptable
 //! - Request-id gating is purely synchronous state checks
 //! - No need to coordinate async cancellation
+//!
+//! ## Global Counter
+//!
+//! Request IDs use a global atomic counter to ensure uniqueness across overlay
+//! lifetimes. This prevents stale results from being accepted when an overlay
+//! is closed and reopened while an async operation is still in flight.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+
+/// Global counter for generating unique request IDs across all overlay lifetimes.
+static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(0);
 
 /// Opaque request id for matching async results.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -21,15 +32,15 @@ pub struct RequestId(pub(crate) u64);
 /// Tracks the latest active request and ignores stale results.
 #[derive(Debug, Default)]
 pub struct LatestOnly {
-    next: u64,
     active: Option<RequestId>,
 }
 
 impl LatestOnly {
     /// Start a new request and mark it as active.
+    ///
+    /// Uses a global atomic counter to ensure IDs are unique across overlay lifetimes.
     pub fn begin(&mut self) -> RequestId {
-        let id = RequestId(self.next);
-        self.next += 1;
+        let id = RequestId(NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
         self.active = Some(id);
         id
     }

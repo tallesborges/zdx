@@ -15,7 +15,6 @@ pub enum StateMutation {
     Transcript(TranscriptMutation),
     Input(InputMutation),
     Thread(ThreadMutation),
-    ThreadOps(ThreadOpsMutation),
     Auth(AuthMutation),
     Config(ConfigMutation),
 }
@@ -88,14 +87,4 @@ pub enum AuthMutation {
 pub enum ConfigMutation {
     SetModel(String),
     SetThinkingLevel(ThinkingLevel),
-}
-
-/// Thread operations mutations (loading flags).
-#[derive(Debug)]
-pub enum ThreadOpsMutation {
-    List(bool),
-    Load(bool),
-    Create(bool),
-    Fork(bool),
-    Rename(bool),
 }

@@ -8,6 +8,11 @@ The interactive mode (`src/modes/tui/`) strictly follows The Elm Architecture (M
 
 **Core Principle:** All state lives in one place (`AppState`). All mutations happen via the reducer (`update`). All side effects are explicit descriptions (`UiEffect`) executed by the runtime.
 
+## Design Principles (Guidance)
+
+- **Decision simplicity (prefer):** Favor designs where the answer to a UI question is obvious and derived from one clear place, reducing ambiguity and making decisions faster.
+- **Low‑drift structures (prefer):** Avoid parallel state that can fall out of sync; prefer structures that minimize maintenance and drift over time.
+
 ### Data Flow
 
 ```
@@ -71,8 +76,13 @@ Overlays (e.g., Command Palette, File Picker) are self-contained state machines 
 
 ### Async & Concurrency
 - **Receivers in State:** Receivers for async workflows live in `AppState`. The runtime polls them and emits `UiEvent`s.
-- **Loading flags:** For simple async operations, the runtime sets loading flags directly when executing effects; result events clear them.
-- **Cancellation pattern:** For cancelable operations, `*Started` events carry a `CancellationToken` from runtime to reducer; reducer stores it and can emit `UiEffect::Cancel*` to trigger cancellation. Only use `*Started` when runtime-created data must be passed to the reducer.
+- **Task state only:** All async operations are modeled as tasks; UI derives loading state from `TaskState` only (no separate loading flags).
+- **Task lifecycle:** The runtime emits `UiEvent::TaskStarted` when a task is actually spawned, and `UiEvent::TaskCompleted` with the wrapped result when it finishes. The reducer is the only place that mutates `TaskState`, and uses `TaskId` for latest-only gating.
+- **Cancellation pattern:** Cancelable tasks use `CancellationToken` carried in `TaskStarted`. The reducer initiates cancellation via `UiEffect::CancelTask` (with the token); the runtime only calls `token.cancel()`.
+- **Lifecycle flow:**
+  - User action → reducer emits effect (with/without `TaskId`)
+  - Runtime `spawn_task` emits `TaskStarted` → reducer marks running
+  - Runtime emits `TaskCompleted` with result → reducer clears task + applies result
 
 ### Performance
 - **Delta Coalescing:** High-frequency events (streaming text, scrolling) are buffered and applied once per frame (`UiEvent::Frame`).

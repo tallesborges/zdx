@@ -184,7 +184,7 @@
 - [ ] Update `TuiState.thread` type annotation
 - [ ] Rename `SessionMutation` → `ThreadMutation` (from Phase 4a)
 - [ ] Rename `SessionUiEvent` → `ThreadUiEvent`
-- [ ] Rename `SessionOpsState` → `ThreadOpsState`
+- [ ] Remove thread ops state in favor of task lifecycle tracking
 - [ ] Update all imports and references across codebase
 - **✅ Demo**: No `session.session` pattern; `cargo test` passes
 
@@ -202,7 +202,7 @@
 
 # Contracts (Guardrails)
 
-1. **Fast poll when ops pending**: `thread_ops.is_loading()` remains source of truth for runtime poll duration
+1. **Fast poll when ops pending**: `tasks.is_any_running()` is source of truth for runtime poll duration
 2. **Receiver cleanup in reducer**: All `*_rx = None` happens in reducer when handling result events (success and failure)
 3. **Guard against double-spawn**: `if *_rx.is_none()` checks remain in effect handlers before spawning
 4. **No behavior change**: All operations work identically (except one-frame timing shift, accepted as imperceptible)

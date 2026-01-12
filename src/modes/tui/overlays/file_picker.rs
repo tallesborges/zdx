@@ -21,7 +21,7 @@ const MAX_DEPTH: usize = 15;
 /// File picker state.
 ///
 /// With the inbox pattern, file discovery results arrive via the inbox.
-/// The `discovery_cancel` token is used to cancel the background file walk.
+/// Discovery runs asynchronously; cancel is handled by the reducer via task effects.
 #[derive(Debug)]
 pub struct FilePickerState {
     pub trigger_pos: usize,
@@ -30,19 +30,6 @@ pub struct FilePickerState {
     pub selected: usize,
     pub offset: usize,
     pub loading: bool,
-    /// Token to cancel the background file walk.
-    ///
-    /// Stored when `FileDiscoveryStarted` arrives. Cancelled on Drop or via
-    /// `UiEffect::CancelFileDiscovery`.
-    pub discovery_cancel: Option<CancellationToken>,
-}
-
-impl Drop for FilePickerState {
-    fn drop(&mut self) {
-        if let Some(cancel) = &self.discovery_cancel {
-            cancel.cancel();
-        }
-    }
 }
 
 impl FilePickerState {
@@ -55,9 +42,8 @@ impl FilePickerState {
                 selected: 0,
                 offset: 0,
                 loading: true,
-                discovery_cancel: None,
             },
-            vec![UiEffect::DiscoverFiles],
+            vec![UiEffect::DiscoverFiles { task: None }],
         )
     }
 

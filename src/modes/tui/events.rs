@@ -9,18 +9,19 @@
 //! Events follow the "inbox" pattern where async operations send events directly
 //! to the runtime's event inbox. Results arrive as separate events.
 //!
-//! ## When to use `*Started` events
+//! ## Task Lifecycle Events
 //!
-//! `*Started` events should only exist when the runtime creates data that the
-//! reducer needs to store (e.g., `CancellationToken`). For simple loading flags,
-//! the runtime sets them directly when executing the effect.
+//! Async work uses a uniform lifecycle:
+//! - The runtime emits `UiEvent::TaskStarted` once a task is actually spawned
+//! - The runtime emits `UiEvent::TaskCompleted` with the result event when done
+//! - The reducer is the only place that mutates `TaskState`
 //!
 //! ## Cancellation Convention
 //!
 //! Cancelable operations use `tokio_util::sync::CancellationToken` uniformly:
-//! - `*Started` events carry the token for the reducer to store
+//! - `TaskStarted` carries the token for the reducer to store
 //! - The runtime spawns tasks that `select!` on `token.cancelled()` vs work
-//! - Cancellation is initiated via `UiEffect::Cancel*` which calls `token.cancel()`
+//! - Cancellation is initiated via `UiEffect::CancelTask` which calls `token.cancel()`
 //! - This keeps the runtime as a "dumb executor" and reducer as the source of truth
 
 use std::path::PathBuf;
@@ -28,18 +29,17 @@ use std::sync::Arc;
 
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::mpsc;
-use tokio_util::sync::CancellationToken;
 
 use crate::core::events::{AgentEvent, ToolOutput};
 use crate::core::thread_log::{ThreadLog, ThreadSummary, Usage};
-use crate::modes::tui::shared::RequestId;
+use crate::modes::tui::shared::{RequestId, TaskCompleted, TaskKind, TaskStarted};
 use crate::modes::tui::transcript::HistoryCell;
 use crate::providers::ChatMessage;
 
 /// Thread event enum for async thread operations.
 ///
-/// Results-only events for thread I/O. Loading flags are set by the runtime
-/// when executing effects, not via separate `*Started` events.
+/// Results-only events for thread I/O. Loading flags are set by the reducer
+/// via mutations when emitting effects, not via separate `*Started` events.
 #[derive(Debug)]
 pub enum ThreadUiEvent {
     /// Thread list loaded for picker.
@@ -123,8 +123,8 @@ pub enum ThreadUiEvent {
 /// ## Inbox Pattern
 ///
 /// With the inbox pattern, async operations send events directly to the runtime's
-/// event inbox. `*Started` events only exist when they carry runtime-created data
-/// (like cancel tokens) that the reducer needs to store.
+/// event inbox. `TaskStarted`/`TaskCompleted` provide a uniform lifecycle for
+/// task state and latest-only gating.
 #[derive(Debug)]
 pub enum UiEvent {
     /// Timer tick (for animation, polling).
@@ -157,15 +157,6 @@ pub enum UiEvent {
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
     HandoffResult(Result<String, String>),
 
-    /// Handoff generation spawned; reducer should set handoff generating state.
-    ///
-    /// The cancel token is stored in HandoffState::Generating for cancellation
-    /// via UiEffect::CancelHandoff.
-    HandoffGenerationStarted {
-        goal: String,
-        cancel: CancellationToken,
-    },
-
     /// Handoff thread creation succeeded.
     HandoffThreadCreated {
         thread_log: ThreadLog,
@@ -176,30 +167,26 @@ pub enum UiEvent {
     /// Handoff thread creation failed.
     HandoffThreadCreateFailed { error: String },
 
-    /// File discovery started (with cancel token for reducer to store).
-    ///
-    /// The cancel token is stored in FilePickerState::discovery_cancel for
-    /// cancellation via UiEffect::CancelFileDiscovery (or overlay close).
-    FileDiscoveryStarted { cancel: CancellationToken },
-
     /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),
 
     /// Clipboard copy completed successfully.
     ClipboardCopied,
 
-    /// Direct bash execution started (with cancel token for reducer to store).
-    ///
-    /// The cancel token is stored in TuiState::bash_cancel for cancellation
-    /// via UiEffect::CancelBash.
-    BashExecutionStarted {
-        id: String,
-        command: String,
-        cancel: CancellationToken,
-    },
-
     /// Direct bash execution completed.
     BashExecuted { id: String, result: ToolOutput },
+
+    /// Task lifecycle: runtime started a task (cancel token optional).
+    TaskStarted {
+        kind: TaskKind,
+        started: TaskStarted,
+    },
+
+    /// Task lifecycle: runtime completed a task (wraps the result event).
+    TaskCompleted {
+        kind: TaskKind,
+        completed: TaskCompleted<Box<UiEvent>>,
+    },
 
     /// Thread async I/O results.
     Thread(ThreadUiEvent),
