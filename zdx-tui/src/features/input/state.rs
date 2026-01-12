@@ -1,0 +1,281 @@
+//! User input state.
+//!
+//! Manages the text area, command history, and history navigation.
+
+use crate::mutations::InputMutation;
+
+/// Handoff feature state machine.
+///
+/// Models the lifecycle of a handoff operation:
+/// - `Idle`: No handoff in progress
+/// - `Pending`: User is typing the goal in textarea
+/// - `Generating`: Async subagent is generating the handoff prompt
+/// - `Ready`: Generated prompt is in textarea, awaiting confirmation
+#[derive(Default, Debug)]
+pub enum HandoffState {
+    #[default]
+    Idle,
+
+    /// User is typing the handoff goal in the textarea.
+    Pending,
+
+    /// Handoff generation is in progress.
+    Generating {
+        /// The goal text (preserved for retry on failure).
+        goal: String,
+    },
+
+    /// Generated prompt is in textarea, ready for user to review and submit.
+    Ready,
+}
+
+impl HandoffState {
+    /// Returns true if handoff is in any active state (not Idle).
+    pub fn is_active(&self) -> bool {
+        !matches!(self, HandoffState::Idle)
+    }
+
+    /// Returns true if currently generating.
+    pub fn is_generating(&self) -> bool {
+        matches!(self, HandoffState::Generating { .. })
+    }
+
+    /// Returns true if in pending state (awaiting goal input).
+    pub fn is_pending(&self) -> bool {
+        matches!(self, HandoffState::Pending)
+    }
+
+    /// Returns true if ready for confirmation.
+    pub fn is_ready(&self) -> bool {
+        matches!(self, HandoffState::Ready)
+    }
+
+    /// Cancels any in-progress generation and resets to Idle.
+    ///
+    /// Note: This is called from InputMutation::SetHandoffState. For explicit
+    /// cancellation via hotkey, the reducer should emit `UiEffect::CancelTask`.
+    pub fn cancel(&mut self) {
+        *self = HandoffState::Idle;
+    }
+}
+
+/// User input state.
+///
+/// Encapsulates the text area, command history, and navigation state.
+pub struct InputState {
+    /// Text area for user input.
+    pub textarea: tui_textarea::TextArea<'static>,
+
+    /// Command history for ↑/↓ navigation.
+    pub history: Vec<String>,
+
+    /// Current position in history (None = not navigating).
+    pub history_index: Option<usize>,
+
+    /// Draft text saved when navigating history.
+    pub draft: Option<String>,
+
+    /// Handoff feature state.
+    pub handoff: HandoffState,
+
+    /// Queued prompts to send after the current turn completes.
+    pub queued: std::collections::VecDeque<String>,
+}
+
+impl Default for InputState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl InputState {
+    /// Creates a new InputState with default textarea styling.
+    pub fn new() -> Self {
+        use ratatui::style::{Color, Style};
+        use ratatui::widgets::{Block, Borders};
+
+        let mut textarea = tui_textarea::TextArea::default();
+        textarea.set_cursor_line_style(Style::default());
+        textarea.set_block(
+            Block::default()
+                .borders(Borders::TOP)
+                .border_style(Style::default().fg(Color::DarkGray))
+                .title(" Input (Enter=send, Shift+Enter=newline, Ctrl+J=newline) "),
+        );
+
+        Self {
+            textarea,
+            history: Vec::new(),
+            history_index: None,
+            draft: None,
+            handoff: HandoffState::Idle,
+            queued: std::collections::VecDeque::new(),
+        }
+    }
+
+    /// Gets the current input text.
+    pub fn get_text(&self) -> String {
+        self.textarea.lines().join("\n")
+    }
+
+    /// Clears the input textarea.
+    pub fn clear(&mut self) {
+        self.textarea.select_all();
+        self.textarea.cut();
+        self.reset_navigation();
+    }
+
+    /// Sets the input textarea to the given text.
+    pub fn set_text(&mut self, text: &str) {
+        self.textarea.select_all();
+        self.textarea.cut();
+        self.textarea.insert_str(text);
+    }
+
+    /// Applies a cross-slice input mutation.
+    pub fn apply(&mut self, mutation: InputMutation) {
+        match mutation {
+            InputMutation::Clear => self.clear(),
+            InputMutation::SetText(text) => self.set_text(&text),
+            InputMutation::InsertChar(ch) => {
+                self.textarea.insert_char(ch);
+            }
+            InputMutation::SetTextAndCursor {
+                text,
+                cursor_row,
+                cursor_col,
+            } => {
+                use tui_textarea::CursorMove;
+
+                self.set_text(&text);
+                self.textarea.move_cursor(CursorMove::Top);
+                self.textarea.move_cursor(CursorMove::Head);
+                for _ in 0..cursor_row {
+                    self.textarea.move_cursor(CursorMove::Down);
+                }
+                for _ in 0..cursor_col {
+                    self.textarea.move_cursor(CursorMove::Forward);
+                }
+            }
+            InputMutation::SetHistory(history) => {
+                self.history = history;
+                self.reset_navigation();
+            }
+            InputMutation::ClearHistory => self.clear_history(),
+            InputMutation::ClearQueue => self.queued.clear(),
+            InputMutation::SetHandoffState(state) => {
+                self.handoff.cancel();
+                self.handoff = state;
+            }
+        }
+    }
+
+    /// Resets history navigation state.
+    pub fn reset_navigation(&mut self) {
+        self.history_index = None;
+        self.draft = None;
+    }
+
+    /// Clears command history (for /new, handoff submit).
+    pub fn clear_history(&mut self) {
+        self.history.clear();
+        self.reset_navigation();
+    }
+
+    /// Enqueues a prompt for later sending.
+    pub fn enqueue_prompt(&mut self, text: String) {
+        self.queued.push_back(text);
+    }
+
+    /// Pops the next queued prompt, if any.
+    pub fn pop_queued_prompt(&mut self) -> Option<String> {
+        self.queued.pop_front()
+    }
+
+    /// Returns true if there are queued prompts.
+    pub fn has_queued(&self) -> bool {
+        !self.queued.is_empty()
+    }
+
+    /// Returns a display-friendly summary of queued prompts.
+    pub fn queued_summaries(&self, max_items: usize, max_chars: usize) -> Vec<String> {
+        self.queued
+            .iter()
+            .take(max_items)
+            .map(|item| {
+                let line = item.lines().next().unwrap_or("");
+                if line.chars().count() > max_chars {
+                    line.chars().take(max_chars).collect()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect()
+    }
+
+    /// Returns true if up arrow should navigate history (not move cursor).
+    pub fn should_navigate_up(&self) -> bool {
+        if self.history.is_empty() {
+            return false;
+        }
+        if self.history_index.is_some() {
+            return true;
+        }
+        if self.get_text().is_empty() {
+            return true;
+        }
+        let (row, _col) = self.textarea.cursor();
+        row == 0
+    }
+
+    /// Returns true if down arrow should navigate history (not move cursor).
+    pub fn should_navigate_down(&self) -> bool {
+        if self.history_index.is_none() {
+            return false;
+        }
+        let (row, _col) = self.textarea.cursor();
+        let line_count = self.textarea.lines().len();
+        row >= line_count.saturating_sub(1)
+    }
+
+    /// Navigates up in command history.
+    pub fn navigate_up(&mut self) {
+        if self.history.is_empty() {
+            return;
+        }
+
+        if self.history_index.is_none() {
+            let current = self.get_text();
+            self.draft = Some(current);
+            self.history_index = Some(self.history.len() - 1);
+        } else if let Some(idx) = self.history_index
+            && idx > 0
+        {
+            self.history_index = Some(idx - 1);
+        }
+
+        if let Some(idx) = self.history_index
+            && let Some(entry) = self.history.get(idx).cloned()
+        {
+            self.set_text(&entry);
+        }
+    }
+
+    /// Navigates down in command history.
+    pub fn navigate_down(&mut self) {
+        let Some(idx) = self.history_index else {
+            return;
+        };
+
+        if idx + 1 < self.history.len() {
+            self.history_index = Some(idx + 1);
+            if let Some(entry) = self.history.get(idx + 1).cloned() {
+                self.set_text(&entry);
+            }
+        } else {
+            let draft = self.draft.take().unwrap_or_default();
+            self.history_index = None;
+            self.set_text(&draft);
+        }
+    }
+}

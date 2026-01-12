@@ -6,7 +6,7 @@
 pub mod exec;
 
 #[cfg(feature = "tui")]
-pub use zdx_tui::modes::tui::{run_interactive_chat, run_interactive_chat_with_history};
+pub use zdx_tui::{run_interactive_chat, run_interactive_chat_with_history};
 
 #[cfg(not(feature = "tui"))]
 pub async fn run_interactive_chat(
