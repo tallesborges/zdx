@@ -7,8 +7,13 @@
 //! ## Inbox Pattern
 //!
 //! Events follow the "inbox" pattern where async operations send events directly
-//! to the runtime's event inbox. `*Started` events are now simple markers (no rx fields)
-//! that indicate an operation has begun. Results arrive as separate events.
+//! to the runtime's event inbox. Results arrive as separate events.
+//!
+//! ## When to use `*Started` events
+//!
+//! `*Started` events should only exist when the runtime creates data that the
+//! reducer needs to store (e.g., `CancellationToken`). For simple loading flags,
+//! the runtime sets them directly when executing the effect.
 //!
 //! ## Cancellation Convention
 //!
@@ -33,13 +38,10 @@ use crate::providers::ChatMessage;
 
 /// Thread event enum for async thread operations.
 ///
-/// With the inbox pattern, `*Started` events are simple markers indicating
-/// an operation has begun. Results arrive as separate events via the inbox.
+/// Results-only events for thread I/O. Loading flags are set by the runtime
+/// when executing effects, not via separate `*Started` events.
 #[derive(Debug)]
 pub enum ThreadUiEvent {
-    /// Thread list load started (operation in progress).
-    ListStarted,
-
     /// Thread list loaded for picker.
     ListLoaded {
         threads: Vec<ThreadSummary>,
@@ -48,9 +50,6 @@ pub enum ThreadUiEvent {
 
     /// Thread list load failed.
     ListFailed { error: String },
-
-    /// Thread load started (operation in progress).
-    LoadStarted,
 
     /// Thread loaded successfully (for switching to a thread).
     Loaded {
@@ -74,12 +73,6 @@ pub enum ThreadUiEvent {
 
     /// Thread preview load failed (silent - just don't update).
     PreviewFailed { req: RequestId },
-
-    /// Thread creation started (operation in progress).
-    CreateStarted,
-
-    /// Thread fork started (operation in progress).
-    ForkStarted,
 
     /// New thread created successfully.
     Created {
@@ -106,9 +99,6 @@ pub enum ThreadUiEvent {
     /// Thread fork failed.
     ForkFailed { error: String },
 
-    /// Thread rename started (operation in progress).
-    RenameStarted,
-
     /// Thread rename succeeded.
     Renamed {
         thread_id: String,
@@ -133,8 +123,8 @@ pub enum ThreadUiEvent {
 /// ## Inbox Pattern
 ///
 /// With the inbox pattern, async operations send events directly to the runtime's
-/// event inbox. `*Started` events now only contain data needed by the reducer
-/// (like cancel tokens), not result receivers.
+/// event inbox. `*Started` events only exist when they carry runtime-created data
+/// (like cancel tokens) that the reducer needs to store.
 #[derive(Debug)]
 pub enum UiEvent {
     /// Timer tick (for animation, polling).
