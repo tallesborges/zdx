@@ -4,10 +4,11 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use zdx_core::config;
+use zdx_core::core::thread_log::ThreadPersistenceOptions;
 
 use super::exec;
-use crate::core::thread_log::ThreadPersistenceOptions;
-use crate::{config, modes};
+use crate::modes;
 
 pub async fn run(
     root: &str,

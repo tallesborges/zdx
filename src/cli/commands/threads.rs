@@ -3,9 +3,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
+use zdx_core::config;
+use zdx_core::core::thread_log;
 
-use crate::core::thread_log;
-use crate::{config, modes};
+use crate::modes;
 
 pub fn list() -> Result<()> {
     let threads = thread_log::list_threads().context("list threads")?;

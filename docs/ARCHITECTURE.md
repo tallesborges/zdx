@@ -2,9 +2,15 @@
 
 zdx is a terminal-based AI coding assistant built in Rust, featuring a non-interactive execution mode and a full-screen interactive TUI.
 
+## Workspace Layout
+
+- **zdx (binary):** CLI + exec mode, routes to the TUI when the `tui` feature is enabled.
+- **zdx-core:** engine, config, providers, tools, thread persistence, and agent runtime (UI-agnostic).
+- **zdx-tui:** full-screen TUI (Elm/MVU), depends on zdx-core.
+
 ## TUI Architecture (Elm/MVU)
 
-The interactive mode (`src/modes/tui/`) strictly follows The Elm Architecture (Model-View-Update).
+The interactive mode (`zdx-tui/src/modes/tui/`) strictly follows The Elm Architecture (Model-View-Update).
 
 **Core Principle:** All state lives in one place (`AppState`). All mutations happen via the reducer (`update`). All side effects are explicit descriptions (`UiEffect`) executed by the runtime.
 

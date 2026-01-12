@@ -6,8 +6,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-
-use crate::config;
+use zdx_core::config;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 
@@ -469,7 +468,7 @@ fn append_codex_records(
 fn load_codex_catalog(path: &Path) -> Result<Vec<ModelRecord>> {
     let mut by_id = HashMap::new();
 
-    let defaults: ModelsFile = toml::from_str(crate::models::default_models_toml())
+    let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml())
         .context("Failed to parse default models registry")?;
     for record in defaults.models {
         if record.provider == "openai-codex" {

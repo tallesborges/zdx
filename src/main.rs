@@ -1,13 +1,7 @@
 mod cli;
-mod config;
-mod core;
-mod models;
 mod modes;
-mod prompts;
-mod providers;
-mod tools;
 
-use crate::core::interrupt;
+use zdx_core::core::interrupt;
 
 fn main() {
     if let Err(e) = cli::run() {

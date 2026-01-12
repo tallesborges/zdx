@@ -11,12 +11,11 @@ use std::time::Instant;
 
 use anyhow::Result;
 use tokio::task::JoinHandle;
-
-use crate::config::Config;
-use crate::core::agent::AgentOptions;
-use crate::core::events::{AgentEvent, ToolOutput};
-use crate::core::thread_log::{self, ThreadEvent, ThreadLog};
-use crate::providers::ChatMessage;
+use zdx_core::config::Config;
+use zdx_core::core::agent::AgentOptions;
+use zdx_core::core::events::{AgentEvent, ToolOutput};
+use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
+use zdx_core::providers::ChatMessage;
 
 /// Options for exec execution.
 #[derive(Debug, Clone)]
@@ -48,7 +47,7 @@ pub async fn run_exec(
     options: &ExecOptions,
 ) -> Result<String> {
     let effective =
-        crate::core::context::build_effective_system_prompt_with_paths(config, &options.root)?;
+        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
     // Emit warnings from context loading to stderr
     for warning in &effective.warnings {
@@ -57,7 +56,7 @@ pub async fn run_exec(
     }
 
     // Emit config path info (only if config exists on disk).
-    let config_path = crate::config::paths::config_path();
+    let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
         use std::io::Write;
         let _ = writeln!(std::io::stderr(), "Config file: {}", config_path.display());
@@ -87,8 +86,8 @@ pub async fn run_exec(
     let agent_opts = AgentOptions::from(options);
 
     // Create channels for broadcast
-    let (agent_tx, agent_rx) = crate::core::agent::create_event_channel();
-    let (render_tx, render_rx) = crate::core::agent::create_event_channel();
+    let (agent_tx, agent_rx) = zdx_core::core::agent::create_event_channel();
+    let (render_tx, render_rx) = zdx_core::core::agent::create_event_channel();
 
     // Spawn renderer task
     let renderer_handle = spawn_exec_renderer_task(render_rx);
@@ -96,19 +95,19 @@ pub async fn run_exec(
     // Spawn persist task if thread exists
     let thread_id = thread.as_ref().map(|t| t.id.clone());
     let persist_handle = if let Some(thread_log_handle) = thread.clone() {
-        let (persist_tx, persist_rx) = crate::core::agent::create_event_channel();
+        let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
         let broadcaster =
-            crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
+            zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
         let persist = thread_log::spawn_thread_persist_task(thread_log_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
         // No thread - just broadcast to renderer
-        let broadcaster = crate::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
+        let broadcaster = zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
         Some((broadcaster, tokio::spawn(async {}))) // Dummy persist task
     };
 
     // Run the agent turn
-    let result = crate::core::agent::run_turn(
+    let result = zdx_core::core::agent::run_turn(
         messages,
         config,
         &agent_opts,
@@ -313,7 +312,7 @@ impl ExecRenderer {
 ///
 /// The task owns the `ExecRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-pub fn spawn_exec_renderer_task(mut rx: crate::core::agent::AgentEventRx) -> JoinHandle<()> {
+pub fn spawn_exec_renderer_task(mut rx: zdx_core::core::agent::AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut renderer = ExecRenderer::new();
 
