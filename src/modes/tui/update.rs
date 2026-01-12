@@ -79,10 +79,32 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 app.tui.thread.usage.mark_saved();
             }
 
+            let should_dequeue = matches!(
+                &agent_event,
+                crate::core::events::AgentEvent::TurnCompleted { .. }
+                    | crate::core::events::AgentEvent::Interrupted
+                    | crate::core::events::AgentEvent::Error { .. }
+            );
+
+            if should_dequeue
+                && !app.tui.agent_state.is_running()
+                && app.tui.bash_running.is_none()
+                && !app.tui.transcript.has_pending_user_cell()
+                && let Some(text) = app.tui.input.pop_queued_prompt()
+            {
+                let thread_id = app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                let thread_is_empty = app.tui.thread.messages.is_empty();
+                let (queue_effects, queue_mutations) =
+                    input::build_send_effects(&text, thread_id, thread_is_empty);
+                apply_mutations(&mut app.tui, queue_mutations);
+                effects.extend(queue_effects);
+            }
+
             effects
         }
         UiEvent::AgentSpawned { rx } => {
             app.tui.agent_state = AgentState::Waiting { rx };
+            app.tui.transcript.activate_pending_user_cell();
             vec![]
         }
         UiEvent::LoginResult { req, result } => {
@@ -378,27 +400,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
-            ThreadUiEvent::PreviewStarted { req } => {
-                // Request-id gating: Only mark loading if this is still the active request.
-                // This prevents stale "loading" state if user navigated away quickly.
-                let is_active = match app.overlay.as_ref() {
-                    Some(overlays::Overlay::ThreadPicker(picker)) => {
-                        picker.preview_request.is_active(req)
-                    }
-                    _ => false,
-                };
-                if is_active {
-                    app.tui.thread_ops.preview_loading = true;
-                }
-                vec![]
-            }
             ThreadUiEvent::PreviewLoaded { req, cells } => {
                 let allow = match app.overlay.as_mut() {
                     Some(overlays::Overlay::ThreadPicker(picker)) => {
                         picker.preview_request.finish_if_active(req)
                     }
                     _ => {
-                        app.tui.thread_ops.preview_loading = false;
                         return vec![];
                     }
                 };
@@ -407,7 +414,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     return vec![];
                 }
 
-                app.tui.thread_ops.preview_loading = false;
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
                 apply_mutations(&mut app.tui, mutations);
@@ -435,7 +441,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         picker.preview_request.finish_if_active(req)
                     }
                     _ => {
-                        app.tui.thread_ops.preview_loading = false;
                         return vec![];
                     }
                 };
@@ -444,7 +449,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     return vec![];
                 }
 
-                app.tui.thread_ops.preview_loading = false;
                 let (effects, mutations, _) =
                     thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
                 apply_mutations(&mut app.tui, mutations);
@@ -800,13 +804,16 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
-    use crate::modes::tui::transcript::ScrollMode;
+    use crate::core::events::AgentEvent;
+    use crate::modes::tui::transcript::{HistoryCell, ScrollMode};
 
     #[test]
     fn test_scroll_to_top() {
         let config = crate::config::Config::default();
-        let mut app = AppState::new(config, std::path::PathBuf::new(), None, None);
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
 
         app.tui.transcript.scroll_to_top();
 
@@ -819,7 +826,7 @@ mod tests {
     #[test]
     fn test_scroll_to_bottom() {
         let config = crate::config::Config::default();
-        let mut app = AppState::new(config, std::path::PathBuf::new(), None, None);
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll_to_top(); // Start from top
 
         app.tui.transcript.scroll_to_bottom();
@@ -833,7 +840,7 @@ mod tests {
     #[test]
     fn test_scroll_up_and_down() {
         let config = crate::config::Config::default();
-        let mut app = AppState::new(config, std::path::PathBuf::new(), None, None);
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll.update_line_count(100);
 
         // Start following, scroll up should anchor
@@ -854,7 +861,7 @@ mod tests {
     #[test]
     fn test_apply_scroll_delta_with_acceleration() {
         let config = crate::config::Config::default();
-        let mut app = AppState::new(config, std::path::PathBuf::new(), None, None);
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll.update_line_count(100);
         app.tui.transcript.viewport_height = 20;
 
@@ -870,6 +877,33 @@ mod tests {
         assert!(matches!(
             app.tui.transcript.scroll.mode,
             ScrollMode::Anchored { offset: 79 }
+        ));
+    }
+
+    #[test]
+    fn test_queue_drains_on_turn_completed() {
+        let config = crate::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        app.tui.input.enqueue_prompt("queued prompt".to_string());
+
+        let effects = update(
+            &mut app,
+            UiEvent::Agent(AgentEvent::TurnCompleted {
+                final_text: String::new(),
+                messages: Vec::new(),
+            }),
+        );
+
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, UiEffect::StartAgentTurn))
+        );
+        assert!(!app.tui.input.has_queued());
+        let last_cell = app.tui.transcript.cells().last().expect("cell");
+        assert!(matches!(
+            last_cell,
+            HistoryCell::User { content, .. } if content == "queued prompt"
         ));
     }
 }

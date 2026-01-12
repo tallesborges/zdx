@@ -19,4 +19,4 @@ mod update;
 // Re-export view functions
 pub use render::{calculate_input_height, render_input};
 pub use state::{HandoffState, InputState};
-pub use update::{handle_handoff_result, handle_main_key, handle_paste};
+pub use update::{build_send_effects, handle_handoff_result, handle_main_key, handle_paste};

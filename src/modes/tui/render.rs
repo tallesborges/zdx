@@ -23,6 +23,12 @@ use crate::modes::tui::transcript::{self, CellId};
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
 
+/// Max queued prompts to display in the queue panel.
+const QUEUE_MAX_ITEMS: usize = 3;
+
+/// Max characters per queued prompt summary.
+const QUEUE_MAX_CHARS: usize = 30;
+
 /// Horizontal margin for the transcript area (left and right).
 /// Transcript horizontal margin (padding on each side).
 pub const TRANSCRIPT_MARGIN: u16 = 1;
@@ -44,6 +50,15 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Calculate dynamic input height based on content
     let input_height = input::calculate_input_height(state, area.height);
+    let queue_summaries = state
+        .input
+        .queued_summaries(QUEUE_MAX_ITEMS, QUEUE_MAX_CHARS);
+    let queue_total = state.input.queued.len();
+    let queue_height = if queue_summaries.is_empty() {
+        0
+    } else {
+        queue_summaries.len() as u16 + 2
+    };
 
     // Get terminal size for transcript rendering (account for margins and scrollbar)
     let transcript_width =
@@ -51,7 +66,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
             .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
 
     // Calculate transcript pane height (no header now)
-    let transcript_height = area.height.saturating_sub(input_height + STATUS_HEIGHT) as usize;
+    let transcript_height =
+        area.height
+            .saturating_sub(input_height + STATUS_HEIGHT + queue_height) as usize;
 
     // Pre-render transcript lines using transcript module
     // is_lazy indicates whether lazy rendering was used (lines are already scrolled)
@@ -105,6 +122,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Min(1),                // Transcript
+            Constraint::Length(queue_height),  // Queue summary
             Constraint::Length(input_height),  // Input (dynamic)
             Constraint::Length(STATUS_HEIGHT), // Status line
         ])
@@ -144,13 +162,18 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     );
 
     // Input area with model on top-left border and path on bottom-right
-    input::render_input(state, frame, chunks[1]);
+    if queue_height > 0 {
+        render_queue_panel(frame, chunks[1], &queue_summaries, queue_total);
+    }
+
+    // Input area with model on top-left border and path on bottom-right
+    input::render_input(state, frame, chunks[2]);
 
     // Status line below input
-    render_status_line(state, frame, chunks[2]);
+    render_status_line(state, frame, chunks[3]);
 
     // Render overlay (last, so it appears on top)
-    app.overlay.render(frame, area, chunks[1].y);
+    app.overlay.render(frame, area, chunks[2].y);
 }
 
 /// Renders the status line below the input.
@@ -207,11 +230,53 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     frame.render_widget(status, area);
 }
 
+/// Renders the queued prompt summary panel between transcript and input.
+fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total: usize) {
+    if summaries.is_empty() || area.height == 0 {
+        return;
+    }
+
+    let inner_width = area.width.saturating_sub(4) as usize;
+    let bullet_style = Style::default().fg(Color::DarkGray);
+    let text_style = Style::default().fg(Color::Gray);
+
+    let lines: Vec<Line<'static>> = summaries
+        .iter()
+        .map(|line| {
+            let mut text = line.clone();
+            if inner_width > 0 && text.chars().count() > inner_width {
+                text = text.chars().take(inner_width).collect();
+            }
+            Line::from(vec![
+                Span::styled("- ", bullet_style),
+                Span::styled(text, text_style),
+            ])
+        })
+        .collect();
+
+    let title = format!(" Queued ({}) ", total);
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .title(Line::from(Span::styled(title, bullet_style)));
+    let panel = Paragraph::new(lines).block(block);
+    frame.render_widget(panel, area);
+}
+
 /// Calculates the available height for the transcript given the terminal height and state.
 /// Encapsulates layout logic so callers don't need to know about input/status heights.
 pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height: u16) -> usize {
     let input_height = input::calculate_input_height(state, terminal_height);
-    terminal_height.saturating_sub(input_height + STATUS_HEIGHT) as usize
+    let queue_height = if state.input.has_queued() {
+        (state
+            .input
+            .queued_summaries(QUEUE_MAX_ITEMS, QUEUE_MAX_CHARS)
+            .len() as u16)
+            .saturating_add(2)
+    } else {
+        0
+    };
+    terminal_height.saturating_sub(input_height + STATUS_HEIGHT + queue_height) as usize
 }
 
 /// Calculates cell line info and returns it for external application.

@@ -84,6 +84,9 @@ pub struct InputState {
 
     /// Handoff feature state.
     pub handoff: HandoffState,
+
+    /// Queued prompts to send after the current turn completes.
+    pub queued: std::collections::VecDeque<String>,
 }
 
 impl Default for InputState {
@@ -113,6 +116,7 @@ impl InputState {
             history_index: None,
             draft: None,
             handoff: HandoffState::Idle,
+            queued: std::collections::VecDeque::new(),
         }
     }
 
@@ -165,6 +169,7 @@ impl InputState {
                 self.reset_navigation();
             }
             InputMutation::ClearHistory => self.clear_history(),
+            InputMutation::ClearQueue => self.queued.clear(),
             InputMutation::SetHandoffState(state) => {
                 self.handoff.cancel();
                 self.handoff = state;
@@ -182,6 +187,37 @@ impl InputState {
     pub fn clear_history(&mut self) {
         self.history.clear();
         self.reset_navigation();
+    }
+
+    /// Enqueues a prompt for later sending.
+    pub fn enqueue_prompt(&mut self, text: String) {
+        self.queued.push_back(text);
+    }
+
+    /// Pops the next queued prompt, if any.
+    pub fn pop_queued_prompt(&mut self) -> Option<String> {
+        self.queued.pop_front()
+    }
+
+    /// Returns true if there are queued prompts.
+    pub fn has_queued(&self) -> bool {
+        !self.queued.is_empty()
+    }
+
+    /// Returns a display-friendly summary of queued prompts.
+    pub fn queued_summaries(&self, max_items: usize, max_chars: usize) -> Vec<String> {
+        self.queued
+            .iter()
+            .take(max_items)
+            .map(|item| {
+                let line = item.lines().next().unwrap_or("");
+                if line.chars().count() > max_chars {
+                    line.chars().take(max_chars).collect()
+                } else {
+                    line.to_string()
+                }
+            })
+            .collect()
     }
 
     /// Returns true if up arrow should navigate history (not move cursor).

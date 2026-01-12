@@ -469,6 +469,7 @@ mod tests {
             InputMutation::SetText(text) => input.set_text(&text),
             InputMutation::InsertChar(ch) => input.textarea.insert_char(ch),
             InputMutation::ClearHistory => input.clear_history(),
+            InputMutation::ClearQueue => input.queued.clear(),
             InputMutation::SetHandoffState(state) => input.handoff = state,
         }
     }

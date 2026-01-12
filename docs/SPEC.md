@@ -42,6 +42,7 @@ ZDX solves this with a boring, reliable core:
 - Full-screen terminal chat UI that stays stable under resizes, overlays, long threads, and continuous streaming.
 - Transcript UX: scroll, select, copy.
 - Threads persist and replay deterministically.
+- **Queued prompts:** when a turn is streaming, submitting a normal prompt enqueues it. The next queued prompt auto-sends when the turn ends. A small queue panel appears between transcript and input (first 3 prompts, 30-char summaries). Queue is in-memory only.
 
 ### Secondary: `zdx exec ...` (non-interactive)
 
