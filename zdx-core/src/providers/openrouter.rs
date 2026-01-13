@@ -4,6 +4,7 @@ use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
 use anyhow::{Context, Result, anyhow};
+use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
@@ -533,10 +534,50 @@ struct ToolCallState {
     stream_index: usize,
 }
 
+struct SseTerminatedStream<S> {
+    inner: S,
+    emitted_terminator: bool,
+}
+
+impl<S> SseTerminatedStream<S> {
+    fn new(inner: S) -> Self {
+        Self {
+            inner,
+            emitted_terminator: false,
+        }
+    }
+}
+
+impl<S, E> Stream for SseTerminatedStream<S>
+where
+    S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+{
+    type Item = std::result::Result<bytes::Bytes, E>;
+
+    fn poll_next(
+        mut self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        use std::task::Poll;
+
+        if self.emitted_terminator {
+            return Poll::Ready(None);
+        }
+
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(item)) => Poll::Ready(Some(item)),
+            Poll::Ready(None) => {
+                self.emitted_terminator = true;
+                Poll::Ready(Some(Ok(bytes::Bytes::from_static(b"\n\n"))))
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
 /// SSE parser for OpenAI-compatible chat completions.
 struct ChatCompletionsSseParser<S> {
-    inner: S,
-    buffer: Vec<u8>,
+    inner: EventStream<SseTerminatedStream<S>>,
     model: String,
     pending: VecDeque<StreamEvent>,
     next_index: usize,
@@ -549,10 +590,12 @@ struct ChatCompletionsSseParser<S> {
 }
 
 impl<S> ChatCompletionsSseParser<S> {
-    fn new(stream: S, model: String) -> Self {
+    fn new<E>(stream: S, model: String) -> Self
+    where
+        S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
+    {
         Self {
-            inner: stream,
-            buffer: Vec::new(),
+            inner: SseTerminatedStream::new(stream).eventsource(),
             model,
             pending: VecDeque::new(),
             next_index: 0,
@@ -614,29 +657,15 @@ impl<S> ChatCompletionsSseParser<S> {
         self.pending.push_back(StreamEvent::MessageCompleted);
     }
 
-    fn try_next_event(&mut self) -> Option<Result<StreamEvent>> {
-        if let Some(event) = self.pending.pop_front() {
-            return Some(Ok(event));
+    fn handle_event_data(&mut self, data: &str) -> Result<()> {
+        let trimmed = data.trim();
+        if trimmed.is_empty() || trimmed == "[DONE]" {
+            return Ok(());
         }
 
-        let (pos, delim_len) = find_double_newline(&self.buffer)?;
-
-        let chunk = self.buffer.drain(..pos).collect::<Vec<u8>>();
-        self.buffer.drain(..delim_len);
-
-        let chunk_text = String::from_utf8_lossy(&chunk);
-        let data = match parse_sse_data(&chunk_text) {
-            Ok(value) => value,
-            Err(err) => return Some(Err(err)),
-        };
-
-        let value = data?;
-
-        if let Err(err) = self.handle_chunk(value) {
-            return Some(Err(err));
-        }
-
-        self.pending.pop_front().map(Ok)
+        let value = serde_json::from_str::<Value>(trimmed)
+            .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
+        self.handle_chunk(value)
     }
 
     fn handle_chunk(&mut self, value: Value) -> Result<()> {
@@ -786,34 +815,21 @@ where
         use std::task::Poll;
 
         loop {
-            if let Some(event) = self.try_next_event() {
-                return Poll::Ready(Some(event));
+            if let Some(event) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(event)));
             }
 
             let inner = Pin::new(&mut self.inner);
             match inner.poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    self.buffer.extend_from_slice(&bytes);
+                Poll::Ready(Some(Ok(event))) => {
+                    if let Err(err) = self.handle_event_data(&event.data) {
+                        return Poll::Ready(Some(Err(err)));
+                    }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(anyhow!("Stream error: {}", e))));
+                    return Poll::Ready(Some(Err(anyhow!("SSE stream error: {}", e))));
                 }
                 Poll::Ready(None) => {
-                    // Try to drain any remaining buffered data
-                    let is_empty = self.buffer.iter().all(|b| b.is_ascii_whitespace());
-                    if !is_empty {
-                        if let Some(event) = self.try_next_event() {
-                            return Poll::Ready(Some(event));
-                        }
-                        // Handle trailing data without final delimiter
-                        if !self.buffer.is_empty() {
-                            let chunk_text = String::from_utf8_lossy(&self.buffer);
-                            if let Ok(Some(value)) = parse_sse_data(&chunk_text) {
-                                self.buffer.clear();
-                                let _ = self.handle_chunk(value);
-                            }
-                        }
-                    }
                     // Stream ended - force emit completion if we haven't yet
                     // (handles providers that don't send usage data or finish_reason)
                     self.emit_completion_if_pending(true);
@@ -834,43 +850,4 @@ fn map_finish_reason(reason: &str) -> String {
         "content_filter" => "error".to_string(),
         other => other.to_string(),
     }
-}
-
-/// Finds the position of a double newline in the buffer.
-fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
-    let crlf_pos = buffer.windows(4).position(|w| w == b"\r\n\r\n");
-    let lf_pos = buffer.windows(2).position(|w| w == b"\n\n");
-
-    match (crlf_pos, lf_pos) {
-        (Some(c), Some(l)) => {
-            if l <= c {
-                Some((l, 2))
-            } else {
-                Some((c, 4))
-            }
-        }
-        (Some(c), None) => Some((c, 4)),
-        (None, Some(l)) => Some((l, 2)),
-        (None, None) => None,
-    }
-}
-
-fn parse_sse_data(chunk: &str) -> Result<Option<Value>> {
-    let mut data_lines = Vec::new();
-    for line in chunk.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            data_lines.push(rest.trim());
-        }
-    }
-    if data_lines.is_empty() {
-        return Ok(None);
-    }
-    let data = data_lines.join("\n");
-    let trimmed = data.trim();
-    if trimmed.is_empty() || trimmed == "[DONE]" {
-        return Ok(None);
-    }
-    let value = serde_json::from_str::<Value>(trimmed)
-        .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
-    Ok(Some(value))
 }

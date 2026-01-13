@@ -6,6 +6,7 @@ use std::collections::{HashSet, VecDeque};
 use std::pin::Pin;
 
 use anyhow::{Result, anyhow};
+use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use serde_json::Value;
 use uuid::Uuid;
@@ -16,10 +17,8 @@ use crate::providers::{ContentBlockType, StreamEvent, Usage};
 ///
 /// Parses Server-Sent Events from Gemini API responses and converts them
 /// to normalized `StreamEvent`s.
-#[derive(Debug)]
 pub struct GeminiSseParser<S> {
-    inner: S,
-    buffer: Vec<u8>,
+    inner: EventStream<S>,
     model: String,
     run_id: String,
     tool_id_prefix: String,
@@ -39,10 +38,12 @@ impl<S> GeminiSseParser<S> {
     ///
     /// The tool ID prefix is used to distinguish tools from different providers
     /// (e.g., "gemini" for API key, "gemini-cli" for OAuth).
-    pub fn new(stream: S, model: String, tool_id_prefix: &str) -> Self {
+    pub fn new(stream: S, model: String, tool_id_prefix: &str) -> Self
+    where
+        S: Eventsource,
+    {
         Self {
-            inner: stream,
-            buffer: Vec::new(),
+            inner: stream.eventsource(),
             model,
             run_id: Uuid::new_v4().to_string(),
             tool_id_prefix: tool_id_prefix.to_string(),
@@ -58,28 +59,15 @@ impl<S> GeminiSseParser<S> {
         }
     }
 
-    fn try_next_event(&mut self) -> Option<Result<StreamEvent>> {
-        if let Some(event) = self.pending.pop_front() {
-            return Some(Ok(event));
+    fn handle_event_data(&mut self, data: &str) -> Result<()> {
+        let trimmed = data.trim();
+        if trimmed.is_empty() || trimmed == "[DONE]" {
+            return Ok(());
         }
 
-        let (pos, delim_len) = find_double_newline(&self.buffer)?;
-        let chunk = self.buffer.drain(..pos).collect::<Vec<u8>>();
-        self.buffer.drain(..delim_len);
-
-        let chunk_text = String::from_utf8_lossy(&chunk);
-        let data = match parse_sse_data(&chunk_text) {
-            Ok(value) => value,
-            Err(err) => return Some(Err(err)),
-        };
-
-        let value = data?;
-
-        if let Err(err) = self.handle_chunk(value) {
-            return Some(Err(err));
-        }
-
-        self.pending.pop_front().map(Ok)
+        let value = serde_json::from_str::<Value>(trimmed)
+            .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
+        self.handle_chunk(value)
     }
 
     fn handle_chunk(&mut self, value: Value) -> Result<()> {
@@ -270,28 +258,21 @@ where
         use std::task::Poll;
 
         loop {
-            if let Some(event) = self.try_next_event() {
-                return Poll::Ready(Some(event));
+            if let Some(event) = self.pending.pop_front() {
+                return Poll::Ready(Some(Ok(event)));
             }
 
             let inner = Pin::new(&mut self.inner);
             match inner.poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    self.buffer.extend_from_slice(&bytes);
+                Poll::Ready(Some(Ok(event))) => {
+                    if let Err(err) = self.handle_event_data(&event.data) {
+                        return Poll::Ready(Some(Err(err)));
+                    }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(anyhow!("Stream error: {}", e))));
+                    return Poll::Ready(Some(Err(anyhow!("SSE stream error: {}", e))));
                 }
-                Poll::Ready(None) => {
-                    let is_empty = self.buffer.iter().all(|b| b.is_ascii_whitespace());
-                    if is_empty {
-                        return Poll::Ready(None);
-                    }
-                    if let Some(event) = self.try_next_event() {
-                        return Poll::Ready(Some(event));
-                    }
-                    return Poll::Ready(None);
-                }
+                Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -305,44 +286,4 @@ pub fn map_finish_reason(reason: &str) -> String {
         "STOP" | "stop" => "stop".to_string(),
         other => other.to_lowercase(),
     }
-}
-
-/// Finds the position of a double newline in the buffer.
-pub fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
-    let crlf_pos = buffer.windows(4).position(|w| w == b"\r\n\r\n");
-    let lf_pos = buffer.windows(2).position(|w| w == b"\n\n");
-
-    match (crlf_pos, lf_pos) {
-        (Some(c), Some(l)) => {
-            if l <= c {
-                Some((l, 2))
-            } else {
-                Some((c, 4))
-            }
-        }
-        (Some(c), None) => Some((c, 4)),
-        (None, Some(l)) => Some((l, 2)),
-        (None, None) => None,
-    }
-}
-
-/// Parses SSE data from a chunk of text.
-pub fn parse_sse_data(chunk: &str) -> Result<Option<Value>> {
-    let mut data_lines = Vec::new();
-    for line in chunk.lines() {
-        if let Some(rest) = line.strip_prefix("data:") {
-            data_lines.push(rest.trim());
-        }
-    }
-    if data_lines.is_empty() {
-        return Ok(None);
-    }
-    let data = data_lines.join("\n");
-    let trimmed = data.trim();
-    if trimmed.is_empty() || trimmed == "[DONE]" {
-        return Ok(None);
-    }
-    let value = serde_json::from_str::<Value>(trimmed)
-        .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
-    Ok(Some(value))
 }
