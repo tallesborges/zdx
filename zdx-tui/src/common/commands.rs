@@ -48,6 +48,11 @@ pub const COMMANDS: &[Command] = &[
         description: "Copy current thread ID to clipboard",
     },
     Command {
+        name: "debug",
+        aliases: &["perf", "status"],
+        description: "Toggle debug/performance status line",
+    },
+    Command {
         name: "handoff",
         aliases: &[],
         description: "Start new thread with context from current",
@@ -140,6 +145,10 @@ mod tests {
     fn test_command_display_name() {
         assert_eq!(find_command("config").display_name(), "/config (settings)");
         assert_eq!(find_command("copy-id").display_name(), "/copy-id (copyid)");
+        assert_eq!(
+            find_command("debug").display_name(),
+            "/debug (perf, status)"
+        );
         assert_eq!(find_command("handoff").display_name(), "/handoff");
         assert_eq!(find_command("login").display_name(), "/login");
         assert_eq!(find_command("logout").display_name(), "/logout");

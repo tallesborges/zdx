@@ -45,6 +45,10 @@
     - `zdx-tui/src/features/`: feature slices (state/update/render per slice)
       - `zdx-tui/src/features/auth/`: auth feature slice
       - `zdx-tui/src/features/input/`: input feature slice
+      - `zdx-tui/src/features/statusline/`: debug status line feature slice
+        - `zdx-tui/src/features/statusline/mod.rs`: module exports
+        - `zdx-tui/src/features/statusline/state.rs`: StatusLineAccumulator (mutable), StatusLine (snapshot)
+        - `zdx-tui/src/features/statusline/render.rs`: render_debug_status_line function
       - `zdx-tui/src/features/thread/`: thread feature slice
       - `zdx-tui/src/features/transcript/`: transcript feature slice
         - `zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
