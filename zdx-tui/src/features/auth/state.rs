@@ -2,7 +2,6 @@
 //!
 //! Manages authentication type detection and login flow state.
 
-use crate::common::LatestOnly;
 use crate::mutations::AuthMutation;
 
 /// Authentication type indicator for status line.
@@ -55,9 +54,6 @@ pub struct AuthState {
     /// Current auth type indicator (cached, refreshed on login/logout).
     pub auth_type: AuthStatus,
 
-    /// Tracks the latest login exchange request.
-    pub login_request: LatestOnly,
-
     /// Whether a local OAuth callback is being awaited.
     pub callback_in_progress: bool,
 }
@@ -73,7 +69,6 @@ impl AuthState {
     pub fn new() -> Self {
         Self {
             auth_type: AuthStatus::detect(),
-            login_request: LatestOnly::default(),
             callback_in_progress: false,
         }
     }
@@ -90,7 +85,6 @@ impl AuthState {
             AuthMutation::SetCallbackInProgress(in_progress) => {
                 self.callback_in_progress = in_progress
             }
-            AuthMutation::CancelLoginRequest => self.login_request.cancel(),
         }
     }
 }

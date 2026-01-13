@@ -109,36 +109,32 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.transcript.activate_pending_user_cell();
             vec![]
         }
-        UiEvent::LoginResult { req, result } => {
-            if !app.tui.auth.login_request.finish_if_active(req) {
-                vec![]
-            } else {
-                let provider = match &app.overlay {
-                    Some(overlays::Overlay::Login(overlays::LoginState::Exchanging {
-                        provider,
-                    })) => *provider,
-                    Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
-                        provider,
-                        ..
-                    })) => *provider,
-                    _ => zdx_core::providers::provider_for_model(&app.tui.config.model),
-                };
-                let (mutations, overlay_action) =
-                    auth::handle_login_result(&mut app.tui.auth, result, provider);
-                apply_mutations(&mut app.tui, mutations);
-
-                match overlay_action {
-                    auth::LoginOverlayAction::Close => {
-                        app.overlay = None;
-                    }
-                    auth::LoginOverlayAction::Reopen { error } => {
-                        app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
-                            provider, error,
-                        )));
-                    }
+        UiEvent::LoginResult { result } => {
+            let provider = match &app.overlay {
+                Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
+                    *provider
                 }
-                vec![]
+                Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
+                    provider,
+                    ..
+                })) => *provider,
+                _ => zdx_core::providers::provider_for_model(&app.tui.config.model),
+            };
+            let (mutations, overlay_action) =
+                auth::handle_login_result(&mut app.tui.auth, result, provider);
+            apply_mutations(&mut app.tui, mutations);
+
+            match overlay_action {
+                auth::LoginOverlayAction::Close => {
+                    app.overlay = None;
+                }
+                auth::LoginOverlayAction::Reopen { error } => {
+                    app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
+                        provider, error,
+                    )));
+                }
             }
+            vec![]
         }
         UiEvent::LoginCallbackResult(code) => {
             // Clear in-progress flag
@@ -181,7 +177,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                                     };
                                 *login_state = overlays::LoginState::Exchanging { provider };
                                 push_token_exchange(
-                                    &mut app.tui,
                                     &mut effects,
                                     provider,
                                     code,
@@ -225,7 +220,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 | TaskKind::ThreadRename
                 | TaskKind::ThreadPreview
                 | TaskKind::ThreadCreate
-                | TaskKind::ThreadFork => {}
+                | TaskKind::ThreadFork
+                | TaskKind::LoginExchange => {}
             }
             vec![]
         }
@@ -394,19 +390,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
-            ThreadUiEvent::PreviewLoaded { req, cells } => {
-                let allow = match app.overlay.as_mut() {
-                    Some(overlays::Overlay::ThreadPicker(picker)) => {
-                        picker.preview_request.finish_if_active(req)
-                    }
-                    _ => false,
-                };
-
+            ThreadUiEvent::PreviewLoaded { cells } => {
+                let allow = matches!(
+                    app.overlay.as_ref(),
+                    Some(overlays::Overlay::ThreadPicker(_))
+                );
                 if !allow {
                     vec![]
                 } else {
                     let (mut effects, mutations, overlay_action) =
-                        thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { req, cells });
+                        thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
                     apply_mutations(&mut app.tui, mutations);
 
                     if let thread::ThreadOverlayAction::OpenThreadPicker {
@@ -427,19 +420,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     effects
                 }
             }
-            ThreadUiEvent::PreviewFailed { req } => {
-                let allow = match app.overlay.as_mut() {
-                    Some(overlays::Overlay::ThreadPicker(picker)) => {
-                        picker.preview_request.finish_if_active(req)
-                    }
-                    _ => false,
-                };
-
+            ThreadUiEvent::PreviewFailed => {
+                let allow = matches!(
+                    app.overlay.as_ref(),
+                    Some(overlays::Overlay::ThreadPicker(_))
+                );
                 if !allow {
                     vec![]
                 } else {
                     let (effects, mutations, _) =
-                        thread::handle_thread_event(ThreadUiEvent::PreviewFailed { req });
+                        thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
                     apply_mutations(&mut app.tui, mutations);
                     effects
                 }
@@ -564,7 +554,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 }
 
 fn ensure_task_id(tui: &mut TuiState, task: Option<TaskId>) -> TaskId {
-    task.unwrap_or_else(|| tui.task_seq.next())
+    task.unwrap_or_else(|| tui.task_seq.next_id())
 }
 
 fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> {
@@ -605,16 +595,27 @@ fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> 
                     thread_id,
                 });
             }
-            UiEffect::PreviewThread {
-                task,
-                thread_id,
-                req,
-            } => {
+            UiEffect::PreviewThread { task, thread_id } => {
                 let task = ensure_task_id(tui, task);
                 out.push(UiEffect::PreviewThread {
                     task: Some(task),
                     thread_id,
-                    req,
+                });
+            }
+            UiEffect::SpawnTokenExchange {
+                task,
+                provider,
+                code,
+                verifier,
+                redirect_uri,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::SpawnTokenExchange {
+                    task: Some(task),
+                    provider,
+                    code,
+                    verifier,
+                    redirect_uri,
                 });
             }
             UiEffect::DiscoverFiles { task } => {
@@ -693,20 +694,18 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
 }
 
 fn push_token_exchange(
-    tui: &mut TuiState,
     effects: &mut Vec<UiEffect>,
     provider: zdx_core::providers::ProviderKind,
     code: String,
     verifier: String,
     redirect_uri: Option<String>,
 ) {
-    let req = tui.auth.login_request.begin();
     effects.push(UiEffect::SpawnTokenExchange {
+        task: None,
         provider,
         code,
         verifier,
         redirect_uri,
-        req,
     });
 }
 

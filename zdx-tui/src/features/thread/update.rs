@@ -72,11 +72,11 @@ pub fn handle_thread_event(
             ));
             vec![]
         }
-        ThreadUiEvent::PreviewLoaded { req: _, cells } => {
+        ThreadUiEvent::PreviewLoaded { cells } => {
             handle_thread_preview_loaded(cells, &mut mutations);
             vec![]
         }
-        ThreadUiEvent::PreviewFailed { .. } => {
+        ThreadUiEvent::PreviewFailed => {
             // Silent failure for preview - errors shown on actual load
             vec![]
         }

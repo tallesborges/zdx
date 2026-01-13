@@ -33,7 +33,7 @@ use zdx_core::core::events::{AgentEvent, ToolOutput};
 use zdx_core::core::thread_log::{ThreadLog, ThreadSummary, Usage};
 use zdx_core::providers::ChatMessage;
 
-use crate::common::{RequestId, TaskCompleted, TaskKind, TaskStarted};
+use crate::common::{TaskCompleted, TaskKind, TaskStarted};
 use crate::transcript::HistoryCell;
 
 /// Thread event enum for async thread operations.
@@ -66,13 +66,10 @@ pub enum ThreadUiEvent {
     LoadFailed { error: String },
 
     /// Thread preview loaded (for thread picker navigation).
-    PreviewLoaded {
-        req: RequestId,
-        cells: Vec<HistoryCell>,
-    },
+    PreviewLoaded { cells: Vec<HistoryCell> },
 
     /// Thread preview load failed (silent - just don't update).
-    PreviewFailed { req: RequestId },
+    PreviewFailed,
 
     /// New thread created successfully.
     Created {
@@ -146,10 +143,7 @@ pub enum UiEvent {
     AgentSpawned { rx: mpsc::Receiver<Arc<AgentEvent>> },
 
     /// Async login token exchange completed.
-    LoginResult {
-        req: RequestId,
-        result: Result<(), String>,
-    },
+    LoginResult { result: Result<(), String> },
 
     /// Local OAuth callback returned with an optional code.
     LoginCallbackResult(Option<String>),
