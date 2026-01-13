@@ -265,7 +265,7 @@ impl Config {
     const DEFAULT_MAX_TOKENS: u32 = 12288;
     /// Default is disabled
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
-    const DEFAULT_HANDOFF_MODEL: &str = "gemini-cli:gemini-2.5-flash";
+    const DEFAULT_HANDOFF_MODEL: &str = "gemini-cli:gemini-3-flash-preview";
     const DEFAULT_TITLE_MODEL: &str = "gemini-cli:gemini-2.5-flash";
 
     /// Loads configuration from the default config path.
