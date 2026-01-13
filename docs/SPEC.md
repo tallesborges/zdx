@@ -180,6 +180,12 @@ Error:
   - `[providers.openrouter].base_url`
   - `[providers.gemini].base_url`
   - `[providers.gemini_cli].base_url` (unused; reserved)
+- Provider tool configuration:
+  - `[providers.<provider>].tools` — list of enabled tools
+  - Available tools: `bash`, `apply_patch`, `edit`, `read`, `write`
+  - Default tool sets:
+    - Most providers: `["bash", "edit", "read", "write"]`
+    - OpenAI Codex: `["bash", "apply_patch", "read"]`
 - Models registry:
   - `[providers.<provider>]` (`enabled`, `models`)
   - `models` entries support `*` wildcards for `zdx models update`.

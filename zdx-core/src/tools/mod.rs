@@ -3,6 +3,7 @@
 //! This module provides a registry of tools that the agent can use,
 //! along with schema definitions for the Anthropic API.
 
+pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod read;
@@ -170,10 +171,34 @@ impl ToolContext {
 pub fn all_tools() -> Vec<ToolDefinition> {
     vec![
         bash::definition(),
+        apply_patch::definition(),
         edit::definition(),
         read::definition(),
         write::definition(),
     ]
+}
+
+/// Returns all tool names (lowercase), derived from `all_tools()` to stay in sync.
+pub fn all_tool_names() -> Vec<String> {
+    all_tools()
+        .into_iter()
+        .map(|t| t.name.to_lowercase())
+        .collect()
+}
+
+/// Returns tool definitions filtered by provider configuration.
+///
+/// Uses `ProviderConfig::filter_tools()` to determine which tools to include.
+pub fn tools_for_provider(provider_config: &crate::config::ProviderConfig) -> Vec<ToolDefinition> {
+    let all_names = all_tool_names();
+    let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
+    let enabled_names = provider_config.filter_tools(&all_names_refs);
+    let enabled_set: std::collections::HashSet<_> = enabled_names.into_iter().collect();
+
+    all_tools()
+        .into_iter()
+        .filter(|t| enabled_set.contains(t.name.to_lowercase().as_str()))
+        .collect()
 }
 
 /// Executes a tool by name with the given input.
@@ -186,13 +211,14 @@ pub async fn execute_tool(
 ) -> (ToolOutput, ToolResult) {
     let output = match name {
         "bash" => bash::execute(input, ctx, ctx.timeout).await,
+        "apply_patch" => execute_apply_patch(input, ctx).await,
         "edit" => execute_edit(input, ctx).await,
         "read" => execute_read(input, ctx).await,
         "write" => execute_write(input, ctx).await,
         _ => ToolOutput::failure_with_details(
             "unknown_tool",
             format!("Unknown tool: {}", name),
-            "Available tools: bash, edit, read, write",
+            "Available tools: bash, apply_patch, edit, read, write",
         ),
     };
 
@@ -205,6 +231,15 @@ async fn execute_edit(input: &Value, ctx: &ToolContext) -> ToolOutput {
         let input = input.clone();
         let ctx = ctx.clone();
         move || edit::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_apply_patch(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || apply_patch::execute(&input, &ctx)
     })
     .await
 }
@@ -307,5 +342,68 @@ mod tests {
                 .unwrap()
                 .contains(r#""code":"unknown_tool""#)
         );
+    }
+
+    #[test]
+    fn test_all_tool_names_derived_from_definitions() {
+        let names = all_tool_names();
+        let tools = all_tools();
+
+        // Verify names are derived from definitions (same count)
+        assert_eq!(names.len(), tools.len());
+
+        // Verify all expected tools are present
+        assert!(names.contains(&"bash".to_string()));
+        assert!(names.contains(&"apply_patch".to_string()));
+        assert!(names.contains(&"edit".to_string()));
+        assert!(names.contains(&"read".to_string()));
+        assert!(names.contains(&"write".to_string()));
+    }
+
+    #[test]
+    fn test_tools_for_provider_no_filtering() {
+        let config = crate::config::ProviderConfig::default();
+        let tools = tools_for_provider(&config);
+
+        let names: Vec<_> = tools.iter().map(|t| t.name.to_lowercase()).collect();
+        assert!(names.contains(&"bash".to_string()));
+        assert!(names.contains(&"apply_patch".to_string()));
+        assert!(names.contains(&"edit".to_string()));
+        assert!(names.contains(&"read".to_string()));
+        assert!(names.contains(&"write".to_string()));
+    }
+
+    #[test]
+    fn test_tools_for_provider_with_filter() {
+        let config = crate::config::ProviderConfig {
+            tools: Some(vec![
+                "bash".to_string(),
+                "read".to_string(),
+                "write".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let tools = tools_for_provider(&config);
+
+        let names: Vec<_> = tools.iter().map(|t| t.name.to_lowercase()).collect();
+        assert!(names.contains(&"bash".to_string()));
+        assert!(!names.contains(&"apply_patch".to_string()));
+        assert!(!names.contains(&"edit".to_string()));
+        assert!(names.contains(&"read".to_string()));
+        assert!(names.contains(&"write".to_string()));
+    }
+
+    #[test]
+    fn test_tools_for_provider_with_explicit_list() {
+        let config = crate::config::ProviderConfig {
+            tools: Some(vec!["bash".to_string(), "read".to_string()]),
+            ..Default::default()
+        };
+        let tools = tools_for_provider(&config);
+
+        let names: Vec<_> = tools.iter().map(|t| t.name.to_lowercase()).collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.contains(&"bash".to_string()));
+        assert!(names.contains(&"read".to_string()));
     }
 }
