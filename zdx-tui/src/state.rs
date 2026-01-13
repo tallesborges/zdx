@@ -39,7 +39,6 @@ use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_log::ThreadLog;
 use zdx_core::providers::{ChatContentBlock, ChatMessage};
 
-// Feature state imports
 use crate::auth::AuthState;
 use crate::common::{TaskSeq, Tasks};
 use crate::input::InputState;
@@ -164,6 +163,8 @@ pub struct TuiState {
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
+    /// Whether to show the debug status line (toggle with Ctrl+Shift+D).
+    pub show_debug_status: bool,
 }
 
 impl TuiState {
@@ -227,6 +228,7 @@ impl TuiState {
             bash_running: None,
             git_branch,
             display_path,
+            show_debug_status: false,
         }
     }
 

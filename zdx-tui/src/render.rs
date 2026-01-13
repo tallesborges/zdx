@@ -18,10 +18,14 @@ use crate::common::Scrollbar;
 use crate::input;
 use crate::overlays::OverlayExt;
 use crate::state::{AgentState, AppState, TuiState};
+use crate::statusline::{StatusLine, render_debug_status_line};
 use crate::transcript::{self, CellId};
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
+
+/// Height of debug status line (when enabled).
+const DEBUG_STATUS_HEIGHT: u16 = 1;
 
 /// Max queued prompts to display in the queue panel.
 const QUEUE_MAX_ITEMS: usize = 3;
@@ -44,7 +48,10 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 ///
 /// This is a pure render function - it only reads state and draws to frame.
 /// No mutations, no side effects.
-pub fn render(app: &AppState, frame: &mut Frame) {
+///
+/// `status_line` is passed from runtime (not stored in state) to keep
+/// performance metrics as view-only data outside the reducer.
+pub fn render(app: &AppState, frame: &mut Frame, status_line: &StatusLine) {
     let area = frame.area();
     let state = &app.tui;
 
@@ -60,15 +67,23 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         queue_summaries.len() as u16 + 2
     };
 
+    // Debug status line height (only when enabled)
+    let debug_status_height = if state.show_debug_status {
+        DEBUG_STATUS_HEIGHT
+    } else {
+        0
+    };
+
     // Get terminal size for transcript rendering (account for margins and scrollbar)
     let transcript_width =
         area.width
             .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
 
     // Calculate transcript pane height (no header now)
-    let transcript_height =
-        area.height
-            .saturating_sub(input_height + STATUS_HEIGHT + queue_height) as usize;
+    let transcript_height = area
+        .height
+        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
+        as usize;
 
     // Pre-render transcript lines using transcript module
     // is_lazy indicates whether lazy rendering was used (lines are already scrolled)
@@ -117,15 +132,27 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         content_lines
     };
 
-    // Create layout: transcript, input, status
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
+    // Create layout: transcript, queue, input, status, [debug status]
+    let constraints = if state.show_debug_status {
+        vec![
+            Constraint::Min(1),                      // Transcript
+            Constraint::Length(queue_height),        // Queue summary
+            Constraint::Length(input_height),        // Input (dynamic)
+            Constraint::Length(STATUS_HEIGHT),       // Status line
+            Constraint::Length(debug_status_height), // Debug status line
+        ]
+    } else {
+        vec![
             Constraint::Min(1),                // Transcript
             Constraint::Length(queue_height),  // Queue summary
             Constraint::Length(input_height),  // Input (dynamic)
             Constraint::Length(STATUS_HEIGHT), // Status line
-        ])
+        ]
+    };
+
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
         .split(area);
 
     // Transcript area with horizontal margins (also accounts for scrollbar)
@@ -171,6 +198,11 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Status line below input
     render_status_line(state, frame, chunks[3]);
+
+    // Debug status line (when enabled)
+    if state.show_debug_status {
+        render_debug_status_line(status_line, frame, chunks[4]);
+    }
 
     // Render overlay (last, so it appears on top)
     app.overlay.render(frame, area, chunks[2].y);
@@ -276,7 +308,14 @@ pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height:
     } else {
         0
     };
-    terminal_height.saturating_sub(input_height + STATUS_HEIGHT + queue_height) as usize
+    let debug_status_height = if state.show_debug_status {
+        DEBUG_STATUS_HEIGHT
+    } else {
+        0
+    };
+    terminal_height
+        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
+        as usize
 }
 
 /// Calculates cell line info and returns it for external application.

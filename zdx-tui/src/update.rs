@@ -682,6 +682,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
+            StateMutation::ToggleDebugStatus => {
+                tui.show_debug_status = !tui.show_debug_status;
+            }
         }
     }
 }

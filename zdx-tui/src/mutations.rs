@@ -18,6 +18,8 @@ pub enum StateMutation {
     Thread(ThreadMutation),
     Auth(AuthMutation),
     Config(ConfigMutation),
+    /// Toggle the debug status line visibility.
+    ToggleDebugStatus,
 }
 
 /// Transcript slice mutations requested by other slices.

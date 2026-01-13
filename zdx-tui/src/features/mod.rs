@@ -2,5 +2,6 @@
 
 pub mod auth;
 pub mod input;
+pub mod statusline;
 pub mod thread;
 pub mod transcript;

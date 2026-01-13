@@ -42,6 +42,7 @@ use crate::common::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskStarted};
 use crate::effects::UiEffect;
 use crate::events::UiEvent;
 use crate::state::{AgentState, AppState};
+use crate::statusline::StatusLineAccumulator;
 use crate::{render, terminal, update};
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
@@ -64,6 +65,8 @@ pub struct TuiRuntime {
     inbox_tx: UiEventSender,
     /// Inbox receiver - runtime drains this each frame.
     inbox_rx: UiEventReceiver,
+    /// Status line accumulator (runtime-owned, snapshot copied to state for render).
+    status_line: StatusLineAccumulator,
 }
 
 impl TuiRuntime {
@@ -108,6 +111,7 @@ impl TuiRuntime {
             state,
             inbox_tx,
             inbox_rx,
+            status_line: StatusLineAccumulator::new(),
         })
     }
 
@@ -129,6 +133,8 @@ impl TuiRuntime {
         let mut last_pending_delta = 0;
 
         while !self.state.tui.should_quit {
+            let frame_start = std::time::Instant::now();
+
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
             // The agent will send an Interrupted event which resets the flag.
@@ -170,6 +176,7 @@ impl TuiRuntime {
                         self.state.tui.agent_state.is_running()
                             || self.state.tui.bash_running.is_some()
                             || self.state.tui.transcript.selection.has_pending_clear()
+                            || self.state.tui.show_debug_status
                     }
                     UiEvent::Frame { .. } => false,
                     _ => true,
@@ -190,12 +197,19 @@ impl TuiRuntime {
 
             // Only render if something changed
             if dirty {
+                // Get status line snapshot (runtime-owned, passed to render as view-only)
+                let status_line = self.status_line.snapshot();
+
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {
-                    render::render(&self.state, frame);
+                    render::render(&self.state, frame, &status_line);
                 })?;
 
                 dirty = false;
+
+                // Measure full loop time (event collection + processing + render)
+                let frame_ms = frame_start.elapsed().as_millis() as u16;
+                self.status_line.on_frame(frame_ms);
             }
         }
 
@@ -236,7 +250,8 @@ impl TuiRuntime {
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
-            || self.state.tui.tasks.is_any_running();
+            || self.state.tui.tasks.is_any_running()
+            || self.state.tui.show_debug_status;
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
