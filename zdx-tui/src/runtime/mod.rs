@@ -41,7 +41,6 @@ use zdx_core::providers::ChatMessage;
 use crate::common::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskStarted};
 use crate::effects::UiEffect;
 use crate::events::UiEvent;
-use crate::overlays::Overlay;
 use crate::state::{AgentState, AppState};
 use crate::{render, terminal, update};
 
@@ -233,20 +232,13 @@ impl TuiRuntime {
         // Otherwise use slow polling to save CPU.
         let file_discovery_pending = self.state.tui.tasks.file_discovery.is_running();
 
-        let thread_picker_pending = matches!(
-            &self.state.overlay,
-            Some(Overlay::ThreadPicker(picker)) if picker.preview_request.has_active()
-        );
-
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.bash_running.is_some()
             || self.state.tui.transcript.selection.has_pending_clear()
-            || self.state.tui.auth.login_request.has_active()
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
             || file_discovery_pending
-            || self.state.tui.tasks.is_any_running()
-            || thread_picker_pending;
+            || self.state.tui.tasks.is_any_running();
 
         let poll_duration = if needs_fast_poll {
             FRAME_DURATION
@@ -395,17 +387,24 @@ impl TuiRuntime {
                 }
             }
 
-            // Auth effects (pure async handlers)
+            // Auth effects
             UiEffect::SpawnTokenExchange {
+                task,
                 provider,
                 code,
                 verifier,
                 redirect_uri,
-                req,
             } => {
-                self.spawn_effect(None, move || {
-                    handlers::token_exchange(provider, code, verifier, redirect_uri, req)
-                });
+                let Some(task) = task else {
+                    return;
+                };
+                self.spawn_task(
+                    TaskKind::LoginExchange,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::token_exchange(provider, code, verifier, redirect_uri),
+                );
             }
             UiEffect::StartLocalAuthCallback {
                 provider,
@@ -536,11 +535,7 @@ impl TuiRuntime {
                     move |_| handlers::thread_load(thread_id, root),
                 );
             }
-            UiEffect::PreviewThread {
-                task,
-                thread_id,
-                req,
-            } => {
+            UiEffect::PreviewThread { task, thread_id } => {
                 let Some(task) = task else {
                     return;
                 };
@@ -549,7 +544,7 @@ impl TuiRuntime {
                     task,
                     TaskMeta::None,
                     false,
-                    move |_| handlers::thread_preview(thread_id, req),
+                    move |_| handlers::thread_preview(thread_id),
                 );
             }
 

@@ -3,7 +3,6 @@ use std::path::{Path, PathBuf};
 use zdx_core::core::thread_log;
 use zdx_core::core::thread_log::ThreadEvent;
 
-use crate::common::RequestId;
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
 
@@ -111,19 +110,19 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
 /// Loads a thread preview.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
-pub async fn thread_preview(thread_id: String, req: RequestId) -> UiEvent {
+pub async fn thread_preview(thread_id: String) -> UiEvent {
     tokio::task::spawn_blocking(move || match thread_log::load_thread_events(&thread_id) {
         Ok(events) => {
             let cells = build_transcript_from_events(&events);
-            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { req, cells })
+            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
         }
         Err(_) => {
             // Silent failure for preview - errors shown on actual load
-            UiEvent::Thread(ThreadUiEvent::PreviewFailed { req })
+            UiEvent::Thread(ThreadUiEvent::PreviewFailed)
         }
     })
     .await
-    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed { req }))
+    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed))
 }
 
 /// Creates a new thread.

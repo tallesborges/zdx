@@ -2,7 +2,6 @@ use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::time::Duration;
 
-use crate::common::RequestId;
 use crate::events::UiEvent;
 
 /// Exchanges an OAuth code for credentials.
@@ -13,7 +12,6 @@ pub async fn token_exchange(
     code: String,
     verifier: String,
     redirect_uri: Option<String>,
-    req: RequestId,
 ) -> UiEvent {
     use zdx_core::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
@@ -27,7 +25,6 @@ pub async fn token_exchange(
                 Some(value) => value,
                 None => {
                     return UiEvent::LoginResult {
-                        req,
                         result: Err("Missing redirect URI for Claude CLI OAuth.".to_string()),
                     };
                 }
@@ -71,7 +68,7 @@ pub async fn token_exchange(
         }
         _ => Err("OAuth is not supported for this provider.".to_string()),
     };
-    UiEvent::LoginResult { req, result }
+    UiEvent::LoginResult { result }
 }
 
 /// Listens for a local OAuth callback.

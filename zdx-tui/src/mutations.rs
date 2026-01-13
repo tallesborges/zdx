@@ -80,7 +80,6 @@ pub enum ThreadMutation {
 pub enum AuthMutation {
     RefreshStatus,
     SetCallbackInProgress(bool),
-    CancelLoginRequest,
 }
 
 /// Config mutations requested by overlays.

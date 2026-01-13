@@ -17,7 +17,7 @@ use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::providers::ProviderKind;
 
-use crate::common::{RequestId, TaskId, TaskKind};
+use crate::common::{TaskId, TaskKind};
 
 /// Effects returned by the reducer for the runtime to execute.
 ///
@@ -39,11 +39,11 @@ pub enum UiEffect {
 
     /// Spawn async token exchange for login.
     SpawnTokenExchange {
+        task: Option<TaskId>,
         provider: ProviderKind,
         code: String,
         verifier: String,
         redirect_uri: Option<String>,
-        req: RequestId,
     },
 
     /// Start a local OAuth callback listener (if supported).
@@ -104,7 +104,6 @@ pub enum UiEffect {
     PreviewThread {
         task: Option<TaskId>,
         thread_id: String,
-        req: RequestId,
     },
 
     /// Discover project files for the file picker.

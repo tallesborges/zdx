@@ -9,7 +9,7 @@ pub struct TaskSeq {
 }
 
 impl TaskSeq {
-    pub fn next(&mut self) -> TaskId {
+    pub fn next_id(&mut self) -> TaskId {
         let id = TaskId(self.next);
         self.next = self.next.wrapping_add(1);
         id
@@ -27,6 +27,7 @@ pub enum TaskKind {
     FileDiscovery,
     Bash,
     Handoff,
+    LoginExchange,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -102,6 +103,7 @@ pub struct Tasks {
     pub file_discovery: TaskState,
     pub bash: TaskState,
     pub handoff: TaskState,
+    pub login_exchange: TaskState,
 }
 
 impl Tasks {
@@ -116,6 +118,7 @@ impl Tasks {
             TaskKind::FileDiscovery => &mut self.file_discovery,
             TaskKind::Bash => &mut self.bash,
             TaskKind::Handoff => &mut self.handoff,
+            TaskKind::LoginExchange => &mut self.login_exchange,
         }
     }
 
@@ -129,5 +132,6 @@ impl Tasks {
             || self.file_discovery.is_running()
             || self.bash.is_running()
             || self.handoff.is_running()
+            || self.login_exchange.is_running()
     }
 }

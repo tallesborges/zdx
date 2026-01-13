@@ -5,6 +5,7 @@ use zdx_core::providers::ProviderKind;
 
 use super::OverlayUpdate;
 use crate::auth::render_login_overlay;
+use crate::common::TaskKind;
 use crate::effects::UiEffect;
 use crate::mutations::{AuthMutation, StateMutation};
 use crate::state::TuiState;
@@ -197,19 +198,27 @@ impl LoginState {
             },
             LoginState::AwaitingCode { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                    OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::CancelLoginRequest),
-                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
-                    ])
+                    OverlayUpdate::close()
+                        .with_ui_effects(vec![UiEffect::CancelTask {
+                            kind: TaskKind::LoginExchange,
+                            token: None,
+                        }])
+                        .with_mutations(vec![StateMutation::Auth(
+                            AuthMutation::SetCallbackInProgress(false),
+                        )])
                 }
                 _ => OverlayUpdate::stay(),
             },
             LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                    OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Auth(AuthMutation::CancelLoginRequest),
-                        StateMutation::Auth(AuthMutation::SetCallbackInProgress(false)),
-                    ])
+                    OverlayUpdate::close()
+                        .with_ui_effects(vec![UiEffect::CancelTask {
+                            kind: TaskKind::LoginExchange,
+                            token: None,
+                        }])
+                        .with_mutations(vec![StateMutation::Auth(
+                            AuthMutation::SetCallbackInProgress(false),
+                        )])
                 } else {
                     OverlayUpdate::stay()
                 }

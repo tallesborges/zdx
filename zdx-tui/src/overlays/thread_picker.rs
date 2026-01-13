@@ -6,7 +6,6 @@ use ratatui::layout::Rect;
 use zdx_core::core::thread_log::ThreadSummary;
 
 use super::OverlayUpdate;
-use crate::common::LatestOnly;
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
@@ -41,8 +40,6 @@ pub struct ThreadPickerState {
     pub original_cells: Vec<HistoryCell>,
     /// When the last copy occurred (for showing brief "Copied!" feedback).
     pub copied_at: Option<Instant>,
-    /// Tracks the latest preview request.
-    pub preview_request: LatestOnly,
 }
 
 impl ThreadPickerState {
@@ -64,7 +61,6 @@ impl ThreadPickerState {
             offset: 0,
             original_cells,
             copied_at: None,
-            preview_request: LatestOnly::default(),
         };
         let effects = state.preview_selected_effects();
         (state, effects)
@@ -176,11 +172,9 @@ impl ThreadPickerState {
     fn preview_selected_effects(&mut self) -> Vec<UiEffect> {
         let thread_id = self.selected_thread().map(|thread| thread.id.clone());
         if let Some(thread_id) = thread_id {
-            let req = self.preview_request.begin();
             vec![UiEffect::PreviewThread {
                 task: None,
                 thread_id,
-                req,
             }]
         } else {
             Vec::new()
