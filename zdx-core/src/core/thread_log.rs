@@ -812,6 +812,14 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
     let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
     let mut open_tool_uses: Vec<String> = Vec::new();
 
+    // Flush tool results before starting a new assistant turn.
+    let flush_tool_results =
+        |messages: &mut Vec<ChatMessage>, pending: &mut Vec<crate::tools::ToolResult>| {
+            if !pending.is_empty() {
+                messages.push(ChatMessage::tool_results(std::mem::take(pending)));
+            }
+        };
+
     /// Flushes pending assistant content (thinking + tool_use) and tool results into messages.
     fn flush_pending_assistant(
         messages: &mut Vec<ChatMessage>,
@@ -864,13 +872,7 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                     && !pending_reasoning.is_empty()
                     && pending_tool_uses.is_empty()
                 {
-                    // First, flush any pending tool results as a user message
-                    // (This happens when tool_result was processed before this thinking block)
-                    if !pending_tool_results.is_empty() {
-                        messages.push(ChatMessage::tool_results(std::mem::take(
-                            &mut pending_tool_results,
-                        )));
-                    }
+                    flush_tool_results(&mut messages, &mut pending_tool_results);
 
                     let mut blocks: Vec<ChatContentBlock> = Vec::new();
 
@@ -901,11 +903,13 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                 }
             }
             ThreadEvent::Reasoning { text, replay, .. } => {
+                flush_tool_results(&mut messages, &mut pending_tool_results);
                 pending_reasoning.push(ReasoningBlock { text, replay });
             }
             ThreadEvent::ToolUse {
                 id, name, input, ..
             } => {
+                flush_tool_results(&mut messages, &mut pending_tool_results);
                 open_tool_uses.push(id.clone());
                 pending_tool_uses.push((id, name, input));
             }
@@ -1587,6 +1591,101 @@ mod tests {
                 messages[3].content
             );
         }
+    }
+
+    #[test]
+    fn test_events_to_messages_consecutive_tool_calls() {
+        // Regression test: consecutive tool calls must have their results
+        // placed immediately after each tool_use, not after the next tool_use.
+        //
+        // Sequence: user → reasoning1 → tool_use1 → tool_result1 → reasoning2 → tool_use2 → tool_result2
+        //
+        // Expected messages:
+        // 1. User: "question"
+        // 2. Assistant: [Reasoning1, ToolUse1]
+        // 3. User: [ToolResult1]
+        // 4. Assistant: [Reasoning2, ToolUse2]
+        // 5. User: [ToolResult2]
+        //
+        // The bug: tool_result1 was being placed AFTER reasoning2+tool_use2, causing
+        // "tool_use ids were found without tool_result blocks immediately after" error.
+        use crate::providers::{ChatContentBlock, MessageContent, ReplayToken};
+
+        let events = vec![
+            ThreadEvent::user_message("run two commands"),
+            ThreadEvent::reasoning(
+                Some("First, let me run the first command...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig1".to_string(),
+                }),
+            ),
+            ThreadEvent::tool_use("t1", "bash", json!({"command": "echo one"})),
+            ThreadEvent::tool_result("t1", json!({"stdout": "one\n"}), true),
+            ThreadEvent::reasoning(
+                Some("Now let me run the second command...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig2".to_string(),
+                }),
+            ),
+            ThreadEvent::tool_use("t2", "bash", json!({"command": "echo two"})),
+            ThreadEvent::tool_result("t2", json!({"stdout": "two\n"}), true),
+            ThreadEvent::assistant_message("Both commands completed."),
+        ];
+
+        let messages = thread_events_to_messages(events);
+
+        // user + assistant1 + result1 + assistant2 + result2 + assistant_final = 6
+        assert_eq!(messages.len(), 6, "Should have 6 messages");
+
+        // Message 0: User
+        assert_eq!(messages[0].role, "user");
+
+        // Message 1: Assistant with reasoning1 + tool_use1
+        assert_eq!(messages[1].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[1].content {
+            assert_eq!(blocks.len(), 2, "First assistant should have 2 blocks");
+            assert!(
+                matches!(&blocks[1], ChatContentBlock::ToolUse { id, .. } if id == "t1"),
+                "Should have tool_use t1"
+            );
+        } else {
+            panic!("Expected Blocks content");
+        }
+
+        // Message 2: User with tool_result1 - THE KEY ASSERTION
+        // Before the fix, this was message 4 (after the second assistant message)
+        assert_eq!(
+            messages[2].role, "user",
+            "Message 2 should be user (tool_result)"
+        );
+        if let MessageContent::Blocks(blocks) = &messages[2].content {
+            assert!(
+                blocks.iter().any(|b| matches!(
+                    b,
+                    ChatContentBlock::ToolResult(result) if result.tool_use_id == "t1"
+                )),
+                "Message 2 should contain result for t1"
+            );
+        } else {
+            panic!("Expected Blocks content with tool_result");
+        }
+
+        // Message 3: Assistant with reasoning2 + tool_use2
+        assert_eq!(messages[3].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[3].content {
+            assert!(
+                matches!(&blocks[1], ChatContentBlock::ToolUse { id, .. } if id == "t2"),
+                "Should have tool_use t2"
+            );
+        } else {
+            panic!("Expected Blocks content");
+        }
+
+        // Message 4: User with tool_result2
+        assert_eq!(messages[4].role, "user");
+
+        // Message 5: Final assistant message
+        assert_eq!(messages[5].role, "assistant");
     }
 
     #[test]
