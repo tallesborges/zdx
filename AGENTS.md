@@ -20,6 +20,10 @@
     - `zdx-core/src/core/agent.rs`: agent loop + event channels
     - `zdx-core/src/core/thread_log.rs`: thread persistence
   - `zdx-core/src/tools/`: tool implementations + schemas
+    - `zdx-core/src/tools/apply_patch/`: apply_patch tool (Codex-style file patching)
+      - `zdx-core/src/tools/apply_patch/mod.rs`: tool definition, execution wrapper, patch application engine
+      - `zdx-core/src/tools/apply_patch/parser.rs`: patch parser for file hunks
+      - `zdx-core/src/tools/apply_patch/types.rs`: Hunk enum, UpdateFileChunk, ParseError
   - `zdx-core/src/providers/`: provider clients + OAuth helpers
 - `zdx-tui/`: full-screen interactive TUI library
   - `zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)

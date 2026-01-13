@@ -405,7 +405,9 @@ pub async fn run_turn(
         config.tool_timeout(),
     );
     // Cache tool definitions outside the loop (they're constant)
-    let tools = tools::all_tools();
+    // Filter tools based on provider configuration
+    let provider_config = config.providers.get(provider);
+    let tools = tools::tools_for_provider(provider_config);
 
     let mut messages = messages;
 

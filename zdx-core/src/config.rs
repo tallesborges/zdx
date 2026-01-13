@@ -502,6 +502,21 @@ impl ProvidersConfig {
         };
         config.enabled.unwrap_or(true)
     }
+
+    /// Returns the provider config for a given provider kind.
+    pub fn get(&self, kind: crate::providers::ProviderKind) -> &ProviderConfig {
+        use crate::providers::ProviderKind;
+
+        match kind {
+            ProviderKind::Anthropic => &self.anthropic,
+            ProviderKind::ClaudeCli => &self.claude_cli,
+            ProviderKind::OpenAI => &self.openai,
+            ProviderKind::OpenAICodex => &self.openai_codex,
+            ProviderKind::OpenRouter => &self.openrouter,
+            ProviderKind::Gemini => &self.gemini,
+            ProviderKind::GeminiCli => &self.gemini_cli,
+        }
+    }
 }
 
 impl Default for ProvidersConfig {
@@ -518,6 +533,25 @@ impl Default for ProvidersConfig {
     }
 }
 
+/// Default tools for most providers (excludes apply_patch which needs special instructions).
+fn default_tools() -> Vec<String> {
+    vec![
+        "bash".to_string(),
+        "edit".to_string(),
+        "read".to_string(),
+        "write".to_string(),
+    ]
+}
+
+/// Default tools for OpenAI Codex (has built-in apply_patch instructions).
+fn codex_tools() -> Vec<String> {
+    vec![
+        "bash".to_string(),
+        "apply_patch".to_string(),
+        "read".to_string(),
+    ]
+}
+
 fn default_anthropic_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
@@ -526,6 +560,7 @@ fn default_anthropic_provider() -> ProviderConfig {
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -538,6 +573,7 @@ fn default_claude_cli_provider() -> ProviderConfig {
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -554,6 +590,7 @@ fn default_openai_provider() -> ProviderConfig {
             "gpt-5.1-codex-mini".to_string(),
             "gpt-4.1".to_string(),
         ],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -567,6 +604,7 @@ fn default_openai_codex_provider() -> ProviderConfig {
             "gpt-5.1-codex-mini".to_string(),
             "gpt-5.2".to_string(),
         ],
+        tools: Some(codex_tools()),
         ..Default::default()
     }
 }
@@ -575,6 +613,7 @@ fn default_openrouter_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["*:exacto".to_string()],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -588,6 +627,7 @@ fn default_gemini_provider() -> ProviderConfig {
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
         ],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -601,6 +641,7 @@ fn default_gemini_cli_provider() -> ProviderConfig {
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
         ],
+        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -617,6 +658,9 @@ pub struct ProviderConfig {
     pub enabled: Option<bool>,
     /// Desired models for `zdx models update` (supports '*' wildcard).
     pub models: Vec<String>,
+    /// Explicit list of enabled tools (if set, only these tools are used).
+    /// If unset, all tools are available.
+    pub tools: Option<Vec<String>>,
 }
 
 impl ProviderConfig {
@@ -634,6 +678,29 @@ impl ProviderConfig {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
+    }
+
+    /// Filters a list of tool names based on this provider's tool configuration.
+    ///
+    /// If `tools` is set, returns only those tools (intersection with available).
+    /// Otherwise returns all tools.
+    ///
+    /// Tool names are matched case-insensitively and trimmed of whitespace.
+    pub fn filter_tools<'a>(&self, all_tools: &[&'a str]) -> Vec<&'a str> {
+        if let Some(include) = &self.tools {
+            let include_set: std::collections::HashSet<_> = include
+                .iter()
+                .map(|s| s.trim().to_lowercase())
+                .filter(|s| !s.is_empty())
+                .collect();
+            all_tools
+                .iter()
+                .filter(|t| include_set.contains(&t.to_lowercase()))
+                .copied()
+                .collect()
+        } else {
+            all_tools.to_vec()
+        }
     }
 }
 
@@ -1103,5 +1170,124 @@ max_tokens = 4096
         // Reload and verify again
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
+    }
+
+    /// filter_tools: returns all tools when no filtering configured.
+    #[test]
+    fn test_filter_tools_no_filtering() {
+        let config = ProviderConfig::default();
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered, all_tools);
+    }
+
+    /// filter_tools: explicit tools list.
+    #[test]
+    fn test_filter_tools_explicit_include() {
+        let config = ProviderConfig {
+            tools: Some(vec!["bash".to_string(), "read".to_string()]),
+            ..Default::default()
+        };
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered, vec!["bash", "read"]);
+    }
+
+    /// filter_tools: case-insensitive matching.
+    #[test]
+    fn test_filter_tools_case_insensitive() {
+        let config = ProviderConfig {
+            tools: Some(vec!["BASH".to_string(), "READ".to_string()]),
+            ..Default::default()
+        };
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered, vec!["bash", "read"]);
+    }
+
+    /// filter_tools: trims whitespace from tool names.
+    #[test]
+    fn test_filter_tools_trims_whitespace() {
+        let config = ProviderConfig {
+            tools: Some(vec![" bash ".to_string(), "\tread\n".to_string()]),
+            ..Default::default()
+        };
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered, vec!["bash", "read"]);
+    }
+
+    /// filter_tools: ignores empty strings after trimming.
+    #[test]
+    fn test_filter_tools_ignores_empty_strings() {
+        let config = ProviderConfig {
+            tools: Some(vec![
+                "bash".to_string(),
+                "  ".to_string(),
+                "".to_string(),
+                "read".to_string(),
+            ]),
+            ..Default::default()
+        };
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered, vec!["bash", "read"]);
+    }
+
+    /// filter_tools: openai_codex default has specific tools.
+    #[test]
+    fn test_openai_codex_default_tools() {
+        let config = default_openai_codex_provider();
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert!(filtered.contains(&"bash"));
+        assert!(filtered.contains(&"apply_patch"));
+        assert!(filtered.contains(&"read"));
+        assert!(!filtered.contains(&"edit"));
+        assert!(!filtered.contains(&"write"));
+    }
+
+    /// filter_tools: anthropic default uses default_tools (no apply_patch).
+    #[test]
+    fn test_anthropic_default_tools() {
+        let config = default_anthropic_provider();
+        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+
+        let filtered = config.filter_tools(all_tools);
+        assert_eq!(filtered.len(), 4);
+        assert!(filtered.contains(&"bash"));
+        assert!(filtered.contains(&"edit"));
+        assert!(filtered.contains(&"read"));
+        assert!(filtered.contains(&"write"));
+        assert!(!filtered.contains(&"apply_patch"));
+    }
+
+    /// ProvidersConfig::get returns correct provider config.
+    #[test]
+    fn test_providers_config_get() {
+        use crate::providers::ProviderKind;
+
+        let providers = ProvidersConfig::default();
+
+        let anthropic = providers.get(ProviderKind::Anthropic);
+        assert!(anthropic.enabled.unwrap());
+        let anthropic_tools = anthropic.tools.as_ref().unwrap();
+        assert!(anthropic_tools.contains(&"bash".to_string()));
+        assert!(anthropic_tools.contains(&"edit".to_string()));
+        assert!(!anthropic_tools.contains(&"apply_patch".to_string()));
+
+        let codex = providers.get(ProviderKind::OpenAICodex);
+        let codex_tools = codex.tools.as_ref().unwrap();
+        assert!(codex_tools.contains(&"bash".to_string()));
+        assert!(codex_tools.contains(&"apply_patch".to_string()));
+        assert!(codex_tools.contains(&"read".to_string()));
+        assert!(!codex_tools.contains(&"edit".to_string()));
+        assert!(!codex_tools.contains(&"write".to_string()));
     }
 }
