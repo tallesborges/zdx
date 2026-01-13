@@ -1,6 +1,7 @@
 use std::pin::Pin;
 
 use anyhow::{Context, Result, bail};
+use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use serde::Deserialize;
 
@@ -8,15 +9,16 @@ use crate::providers::shared::{ContentBlockType, StreamEvent, Usage};
 
 /// SSE parser that converts a byte stream into StreamEvents.
 pub struct SseParser<S> {
-    inner: S,
-    buffer: Vec<u8>,
+    inner: EventStream<S>,
 }
 
 impl<S> SseParser<S> {
-    pub fn new(stream: S) -> Self {
+    pub fn new(stream: S) -> Self
+    where
+        S: Eventsource,
+    {
         Self {
-            inner: stream,
-            buffer: Vec::new(),
+            inner: stream.eventsource(),
         }
     }
 }
@@ -34,63 +36,21 @@ where
     ) -> std::task::Poll<Option<Self::Item>> {
         use std::task::Poll;
 
-        loop {
-            // Check if we have a complete event in the buffer
-            if let Some(event) = self.try_parse_event() {
-                return Poll::Ready(Some(event));
+        match Pin::new(&mut self.inner).poll_next(cx) {
+            Poll::Ready(Some(Ok(event))) => {
+                Poll::Ready(Some(parse_sse_event_fields(&event.event, &event.data)))
             }
-
-            // Try to get more data from the underlying stream
-            let inner = Pin::new(&mut self.inner);
-            match inner.poll_next(cx) {
-                Poll::Ready(Some(Ok(bytes))) => {
-                    self.buffer.extend_from_slice(&bytes);
-                    // Continue looping to parse
-                }
-                Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(anyhow::anyhow!("Stream error: {}", e))));
-                }
-                Poll::Ready(None) => {
-                    // Stream ended - check for any remaining buffered event
-                    let is_empty = self.buffer.iter().all(|b| b.is_ascii_whitespace());
-                    if is_empty {
-                        return Poll::Ready(None);
-                    }
-                    // Try to parse remaining buffer
-                    if let Some(event) = self.try_parse_event() {
-                        return Poll::Ready(Some(event));
-                    }
-                    return Poll::Ready(None);
-                }
-                Poll::Pending => return Poll::Pending,
+            Poll::Ready(Some(Err(e))) => {
+                Poll::Ready(Some(Err(anyhow::anyhow!("SSE stream error: {}", e))))
             }
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
 
-impl<S> SseParser<S> {
-    /// Tries to parse a complete SSE event from the buffer.
-    /// Returns None if no complete event is available yet.
-    fn try_parse_event(&mut self) -> Option<Result<StreamEvent>> {
-        // SSE events are separated by double newlines
-        // Handle both LF (\n\n) and CRLF (\r\n\r\n) line endings
-        let (event_end, delim_len) = find_double_newline(&self.buffer)?;
-
-        // Extract the event bytes and remove from buffer
-        let event_bytes: Vec<u8> = self.buffer.drain(..event_end).collect();
-        self.buffer.drain(..delim_len); // remove the delimiter
-
-        // Decode UTF-8 only after we have the complete event
-        let event_text = match std::str::from_utf8(&event_bytes) {
-            Ok(s) => s,
-            Err(e) => return Some(Err(anyhow::anyhow!("Invalid UTF-8 in SSE event: {}", e))),
-        };
-
-        Some(parse_sse_event(event_text))
-    }
-}
-
 /// Parses a single SSE event block into a StreamEvent.
+#[allow(dead_code)]
 pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
     let mut event_type = None;
     let mut data = None;
@@ -104,6 +64,17 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
     }
 
     let event_type = event_type.unwrap_or("message");
+    let data = data.unwrap_or("");
+
+    parse_sse_event_fields(event_type, data)
+}
+
+fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
+    let data = if data.trim().is_empty() {
+        None
+    } else {
+        Some(data)
+    };
 
     match event_type {
         "ping" => Ok(StreamEvent::Ping),
@@ -288,24 +259,6 @@ struct SseErrorInfo {
     #[serde(rename = "type")]
     error_type: String,
     message: String,
-}
-
-/// Finds the position of a double newline in the buffer.
-/// Handles both LF (\n\n) and CRLF (\r\n\r\n) line endings.
-/// Returns the position and the length of the delimiter (2 or 4 bytes).
-fn find_double_newline(buffer: &[u8]) -> Option<(usize, usize)> {
-    let crlf_pos = buffer.windows(4).position(|w| w == b"\r\n\r\n");
-    let lf_pos = buffer.windows(2).position(|w| w == b"\n\n");
-
-    match (crlf_pos, lf_pos) {
-        (Some(c), Some(l)) => {
-            // Return whichever comes first
-            if l <= c { Some((l, 2)) } else { Some((c, 4)) }
-        }
-        (Some(c), None) => Some((c, 4)),
-        (None, Some(l)) => Some((l, 2)),
-        (None, None) => None,
-    }
 }
 
 #[cfg(test)]

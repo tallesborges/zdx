@@ -12,6 +12,7 @@ bytes.workspace = true
 chrono.workspace = true
 ctrlc.workspace = true
 dirs.workspace = true
+eventsource-stream.workspace = true
 futures-util.workspace = true
 infer.workspace = true
 reqwest.workspace = true
