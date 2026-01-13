@@ -17,7 +17,6 @@ use crate::mutations::{InputMutation, StateMutation};
 
 const MAX_VISIBLE_FILES: usize = 10;
 const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
-const MAX_FILES: usize = 1000;
 const MAX_DEPTH: usize = 15;
 
 /// A matched file with its score and matched character indices.
@@ -185,11 +184,7 @@ impl FilePickerState {
                 .collect();
 
             // Sort by score descending (best matches first)
-            matches.sort_by(|a, b| {
-                b.score
-                    .unwrap_or(i64::MIN)
-                    .cmp(&a.score.unwrap_or(i64::MIN))
-            });
+            matches.sort_by_key(|m| std::cmp::Reverse(m.score.unwrap_or(i64::MIN)));
 
             self.filtered = matches;
         }
@@ -337,10 +332,6 @@ pub fn discover_files(root: &std::path::Path, cancel: &CancellationToken) -> Vec
             }
 
             files.push(rel_path.to_path_buf());
-
-            if files.len() >= MAX_FILES {
-                break;
-            }
         }
     }
 
