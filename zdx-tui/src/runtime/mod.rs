@@ -230,14 +230,12 @@ impl TuiRuntime {
         // - Selection clear is pending (visual feedback timer)
         // - Any async operations are in progress
         // Otherwise use slow polling to save CPU.
-        let file_discovery_pending = self.state.tui.tasks.file_discovery.is_running();
 
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || self.state.tui.bash_running.is_some()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
-            || file_discovery_pending
             || self.state.tui.tasks.is_any_running();
 
         let poll_duration = if needs_fast_poll {
