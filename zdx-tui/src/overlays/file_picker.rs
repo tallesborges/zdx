@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
@@ -18,6 +20,17 @@ const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
 const MAX_FILES: usize = 1000;
 const MAX_DEPTH: usize = 15;
 
+/// A matched file with its score and matched character indices.
+#[derive(Debug, Clone)]
+pub struct FileMatch {
+    /// Index into the files Vec.
+    pub file_idx: usize,
+    /// Match score (higher = better match). None for unfiltered results.
+    pub score: Option<i64>,
+    /// Byte indices of matched characters for highlighting.
+    pub match_indices: Vec<usize>,
+}
+
 /// File picker state.
 ///
 /// With the inbox pattern, file discovery results arrive via the inbox.
@@ -26,7 +39,8 @@ const MAX_DEPTH: usize = 15;
 pub struct FilePickerState {
     pub trigger_pos: usize,
     pub files: Vec<PathBuf>,
-    pub filtered: Vec<usize>,
+    /// Filtered results with match info for scoring and highlighting.
+    pub filtered: Vec<FileMatch>,
     pub selected: usize,
     pub offset: usize,
     pub loading: bool,
@@ -108,7 +122,12 @@ impl FilePickerState {
     pub fn selected_file(&self) -> Option<&PathBuf> {
         self.filtered
             .get(self.selected)
-            .and_then(|&idx| self.files.get(idx))
+            .and_then(|m| self.files.get(m.file_idx))
+    }
+
+    /// Returns the match info for the currently selected file.
+    pub fn selected_match(&self) -> Option<&FileMatch> {
+        self.filtered.get(self.selected)
     }
 
     pub fn should_route_input_key(key: KeyEvent) -> bool {
@@ -122,23 +141,58 @@ impl FilePickerState {
     }
 
     pub fn apply_filter(&mut self, pattern: &str) {
-        let pattern_lower = pattern.to_lowercase();
+        if pattern.is_empty() {
+            // No filter: show all files without highlighting
+            self.filtered = self
+                .files
+                .iter()
+                .enumerate()
+                .map(|(idx, _)| FileMatch {
+                    file_idx: idx,
+                    score: None,
+                    match_indices: Vec::new(),
+                })
+                .collect();
+        } else {
+            let mut matcher = Matcher::new(Config::DEFAULT);
+            let pattern = Pattern::parse(pattern, CaseMatching::Ignore, Normalization::Smart);
 
-        self.filtered = self
-            .files
-            .iter()
-            .enumerate()
-            .filter(|(_, path)| {
-                if pattern.is_empty() {
-                    true
-                } else {
-                    path.to_string_lossy()
-                        .to_lowercase()
-                        .contains(&pattern_lower)
-                }
-            })
-            .map(|(idx, _)| idx)
-            .collect();
+            // Collect matches with scores
+            let mut matches: Vec<FileMatch> = self
+                .files
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, path)| {
+                    let path_str = path.to_string_lossy();
+                    let mut buf = Vec::new();
+                    let haystack = Utf32Str::new(&path_str, &mut buf);
+
+                    pattern.score(haystack, &mut matcher).map(|score| {
+                        // Get character indices
+                        let mut char_indices = Vec::new();
+                        pattern.indices(haystack, &mut matcher, &mut char_indices);
+
+                        // Convert character indices to byte indices
+                        let byte_indices = char_to_byte_indices(&path_str, &char_indices);
+
+                        FileMatch {
+                            file_idx: idx,
+                            score: Some(score as i64),
+                            match_indices: byte_indices,
+                        }
+                    })
+                })
+                .collect();
+
+            // Sort by score descending (best matches first)
+            matches.sort_by(|a, b| {
+                b.score
+                    .unwrap_or(i64::MIN)
+                    .cmp(&a.score.unwrap_or(i64::MIN))
+            });
+
+            self.filtered = matches;
+        }
 
         self.selected = 0;
         self.offset = 0;
@@ -147,7 +201,14 @@ impl FilePickerState {
     pub fn set_files(&mut self, files: Vec<PathBuf>) {
         self.files = files;
         self.loading = false;
-        self.filtered = (0..self.files.len()).collect();
+        // Initialize filtered with all files (no highlighting)
+        self.filtered = (0..self.files.len())
+            .map(|idx| FileMatch {
+                file_idx: idx,
+                score: None,
+                match_indices: Vec::new(),
+            })
+            .collect();
     }
 
     fn get_cursor_byte_pos(input: &InputState) -> usize {
@@ -287,6 +348,80 @@ pub fn discover_files(root: &std::path::Path, cancel: &CancellationToken) -> Vec
     files
 }
 
+/// Converts character indices to byte indices.
+///
+/// Nucleo returns character indices, but we need byte indices for highlighting
+/// since we work with byte offsets in the string.
+fn char_to_byte_indices(text: &str, char_indices: &[u32]) -> Vec<usize> {
+    if char_indices.is_empty() {
+        return Vec::new();
+    }
+
+    let mut byte_indices = Vec::with_capacity(char_indices.len());
+    let char_set: std::collections::HashSet<u32> = char_indices.iter().copied().collect();
+
+    for (char_idx, (byte_idx, _)) in text.char_indices().enumerate() {
+        if char_set.contains(&(char_idx as u32)) {
+            byte_indices.push(byte_idx);
+        }
+    }
+
+    byte_indices
+}
+
+/// Builds a line with highlighted matched characters.
+///
+/// Characters at `match_indices` are highlighted with bold + yellow,
+/// other characters use the default cyan style.
+fn build_highlighted_line(text: &str, match_indices: &[usize]) -> Line<'static> {
+    use std::collections::HashSet;
+
+    if match_indices.is_empty() {
+        return Line::from(Span::styled(
+            text.to_string(),
+            Style::default().fg(Color::Cyan),
+        ));
+    }
+
+    let match_set: HashSet<usize> = match_indices.iter().copied().collect();
+    let mut spans = Vec::new();
+    let mut current_span = String::new();
+    let mut current_is_match = false;
+
+    for (byte_idx, ch) in text.char_indices() {
+        let is_match = match_set.contains(&byte_idx);
+
+        if is_match != current_is_match && !current_span.is_empty() {
+            // Style transition: push current span and start new one
+            let style = if current_is_match {
+                Style::default()
+                    .fg(Color::Yellow)
+                    .add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::Cyan)
+            };
+            spans.push(Span::styled(std::mem::take(&mut current_span), style));
+        }
+
+        current_span.push(ch);
+        current_is_match = is_match;
+    }
+
+    // Push the final span
+    if !current_span.is_empty() {
+        let style = if current_is_match {
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::Cyan)
+        };
+        spans.push(Span::styled(current_span, style));
+    }
+
+    Line::from(spans)
+}
+
 pub fn render_file_picker(
     frame: &mut Frame,
     picker: &FilePickerState,
@@ -366,18 +501,40 @@ pub fn render_file_picker(
         .iter()
         .skip(picker.offset)
         .take(list_height)
-        .filter_map(|&idx| picker.files.get(idx))
-        .map(|path| {
-            let path_str = path.to_string_lossy();
-            let max_width = inner_area.width.saturating_sub(4) as usize;
-            let display = if path_str.len() > max_width {
-                format!("…{}", &path_str[path_str.len() - max_width + 1..])
-            } else {
-                path_str.to_string()
-            };
+        .filter_map(|file_match| {
+            picker.files.get(file_match.file_idx).map(|path| {
+                let path_str = path.to_string_lossy();
+                let max_width = inner_area.width.saturating_sub(4) as usize;
 
-            let line = Line::from(Span::styled(display, Style::default().fg(Color::Cyan)));
-            ListItem::new(line)
+                // Handle path truncation with ellipsis
+                let (display, adjusted_indices) = if path_str.len() > max_width {
+                    // Truncate from the start, keep the end
+                    let truncate_at = path_str.len() - max_width + 1;
+                    let truncated = format!("…{}", &path_str[truncate_at..]);
+
+                    // Adjust match indices for truncation
+                    let adjusted: Vec<usize> = file_match
+                        .match_indices
+                        .iter()
+                        .filter_map(|&idx| {
+                            if idx >= truncate_at {
+                                // Add 1 for the ellipsis character
+                                Some(idx - truncate_at + 1)
+                            } else {
+                                None // Index was in the truncated portion
+                            }
+                        })
+                        .collect();
+
+                    (truncated, adjusted)
+                } else {
+                    (path_str.to_string(), file_match.match_indices.clone())
+                };
+
+                // Build styled spans with highlighted characters
+                let line = build_highlighted_line(&display, &adjusted_indices);
+                ListItem::new(line)
+            })
         })
         .collect();
 
@@ -580,5 +737,134 @@ mod tests {
 
         let text = input.get_text();
         assert_eq!(text, "@c.txt ");
+    }
+
+    #[test]
+    fn test_fuzzy_matching_basic() {
+        let (mut picker, _) = FilePickerState::open(0);
+        picker.set_files(vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+            PathBuf::from("tests/integration.rs"),
+        ]);
+
+        // "mr" should match "main.rs" with higher score
+        picker.apply_filter("mr");
+
+        assert!(!picker.filtered.is_empty());
+        // Should have matches (fuzzy matches "mr" in "main.rs")
+        let first_match = &picker.filtered[0];
+        let first_path = picker.files.get(first_match.file_idx).unwrap();
+        assert_eq!(first_path, &PathBuf::from("src/main.rs"));
+    }
+
+    #[test]
+    fn test_fuzzy_matching_scores_better_matches_higher() {
+        let (mut picker, _) = FilePickerState::open(0);
+        picker.set_files(vec![
+            PathBuf::from("deeply/nested/config.toml"),
+            PathBuf::from("config.toml"),
+            PathBuf::from("src/configuration/settings.rs"),
+        ]);
+
+        picker.apply_filter("config");
+
+        // "config.toml" should rank higher than deeply nested version
+        // because the match is more direct
+        assert!(picker.filtered.len() >= 2);
+
+        // All matches should have scores
+        for m in &picker.filtered {
+            assert!(m.score.is_some());
+        }
+
+        // Verify scores are in descending order
+        for window in picker.filtered.windows(2) {
+            assert!(window[0].score >= window[1].score);
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_matching_captures_indices() {
+        let (mut picker, _) = FilePickerState::open(0);
+        picker.set_files(vec![PathBuf::from("src/main.rs")]);
+
+        picker.apply_filter("main");
+
+        assert_eq!(picker.filtered.len(), 1);
+        let m = &picker.filtered[0];
+
+        // Should have match indices for highlighting
+        assert!(!m.match_indices.is_empty());
+        // "main" appears at bytes 4-7 in "src/main.rs"
+        assert!(m.match_indices.contains(&4)); // 'm'
+        assert!(m.match_indices.contains(&5)); // 'a'
+        assert!(m.match_indices.contains(&6)); // 'i'
+        assert!(m.match_indices.contains(&7)); // 'n'
+    }
+
+    #[test]
+    fn test_empty_filter_shows_all_files_without_indices() {
+        let (mut picker, _) = FilePickerState::open(0);
+        picker.set_files(vec![
+            PathBuf::from("a.txt"),
+            PathBuf::from("b.txt"),
+            PathBuf::from("c.txt"),
+        ]);
+
+        picker.apply_filter("");
+
+        // All files shown
+        assert_eq!(picker.filtered.len(), 3);
+
+        // No highlighting when no filter
+        for m in &picker.filtered {
+            assert!(m.match_indices.is_empty());
+            assert!(m.score.is_none());
+        }
+    }
+
+    #[test]
+    fn test_fuzzy_matching_no_match() {
+        let (mut picker, _) = FilePickerState::open(0);
+        picker.set_files(vec![
+            PathBuf::from("src/main.rs"),
+            PathBuf::from("src/lib.rs"),
+        ]);
+
+        picker.apply_filter("xyz123");
+
+        // No matches for nonsense pattern
+        assert!(picker.filtered.is_empty());
+    }
+
+    #[test]
+    fn test_build_highlighted_line_no_matches() {
+        let line = build_highlighted_line("src/main.rs", &[]);
+        assert_eq!(line.spans.len(), 1);
+        // Should be cyan (non-highlighted)
+        assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+    }
+
+    #[test]
+    fn test_build_highlighted_line_with_matches() {
+        // Highlight "main" at indices 4-7
+        let line = build_highlighted_line("src/main.rs", &[4, 5, 6, 7]);
+
+        // Should have multiple spans: "src/" (cyan), "main" (yellow), ".rs" (cyan)
+        assert!(line.spans.len() >= 3);
+
+        // First span should be cyan (non-matched)
+        assert_eq!(line.spans[0].content, "src/");
+        assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
+
+        // Second span should be yellow+bold (matched)
+        assert_eq!(line.spans[1].content, "main");
+        assert_eq!(line.spans[1].style.fg, Some(Color::Yellow));
+        assert!(line.spans[1].style.add_modifier.contains(Modifier::BOLD));
+
+        // Third span should be cyan (non-matched)
+        assert_eq!(line.spans[2].content, ".rs");
+        assert_eq!(line.spans[2].style.fg, Some(Color::Cyan));
     }
 }
