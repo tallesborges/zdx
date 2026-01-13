@@ -180,11 +180,11 @@
 - [x] Handle hidden files (show by default, respect gitignore)
 - **✅ Check-in demo**: Popup positions correctly near edge of terminal
 
-## Phase 2: Fuzzy matching
-- [ ] Add fuzzy matching algorithm (or `fuzzy-matcher` crate)
-- [ ] Score and sort results by match quality
-- [ ] Highlight matched characters in file names
-- **✅ Check-in demo**: Type `@mr` and see `main.rs` ranked high
+## Phase 2: Fuzzy matching ✅
+- [x] Add fuzzy matching algorithm (or `fuzzy-matcher` crate)
+- [x] Score and sort results by match quality
+- [x] Highlight matched characters in file names
+- **✅ Check-in demo**: Type `@mr` and see `main.rs` ranked high with "m" and "r" highlighted
 
 ## Phase 3: Performance
 - [ ] Add debouncing for filter (wait 50ms after keystroke)
