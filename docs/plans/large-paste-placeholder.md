@@ -68,31 +68,31 @@ All paths that modify textarea content:
 
 ## MVP slices (ship-shaped, demoable)
 
-### Slice 1: Add pending_pastes storage to InputState
+### Slice 1: Add pending_pastes storage to InputState ✅
 - Goal: Store large paste content mapped to placeholders with unique IDs
 - Scope checklist:
-  - [ ] Add `LARGE_PASTE_CHAR_THRESHOLD` constant (1000)
-  - [ ] Define `PendingPaste` struct: `{ id: String, placeholder: String, content: String }`
-  - [ ] Add `pending_pastes: Vec<PendingPaste>` field to `InputState`
-  - [ ] Add `paste_counter: u32` field to `InputState` for monotonic ID generation
-  - [ ] Add `clear_pending_pastes()` method - clears vec but keeps counter
-  - [ ] Wire `clear_pending_pastes()` into `clear()` method
-  - [ ] Wire `clear_pending_pastes()` into `set_text()` method
-  - [ ] Add `next_paste_id() -> String` helper: simple incrementing number from counter (1, 2, 3...)
+  - [x] Add `LARGE_PASTE_CHAR_THRESHOLD` constant (1000)
+  - [x] Define `PendingPaste` struct: `{ id: String, placeholder: String, content: String }`
+  - [x] Add `pending_pastes: Vec<PendingPaste>` field to `InputState`
+  - [x] Add `paste_counter: u32` field to `InputState` for monotonic ID generation
+  - [x] Add `clear_pending_pastes()` method - clears vec but keeps counter
+  - [x] Wire `clear_pending_pastes()` into `clear()` method
+  - [x] Wire `clear_pending_pastes()` into `set_text()` method
+  - [x] Add `next_paste_id() -> String` helper: simple incrementing number from counter (1, 2, 3...)
 - ✅ Demo: Code compiles, existing tests pass
 - Risks / failure modes:
   - State leak if pending_pastes not cleared on new thread → mitigated by clear() hook
   - Counter wraps at 4 billion pastes per session → acceptable, near-impossible to hit
 
-### Slice 2: Create placeholder on large paste
+### Slice 2: Create placeholder on large paste ✅
 - Goal: Generate and insert placeholder for pastes >1000 chars
 - Scope checklist:
-  - [ ] Add `generate_placeholder(char_count: usize, id: &str) -> String` method
-  - [ ] Format: `[Pasted Content 1234 chars #1]`
-  - [ ] Modify `handle_paste()` to detect large pastes (>THRESHOLD chars)
-  - [ ] For large paste: generate ID, create placeholder, store PendingPaste, insert placeholder
-  - [ ] For small paste: insert directly (existing behavior)
-  - [ ] Preserve cursor position after placeholder insertion
+  - [x] Add `generate_placeholder(char_count: usize, id: &str) -> String` method
+  - [x] Format: `[Pasted Content 1234 chars #1]`
+  - [x] Modify `handle_paste()` to detect large pastes (>THRESHOLD chars)
+  - [x] For large paste: generate ID, create placeholder, store PendingPaste, insert placeholder
+  - [x] For small paste: insert directly (existing behavior)
+  - [x] Preserve cursor position after placeholder insertion
 - ✅ Demo: Paste >1000 chars, see `[Pasted Content N chars #1]` in input
 - Risks / failure modes:
   - Unicode char count: use `text.chars().count()` (Unicode scalar values, not graphemes) - acceptable for MVP
