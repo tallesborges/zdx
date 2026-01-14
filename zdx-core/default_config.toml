@@ -64,7 +64,7 @@ tools = ["bash", "edit", "read", "write"]
 enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
-models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.1-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
+models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
 tools = ["bash", "edit", "read", "write"]
 
 [providers.openai_codex]
