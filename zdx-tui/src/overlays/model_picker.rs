@@ -271,18 +271,32 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     let name = cleaned_display_name(model, model.provider);
     let context = format_context(model.context_limit);
     let pricing = format_pricing(model.pricing.input, model.pricing.output);
-    let right = if context.is_empty() && pricing.is_empty() {
-        String::new()
-    } else if pricing.is_empty() {
-        context
-    } else if context.is_empty() {
-        pricing
+
+    // Check if this provider is subscription-based
+    let is_subscription = ProviderKind::all()
+        .iter()
+        .find(|kind| kind.id() == model.provider)
+        .is_some_and(|kind| kind.is_subscription());
+
+    // Build the right side with pricing and context
+    let (pricing_text, pricing_suffix) = if is_subscription && !pricing.is_empty() {
+        (pricing.clone(), " (subs)")
     } else {
-        format!("{} · {}", pricing, context)
+        (pricing.clone(), "")
+    };
+
+    let right_text = if context.is_empty() && pricing_text.is_empty() {
+        String::new()
+    } else if pricing_text.is_empty() {
+        context.clone()
+    } else if context.is_empty() {
+        format!("{}{}", pricing_text, pricing_suffix)
+    } else {
+        format!("{}{} · {}", pricing_text, pricing_suffix, context)
     };
 
     let left_width = (label.len() + 3 + name.len()) as u16;
-    let right_width = right.len() as u16;
+    let right_width = right_text.len() as u16;
     let spacing = if right_width == 0 || width <= left_width + right_width {
         1
     } else {
@@ -299,7 +313,29 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     ));
     spans.push(Span::styled(name, left_style));
     spans.push(Span::raw(" ".repeat(spacing)));
-    spans.push(Span::styled(right, Style::default().fg(Color::DarkGray)));
+
+    // For subscription providers, show pricing with strikethrough
+    if is_subscription && !pricing.is_empty() {
+        let pricing_style = Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::CROSSED_OUT);
+        spans.push(Span::styled(pricing, pricing_style));
+        spans.push(Span::styled(
+            " (subs)",
+            Style::default().fg(Color::DarkGray),
+        ));
+        if !context.is_empty() {
+            spans.push(Span::styled(
+                format!(" · {}", context),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+    } else {
+        spans.push(Span::styled(
+            right_text,
+            Style::default().fg(Color::DarkGray),
+        ));
+    }
 
     Line::from(spans)
 }
