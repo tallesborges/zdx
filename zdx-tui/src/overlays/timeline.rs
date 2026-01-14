@@ -8,7 +8,7 @@ use serde_json::json;
 use zdx_core::core::thread_log::ThreadEvent;
 
 use super::OverlayUpdate;
-use crate::common::sanitize_for_display;
+use crate::common::{sanitize_for_display, truncate_with_ellipsis};
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
@@ -400,28 +400,6 @@ fn render_timeline(frame: &mut Frame, state: &TimelineState, area: Rect, input_y
     );
 }
 
-fn truncate_with_ellipsis(text: &str, max_chars: usize) -> String {
-    if max_chars == 0 {
-        return String::new();
-    }
-
-    let text_len = text.chars().count();
-    if text_len <= max_chars {
-        return text.to_string();
-    }
-
-    if max_chars <= 3 {
-        return ".".repeat(max_chars);
-    }
-
-    let mut truncated = String::new();
-    for ch in text.chars().take(max_chars - 3) {
-        truncated.push(ch);
-    }
-    truncated.push_str("...");
-    truncated
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -437,12 +415,5 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].preview, "Hello");
         assert_eq!(entries[1].preview, "Reply");
-    }
-
-    #[test]
-    fn truncate_with_ellipsis_limits() {
-        assert_eq!(truncate_with_ellipsis("Hello world", 5), "He...");
-        assert_eq!(truncate_with_ellipsis("Hi", 5), "Hi");
-        assert_eq!(truncate_with_ellipsis("Hello", 2), "..");
     }
 }

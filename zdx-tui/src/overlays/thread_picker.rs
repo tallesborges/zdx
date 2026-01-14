@@ -9,10 +9,11 @@ use super::OverlayUpdate;
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
-use crate::thread::render_thread_picker;
+use crate::thread::{
+    MAX_VISIBLE_THREADS, ThreadDisplayItem, flatten_refs_as_tree, render_thread_picker,
+};
 use crate::transcript::HistoryCell;
 
-const VISIBLE_HEIGHT: usize = 8; // MAX_VISIBLE_THREADS - 2
 const COPIED_FEEDBACK_DURATION_MS: u128 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -40,6 +41,8 @@ pub struct ThreadPickerState {
     pub original_cells: Vec<HistoryCell>,
     /// When the last copy occurred (for showing brief "Copied!" feedback).
     pub copied_at: Option<Instant>,
+    /// ID of the currently active thread (for highlighting in picker).
+    pub current_thread_id: Option<String>,
 }
 
 impl ThreadPickerState {
@@ -47,6 +50,7 @@ impl ThreadPickerState {
         threads: Vec<ThreadSummary>,
         original_cells: Vec<HistoryCell>,
         current_root: &std::path::Path,
+        current_thread_id: Option<String>,
     ) -> (Self, Vec<UiEffect>) {
         let current_root = current_root
             .canonicalize()
@@ -61,6 +65,7 @@ impl ThreadPickerState {
             offset: 0,
             original_cells,
             copied_at: None,
+            current_thread_id,
         };
         let effects = state.preview_selected_effects();
         (state, effects)
@@ -91,7 +96,7 @@ impl ThreadPickerState {
                 ])
             }
             KeyCode::Up | KeyCode::Char('k') => {
-                let total = self.visible_threads().len();
+                let total = self.visible_tree_items().len();
                 if self.selected > 0 {
                     self.selected -= 1;
                     if self.selected < self.offset {
@@ -102,11 +107,12 @@ impl ThreadPickerState {
                 OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             KeyCode::Down | KeyCode::Char('j') => {
-                let total = self.visible_threads().len();
+                let total = self.visible_tree_items().len();
+                let visible_height = self.visible_height();
                 if self.selected < total.saturating_sub(1) {
                     self.selected += 1;
-                    if self.selected >= self.offset + VISIBLE_HEIGHT {
-                        self.offset = self.selected - VISIBLE_HEIGHT + 1;
+                    if self.selected >= self.offset + visible_height {
+                        self.offset = self.selected - visible_height + 1;
                     }
                 }
                 OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
@@ -148,7 +154,9 @@ impl ThreadPickerState {
     }
 
     pub fn selected_thread(&self) -> Option<&ThreadSummary> {
-        self.visible_threads().get(self.selected).copied()
+        self.visible_tree_items()
+            .get(self.selected)
+            .map(|item| item.summary)
     }
 
     /// Returns true if the "Copied!" feedback should be shown.
@@ -167,6 +175,28 @@ impl ThreadPickerState {
                 .filter(|thread| thread.root_path.as_deref() == Some(self.current_root.as_str()))
                 .collect(),
         }
+    }
+
+    /// Returns the number of threads visible in the picker list.
+    ///
+    /// Calculated dynamically based on the filtered thread count, capped at
+    /// MAX_VISIBLE_THREADS. This ensures scroll logic matches render layout.
+    fn visible_height(&self) -> usize {
+        let count = self.visible_tree_items().len();
+        if count == 0 {
+            1
+        } else {
+            count.min(MAX_VISIBLE_THREADS)
+        }
+    }
+
+    /// Returns the visible threads as a tree-flattened list for hierarchical display.
+    ///
+    /// Delegates to the shared tree utility. The returned items contain depth
+    /// information for rendering indentation.
+    pub fn visible_tree_items(&self) -> Vec<ThreadDisplayItem<'_>> {
+        let visible = self.visible_threads();
+        flatten_refs_as_tree(&visible)
     }
 
     fn preview_selected_effects(&mut self) -> Vec<UiEffect> {
@@ -188,7 +218,7 @@ mod tests {
 
     #[test]
     fn test_thread_picker_state_new_empty() {
-        let (state, _) = ThreadPickerState::open(vec![], vec![], std::path::Path::new("."));
+        let (state, _) = ThreadPickerState::open(vec![], vec![], std::path::Path::new("."), None);
         assert_eq!(state.selected, 0);
         assert_eq!(state.offset, 0);
         assert!(state.all_threads.is_empty());
@@ -209,15 +239,17 @@ mod tests {
                 title: None,
                 root_path: Some(current_root.clone()),
                 modified: None,
+                handoff_from: None,
             },
             ThreadSummary {
                 id: "thread-2".to_string(),
                 title: None,
                 root_path: Some(current_root),
                 modified: None,
+                handoff_from: None,
             },
         ];
-        let (state, _) = ThreadPickerState::open(threads, vec![], std::path::Path::new("."));
+        let (state, _) = ThreadPickerState::open(threads, vec![], std::path::Path::new("."), None);
         assert_eq!(state.selected, 0);
         assert_eq!(state.all_threads.len(), 2);
         assert_eq!(state.selected_thread().unwrap().id, "thread-1");
@@ -230,13 +262,18 @@ mod tests {
             title: None,
             root_path: None,
             modified: None,
+            handoff_from: None,
         }];
         let original_cells = vec![
             HistoryCell::user("test message"),
             HistoryCell::assistant("response"),
         ];
-        let (state, _) =
-            ThreadPickerState::open(threads, original_cells.clone(), std::path::Path::new("."));
+        let (state, _) = ThreadPickerState::open(
+            threads,
+            original_cells.clone(),
+            std::path::Path::new("."),
+            None,
+        );
         assert_eq!(state.original_cells.len(), 2);
     }
 
@@ -248,21 +285,25 @@ mod tests {
                 title: None,
                 root_path: None,
                 modified: None,
+                handoff_from: None,
             },
             ThreadSummary {
                 id: "s2".to_string(),
                 title: None,
                 root_path: None,
                 modified: None,
+                handoff_from: None,
             },
             ThreadSummary {
                 id: "s3".to_string(),
                 title: None,
                 root_path: None,
                 modified: None,
+                handoff_from: None,
             },
         ];
-        let (mut state, _) = ThreadPickerState::open(threads, vec![], std::path::Path::new("."));
+        let (mut state, _) =
+            ThreadPickerState::open(threads, vec![], std::path::Path::new("."), None);
 
         assert_eq!(state.selected, 0);
 
@@ -282,23 +323,30 @@ mod tests {
                     title: None,
                     root_path: None,
                     modified: None,
+                    handoff_from: None,
                 })
                 .collect(),
             vec![],
             std::path::Path::new("."),
+            None,
         );
+
+        // Switch to All scope so threads without root_path are visible
+        picker.scope = ThreadScope::All;
 
         assert_eq!(picker.selected, 0);
         assert_eq!(picker.offset, 0);
 
-        for i in 1..=10 {
+        let visible_height = picker.visible_height();
+        for i in 1..=12 {
             picker.selected = i;
-            if picker.selected >= picker.offset + VISIBLE_HEIGHT {
-                picker.offset = picker.selected - VISIBLE_HEIGHT + 1;
+            if picker.selected >= picker.offset + visible_height {
+                picker.offset = picker.selected - visible_height + 1;
             }
         }
 
-        assert_eq!(picker.selected, 10);
+        assert_eq!(picker.selected, 12);
+        // With MAX_VISIBLE_THREADS=10, offset should be 3
         assert_eq!(picker.offset, 3);
     }
 
@@ -311,11 +359,16 @@ mod tests {
                     title: None,
                     root_path: None,
                     modified: None,
+                    handoff_from: None,
                 })
                 .collect(),
             vec![],
             std::path::Path::new("."),
+            None,
         );
+
+        // Switch to All scope so threads without root_path are visible
+        picker.scope = ThreadScope::All;
 
         picker.selected = 10;
         picker.offset = 5;
