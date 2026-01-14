@@ -106,6 +106,7 @@ mod tests {
                 schema_version: 1,
                 title: None,
                 root_path: None,
+                handoff_from: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
@@ -217,6 +218,7 @@ mod tests {
                 schema_version: 1,
                 title: None,
                 root_path: None,
+                handoff_from: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {

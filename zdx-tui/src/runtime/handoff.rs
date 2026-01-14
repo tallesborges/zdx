@@ -113,15 +113,16 @@ async fn run_subagent(
     UiEvent::HandoffResult(result)
 }
 
-/// Executes a handoff submit: creates a new thread.
+/// Executes a handoff submit: creates a new thread with handoff source.
 ///
 /// Returns the new thread for the reducer to store, or an error string.
 pub fn execute_handoff_submit(
     config: &Config,
     root: &Path,
+    handoff_from: Option<String>,
 ) -> Result<(ThreadLog, Vec<PathBuf>), String> {
-    let thread_log_handle =
-        thread_log::ThreadLog::new_with_root(root).map_err(|e| e.to_string())?;
+    let thread_log_handle = thread_log::ThreadLog::new_with_root_and_source(root, handoff_from)
+        .map_err(|e| e.to_string())?;
 
     let context_paths =
         match zdx_core::core::context::build_effective_system_prompt_with_paths(config, root) {

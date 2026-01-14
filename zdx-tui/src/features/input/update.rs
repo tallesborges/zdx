@@ -500,6 +500,7 @@ fn submit_input(
         return (
             vec![UiEffect::HandoffSubmit {
                 prompt: text.clone(),
+                handoff_from: thread_id.clone(),
             }],
             vec![
                 StateMutation::Transcript(TranscriptMutation::Clear),
