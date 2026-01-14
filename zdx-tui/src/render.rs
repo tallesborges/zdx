@@ -15,6 +15,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
 use crate::common::Scrollbar;
+use crate::common::text::truncate_with_ellipsis;
 use crate::input;
 use crate::overlays::OverlayExt;
 use crate::state::{AgentState, AppState, TuiState};
@@ -29,9 +30,6 @@ const DEBUG_STATUS_HEIGHT: u16 = 1;
 
 /// Max queued prompts to display in the queue panel.
 const QUEUE_MAX_ITEMS: usize = 3;
-
-/// Max characters per queued prompt summary.
-const QUEUE_MAX_CHARS: usize = 30;
 
 /// Horizontal margin for the transcript area (left and right).
 /// Transcript horizontal margin (padding on each side).
@@ -54,9 +52,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Calculate dynamic input height based on content
     let input_height = input::calculate_input_height(state, area.height);
-    let queue_summaries = state
-        .input
-        .queued_summaries(QUEUE_MAX_ITEMS, QUEUE_MAX_CHARS);
+    let queue_summaries = state.input.queued_summaries(QUEUE_MAX_ITEMS);
     let queue_total = state.input.queued.len();
     let queue_height = if queue_summaries.is_empty() {
         0
@@ -266,6 +262,7 @@ fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total
         return;
     }
 
+    // Inner width accounts for borders (2) + bullet prefix "- " (2)
     let inner_width = area.width.saturating_sub(4) as usize;
     let bullet_style = Style::default().fg(Color::DarkGray);
     let text_style = Style::default().fg(Color::Gray);
@@ -273,10 +270,8 @@ fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total
     let lines: Vec<Line<'static>> = summaries
         .iter()
         .map(|line| {
-            let mut text = line.clone();
-            if inner_width > 0 && text.chars().count() > inner_width {
-                text = text.chars().take(inner_width).collect();
-            }
+            // Use unicode-aware truncation for proper handling of wide characters
+            let text = truncate_with_ellipsis(line, inner_width);
             Line::from(vec![
                 Span::styled("- ", bullet_style),
                 Span::styled(text, text_style),
@@ -298,11 +293,7 @@ fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total
 pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height: u16) -> usize {
     let input_height = input::calculate_input_height(state, terminal_height);
     let queue_height = if state.input.has_queued() {
-        (state
-            .input
-            .queued_summaries(QUEUE_MAX_ITEMS, QUEUE_MAX_CHARS)
-            .len() as u16)
-            .saturating_add(2)
+        (state.input.queued_summaries(QUEUE_MAX_ITEMS).len() as u16).saturating_add(2)
     } else {
         0
     };
