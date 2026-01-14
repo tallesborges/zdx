@@ -4,6 +4,38 @@
 
 use std::borrow::Cow;
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
+/// Truncates a string with ellipsis if it exceeds max_width (unicode-aware).
+///
+/// Uses unicode width for accurate terminal column calculation, handling
+/// wide characters (CJK, emoji) correctly.
+///
+/// # Arguments
+/// * `text` - The string to truncate
+/// * `max_width` - Maximum display width in terminal columns
+///
+/// # Returns
+/// The original string if it fits, or a truncated version ending with `…`
+pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+    let mut truncated = String::new();
+    for ch in text.chars() {
+        let next_width = truncated.width() + ch.width().unwrap_or(0);
+        if next_width + 1 > max_width {
+            break;
+        }
+        truncated.push(ch);
+    }
+    truncated.push('…');
+    truncated
+}
+
 /// Sanitizes a line for display by removing ANSI escapes and expanding tabs.
 ///
 /// This combines common sanitization steps needed for tool output and other
@@ -38,6 +70,26 @@ pub fn sanitize_for_display(s: &str) -> Cow<'_, str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_truncate_with_ellipsis_short() {
+        assert_eq!(truncate_with_ellipsis("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_exact() {
+        assert_eq!(truncate_with_ellipsis("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_truncated() {
+        assert_eq!(truncate_with_ellipsis("hello world", 8), "hello w…");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_very_short() {
+        assert_eq!(truncate_with_ellipsis("hello", 1), "…");
+    }
 
     #[test]
     fn test_sanitize_for_display_ansi_and_tabs() {

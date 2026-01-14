@@ -7,12 +7,18 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+use unicode_width::UnicodeWidthStr;
 use zdx_core::core::thread_log::{self, short_thread_id};
 
+use crate::common::truncate_with_ellipsis;
 use crate::overlays::{ThreadPickerState, ThreadScope};
 
-const MAX_VISIBLE_THREADS: usize = 10;
+/// Maximum number of threads visible in the picker list.
+///
+/// This constant is the source of truth for scroll calculations in both
+/// rendering and update logic. The actual visible height is calculated
+/// dynamically but capped at this value.
+pub const MAX_VISIBLE_THREADS: usize = 10;
 
 /// Renders the thread picker overlay.
 pub fn render_thread_picker(
@@ -25,10 +31,10 @@ pub fn render_thread_picker(
         InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
     };
 
-    let visible_threads = picker.visible_threads();
-    let visible_count = visible_threads.len().min(MAX_VISIBLE_THREADS);
+    let tree_items = picker.visible_tree_items();
+    let visible_count = tree_items.len().min(MAX_VISIBLE_THREADS);
     let thread_count = match picker.scope {
-        ThreadScope::All => visible_threads.len(),
+        ThreadScope::All => tree_items.len(),
         ThreadScope::Current => picker.all_threads.len(),
     };
 
@@ -38,7 +44,7 @@ pub fn render_thread_picker(
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     let title = match picker.scope {
         ThreadScope::All => format!("Threads ({})", thread_count),
-        ThreadScope::Current => format!("Threads ({}/{})", visible_threads.len(), thread_count),
+        ThreadScope::Current => format!("Threads ({}/{})", tree_items.len(), thread_count),
     };
     render_overlay_container(frame, picker_area, &title, Color::Blue);
 
@@ -49,7 +55,7 @@ pub fn render_thread_picker(
         picker_area.height.saturating_sub(2),
     );
 
-    if visible_threads.is_empty() {
+    if tree_items.is_empty() {
         let empty_msg = Paragraph::new(match picker.scope {
             ThreadScope::Current => "No threads in this workspace",
             ThreadScope::All => "No threads found",
@@ -69,12 +75,12 @@ pub fn render_thread_picker(
         list_height as u16,
     );
 
-    let items: Vec<ListItem> = visible_threads
+    let items: Vec<ListItem> = tree_items
         .iter()
         .skip(picker.offset)
         .take(list_height)
-        .map(|thread| {
-            let thread = *thread;
+        .map(|item| {
+            let thread = item.summary;
             let timestamp = thread
                 .modified
                 .and_then(thread_log::format_timestamp_relative)
@@ -87,18 +93,58 @@ pub fn render_thread_picker(
                 short_thread_id(&thread.id).to_string()
             };
 
+            // Calculate tree prefix for hierarchical display
+            // For depth 1, branch starts at column 0 (aligned with parent)
+            // For depth 2+, indent by (depth-1) * 4 to align under previous level's text
+            let capped_depth = item.depth.min(4);
+            let indent_spaces = if capped_depth > 1 {
+                (capped_depth - 1) * 4
+            } else {
+                0
+            };
+            let indent_str: String = " ".repeat(indent_spaces);
+            // Branch character for child threads (depth > 0)
+            let branch_str = if item.depth > 0 { "└── " } else { "" };
+            // Handoff label for threads created via handoff
+            let handoff_label = if item.is_handoff { "[handoff] " } else { "" };
+            // Current thread indicator (appears before thread name)
+            let is_current = picker
+                .current_thread_id
+                .as_ref()
+                .is_some_and(|id| id == &thread.id);
+            let current_label = if is_current { "(current) " } else { "" };
+
+            let tree_prefix = format!("{}{}", indent_str, branch_str);
+            let tree_prefix_width = tree_prefix.width();
+            let handoff_label_width = handoff_label.width();
+            let current_label_width = current_label.width();
+
             // Account for highlight symbol "▶ " (3 chars wide)
             let highlight_width = 3;
             let available_width = (inner_area.width as usize).saturating_sub(highlight_width);
             let date_width = timestamp.width();
-            // Reserve space for date + gap (minimum 1 space)
-            let name_max_width = available_width.saturating_sub(date_width + 2);
+            // Reserve space for: tree_prefix + handoff_label + current_label + date + gap (minimum 1 space)
+            let name_max_width = available_width.saturating_sub(
+                tree_prefix_width + handoff_label_width + current_label_width + date_width + 2,
+            );
             let display_name = truncate_with_ellipsis(&display_name, name_max_width);
             let gap = available_width
-                .saturating_sub(display_name.width() + date_width)
+                .saturating_sub(
+                    tree_prefix_width
+                        + handoff_label_width
+                        + display_name.width()
+                        + current_label_width
+                        + date_width,
+                )
                 .max(1);
 
             let line = Line::from(vec![
+                Span::styled(tree_prefix, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    handoff_label.to_string(),
+                    Style::default().fg(Color::Yellow),
+                ),
+                Span::styled(current_label.to_string(), Style::default().fg(Color::Cyan)),
                 Span::styled(display_name, Style::default().fg(Color::White)),
                 Span::styled(" ".repeat(gap), Style::default()),
                 Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
@@ -147,49 +193,4 @@ pub fn render_thread_picker(
         ],
         Color::Blue,
     );
-}
-
-/// Truncates a string with ellipsis if it exceeds max_width.
-fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
-    if text.width() <= max_width {
-        return text.to_string();
-    }
-    if max_width <= 1 {
-        return "…".to_string();
-    }
-    let mut truncated = String::new();
-    for ch in text.chars() {
-        let next_width = truncated.width() + ch.width().unwrap_or(0);
-        if next_width + 1 > max_width {
-            break;
-        }
-        truncated.push(ch);
-    }
-    truncated.push('…');
-    truncated
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_truncate_with_ellipsis_short() {
-        assert_eq!(truncate_with_ellipsis("hello", 10), "hello");
-    }
-
-    #[test]
-    fn test_truncate_with_ellipsis_exact() {
-        assert_eq!(truncate_with_ellipsis("hello", 5), "hello");
-    }
-
-    #[test]
-    fn test_truncate_with_ellipsis_truncated() {
-        assert_eq!(truncate_with_ellipsis("hello world", 8), "hello w…");
-    }
-
-    #[test]
-    fn test_truncate_with_ellipsis_very_short() {
-        assert_eq!(truncate_with_ellipsis("hello", 1), "…");
-    }
 }
