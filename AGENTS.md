@@ -50,6 +50,11 @@
         - `zdx-tui/src/features/statusline/state.rs`: StatusLineAccumulator (mutable), StatusLine (snapshot)
         - `zdx-tui/src/features/statusline/render.rs`: render_debug_status_line function
       - `zdx-tui/src/features/thread/`: thread feature slice
+        - `zdx-tui/src/features/thread/mod.rs`: module exports
+        - `zdx-tui/src/features/thread/state.rs`: ThreadState, ThreadUsage
+        - `zdx-tui/src/features/thread/update.rs`: thread event handlers
+        - `zdx-tui/src/features/thread/render.rs`: thread picker rendering
+        - `zdx-tui/src/features/thread/tree.rs`: tree derivation for hierarchical display (ThreadDisplayItem, flatten_as_tree)
       - `zdx-tui/src/features/transcript/`: transcript feature slice
         - `zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
     - `zdx-tui/src/overlays/`: overlay feature slice
