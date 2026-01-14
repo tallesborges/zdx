@@ -404,7 +404,7 @@ mod tests {
     #[test]
     fn test_apply_patch_add_file() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Begin Patch\n*** Add File: hello.txt\n+Hello\n+World\n*** End Patch";
         let input = json!({"patch": patch});
 
@@ -422,7 +422,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch =
             "*** Begin Patch\n*** Update File: test.txt\n@@\n-line2\n+line2b\n*** End Patch";
         let input = json!({"patch": patch});
@@ -440,7 +440,7 @@ mod tests {
         let file_path = temp.path().join("delete.txt");
         fs::write(&file_path, "delete me").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Begin Patch\n*** Delete File: delete.txt\n*** End Patch";
         let input = json!({"patch": patch});
 
@@ -452,7 +452,7 @@ mod tests {
     #[test]
     fn test_apply_patch_parse_error() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Update File: missing_begin.txt\n@@\n-foo\n+bar\n*** End Patch";
         let input = json!({"patch": patch});
 
@@ -468,7 +468,7 @@ mod tests {
         let file_path = temp.path().join("pattern.txt");
         fs::write(&file_path, "alpha\nbeta\n").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch =
             "*** Begin Patch\n*** Update File: pattern.txt\n@@\n-gamma\n+delta\n*** End Patch";
         let input = json!({"patch": patch});
@@ -485,7 +485,7 @@ mod tests {
         let file_path = temp.path().join("multi.txt");
         fs::write(&file_path, "one\ntwo\nthree\nfour\n").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Begin Patch\n*** Update File: multi.txt\n@@\n-two\n+TWO\n@@\n-four\n+FOUR\n*** End Patch";
         let input = json!({"patch": patch});
 
@@ -501,7 +501,7 @@ mod tests {
         let file_path = temp.path().join("original.txt");
         fs::write(&file_path, "content\n").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Begin Patch\n*** Update File: original.txt\n*** Move to: renamed.txt\n@@\n-content\n+updated content\n*** End Patch";
         let input = json!({"patch": patch});
 
@@ -520,7 +520,7 @@ mod tests {
         let file_path = temp.path().join("context.txt");
         fs::write(&file_path, "fn main() {\n    hello();\n    world();\n}\n").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let patch = "*** Begin Patch\n*** Update File: context.txt\n@@ fn main() {\n-    hello();\n+    greet();\n*** End Patch";
         let input = json!({"patch": patch});
 

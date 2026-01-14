@@ -155,7 +155,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "Hello world!").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt", "old": "world", "new": "Rust"});
 
         let result = execute(&input, &ctx);
@@ -175,7 +175,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "Hello world!").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt", "old": "nonexistent", "new": "replacement"});
 
         let result = execute(&input, &ctx);
@@ -195,7 +195,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "foo bar foo baz foo").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Default expected_replacements is 1, but there are 3 occurrences
         let input = json!({"path": "test.txt", "old": "foo", "new": "qux"});
 
@@ -216,7 +216,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "foo bar foo baz foo").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input =
             json!({"path": "test.txt", "old": "foo", "new": "qux", "expected_replacements": 3});
 
@@ -237,7 +237,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "Hello world!").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt", "old": "", "new": "replacement"});
 
         let result = execute(&input, &ctx);
@@ -252,7 +252,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "Hello world!").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input =
             json!({"path": "test.txt", "old": "world", "new": "Rust", "expected_replacements": 0});
 
@@ -265,7 +265,7 @@ mod tests {
     #[test]
     fn test_edit_file_not_found() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "nonexistent.txt", "old": "foo", "new": "bar"});
 
         let result = execute(&input, &ctx);
@@ -280,7 +280,7 @@ mod tests {
         let file_path = temp.path().join("test.txt");
         fs::write(&file_path, "line1\r\nline2\r\nline3").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt", "old": "line2\r\n", "new": "replaced\r\n"});
 
         let result = execute(&input, &ctx);

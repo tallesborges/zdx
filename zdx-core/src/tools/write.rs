@@ -101,7 +101,7 @@ mod tests {
     #[test]
     fn test_write_new_file() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "new.txt", "content": "hello world"});
 
         let result = execute(&input, &ctx);
@@ -123,7 +123,7 @@ mod tests {
         let file_path = temp.path().join("existing.txt");
         fs::write(&file_path, "old content").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "existing.txt", "content": "new content"});
 
         let result = execute(&input, &ctx);
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn test_write_invalid_input() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "test.txt"}); // missing content
 
         let result = execute(&input, &ctx);
@@ -151,7 +151,7 @@ mod tests {
     #[test]
     fn test_write_creates_parent_dirs() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "new_dir/nested/file.txt", "content": "nested content"});
 
         let result = execute(&input, &ctx);
@@ -170,7 +170,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": "subdir/nested.txt", "content": "nested content"});
 
         let result = execute(&input, &ctx);
@@ -188,7 +188,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let abs_path = temp.path().join("absolute.txt");
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"path": abs_path.to_str().unwrap(), "content": "absolute content"});
 
         let result = execute(&input, &ctx);

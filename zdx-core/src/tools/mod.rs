@@ -162,7 +162,7 @@ pub struct ToolContext {
 }
 
 impl ToolContext {
-    pub fn with_timeout(root: PathBuf, timeout: Option<Duration>) -> Self {
+    pub fn new(root: PathBuf, timeout: Option<Duration>) -> Self {
         Self { root, timeout }
     }
 }
@@ -203,23 +203,56 @@ pub fn tools_for_provider(provider_config: &crate::config::ProviderConfig) -> Ve
 
 /// Executes a tool by name with the given input.
 /// Returns the structured ToolOutput (envelope format).
+///
+/// Validates that the tool is in the enabled set before execution.
+/// If the tool is unknown or not enabled, returns an error with the
+/// list of actually enabled tools (shown in canonical casing).
+///
+/// Tool names are matched case-insensitively, making the API resilient
+/// to provider casing differences.
 pub async fn execute_tool(
     name: &str,
     tool_use_id: &str,
     input: &Value,
     ctx: &ToolContext,
+    enabled_tools: &std::collections::HashSet<String>,
 ) -> (ToolOutput, ToolResult) {
-    let output = match name {
+    // Check if tool is enabled (case-insensitive comparison)
+    let name_lower = name.to_ascii_lowercase();
+    let is_enabled = enabled_tools
+        .iter()
+        .any(|t| t.to_ascii_lowercase() == name_lower);
+
+    if !is_enabled {
+        let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
+        available.sort();
+        let output = ToolOutput::failure_with_details(
+            "unknown_tool",
+            format!("Unknown tool: {}", name),
+            format!("Available tools: {}", available.join(", ")),
+        );
+        let result = ToolResult::from_output(tool_use_id.to_string(), &output);
+        return (output, result);
+    }
+
+    // Match on lowercase for dispatch
+    let output = match name_lower.as_str() {
         "bash" => bash::execute(input, ctx, ctx.timeout).await,
         "apply_patch" => execute_apply_patch(input, ctx).await,
         "edit" => execute_edit(input, ctx).await,
         "read" => execute_read(input, ctx).await,
         "write" => execute_write(input, ctx).await,
-        _ => ToolOutput::failure_with_details(
-            "unknown_tool",
-            format!("Unknown tool: {}", name),
-            "Available tools: bash, apply_patch, edit, read, write",
-        ),
+        _ => {
+            // This shouldn't happen if enabled_tools is properly configured,
+            // but handle it gracefully
+            let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
+            available.sort();
+            ToolOutput::failure_with_details(
+                "unknown_tool",
+                format!("Unknown tool: {}", name),
+                format!("Available tools: {}", available.join(", ")),
+            )
+        }
     };
 
     let result = ToolResult::from_output(tool_use_id.to_string(), &output);
@@ -307,14 +340,19 @@ mod tests {
 
     use super::*;
 
+    /// Helper to create enabled_tools set with all tools (canonical names)
+    fn all_enabled_tools() -> std::collections::HashSet<String> {
+        all_tools().into_iter().map(|t| t.name).collect()
+    }
+
     #[tokio::test]
     async fn test_execute_tool_times_out() {
         let temp = TempDir::new().unwrap();
-        let ctx =
-            ToolContext::with_timeout(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
+        let ctx = ToolContext::new(temp.path().to_path_buf(), Some(Duration::from_secs(1)));
+        let enabled = all_enabled_tools();
         let input = json!({"command": "sleep 2"});
 
-        let (output, result) = execute_tool("bash", "toolu_timeout", &input, &ctx).await;
+        let (output, result) = execute_tool("bash", "toolu_timeout", &input, &ctx, &enabled).await;
         // Timeout is still a success envelope with timed_out=true
         assert!(output.is_ok());
         assert!(
@@ -327,21 +365,55 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_execute_unknown_tool() {
+    async fn test_execute_tool_respects_enabled_tools() {
         let temp = TempDir::new().unwrap();
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        // Only enable Bash and Read (canonical names) - NOT Apply_Patch
+        let enabled: std::collections::HashSet<String> =
+            vec!["Bash".to_string(), "Read".to_string()]
+                .into_iter()
+                .collect();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({});
 
-        let (output, result) = execute_tool("unknown", "toolu_unknown", &input, &ctx).await;
+        // Try to call apply_patch which is not enabled (lowercase, as model might return)
+        let (output, result) =
+            execute_tool("apply_patch", "toolu_test", &input, &ctx, &enabled).await;
+
+        // Should fail as unknown_tool
         assert!(!output.is_ok());
         assert!(result.is_error);
-        assert!(
-            result
-                .content
-                .as_text()
-                .unwrap()
-                .contains(r#""code":"unknown_tool""#)
-        );
+
+        let content = result.content.as_text().unwrap();
+        assert!(content.contains(r#""code":"unknown_tool""#));
+        // Error message mentions the unknown tool (preserves original casing from caller)
+        assert!(content.contains("Unknown tool: apply_patch"));
+        // Available tools should list canonical names (PascalCase)
+        assert!(content.contains("Available tools: Bash, Read"));
+        // Should NOT include tools that weren't enabled
+        assert!(!content.contains("Edit"));
+        assert!(!content.contains("Write"));
+    }
+
+    #[tokio::test]
+    async fn test_execute_tool_case_insensitive() {
+        let temp = TempDir::new().unwrap();
+        std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let enabled = all_enabled_tools();
+        let input = json!({"path": "test.txt"});
+
+        // Call with PascalCase (as Anthropic might return)
+        let (output, _) = execute_tool("Read", "toolu_test", &input, &ctx, &enabled).await;
+        assert!(output.is_ok());
+
+        // Call with lowercase
+        let (output, _) = execute_tool("read", "toolu_test", &input, &ctx, &enabled).await;
+        assert!(output.is_ok());
+
+        // Call with UPPERCASE
+        let (output, _) = execute_tool("READ", "toolu_test", &input, &ctx, &enabled).await;
+        assert!(output.is_ok());
     }
 
     #[test]
@@ -376,26 +448,6 @@ mod tests {
     #[test]
     fn test_tools_for_provider_with_filter() {
         let config = crate::config::ProviderConfig {
-            tools: Some(vec![
-                "bash".to_string(),
-                "read".to_string(),
-                "write".to_string(),
-            ]),
-            ..Default::default()
-        };
-        let tools = tools_for_provider(&config);
-
-        let names: Vec<_> = tools.iter().map(|t| t.name.to_lowercase()).collect();
-        assert!(names.contains(&"bash".to_string()));
-        assert!(!names.contains(&"apply_patch".to_string()));
-        assert!(!names.contains(&"edit".to_string()));
-        assert!(names.contains(&"read".to_string()));
-        assert!(names.contains(&"write".to_string()));
-    }
-
-    #[test]
-    fn test_tools_for_provider_with_explicit_list() {
-        let config = crate::config::ProviderConfig {
             tools: Some(vec!["bash".to_string(), "read".to_string()]),
             ..Default::default()
         };
@@ -405,5 +457,6 @@ mod tests {
         assert_eq!(names.len(), 2);
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"read".to_string()));
+        assert!(!names.contains(&"apply_patch".to_string()));
     }
 }
