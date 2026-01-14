@@ -1,5 +1,7 @@
 # ZDX
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
+
 A fast, beautiful agentic coding assistant.
 
 ![zdx demo](docs/assets/demo.gif)
