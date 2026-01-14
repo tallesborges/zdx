@@ -30,7 +30,7 @@
 1. User submits prompt "a"; agent starts streaming.
 2. While streaming, user presses Enter with "b" in input.
    -> "b" is enqueued and input clears.
-3. Queue panel appears with "b" listed (first 30 chars).
+3. Queue panel appears with "b" listed (truncated to panel width with ellipsis).
 4. Agent finishes "a". "b" auto-sends and starts streaming.
 5. If user interrupts "a" mid-tool, only the "a" cell shows "interrupted".
 ```
@@ -89,8 +89,30 @@
 **Checklist:**
 - [x] Add a layout segment between transcript and input.
 - [x] Show a bordered panel with title `Queued (N)`.
-- [x] Render up to 3 items, each max 30 chars, truncated to fit width.
+- [x] Render up to 3 items, truncated to fit panel width with ellipsis.
 - [x] Hide panel when queue empty.
+
+---
+
+### Slice 5: Unicode-Aware Truncation (Polish)
+
+**Goal:** Use `truncate_with_ellipsis` for proper unicode width handling.
+
+**Rationale:** The original implementation used `.chars().count()/.take()` which counts 
+characters, not display width. Wide characters (CJK, emoji) take 2 terminal columns 
+but count as 1 char, causing layout overflow. Using `common/text::truncate_with_ellipsis` 
+fixes this and adds a proper ellipsis indicator.
+
+**Checklist:**
+- [x] Update `InputState::queued_summaries()` in `zdx-tui/src/features/input/state.rs`:
+  - Remove `max_chars` parameter (no longer needed - truncation happens at render time)
+  - Return first line of each queued prompt without truncation
+- [x] Update `render_queue_panel()` in `zdx-tui/src/render.rs`:
+  - Import `crate::common::text::truncate_with_ellipsis`
+  - Use `truncate_with_ellipsis(line, inner_width)` instead of `.chars().take()`
+  - Remove `QUEUE_MAX_CHARS` constant (width is now dynamic based on panel size)
+- [x] Update call sites in `render.rs` that pass `QUEUE_MAX_CHARS` to `queued_summaries()`
+- [x] Add test for truncation with wide characters (emoji, CJK)
 
 ---
 
@@ -123,10 +145,11 @@
 
 ## Files
 
-- `src/modes/tui/input/state.rs` (queue storage + helpers)
-- `src/modes/tui/input/update.rs` (enqueue logic)
-- `src/modes/tui/update.rs` (dequeue on turn end)
-- `src/modes/tui/render.rs` (queue panel)
-- `src/modes/tui/transcript/state.rs` (active user cell tracking)
+- `zdx-tui/src/features/input/state.rs` (queue storage + helpers)
+- `zdx-tui/src/features/input/update.rs` (enqueue logic)
+- `zdx-tui/src/update.rs` (dequeue on turn end)
+- `zdx-tui/src/render.rs` (queue panel)
+- `zdx-tui/src/features/transcript/state.rs` (active user cell tracking)
+- `zdx-tui/src/common/text.rs` (truncate_with_ellipsis utility)
 - `docs/SPEC.md` (user-visible contract)
 

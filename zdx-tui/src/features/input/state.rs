@@ -644,18 +644,14 @@ impl InputState {
     }
 
     /// Returns a display-friendly summary of queued prompts.
-    pub fn queued_summaries(&self, max_items: usize, max_chars: usize) -> Vec<String> {
+    ///
+    /// Returns the first line of each queued prompt without truncation.
+    /// Truncation is handled at render time using unicode-aware width calculation.
+    pub fn queued_summaries(&self, max_items: usize) -> Vec<String> {
         self.queued
             .iter()
             .take(max_items)
-            .map(|item| {
-                let line = item.lines().next().unwrap_or("");
-                if line.chars().count() > max_chars {
-                    line.chars().take(max_chars).collect()
-                } else {
-                    line.to_string()
-                }
-            })
+            .map(|item| item.lines().next().unwrap_or("").to_string())
             .collect()
     }
 

@@ -109,4 +109,35 @@ mod tests {
         assert!(matches!(result, Cow::Owned(_)));
         assert_eq!(result, "hello    world");
     }
+
+    #[test]
+    fn test_truncate_with_ellipsis_wide_emoji() {
+        // Emoji like 🎉 takes 2 terminal columns
+        // "hello 🎉" = 5 + 1 + 2 = 8 columns
+        let text = "hello 🎉 world";
+        // With max_width=10, we should fit "hello 🎉" (8 cols) + ellipsis (1)
+        let result = truncate_with_ellipsis(text, 10);
+        assert_eq!(result, "hello 🎉 …");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_wide_cjk() {
+        // CJK characters take 2 terminal columns each
+        // "中文" = 4 columns, "test" = 4 columns
+        let text = "中文test";
+        // With max_width=6, we should fit "中文t" (5 cols) + ellipsis (1)
+        let result = truncate_with_ellipsis(text, 6);
+        assert_eq!(result, "中文t…");
+    }
+
+    #[test]
+    fn test_truncate_with_ellipsis_mixed_width() {
+        // Mix of narrow (1 col) and wide (2 col) characters
+        let text = "a中b文c";
+        // Width: 1 + 2 + 1 + 2 + 1 = 7 columns
+        assert_eq!(truncate_with_ellipsis(text, 7), "a中b文c");
+        assert_eq!(truncate_with_ellipsis(text, 6), "a中b…");
+        assert_eq!(truncate_with_ellipsis(text, 5), "a中b…");
+        assert_eq!(truncate_with_ellipsis(text, 4), "a中…");
+    }
 }
