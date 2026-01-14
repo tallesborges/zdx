@@ -7,7 +7,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
-use super::state::{HandoffState, InputState};
+use super::state::{HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingPaste};
 use crate::common::{TaskKind, sanitize_for_display};
 use crate::effects::UiEffect;
 use crate::mutations::{InputMutation, StateMutation, ThreadMutation, TranscriptMutation};
@@ -18,13 +18,33 @@ use crate::transcript::HistoryCell;
 /// Handles paste events for input.
 ///
 /// Sanitizes pasted text by stripping ANSI escapes and expanding tabs to spaces.
+/// For large pastes (>1000 chars), inserts a placeholder and stores the original
+/// content for expansion on submission.
 pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
     let sanitized = sanitize_for_display(text);
     if let Some(Overlay::Login(LoginState::AwaitingCode { .. })) = overlay {
         // Ignore paste while waiting for OAuth callback.
+        return;
+    }
+
+    let char_count = sanitized.chars().count();
+    if char_count > LARGE_PASTE_CHAR_THRESHOLD {
+        // Large paste: create placeholder and store original content
+        let id = input.next_paste_id();
+        let placeholder = InputState::generate_placeholder(char_count, &id);
+        input.pending_pastes.push(PendingPaste {
+            id,
+            placeholder: placeholder.clone(),
+            content: sanitized.into_owned(),
+        });
+        input.textarea.insert_str(&placeholder);
     } else {
+        // Small paste: insert directly
         input.textarea.insert_str(&sanitized);
     }
+
+    // Sync pending pastes in case the paste replaced selected text containing a placeholder
+    input.sync_pending_pastes();
 }
 
 /// Handles main key input when no overlay is active.
@@ -63,6 +83,7 @@ pub fn handle_main_key(
                 input.textarea.move_cursor(tui_textarea::CursorMove::Head);
                 input.textarea.delete_line_by_end();
             }
+            input.sync_pending_pastes();
             (vec![], vec![], None)
         }
         KeyCode::Char('/') if !ctrl && !shift && !alt => {
@@ -76,6 +97,7 @@ pub fn handle_main_key(
                 )
             } else {
                 input.textarea.input(key);
+                input.sync_pending_pastes();
                 (vec![], vec![], None)
             }
         }
@@ -190,6 +212,9 @@ pub fn handle_main_key(
                 input.navigate_up();
             } else {
                 input.textarea.input(key);
+                input.sync_pending_pastes();
+                // Snap cursor to placeholder end if it landed inside one
+                input.snap_to_placeholder_end();
             }
             (vec![], vec![], None)
         }
@@ -198,6 +223,9 @@ pub fn handle_main_key(
                 input.navigate_down();
             } else {
                 input.textarea.input(key);
+                input.sync_pending_pastes();
+                // Snap cursor to placeholder end if it landed inside one
+                input.snap_to_placeholder_end();
             }
             (vec![], vec![], None)
         }
@@ -208,9 +236,53 @@ pub fn handle_main_key(
             input.textarea.insert_str("    ");
             (vec![], vec![], None)
         }
+        KeyCode::Backspace => {
+            input.reset_navigation();
+            // If deleting the closing `]` of a placeholder, remove the entire placeholder
+            if !input.try_delete_placeholder_at_bracket(true) {
+                input.textarea.input(key);
+                input.sync_pending_pastes();
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Delete => {
+            input.reset_navigation();
+            // If deleting the closing `]` of a placeholder, remove the entire placeholder
+            if !input.try_delete_placeholder_at_bracket(false) {
+                input.textarea.input(key);
+                input.sync_pending_pastes();
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Left if !ctrl && !shift && !alt => {
+            // Jump over placeholder if cursor is inside one, otherwise move normally
+            if !input.try_jump_over_placeholder(true) {
+                input.textarea.input(key);
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Right if !ctrl && !shift && !alt => {
+            // Jump over placeholder if cursor is inside one, otherwise move normally
+            if !input.try_jump_over_placeholder(false) {
+                input.textarea.input(key);
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Char(' ') if !ctrl && !shift && !alt => {
+            // If cursor is inside a placeholder, expand it to original content
+            if input.try_expand_placeholder_at_cursor() {
+                return (vec![], vec![], None);
+            }
+            // Otherwise, insert space normally
+            input.reset_navigation();
+            input.textarea.input(key);
+            input.sync_pending_pastes();
+            (vec![], vec![], None)
+        }
         _ => {
             input.reset_navigation();
             input.textarea.input(key);
+            input.sync_pending_pastes();
 
             // Detect `@` trigger for file picker
             if key.code == KeyCode::Char('@') && !key.modifiers.contains(KeyModifiers::CONTROL) {
@@ -269,7 +341,7 @@ fn submit_input(
         );
     }
 
-    let text = input.get_text();
+    let text = input.get_text_with_pending();
     let trimmed = text.trim();
 
     let agent_running = agent_state.is_running();
