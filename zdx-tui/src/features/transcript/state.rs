@@ -302,13 +302,12 @@ impl ScrollAccumulator {
             self.consecutive_frames = self.consecutive_frames.saturating_add(1);
         }
 
-        // Acceleration curve: 1, 1, 2, 3, 5, 8, ... (capped)
-        let multiplier = match self.consecutive_frames {
-            0..=2 => 1,
-            3..=4 => 2,
-            5..=6 => 3,
-            7..=8 => 5,
-            _ => 8,
+        // Log2-based acceleration: smooth, unbounded growth.
+        // Formula: 1 + floor(log2(max(1, consecutive_frames - 1)))
+        // This gives: frames 1-2 → 1, frame 3+ → grows logarithmically.
+        let multiplier = {
+            let adjusted = self.consecutive_frames.saturating_sub(1).max(1) as f64;
+            (1.0 + adjusted.log2()).floor() as u32
         };
 
         // Apply multiplier but cap at the raw delta magnitude
