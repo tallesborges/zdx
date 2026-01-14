@@ -150,6 +150,8 @@ enum ConfigCommands {
     Path,
     /// Initialize a default config file (if not present)
     Init,
+    /// Generate a fresh config from Rust defaults (for xtask)
+    Generate,
 }
 
 #[derive(clap::Subcommand)]
@@ -217,6 +219,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         Commands::Config { command } => match command {
             ConfigCommands::Path => commands::config::path(),
             ConfigCommands::Init => commands::config::init(),
+            ConfigCommands::Generate => commands::config::generate(),
         },
 
         Commands::Login {
