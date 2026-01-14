@@ -25,6 +25,8 @@ tool_timeout_secs = 0
 # Options: off, minimal (~5%), low (~20%), medium (~50%), high (~80%), xhigh (~95%)
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
+handoff_model = "gemini-cli:gemini-3-flash-preview"
+title_model = "gemini-cli:gemini-2.5-flash"
 
 # Model used for handoff generation subagent.
 # Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
@@ -64,7 +66,7 @@ tools = ["bash", "edit", "read", "write"]
 enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
-models = ["gpt-5.2", "gpt-5-mini", "gpt-5-nano", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
+models = ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
 tools = ["bash", "edit", "read", "write"]
 
 [providers.openai_codex]

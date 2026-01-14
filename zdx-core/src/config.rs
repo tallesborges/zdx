@@ -423,6 +423,57 @@ impl Config {
         Self::write_config(path, default_config_template())
     }
 
+    /// Generates a fresh config TOML from Rust defaults.
+    ///
+    /// This is used by `xtask update-default-config` to keep
+    /// `default_config.toml` in sync with Rust default values.
+    ///
+    /// Uses the embedded template for structure/comments and merges
+    /// generated values from `Config::default()` into it.
+    pub fn generate() -> Result<String> {
+        use toml_edit::{DocumentMut, Item};
+
+        let config = Config::default();
+        let generated_toml =
+            toml::to_string(&config).context("Failed to serialize default config to TOML")?;
+
+        // Parse template as base (preserves comments)
+        let mut doc: DocumentMut = default_config_template()
+            .parse()
+            .context("Failed to parse default config template")?;
+
+        // Parse generated values
+        let generated_doc: DocumentMut = generated_toml
+            .parse()
+            .context("Failed to parse generated config")?;
+
+        // Merge generated values into template (overwrites values, keeps comments)
+        fn merge(target: &mut toml_edit::Table, source: &toml_edit::Table) {
+            for (key, value) in source.iter() {
+                match value {
+                    Item::Value(v) => {
+                        target[key] = Item::Value(v.clone());
+                    }
+                    Item::Table(src_table) => {
+                        if let Some(Item::Table(target_table)) = target.get_mut(key) {
+                            merge(target_table, src_table);
+                        } else {
+                            target[key] = Item::Table(src_table.clone());
+                        }
+                    }
+                    Item::ArrayOfTables(arr) => {
+                        target[key] = Item::ArrayOfTables(arr.clone());
+                    }
+                    Item::None => {}
+                }
+            }
+        }
+
+        merge(doc.as_table_mut(), generated_doc.as_table());
+
+        Ok(doc.to_string())
+    }
+
     /// Writes config content to a file, creating parent directories as needed.
     /// Uses atomic write (temp file + rename) to prevent corruption.
     fn write_config(path: &Path, content: &str) -> Result<()> {
@@ -583,6 +634,7 @@ fn default_openai_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gpt-5.2".to_string(),
+            "gpt-5.1".to_string(),
             "gpt-5-mini".to_string(),
             "gpt-5-nano".to_string(),
             "gpt-5.2-codex".to_string(),

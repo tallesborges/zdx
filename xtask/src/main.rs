@@ -79,32 +79,26 @@ fn update_default_models() -> Result<()> {
 
 fn update_default_config() -> Result<()> {
     let root = project_root()?;
-    let temp_dir = tempfile::tempdir().context("create temp dir for ZDX_HOME")?;
-    let config_path = temp_dir.path().join("config.toml");
+    let dest = root.join("zdx-core").join("default_config.toml");
 
-    let status = Command::new("cargo")
+    let output = Command::new("cargo")
         .current_dir(&root)
-        .env("ZDX_HOME", temp_dir.path())
         .arg("run")
         .arg("-p")
         .arg("zdx")
         .arg("--")
         .arg("config")
-        .arg("init")
-        .status()
-        .context("run `cargo run -p zdx -- config init`")?;
+        .arg("generate")
+        .output()
+        .context("run `cargo run -p zdx -- config generate`")?;
 
-    if !status.success() {
-        bail!("config init failed with status {status}");
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("config generate failed: {}", stderr);
     }
 
-    if !config_path.exists() {
-        bail!("config init did not produce {}", config_path.display());
-    }
-
-    let dest = root.join("zdx-core").join("default_config.toml");
-    fs::copy(&config_path, &dest)
-        .with_context(|| format!("copy {} to {}", config_path.display(), dest.display()))?;
+    fs::write(&dest, &output.stdout)
+        .with_context(|| format!("write config to {}", dest.display()))?;
 
     println!("Updated {}", dest.display());
     Ok(())

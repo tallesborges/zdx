@@ -15,3 +15,9 @@ pub fn init() -> Result<()> {
     println!("Created config at {}", config_path.display());
     Ok(())
 }
+
+pub fn generate() -> Result<()> {
+    let toml = config::Config::generate()?;
+    print!("{}", toml);
+    Ok(())
+}
