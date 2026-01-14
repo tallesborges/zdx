@@ -4,6 +4,20 @@
 
 use crate::mutations::InputMutation;
 
+/// Threshold for replacing large pastes with placeholders (in chars).
+pub const LARGE_PASTE_CHAR_THRESHOLD: usize = 1000;
+
+/// A pending paste stored for later expansion on submission.
+#[derive(Debug, Clone)]
+pub struct PendingPaste {
+    /// Unique numeric identifier for this paste (e.g., "1", "2", "3").
+    pub id: String,
+    /// The placeholder text shown in the textarea.
+    pub placeholder: String,
+    /// The original pasted content.
+    pub content: String,
+}
+
 /// Handoff feature state machine.
 ///
 /// Models the lifecycle of a handoff operation:
@@ -80,6 +94,12 @@ pub struct InputState {
 
     /// Queued prompts to send after the current turn completes.
     pub queued: std::collections::VecDeque<String>,
+
+    /// Pending pastes waiting for expansion on submission.
+    pub pending_pastes: Vec<PendingPaste>,
+
+    /// Monotonic counter for generating unique paste IDs.
+    paste_counter: u32,
 }
 
 impl Default for InputState {
@@ -110,6 +130,8 @@ impl InputState {
             draft: None,
             handoff: HandoffState::Idle,
             queued: std::collections::VecDeque::new(),
+            pending_pastes: Vec::new(),
+            paste_counter: 0,
         }
     }
 
@@ -118,11 +140,433 @@ impl InputState {
         self.textarea.lines().join("\n")
     }
 
+    /// Gets the current input text with pending paste placeholders expanded.
+    ///
+    /// Replaces all placeholder strings with their original pasted content,
+    /// then clears pending_pastes. Should only be called at submission time.
+    ///
+    /// If a placeholder appears multiple times (e.g., user copy-pasted it),
+    /// all occurrences are expanded to the same content.
+    pub fn get_text_with_pending(&mut self) -> String {
+        let text = self.get_text();
+        let expanded = self.pending_pastes.iter().fold(text, |acc, paste| {
+            acc.replace(&paste.placeholder, &paste.content)
+        });
+        self.clear_pending_pastes();
+        expanded
+    }
+
+    /// Clears pending pastes but keeps the counter.
+    pub fn clear_pending_pastes(&mut self) {
+        self.pending_pastes.clear();
+    }
+
+    /// Removes pending pastes whose placeholders no longer exist in the textarea.
+    ///
+    /// Called after any text mutation that might delete or modify placeholders.
+    /// This keeps pending_pastes in sync with what's actually in the textarea.
+    pub fn sync_pending_pastes(&mut self) {
+        if self.pending_pastes.is_empty() {
+            return;
+        }
+        let text = self.get_text();
+        self.pending_pastes
+            .retain(|paste| text.contains(&paste.placeholder));
+    }
+
+    /// Attempts to delete an entire placeholder if the user is deleting its closing bracket.
+    ///
+    /// When the user presses Backspace or Delete on the `]` of a placeholder like
+    /// `[Pasted Content 1234 chars #a1b2c3d4]`, this removes the entire placeholder
+    /// from the textarea rather than leaving orphaned text.
+    ///
+    /// Returns `true` if a placeholder was deleted (caller should skip normal key handling),
+    /// `false` otherwise (caller should proceed with normal key handling).
+    pub fn try_delete_placeholder_at_bracket(&mut self, is_backspace: bool) -> bool {
+        if self.pending_pastes.is_empty() {
+            return false;
+        }
+
+        let text = self.get_text();
+        let (row, col) = self.textarea.cursor();
+
+        // Convert cursor position (row, col) to byte offset in text
+        let cursor_byte_offset = Self::cursor_to_byte_offset(&text, row, col);
+
+        // Determine the byte offset of the character being deleted
+        let delete_byte_offset = if is_backspace {
+            // Backspace deletes the char immediately before cursor
+            if cursor_byte_offset == 0 {
+                return false;
+            }
+            // Find start of previous char (handle multi-byte UTF-8)
+            text[..cursor_byte_offset]
+                .char_indices()
+                .last()
+                .map(|(i, _)| i)
+                .unwrap_or(0)
+        } else {
+            // Delete deletes the char at cursor
+            if cursor_byte_offset >= text.len() {
+                return false;
+            }
+            cursor_byte_offset
+        };
+
+        // Check if the char at delete_byte_offset is `]`
+        if !text[delete_byte_offset..].starts_with(']') {
+            return false;
+        }
+
+        // Find if this `]` is the closing bracket of any placeholder
+        for paste_idx in 0..self.pending_pastes.len() {
+            let placeholder = &self.pending_pastes[paste_idx].placeholder;
+
+            // Find all occurrences of this placeholder in the text
+            let mut search_start = 0;
+            while let Some(pos) = text[search_start..].find(placeholder) {
+                let abs_pos = search_start + pos;
+                let placeholder_end = abs_pos + placeholder.len();
+
+                // The `]` is at placeholder_end - 1 (last byte of placeholder)
+                if delete_byte_offset == placeholder_end - 1 {
+                    // Found! Delete the entire placeholder
+                    return self.delete_placeholder_at(paste_idx, abs_pos, &text);
+                }
+
+                search_start = abs_pos + 1;
+            }
+        }
+
+        false
+    }
+
+    /// Converts cursor position (row, col) to byte offset in text.
+    fn cursor_to_byte_offset(text: &str, row: usize, col: usize) -> usize {
+        let mut offset = 0;
+        for (i, line) in text.lines().enumerate() {
+            if i < row {
+                offset += line.len() + 1; // +1 for newline
+            } else {
+                // col is in char units, need to convert to bytes
+                offset += line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
+                break;
+            }
+        }
+        // Handle case where cursor is on a line past the last line (empty line at end)
+        if text.ends_with('\n') && row == text.lines().count() {
+            offset = text.len();
+        }
+        offset
+    }
+
+    /// Converts byte offset to cursor position (row, col).
+    fn byte_offset_to_cursor(text: &str, byte_offset: usize) -> (usize, usize) {
+        let mut row = 0;
+        let mut current_line_start = 0;
+
+        for (i, line) in text.lines().enumerate() {
+            let line_end = current_line_start + line.len();
+            if byte_offset <= line_end {
+                // Cursor is on this line
+                let col = text[current_line_start..byte_offset].chars().count();
+                return (i, col);
+            }
+            current_line_start = line_end + 1; // +1 for newline
+            row = i + 1;
+        }
+
+        // If byte_offset is at or past end, put cursor at end of last line
+        let last_line_chars = text.lines().last().map(|l| l.chars().count()).unwrap_or(0);
+        (row.saturating_sub(1), last_line_chars)
+    }
+
+    /// Finds if cursor should jump over a placeholder when navigating.
+    ///
+    /// For Right arrow: if cursor is at or inside a placeholder [start, end),
+    /// returns the byte position after the placeholder (end).
+    ///
+    /// For Left arrow: if cursor is inside or at end of placeholder (start, end],
+    /// returns the byte position at the start of the placeholder.
+    ///
+    /// Returns `None` if cursor is not in a position that requires jumping.
+    fn find_placeholder_jump_target(
+        &self,
+        text: &str,
+        cursor_byte: usize,
+        is_left: bool,
+    ) -> Option<usize> {
+        for paste in &self.pending_pastes {
+            // Find all occurrences of this placeholder in text
+            let mut search_start = 0;
+            while let Some(pos) = text[search_start..].find(&paste.placeholder) {
+                let start = search_start + pos;
+                let end = start + paste.placeholder.len();
+
+                if is_left {
+                    // Moving left: jump to start if cursor is in (start, end]
+                    if cursor_byte > start && cursor_byte <= end {
+                        return Some(start);
+                    }
+                } else {
+                    // Moving right: jump to end if cursor is in [start, end)
+                    if cursor_byte >= start && cursor_byte < end {
+                        return Some(end);
+                    }
+                }
+
+                search_start = start + 1;
+            }
+        }
+        None
+    }
+
+    /// Finds if cursor is inside a placeholder and returns the end byte position.
+    ///
+    /// Used after Up/Down cursor movement to snap cursor to placeholder end.
+    /// Returns `Some(end)` if cursor is strictly inside a placeholder [start, end),
+    /// `None` otherwise.
+    fn find_placeholder_end_if_inside(&self, text: &str, cursor_byte: usize) -> Option<usize> {
+        for paste in &self.pending_pastes {
+            let mut search_start = 0;
+            while let Some(pos) = text[search_start..].find(&paste.placeholder) {
+                let start = search_start + pos;
+                let end = start + paste.placeholder.len();
+
+                // Cursor is inside placeholder if in [start, end)
+                if cursor_byte >= start && cursor_byte < end {
+                    return Some(end);
+                }
+
+                search_start = start + 1;
+            }
+        }
+        None
+    }
+
+    /// Finds which placeholder the cursor is inside, if any.
+    ///
+    /// Returns `Some((paste_idx, byte_start, byte_end))` if cursor is inside a placeholder,
+    /// where `paste_idx` is the index in `pending_pastes` and byte positions are for the
+    /// placeholder occurrence in the text.
+    fn find_placeholder_at_cursor(
+        &self,
+        text: &str,
+        cursor_byte: usize,
+    ) -> Option<(usize, usize, usize)> {
+        for (paste_idx, paste) in self.pending_pastes.iter().enumerate() {
+            let mut search_start = 0;
+            while let Some(pos) = text[search_start..].find(&paste.placeholder) {
+                let start = search_start + pos;
+                let end = start + paste.placeholder.len();
+
+                // Cursor is inside placeholder if in [start, end)
+                if cursor_byte >= start && cursor_byte < end {
+                    return Some((paste_idx, start, end));
+                }
+
+                search_start = start + 1;
+            }
+        }
+        None
+    }
+
+    /// Snaps cursor to placeholder end if it landed inside a placeholder.
+    ///
+    /// Called after Up/Down arrow movement to ensure the cursor doesn't
+    /// land in the middle of a placeholder. If cursor is inside a placeholder,
+    /// moves it to the position after the closing `]`.
+    ///
+    /// Returns `true` if cursor was snapped, `false` otherwise.
+    pub fn snap_to_placeholder_end(&mut self) -> bool {
+        if self.pending_pastes.is_empty() {
+            return false;
+        }
+
+        let text = self.get_text();
+        let (row, col) = self.textarea.cursor();
+        let cursor_byte = Self::cursor_to_byte_offset(&text, row, col);
+
+        let Some(target_byte) = self.find_placeholder_end_if_inside(&text, cursor_byte) else {
+            return false;
+        };
+
+        // Move cursor to end of placeholder
+        let (new_row, new_col) = Self::byte_offset_to_cursor(&text, target_byte);
+
+        use tui_textarea::CursorMove;
+        self.textarea.move_cursor(CursorMove::Top);
+        self.textarea.move_cursor(CursorMove::Head);
+        for _ in 0..new_row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        for _ in 0..new_col {
+            self.textarea.move_cursor(CursorMove::Forward);
+        }
+
+        true
+    }
+
+    /// Attempts to jump the cursor over a placeholder when navigating with arrow keys.
+    ///
+    /// When the cursor is inside or at the boundary of a placeholder:
+    /// - Right arrow: jumps cursor to position after the closing `]`
+    /// - Left arrow: jumps cursor to position before the opening `[`
+    ///
+    /// Returns `true` if a jump occurred (caller should skip normal arrow handling),
+    /// `false` otherwise (caller should proceed with normal cursor movement).
+    pub fn try_jump_over_placeholder(&mut self, is_left: bool) -> bool {
+        if self.pending_pastes.is_empty() {
+            return false;
+        }
+
+        let text = self.get_text();
+        let (row, col) = self.textarea.cursor();
+        let cursor_byte = Self::cursor_to_byte_offset(&text, row, col);
+
+        let Some(target_byte) = self.find_placeholder_jump_target(&text, cursor_byte, is_left)
+        else {
+            return false;
+        };
+
+        // Move cursor to target position
+        let (new_row, new_col) = Self::byte_offset_to_cursor(&text, target_byte);
+
+        use tui_textarea::CursorMove;
+        self.textarea.move_cursor(CursorMove::Top);
+        self.textarea.move_cursor(CursorMove::Head);
+        for _ in 0..new_row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        for _ in 0..new_col {
+            self.textarea.move_cursor(CursorMove::Forward);
+        }
+
+        true
+    }
+
+    /// Deletes a placeholder at the given byte position and updates cursor.
+    fn delete_placeholder_at(&mut self, paste_idx: usize, byte_start: usize, text: &str) -> bool {
+        let placeholder = &self.pending_pastes[paste_idx].placeholder;
+        let byte_end = byte_start + placeholder.len();
+
+        // Build new text without the placeholder
+        let new_text = format!("{}{}", &text[..byte_start], &text[byte_end..]);
+
+        // Remove from pending_pastes
+        self.pending_pastes.remove(paste_idx);
+
+        // Calculate new cursor position (at the start of where placeholder was)
+        let (new_row, new_col) = Self::byte_offset_to_cursor(&new_text, byte_start);
+
+        // Set the new text
+        self.textarea.select_all();
+        self.textarea.cut();
+        if !new_text.is_empty() {
+            self.textarea.insert_str(&new_text);
+        }
+
+        // Position cursor at where the placeholder started
+        use tui_textarea::CursorMove;
+        self.textarea.move_cursor(CursorMove::Top);
+        self.textarea.move_cursor(CursorMove::Head);
+        for _ in 0..new_row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        for _ in 0..new_col {
+            self.textarea.move_cursor(CursorMove::Forward);
+        }
+
+        true
+    }
+
+    /// Expands a placeholder at the given byte position to its original content.
+    ///
+    /// Replaces the placeholder text with the stored original content and
+    /// positions the cursor at the end of the expanded content.
+    fn expand_placeholder_at(&mut self, paste_idx: usize, byte_start: usize, text: &str) -> bool {
+        let placeholder = &self.pending_pastes[paste_idx].placeholder;
+        let content = &self.pending_pastes[paste_idx].content;
+        let byte_end = byte_start + placeholder.len();
+
+        // Build new text with placeholder replaced by original content
+        let new_text = format!("{}{}{}", &text[..byte_start], content, &text[byte_end..]);
+
+        // Calculate cursor position at end of expanded content
+        let cursor_byte = byte_start + content.len();
+
+        // Remove from pending_pastes
+        self.pending_pastes.remove(paste_idx);
+
+        // Calculate new cursor position (at end of expanded content)
+        let (new_row, new_col) = Self::byte_offset_to_cursor(&new_text, cursor_byte);
+
+        // Set the new text
+        self.textarea.select_all();
+        self.textarea.cut();
+        if !new_text.is_empty() {
+            self.textarea.insert_str(&new_text);
+        }
+
+        // Position cursor at end of expanded content
+        use tui_textarea::CursorMove;
+        self.textarea.move_cursor(CursorMove::Top);
+        self.textarea.move_cursor(CursorMove::Head);
+        for _ in 0..new_row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        for _ in 0..new_col {
+            self.textarea.move_cursor(CursorMove::Forward);
+        }
+
+        true
+    }
+
+    /// Attempts to expand a placeholder if the cursor is inside one.
+    ///
+    /// When the user presses Space while the cursor is inside a placeholder like
+    /// `[Pasted Content 1234 chars #1]`, this replaces the placeholder with its
+    /// original content and positions the cursor at the end of the expanded text.
+    ///
+    /// Returns `true` if a placeholder was expanded (caller should skip normal key handling),
+    /// `false` otherwise (caller should proceed with normal Space handling).
+    pub fn try_expand_placeholder_at_cursor(&mut self) -> bool {
+        if self.pending_pastes.is_empty() {
+            return false;
+        }
+
+        let text = self.get_text();
+        let (row, col) = self.textarea.cursor();
+        let cursor_byte = Self::cursor_to_byte_offset(&text, row, col);
+
+        let Some((paste_idx, byte_start, _byte_end)) =
+            self.find_placeholder_at_cursor(&text, cursor_byte)
+        else {
+            return false;
+        };
+
+        self.expand_placeholder_at(paste_idx, byte_start, &text)
+    }
+
+    /// Generates the next unique paste ID (simple incrementing number).
+    pub fn next_paste_id(&mut self) -> String {
+        self.paste_counter = self.paste_counter.wrapping_add(1);
+        self.paste_counter.to_string()
+    }
+
+    /// Generates a placeholder string for a large paste.
+    ///
+    /// Format: `[Pasted Content N chars #xxxxxxxx]`
+    pub fn generate_placeholder(char_count: usize, id: &str) -> String {
+        format!("[Pasted Content {} chars #{}]", char_count, id)
+    }
+
     /// Clears the input textarea.
     pub fn clear(&mut self) {
         self.textarea.select_all();
         self.textarea.cut();
         self.reset_navigation();
+        self.clear_pending_pastes();
     }
 
     /// Sets the input textarea to the given text.
@@ -130,6 +574,7 @@ impl InputState {
         self.textarea.select_all();
         self.textarea.cut();
         self.textarea.insert_str(text);
+        self.clear_pending_pastes();
     }
 
     /// Applies a cross-slice input mutation.
@@ -139,6 +584,7 @@ impl InputState {
             InputMutation::SetText(text) => self.set_text(&text),
             InputMutation::InsertChar(ch) => {
                 self.textarea.insert_char(ch);
+                self.sync_pending_pastes();
             }
             InputMutation::SetTextAndCursor {
                 text,
