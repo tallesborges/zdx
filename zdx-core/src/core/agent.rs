@@ -400,7 +400,7 @@ pub async fn run_turn(
         }
     };
 
-    let tool_ctx = ToolContext::with_timeout(
+    let tool_ctx = ToolContext::new(
         options.root.canonicalize().unwrap_or(options.root.clone()),
         config.tool_timeout(),
     );
@@ -408,6 +408,10 @@ pub async fn run_turn(
     // Filter tools based on provider configuration
     let provider_config = config.providers.get(provider);
     let tools = tools::tools_for_provider(provider_config);
+
+    // Build the set of enabled tool names for validation in execute_tool
+    // Keep canonical names (as defined) for proper display in error messages
+    let enabled_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
 
     let mut messages = messages;
 
@@ -678,7 +682,8 @@ pub async fn run_turn(
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results (may be partial on interrupt)
-            let tool_results = execute_tools_async(&finalized, &tool_ctx, &sender).await;
+            let tool_results =
+                execute_tools_async(&finalized, &tool_ctx, &enabled_tools, &sender).await;
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Check if interrupted during tool execution
@@ -743,6 +748,7 @@ fn map_thinking_to_reasoning(level: crate::config::ThinkingLevel) -> Option<Stri
 async fn execute_tools_async(
     tool_uses: &[ToolUse],
     ctx: &ToolContext,
+    enabled_tools: &HashSet<String>,
     sender: &EventSender,
 ) -> Vec<ToolResult> {
     let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
@@ -761,9 +767,11 @@ async fn execute_tools_async(
         // Clone for 'static requirement
         let tu = tu.clone();
         let ctx = ctx.clone();
+        let enabled_tools = enabled_tools.clone();
 
         join_set.spawn(async move {
-            let (output, result) = tools::execute_tool(&tu.name, &tu.id, &tu.input, &ctx).await;
+            let (output, result) =
+                tools::execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools).await;
             (i, tu.id.clone(), output, result)
         });
     }
@@ -854,7 +862,8 @@ mod tests {
         let temp = TempDir::new().unwrap();
         std::fs::write(temp.path().join("test.txt"), "hello").unwrap();
 
-        let ctx = ToolContext::with_timeout(temp.path().to_path_buf(), None);
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let enabled_tools: HashSet<String> = vec!["Read".to_string()].into_iter().collect();
 
         // Use ToolUse (finalized) instead of ToolUseBuilder
         let tool_uses = vec![ToolUse {
@@ -867,8 +876,9 @@ mod tests {
         let sender = EventSender::new(tx);
 
         // Run in a task so we can collect events
-        let handle =
-            tokio::spawn(async move { execute_tools_async(&tool_uses, &ctx, &sender).await });
+        let handle = tokio::spawn(async move {
+            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender).await
+        });
 
         // Collect events with timeout to avoid hangs
         let mut received = Vec::new();
