@@ -89,6 +89,12 @@ impl ProviderKind {
         )
     }
 
+    /// Returns true if this provider is subscription-based (usage included in subscription).
+    pub fn is_subscription(&self) -> bool {
+        // OAuth providers are typically subscription-based (no per-token charges)
+        self.supports_oauth()
+    }
+
     pub fn api_key_env_var(&self) -> Option<&'static str> {
         match self {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
