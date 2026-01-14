@@ -122,6 +122,9 @@ pub enum ThreadEvent {
         title: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         root_path: Option<String>,
+        /// The ID of the parent thread this was handed off from (if any).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        handoff_from: Option<String>,
         ts: String,
     },
 
@@ -183,6 +186,21 @@ impl ThreadEvent {
             schema_version: SCHEMA_VERSION,
             title: None,
             root_path,
+            handoff_from: None,
+            ts: chrono_timestamp(),
+        }
+    }
+
+    /// Creates a new meta event with root path and handoff source.
+    pub fn meta_with_root_and_source(
+        root_path: Option<String>,
+        handoff_from: Option<String>,
+    ) -> Self {
+        Self::Meta {
+            schema_version: SCHEMA_VERSION,
+            title: None,
+            root_path,
+            handoff_from,
             ts: chrono_timestamp(),
         }
     }
@@ -342,6 +360,8 @@ pub struct ThreadLog {
     is_new: bool,
     /// Root path for the thread (workspace association).
     root_path: Option<String>,
+    /// The ID of the parent thread this was handed off from (if any).
+    handoff_from: Option<String>,
 }
 
 impl ThreadLog {
@@ -382,10 +402,23 @@ impl ThreadLog {
     pub fn new_with_root(root: &Path) -> Result<Self> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let root_path = Some(root.display().to_string());
-        Self::new_with_root_path(root_path)
+        Self::new_with_root_path_and_source(root_path, None)
     }
 
-    fn new_with_root_path(root_path: Option<String>) -> Result<Self> {
+    /// Creates a new thread with a root path and handoff source.
+    ///
+    /// Use this when creating a thread from a `/handoff` command to record
+    /// the parent thread relationship.
+    pub fn new_with_root_and_source(root: &Path, handoff_from: Option<String>) -> Result<Self> {
+        let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+        let root_path = Some(root.display().to_string());
+        Self::new_with_root_path_and_source(root_path, handoff_from)
+    }
+
+    fn new_with_root_path_and_source(
+        root_path: Option<String>,
+        handoff_from: Option<String>,
+    ) -> Result<Self> {
         Self::guard_thread_creation();
 
         let id = generate_thread_id();
@@ -400,6 +433,7 @@ impl ThreadLog {
             path,
             is_new,
             root_path,
+            handoff_from,
         })
     }
 
@@ -421,13 +455,17 @@ impl ThreadLog {
             path,
             is_new,
             root_path: None,
+            handoff_from: None,
         })
     }
 
     /// Ensures the meta event is written for new threads.
     fn ensure_meta(&mut self) -> Result<()> {
         if self.is_new {
-            self.append_raw(&ThreadEvent::meta_with_root(self.root_path.clone()))?;
+            self.append_raw(&ThreadEvent::meta_with_root_and_source(
+                self.root_path.clone(),
+                self.handoff_from.clone(),
+            ))?;
             self.is_new = false;
         }
         Ok(())
@@ -662,6 +700,41 @@ fn read_meta_root_path(path: &PathBuf) -> Result<Option<Option<String>>> {
     }
 }
 
+/// Reads only the meta line to extract handoff_from (backward compatible).
+fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<Option<String>>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+
+    // Read first non-empty line
+    loop {
+        first_line.clear();
+        let bytes = reader.read_line(&mut first_line)?;
+        if bytes == 0 {
+            return Ok(None); // Empty file
+        }
+        if !first_line.trim().is_empty() {
+            break;
+        }
+    }
+
+    // Parse meta event, defaulting handoff_from to None if missing
+    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
+        Ok(event) => event,
+        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+    };
+
+    if let ThreadEvent::Meta { handoff_from, .. } = parsed {
+        Ok(Some(handoff_from))
+    } else {
+        Ok(None) // First event wasn't meta
+    }
+}
+
 /// Generates a unique thread ID using UUID v4.
 fn generate_thread_id() -> String {
     uuid::Uuid::new_v4().to_string()
@@ -707,6 +780,8 @@ pub struct ThreadSummary {
     pub title: Option<String>,
     pub root_path: Option<String>,
     pub modified: Option<SystemTime>,
+    /// The ID of the parent thread this was handed off from (if any).
+    pub handoff_from: Option<String>,
 }
 
 impl ThreadSummary {
@@ -742,12 +817,14 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
             let title = read_meta_title(&path).unwrap_or(None).flatten();
             let root_path = read_meta_root_path(&path).unwrap_or(None).flatten();
+            let handoff_from = read_meta_handoff_from(&path).unwrap_or(None).flatten();
 
             threads.push(ThreadSummary {
                 id,
                 title,
                 root_path,
                 modified,
+                handoff_from,
             });
         }
     }

@@ -88,7 +88,11 @@ pub enum UiEffect {
     StartHandoff { task: Option<TaskId>, goal: String },
 
     /// Submit handoff prompt: create new thread and send prompt as first message.
-    HandoffSubmit { prompt: String },
+    HandoffSubmit {
+        prompt: String,
+        /// The source thread ID this handoff originated from.
+        handoff_from: Option<String>,
+    },
 
     /// Open the thread picker overlay (loads thread list via I/O).
     OpenThreadPicker { task: Option<TaskId> },
