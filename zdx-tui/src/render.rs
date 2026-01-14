@@ -18,7 +18,7 @@ use crate::common::Scrollbar;
 use crate::input;
 use crate::overlays::OverlayExt;
 use crate::state::{AgentState, AppState, TuiState};
-use crate::statusline::{StatusLine, render_debug_status_line};
+use crate::statusline::render_debug_status_line;
 use crate::transcript::{self, CellId};
 
 /// Height of status line below input.
@@ -48,10 +48,7 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 ///
 /// This is a pure render function - it only reads state and draws to frame.
 /// No mutations, no side effects.
-///
-/// `status_line` is passed from runtime (not stored in state) to keep
-/// performance metrics as view-only data outside the reducer.
-pub fn render(app: &AppState, frame: &mut Frame, status_line: &StatusLine) {
+pub fn render(app: &AppState, frame: &mut Frame) {
     let area = frame.area();
     let state = &app.tui;
 
@@ -201,7 +198,8 @@ pub fn render(app: &AppState, frame: &mut Frame, status_line: &StatusLine) {
 
     // Debug status line (when enabled)
     if state.show_debug_status {
-        render_debug_status_line(status_line, frame, chunks[4]);
+        let status_line = state.status_line.snapshot();
+        render_debug_status_line(&status_line, frame, chunks[4]);
     }
 
     // Render overlay (last, so it appears on top)

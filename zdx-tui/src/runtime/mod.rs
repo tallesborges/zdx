@@ -42,7 +42,6 @@ use crate::common::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskStarted};
 use crate::effects::UiEffect;
 use crate::events::UiEvent;
 use crate::state::{AgentState, AppState};
-use crate::statusline::StatusLineAccumulator;
 use crate::{render, terminal, update};
 
 /// Target frame rate for streaming updates (60fps = ~16ms per frame).
@@ -65,8 +64,12 @@ pub struct TuiRuntime {
     inbox_tx: UiEventSender,
     /// Inbox receiver - runtime drains this each frame.
     inbox_rx: UiEventReceiver,
-    /// Status line accumulator (runtime-owned, snapshot copied to state for render).
-    status_line: StatusLineAccumulator,
+    /// Last time a Tick event was emitted.
+    last_tick: std::time::Instant,
+    /// Last time a render occurred (for FPS calculation).
+    last_render: std::time::Instant,
+    /// Last time a terminal event was received (for fast tick during interaction).
+    last_terminal_event: std::time::Instant,
 }
 
 impl TuiRuntime {
@@ -106,12 +109,15 @@ impl TuiRuntime {
         // Create inbox channel for async event collection
         let (inbox_tx, inbox_rx) = mpsc::unbounded_channel();
 
+        let now = std::time::Instant::now();
         Ok(Self {
             terminal,
             state,
             inbox_tx,
             inbox_rx,
-            status_line: StatusLineAccumulator::new(),
+            last_tick: now,
+            last_render: now,
+            last_terminal_event: now,
         })
     }
 
@@ -130,11 +136,8 @@ impl TuiRuntime {
 
     fn event_loop(&mut self) -> Result<()> {
         let mut dirty = true; // Start dirty to ensure initial render
-        let mut last_pending_delta = 0;
 
         while !self.state.tui.should_quit {
-            let frame_start = std::time::Instant::now();
-
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
             // The agent will send an Interrupted event which resets the flag.
@@ -166,50 +169,37 @@ impl TuiRuntime {
 
             // Process each event through the reducer
             for event in events {
-                // Determine if this event should mark the view as dirty.
-                // We're conservative here to avoid unnecessary renders:
-                // - Tick marks dirty if agent is running (spinner) or selection clear pending
-                // - Frame never marks dirty on its own (it's just housekeeping)
-                // - Other events (input, agent events) always mark dirty
-                let marks_dirty = match &event {
-                    UiEvent::Tick => {
-                        self.state.tui.agent_state.is_running()
-                            || self.state.tui.bash_running.is_some()
-                            || self.state.tui.transcript.selection.has_pending_clear()
-                            || self.state.tui.show_debug_status
-                    }
-                    UiEvent::Frame { .. } => false,
-                    _ => true,
-                };
+                // Track terminal activity for fast tick mode
+                if matches!(&event, UiEvent::Terminal(_)) {
+                    self.last_terminal_event = std::time::Instant::now();
+                }
+
+                // Only Tick triggers render - this caps frame rate at tick cadence
+                // Terminal events update state but batch renders to next Tick
+                let marks_dirty = matches!(&event, UiEvent::Tick);
+
                 let effects = update::update(&mut self.state, event);
-                if marks_dirty || !effects.is_empty() {
+                if marks_dirty {
                     dirty = true;
                 }
                 self.execute_effects(effects);
             }
 
-            // Mark dirty when scroll delta changes (mouse wheel coalescing).
-            let pending_delta = self.state.tui.transcript.scroll_accumulator.peek_delta();
-            if pending_delta != 0 && pending_delta != last_pending_delta {
-                dirty = true;
-            }
-            last_pending_delta = pending_delta;
-
             // Only render if something changed
             if dirty {
-                // Get status line snapshot (runtime-owned, passed to render as view-only)
-                let status_line = self.status_line.snapshot();
+                // Measure time since last render (actual frame interval for FPS)
+                let frame_ms = self.last_render.elapsed().as_millis() as u16;
+                self.last_render = std::time::Instant::now();
 
                 // Render - state is a separate field, no borrow conflict
                 self.terminal.draw(|frame| {
-                    render::render(&self.state, frame, &status_line);
+                    render::render(&self.state, frame);
                 })?;
 
                 dirty = false;
 
-                // Measure full loop time (event collection + processing + render)
-                let frame_ms = frame_start.elapsed().as_millis() as u16;
-                self.status_line.on_frame(frame_ms);
+                // Update FPS based on actual render interval
+                self.state.tui.status_line.on_frame(frame_ms);
             }
         }
 
@@ -227,8 +217,28 @@ impl TuiRuntime {
     fn collect_events(&mut self) -> Result<Vec<UiEvent>> {
         let mut events = Vec::new();
 
-        // Always emit a tick for animation/polling
-        events.push(UiEvent::Tick);
+        // Determine tick interval based on activity level.
+        // Use fast polling (60fps) when:
+        // - Agent is running (streaming content)
+        // - Bash is running
+        // - Selection clear is pending (visual feedback timer)
+        // - Any async operations are in progress
+        // - Recent terminal activity (scrolling, typing)
+        // Otherwise use slow polling to save CPU.
+        let recent_terminal_activity = self.last_terminal_event.elapsed() < IDLE_POLL_DURATION;
+        let needs_fast_poll = self.state.tui.agent_state.is_running()
+            || self.state.tui.bash_running.is_some()
+            || self.state.tui.transcript.selection.has_pending_clear()
+            || self.state.tui.auth.callback_in_progress
+            || self.state.tui.input.handoff.is_generating()
+            || self.state.tui.tasks.is_any_running()
+            || recent_terminal_activity;
+
+        let tick_interval = if needs_fast_poll {
+            FRAME_DURATION
+        } else {
+            IDLE_POLL_DURATION
+        };
 
         // Poll agent events (streaming deltas, tool events, completion, etc.)
         // Agent streaming is kept separate for now - could be unified later
@@ -237,36 +247,32 @@ impl TuiRuntime {
         // Drain inbox - all async results arrive here
         self.collect_inbox_events(&mut events);
 
-        // Determine poll timeout based on activity level.
-        // Use fast polling (60fps) when:
-        // - Agent is running (streaming content)
-        // - Bash is running
-        // - Selection clear is pending (visual feedback timer)
-        // - Any async operations are in progress
-        // Otherwise use slow polling to save CPU.
+        // Calculate time until next tick for poll duration.
+        // This ensures we wake up exactly when Tick is due.
+        let time_until_tick = tick_interval.saturating_sub(self.last_tick.elapsed());
 
-        let needs_fast_poll = self.state.tui.agent_state.is_running()
-            || self.state.tui.bash_running.is_some()
-            || self.state.tui.transcript.selection.has_pending_clear()
-            || self.state.tui.auth.callback_in_progress
-            || self.state.tui.input.handoff.is_generating()
-            || self.state.tui.tasks.is_any_running()
-            || self.state.tui.show_debug_status;
-
-        let poll_duration = if needs_fast_poll {
-            FRAME_DURATION
+        // Poll terminal events:
+        // - If we already have events to process, do non-blocking poll (don't delay rendering)
+        // - Otherwise, block until next tick is due (keeps input responsive while hitting tick cadence)
+        let poll_duration = if events.is_empty() {
+            time_until_tick
         } else {
-            IDLE_POLL_DURATION
+            std::time::Duration::ZERO
         };
 
-        // Poll terminal events with appropriate timeout
-        // Batch ALL available events to avoid one-event-per-frame lag on fast scroll
         if event::poll(poll_duration)? {
             events.push(UiEvent::Terminal(event::read()?));
             // Drain any remaining buffered events (non-blocking)
             while event::poll(std::time::Duration::ZERO)? {
                 events.push(UiEvent::Terminal(event::read()?));
             }
+        }
+
+        // Emit Tick after poll - we've now waited until the tick interval elapsed
+        // (or woke early due to terminal input, in which case we check again)
+        if self.last_tick.elapsed() >= tick_interval {
+            events.push(UiEvent::Tick);
+            self.last_tick = std::time::Instant::now();
         }
 
         Ok(events)

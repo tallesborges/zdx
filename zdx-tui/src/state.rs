@@ -163,7 +163,9 @@ pub struct TuiState {
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
     pub display_path: String,
-    /// Whether to show the debug status line (toggle with Ctrl+Shift+D).
+    /// Status line accumulator for FPS tracking.
+    pub status_line: crate::statusline::StatusLineAccumulator,
+    /// Whether to show the debug status line.
     pub show_debug_status: bool,
 }
 
@@ -228,6 +230,7 @@ impl TuiState {
             bash_running: None,
             git_branch,
             display_path,
+            status_line: crate::statusline::StatusLineAccumulator::new(),
             show_debug_status: false,
         }
     }
