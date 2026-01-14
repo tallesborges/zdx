@@ -21,6 +21,13 @@ const INPUT_HEIGHT_MIN: u16 = 5;
 /// Maximum height of the input area as a percentage of screen height.
 const INPUT_HEIGHT_MAX_PERCENT: f32 = 0.4;
 
+/// Style for placeholder text (bold cyan to stand out from normal text).
+fn placeholder_style() -> Style {
+    Style::default()
+        .fg(Color::Cyan)
+        .add_modifier(Modifier::BOLD)
+}
+
 /// Result of wrapping textarea content with Unicode-aware cursor tracking.
 struct WrappedTextarea {
     /// Wrapped lines ready to render.
@@ -31,11 +38,78 @@ struct WrappedTextarea {
     cursor_col: usize,
 }
 
+/// A segment of text that is either normal text or a placeholder.
+#[derive(Debug)]
+enum TextSegment<'a> {
+    Normal(&'a str),
+    Placeholder(&'a str),
+}
+
+/// Splits a line into segments of normal text and placeholders.
+///
+/// Placeholders are treated as atomic units that shouldn't be broken during wrapping.
+fn split_into_segments<'a>(line: &'a str, placeholders: &[String]) -> Vec<TextSegment<'a>> {
+    if placeholders.is_empty() {
+        return vec![TextSegment::Normal(line)];
+    }
+
+    // Find all placeholder occurrences with their byte ranges
+    let mut matches: Vec<(usize, usize)> = Vec::new();
+    for placeholder in placeholders {
+        let mut search_start = 0;
+        while let Some(pos) = line[search_start..].find(placeholder.as_str()) {
+            let abs_start = search_start + pos;
+            let abs_end = abs_start + placeholder.len();
+            matches.push((abs_start, abs_end));
+            search_start = abs_start + 1;
+        }
+    }
+
+    if matches.is_empty() {
+        return vec![TextSegment::Normal(line)];
+    }
+
+    // Sort by start position and remove overlapping matches (keep first)
+    matches.sort_by_key(|(start, _)| *start);
+    let mut filtered: Vec<(usize, usize)> = Vec::new();
+    for (start, end) in matches {
+        if filtered
+            .last()
+            .is_none_or(|(_, prev_end)| start >= *prev_end)
+        {
+            filtered.push((start, end));
+        }
+    }
+
+    // Build segments
+    let mut segments = Vec::new();
+    let mut cursor = 0;
+
+    for (start, end) in filtered {
+        if cursor < start {
+            segments.push(TextSegment::Normal(&line[cursor..start]));
+        }
+        segments.push(TextSegment::Placeholder(&line[start..end]));
+        cursor = end;
+    }
+
+    if cursor < line.len() {
+        segments.push(TextSegment::Normal(&line[cursor..]));
+    }
+
+    segments
+}
+
 /// Wraps textarea content respecting Unicode display width.
 ///
 /// Handles multi-width characters (CJK, emoji) correctly by using
 /// display width instead of character count for line breaking.
-fn wrap_textarea(textarea: &tui_textarea::TextArea, available_width: usize) -> WrappedTextarea {
+/// Placeholders are treated as atomic units that won't be broken mid-text.
+fn wrap_textarea(
+    textarea: &tui_textarea::TextArea,
+    available_width: usize,
+    placeholders: &[String],
+) -> WrappedTextarea {
     let (cursor_line, cursor_col) = textarea.cursor();
     let cursor_line = cursor_line.min(textarea.lines().len().saturating_sub(1));
 
@@ -59,61 +133,117 @@ fn wrap_textarea(textarea: &tui_textarea::TextArea, available_width: usize) -> W
             continue;
         }
 
-        // Wrap the line at exact character width boundaries
+        // Split line into segments (normal text vs placeholders)
+        let segments = split_into_segments(logical_line, placeholders);
+
+        // Track current visual line being built
+        let mut current_spans: Vec<Span<'static>> = Vec::new();
         let mut current_width = 0usize;
-        let mut line_start_byte = 0usize;
 
-        for (byte_idx, ch) in logical_line.char_indices() {
-            let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
-
-            if current_width + ch_width > available_width && current_width > 0 {
-                // Wrap here - emit the current segment
-                wrapped_lines.push(Line::from(Span::raw(
-                    logical_line[line_start_byte..byte_idx].to_string(),
-                )));
-                line_start_byte = byte_idx;
-                current_width = ch_width;
-            } else {
-                current_width += ch_width;
-            }
-        }
-
-        // Emit remaining text
-        wrapped_lines.push(Line::from(Span::raw(
-            logical_line[line_start_byte..].to_string(),
-        )));
-
-        // Calculate cursor position if on this line
+        // Track byte position for cursor calculation
+        let mut byte_pos = 0usize;
+        // Map from byte position to (visual_row_offset, visual_col)
+        let mut cursor_byte_pos = 0usize;
         if is_cursor_line {
-            // Calculate display width up to cursor position
-            let mut width_to_cursor = 0usize;
-            for ch in logical_line.chars().take(cursor_col) {
-                width_to_cursor += UnicodeWidthChar::width(ch).unwrap_or(0);
-            }
-
-            // Find which wrapped row and column
-            let row_offset = if available_width > 0 {
-                width_to_cursor / available_width
-            } else {
-                0
-            };
-            let col_offset = if available_width > 0 {
-                width_to_cursor % available_width
-            } else {
-                0
-            };
-            cursor_visual_row = line_visual_start + row_offset;
-            cursor_visual_col = col_offset;
+            // Convert cursor_col (char index) to byte position
+            cursor_byte_pos = logical_line
+                .char_indices()
+                .nth(cursor_col)
+                .map(|(i, _)| i)
+                .unwrap_or(logical_line.len());
         }
 
-        // Count how many visual rows this logical line took
-        let line_width = UnicodeWidthStr::width(logical_line.as_str());
-        let wrapped_count = if available_width == 0 {
-            1
-        } else {
-            line_width.div_ceil(available_width).max(1)
-        };
-        visual_row = line_visual_start + wrapped_count;
+        for segment in segments {
+            match segment {
+                TextSegment::Placeholder(text) => {
+                    let placeholder_width = UnicodeWidthStr::width(text);
+
+                    // If placeholder doesn't fit on current line (and line has content), wrap first
+                    if current_width > 0 && current_width + placeholder_width > available_width {
+                        // Emit current line
+                        wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
+                        visual_row += 1;
+                        current_width = 0;
+                    }
+
+                    // Check cursor position before adding placeholder
+                    if is_cursor_line
+                        && byte_pos <= cursor_byte_pos
+                        && cursor_byte_pos < byte_pos + text.len()
+                    {
+                        // Cursor is inside this placeholder - place it at the start
+                        cursor_visual_row = visual_row;
+                        cursor_visual_col = current_width;
+                    }
+
+                    // Add placeholder as atomic unit (with styling)
+                    current_spans.push(Span::styled(text.to_string(), placeholder_style()));
+                    current_width += placeholder_width;
+                    byte_pos += text.len();
+
+                    // Check if cursor is right after the placeholder
+                    if is_cursor_line && cursor_byte_pos == byte_pos {
+                        cursor_visual_row = visual_row;
+                        cursor_visual_col = current_width;
+                    }
+                }
+                TextSegment::Normal(text) => {
+                    // Wrap normal text character by character
+                    let mut segment_start = 0;
+
+                    for (char_offset, ch) in text.char_indices() {
+                        let ch_width = UnicodeWidthChar::width(ch).unwrap_or(0);
+
+                        // Check if we need to wrap before this character
+                        if current_width + ch_width > available_width && current_width > 0 {
+                            // Emit accumulated normal text first
+                            if segment_start < char_offset {
+                                current_spans
+                                    .push(Span::raw(text[segment_start..char_offset].to_string()));
+                            }
+                            // Emit current line
+                            wrapped_lines.push(Line::from(std::mem::take(&mut current_spans)));
+                            visual_row += 1;
+                            current_width = 0;
+                            segment_start = char_offset;
+                        }
+
+                        // Track cursor position
+                        if is_cursor_line && byte_pos + char_offset == cursor_byte_pos {
+                            cursor_visual_row = visual_row;
+                            cursor_visual_col = current_width;
+                        }
+
+                        current_width += ch_width;
+                    }
+
+                    // Add remaining text from this segment
+                    if segment_start < text.len() {
+                        current_spans.push(Span::raw(text[segment_start..].to_string()));
+                    }
+
+                    // Check cursor at end of segment
+                    if is_cursor_line && byte_pos + text.len() == cursor_byte_pos {
+                        cursor_visual_row = visual_row;
+                        cursor_visual_col = current_width;
+                    }
+
+                    byte_pos += text.len();
+                }
+            }
+        }
+
+        // Emit final line for this logical line
+        if !current_spans.is_empty() || wrapped_lines.len() == line_visual_start {
+            wrapped_lines.push(Line::from(current_spans));
+            visual_row += 1;
+        }
+
+        // Handle cursor at very end of line
+        if is_cursor_line && cursor_byte_pos >= logical_line.len() {
+            cursor_visual_row = visual_row.saturating_sub(1);
+            cursor_visual_col = current_width;
+        }
     }
 
     WrappedTextarea {
@@ -213,8 +343,16 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
         return;
     }
 
+    // Extract placeholder strings for visual highlighting
+    let placeholders: Vec<String> = state
+        .input
+        .pending_pastes
+        .iter()
+        .map(|p| p.placeholder.clone())
+        .collect();
+
     // Wrap textarea content with Unicode-aware width calculation
-    let wrapped = wrap_textarea(&state.input.textarea, available_width);
+    let wrapped = wrap_textarea(&state.input.textarea, available_width, &placeholders);
 
     // Calculate vertical scroll offset to keep cursor visible
     let total_visual_rows = wrapped.lines.len();
@@ -294,9 +432,17 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
 
     frame.render_widget(block, area);
 
+    // Extract placeholder strings for visual highlighting (unlikely in handoff but consistent)
+    let placeholders: Vec<String> = state
+        .input
+        .pending_pastes
+        .iter()
+        .map(|p| p.placeholder.clone())
+        .collect();
+
     // Use common wrapping helper for Unicode-aware width calculation
     let available_width = inner_area.width as usize;
-    let wrapped = wrap_textarea(&state.input.textarea, available_width);
+    let wrapped = wrap_textarea(&state.input.textarea, available_width, &placeholders);
 
     // Viewport scrolling
     let visible_lines = inner_area.height as usize;
