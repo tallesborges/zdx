@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "xtask", "zdx-core", "zdx-tui"]
+members = ["crates/zdx-cli", "crates/xtask", "crates/zdx-core", "crates/zdx-tui"]
 resolver = "2"
 
 [workspace.package]
@@ -40,40 +40,3 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2"
 url = "2.5"
 uuid = { version = "1.19.0", features = ["v4"] }
-
-[package]
-name = "zdx"
-version.workspace = true
-edition.workspace = true
-license.workspace = true
-default-run = "zdx"
-publish = false
-
-[features]
-default = ["tui"]
-tui = ["dep:zdx-tui"]
-
-[dependencies]
-zdx-core = { path = "zdx-core" }
-zdx-tui = { path = "zdx-tui", optional = true }
-
-anyhow.workspace = true
-clap = { workspace = true, features = ["env"] }
-open.workspace = true
-reqwest.workspace = true
-serde.workspace = true
-tokio.workspace = true
-toml.workspace = true
-url.workspace = true
-uuid.workspace = true
-
-[lints.clippy]
-absolute_paths = "warn"
-
-[dev-dependencies]
-assert_cmd = "2.1.1"
-predicates = "3.1.3"
-serde_json.workspace = true
-tempfile.workspace = true
-tokio = { workspace = true, features = ["rt-multi-thread", "macros", "time", "process", "test-util"] }
-wiremock = "0.6.5"

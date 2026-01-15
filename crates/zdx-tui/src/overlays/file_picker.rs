@@ -616,8 +616,8 @@ mod tests {
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
-            PathBuf::from("src/main.rs"),
-            PathBuf::from("src/lib.rs"),
+            PathBuf::from("crates/zdx-cli/src/main.rs"),
+            PathBuf::from("crates/zdx-cli/src/lib.rs"),
         ]);
 
         let update = picker.handle_key(&input, make_key_event(KeyCode::Enter));
@@ -629,7 +629,7 @@ mod tests {
         }
 
         let text = input.get_text();
-        assert_eq!(text, "@src/main.rs ");
+        assert_eq!(text, "@crates/zdx-cli/src/main.rs ");
     }
 
     #[test]
@@ -640,8 +640,8 @@ mod tests {
 
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
-            PathBuf::from("src/main.rs"),
-            PathBuf::from("src/lib.rs"),
+            PathBuf::from("crates/zdx-cli/src/main.rs"),
+            PathBuf::from("crates/zdx-cli/src/lib.rs"),
         ]);
         picker.apply_filter("lib");
 
@@ -654,7 +654,7 @@ mod tests {
         }
 
         let text = input.get_text();
-        assert_eq!(text, "@src/lib.rs ");
+        assert_eq!(text, "@crates/zdx-cli/src/lib.rs ");
     }
 
     #[test]
@@ -667,7 +667,7 @@ mod tests {
         }
 
         let (mut picker, _) = FilePickerState::open(6);
-        picker.set_files(vec![PathBuf::from("src/main.rs")]);
+        picker.set_files(vec![PathBuf::from("crates/zdx-cli/src/main.rs")]);
 
         let update = picker.handle_key(&input, make_key_event(KeyCode::Tab));
         assert!(matches!(update.transition, OverlayTransition::Close));
@@ -678,7 +678,7 @@ mod tests {
         }
 
         let text = input.get_text();
-        assert_eq!(text, "Hello @src/main.rs  world");
+        assert_eq!(text, "Hello @crates/zdx-cli/src/main.rs  world");
     }
 
     #[test]
@@ -734,9 +734,9 @@ mod tests {
     fn test_fuzzy_matching_basic() {
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
-            PathBuf::from("src/main.rs"),
-            PathBuf::from("src/lib.rs"),
-            PathBuf::from("tests/integration.rs"),
+            PathBuf::from("crates/zdx-cli/src/main.rs"),
+            PathBuf::from("crates/zdx-cli/src/lib.rs"),
+            PathBuf::from("crates/zdx-cli/tests/integration.rs"),
         ]);
 
         // "mr" should match "main.rs" with higher score
@@ -746,7 +746,7 @@ mod tests {
         // Should have matches (fuzzy matches "mr" in "main.rs")
         let first_match = &picker.filtered[0];
         let first_path = picker.files.get(first_match.file_idx).unwrap();
-        assert_eq!(first_path, &PathBuf::from("src/main.rs"));
+        assert_eq!(first_path, &PathBuf::from("crates/zdx-cli/src/main.rs"));
     }
 
     #[test]
@@ -778,7 +778,7 @@ mod tests {
     #[test]
     fn test_fuzzy_matching_captures_indices() {
         let (mut picker, _) = FilePickerState::open(0);
-        picker.set_files(vec![PathBuf::from("src/main.rs")]);
+        picker.set_files(vec![PathBuf::from("crates/zdx-cli/src/main.rs")]);
 
         picker.apply_filter("main");
 
@@ -787,11 +787,11 @@ mod tests {
 
         // Should have match indices for highlighting
         assert!(!m.match_indices.is_empty());
-        // "main" appears at bytes 4-7 in "src/main.rs"
-        assert!(m.match_indices.contains(&4)); // 'm'
-        assert!(m.match_indices.contains(&5)); // 'a'
-        assert!(m.match_indices.contains(&6)); // 'i'
-        assert!(m.match_indices.contains(&7)); // 'n'
+        // "main" appears at bytes 19-22 in "crates/zdx-cli/src/main.rs"
+        assert!(m.match_indices.contains(&19)); // 'm'
+        assert!(m.match_indices.contains(&20)); // 'a'
+        assert!(m.match_indices.contains(&21)); // 'i'
+        assert!(m.match_indices.contains(&22)); // 'n'
     }
 
     #[test]
@@ -819,8 +819,8 @@ mod tests {
     fn test_fuzzy_matching_no_match() {
         let (mut picker, _) = FilePickerState::open(0);
         picker.set_files(vec![
-            PathBuf::from("src/main.rs"),
-            PathBuf::from("src/lib.rs"),
+            PathBuf::from("crates/zdx-cli/src/main.rs"),
+            PathBuf::from("crates/zdx-cli/src/lib.rs"),
         ]);
 
         picker.apply_filter("xyz123");
@@ -831,7 +831,7 @@ mod tests {
 
     #[test]
     fn test_build_highlighted_line_no_matches() {
-        let line = build_highlighted_line("src/main.rs", &[]);
+        let line = build_highlighted_line("crates/zdx-cli/src/main.rs", &[]);
         assert_eq!(line.spans.len(), 1);
         // Should be cyan (non-highlighted)
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
@@ -839,14 +839,14 @@ mod tests {
 
     #[test]
     fn test_build_highlighted_line_with_matches() {
-        // Highlight "main" at indices 4-7
-        let line = build_highlighted_line("src/main.rs", &[4, 5, 6, 7]);
+        // Highlight "main" at indices 19-22
+        let line = build_highlighted_line("crates/zdx-cli/src/main.rs", &[19, 20, 21, 22]);
 
         // Should have multiple spans: "src/" (cyan), "main" (yellow), ".rs" (cyan)
         assert!(line.spans.len() >= 3);
 
         // First span should be cyan (non-matched)
-        assert_eq!(line.spans[0].content, "src/");
+        assert_eq!(line.spans[0].content, "crates/zdx-cli/src/");
         assert_eq!(line.spans[0].style.fg, Some(Color::Cyan));
 
         // Second span should be yellow+bold (matched)
