@@ -359,12 +359,7 @@ pub async fn run_turn(
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let cache_key = config
-                .providers
-                .openai_codex
-                .prompt_cache_key
-                .clone()
-                .or_else(|| thread_id.map(|s| s.to_string()));
+            let cache_key = thread_id.map(|s| s.to_string());
 
             let openai_config = OpenAICodexConfig::new(
                 selection.model.clone(),
@@ -375,12 +370,7 @@ pub async fn run_turn(
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
         }
         ProviderKind::OpenAI => {
-            let cache_key = config
-                .providers
-                .openai
-                .prompt_cache_key
-                .clone()
-                .or_else(|| thread_id.map(|s| s.to_string()));
+            let cache_key = thread_id.map(|s| s.to_string());
 
             let openai_config = OpenAIConfig::from_env(
                 selection.model.clone(),
