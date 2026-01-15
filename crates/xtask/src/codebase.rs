@@ -1,7 +1,13 @@
 use std::io;
 use std::path::{Path, PathBuf};
 
-const INCLUDE_DIRS: &[&str] = &["docs", "src", "zdx-core", "zdx-tui", "xtask"];
+const INCLUDE_DIRS: &[&str] = &[
+    "docs",
+    "crates/zdx-cli/src",
+    "crates/zdx-core",
+    "crates/zdx-tui",
+    "crates/xtask",
+];
 const EXCLUDE_EXTENSIONS: &[&str] = &[
     ".png", ".jpg", ".jpeg", ".gif", ".ico", ".svg", ".woff", ".woff2", ".ttf", ".eot", ".pdf",
     ".zip", ".tar", ".gz", ".exe", ".bin",
