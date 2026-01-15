@@ -1,0 +1,23 @@
+#!/bin/bash
+set -euo pipefail
+
+export DEBIAN_FRONTEND=noninteractive
+
+apt-get update
+apt-get install -y --no-install-recommends \
+  ca-certificates \
+  curl \
+  git \
+  build-essential \
+  pkg-config \
+  libssl-dev
+
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+  | sh -s -- -y --profile minimal
+
+export PATH="/root/.cargo/bin:$PATH"
+
+git clone --depth 1 {{ zdx_repo }} /opt/zdx
+cd /opt/zdx
+cargo build -p zdx --release
+cp target/release/zdx /root/.cargo/bin/zdx
