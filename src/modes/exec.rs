@@ -22,12 +22,15 @@ use zdx_core::providers::ChatMessage;
 pub struct ExecOptions {
     /// Root directory for file operations.
     pub root: PathBuf,
+    /// Optional tools override list (full override).
+    pub tools_override: Option<Vec<String>>,
 }
 
 impl From<&ExecOptions> for AgentOptions {
     fn from(opts: &ExecOptions) -> Self {
         AgentOptions {
             root: opts.root.clone(),
+            tools_override: opts.tools_override.clone(),
         }
     }
 }

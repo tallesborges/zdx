@@ -81,6 +81,8 @@ async fn run_subagent(
             &handoff_model,
             "-t",
             HANDOFF_THINKING,
+            "--tools",
+            "read",
             "-p",
             &generation_prompt,
         ])

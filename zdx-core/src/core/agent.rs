@@ -37,6 +37,8 @@ use crate::tools::{self, ToolContext, ToolResult};
 pub struct AgentOptions {
     /// Root directory for file operations.
     pub root: PathBuf,
+    /// Optional tools override list (full override).
+    pub tools_override: Option<Vec<String>>,
 }
 
 /// Channel-based event sender (async, bounded).
@@ -405,9 +407,24 @@ pub async fn run_turn(
         config.tool_timeout(),
     );
     // Cache tool definitions outside the loop (they're constant)
-    // Filter tools based on provider configuration
-    let provider_config = config.providers.get(provider);
-    let tools = tools::tools_for_provider(provider_config);
+    // Filter tools based on provider configuration or override list.
+    let tools = if let Some(override_tools) = options.tools_override.as_ref() {
+        let all_names = tools::all_tool_names();
+        let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
+        let override_config = crate::config::ProviderConfig {
+            tools: Some(override_tools.clone()),
+            ..Default::default()
+        };
+        let enabled_names = override_config.filter_tools(&all_names_refs);
+        let enabled_set: HashSet<_> = enabled_names.into_iter().collect();
+        tools::all_tools()
+            .into_iter()
+            .filter(|t| enabled_set.contains(t.name.to_lowercase().as_str()))
+            .collect()
+    } else {
+        let provider_config = config.providers.get(provider);
+        tools::tools_for_provider(provider_config)
+    };
 
     // Build the set of enabled tool names for validation in execute_tool
     // Keep canonical names (as defined) for proper display in error messages

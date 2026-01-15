@@ -65,6 +65,10 @@ enum Commands {
         /// Override the thinking level (off, minimal, low, medium, high)
         #[arg(short, long)]
         thinking: Option<String>,
+
+        /// Comma-separated list of tools to enable (full override)
+        #[arg(long, value_name = "TOOLS")]
+        tools: Option<String>,
     },
 
     /// Manage saved threads
@@ -196,6 +200,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             prompt,
             model,
             thinking,
+            tools,
         } => {
             let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
             commands::exec::run(
@@ -205,6 +210,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 &config,
                 model.as_deref(),
                 thinking.as_deref(),
+                tools.as_deref(),
             )
             .await
         }

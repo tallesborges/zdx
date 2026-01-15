@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use zdx_core::config::{self, ThinkingLevel};
 use zdx_core::core::thread_log::ThreadPersistenceOptions;
+use zdx_core::tools;
 
 use crate::modes;
 
@@ -15,6 +16,7 @@ pub async fn run(
     config: &config::Config,
     model_override: Option<&str>,
     thinking_override: Option<&str>,
+    tools_override: Option<&str>,
 ) -> Result<()> {
     let root_path = PathBuf::from(root);
     let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
@@ -31,7 +33,15 @@ pub async fn run(
         c
     };
 
-    let exec_opts = modes::exec::ExecOptions { root: root_path };
+    let tools_override = match tools_override {
+        Some(raw) => Some(parse_tools_override(raw)?),
+        None => None,
+    };
+
+    let exec_opts = modes::exec::ExecOptions {
+        root: root_path,
+        tools_override,
+    };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
     modes::exec::run_exec(prompt, &config, thread, &exec_opts)
@@ -53,4 +63,39 @@ fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
             s
         ),
     }
+}
+
+fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
+    let tools: Vec<String> = raw
+        .split(',')
+        .map(|t| t.trim())
+        .filter(|t| !t.is_empty())
+        .map(|t| t.to_string())
+        .collect();
+
+    if tools.is_empty() {
+        anyhow::bail!("--tools requires a comma-separated list of tool names");
+    }
+
+    let available = tools::all_tool_names();
+    let available_set: std::collections::HashSet<String> =
+        available.iter().map(|t| t.to_ascii_lowercase()).collect();
+    let mut unknown: Vec<String> = tools
+        .iter()
+        .filter(|t| !available_set.contains(&t.to_ascii_lowercase()))
+        .cloned()
+        .collect();
+
+    if !unknown.is_empty() {
+        unknown.sort();
+        let mut available_sorted = available;
+        available_sorted.sort();
+        anyhow::bail!(
+            "Unknown tool(s): {}. Available tools: {}",
+            unknown.join(", "),
+            available_sorted.join(", ")
+        );
+    }
+
+    Ok(tools)
 }

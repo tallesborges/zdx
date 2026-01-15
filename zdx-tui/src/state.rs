@@ -180,7 +180,10 @@ impl TuiState {
         thread_log: Option<ThreadLog>,
         history: Vec<ChatMessage>,
     ) -> Self {
-        let agent_opts = AgentOptions { root };
+        let agent_opts = AgentOptions {
+            root,
+            tools_override: None,
+        };
 
         // Cache display values at startup (avoids I/O during render)
         let git_branch = get_git_branch(&agent_opts.root);
