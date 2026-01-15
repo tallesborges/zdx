@@ -7,7 +7,9 @@ use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::gemini_shared::sse::GeminiSseParser;
-use crate::providers::gemini_shared::{build_gemini_request, classify_reqwest_error};
+use crate::providers::gemini_shared::{
+    GeminiThinkingConfig, build_gemini_request, classify_reqwest_error,
+};
 use crate::providers::{ChatMessage, ProviderError, StreamEvent};
 use crate::tools::ToolDefinition;
 
@@ -20,6 +22,8 @@ pub struct GeminiConfig {
     pub base_url: String,
     pub model: String,
     pub max_output_tokens: u32,
+    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
+    pub thinking_config: Option<GeminiThinkingConfig>,
 }
 
 impl GeminiConfig {
@@ -37,6 +41,7 @@ impl GeminiConfig {
         max_output_tokens: u32,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
+        thinking_config: Option<GeminiThinkingConfig>,
     ) -> Result<Self> {
         let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
@@ -46,6 +51,7 @@ impl GeminiConfig {
             base_url,
             model,
             max_output_tokens,
+            thinking_config,
         })
     }
 }
@@ -70,7 +76,13 @@ impl GeminiClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
-        let request = build_gemini_request(messages, tools, system, self.config.max_output_tokens)?;
+        let request = build_gemini_request(
+            messages,
+            tools,
+            system,
+            self.config.max_output_tokens,
+            self.config.thinking_config.as_ref(),
+        )?;
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse",
             self.config.base_url, self.config.model

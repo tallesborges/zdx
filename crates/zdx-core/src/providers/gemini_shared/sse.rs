@@ -26,6 +26,12 @@ pub struct GeminiSseParser<S> {
     next_index: usize,
     text_index: Option<usize>,
     last_text: String,
+    /// Current reasoning block index (when processing thought parts)
+    reasoning_index: Option<usize>,
+    /// Accumulated reasoning text for delta calculation
+    last_reasoning: String,
+    /// Accumulated thought signature to emit at block completion
+    pending_signature: Option<String>,
     saw_tool: bool,
     emitted_tool_calls: HashSet<String>,
     final_usage: Option<Usage>,
@@ -51,6 +57,9 @@ impl<S> GeminiSseParser<S> {
             next_index: 0,
             text_index: None,
             last_text: String::new(),
+            reasoning_index: None,
+            last_reasoning: String::new(),
+            pending_signature: None,
             saw_tool: false,
             emitted_tool_calls: HashSet::new(),
             final_usage: None,
@@ -136,10 +145,61 @@ impl<S> GeminiSseParser<S> {
             if let Some(content) = candidate.get("content")
                 && let Some(parts) = content.get("parts").and_then(|v| v.as_array())
             {
-                let mut combined_text = String::new();
-
+                // First pass: process thought parts (reasoning)
+                let mut combined_reasoning = String::new();
                 for part in parts {
-                    if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                    let is_thought = part
+                        .get("thought")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if is_thought {
+                        // Accumulate thought text
+                        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                            combined_reasoning.push_str(text);
+                        }
+                        // Capture thought signature (may arrive in later chunk)
+                        if let Some(sig) = part.get("thoughtSignature").and_then(|v| v.as_str()) {
+                            self.pending_signature = Some(sig.to_string());
+                        }
+                    }
+                }
+
+                // Emit reasoning events if we have thought content
+                if !combined_reasoning.is_empty() {
+                    if self.reasoning_index.is_none() {
+                        let index = self.next_index;
+                        self.next_index += 1;
+                        self.reasoning_index = Some(index);
+                        self.pending.push_back(StreamEvent::ContentBlockStart {
+                            index,
+                            block_type: ContentBlockType::Reasoning,
+                            id: None,
+                            name: None,
+                        });
+                    }
+
+                    let delta = if combined_reasoning.starts_with(&self.last_reasoning) {
+                        combined_reasoning[self.last_reasoning.len()..].to_string()
+                    } else {
+                        combined_reasoning.clone()
+                    };
+                    self.last_reasoning = combined_reasoning;
+                    if !delta.is_empty() {
+                        self.pending.push_back(StreamEvent::ReasoningDelta {
+                            index: self.reasoning_index.unwrap_or(0),
+                            reasoning: delta,
+                        });
+                    }
+                }
+
+                // Second pass: process regular text parts (non-thought)
+                let mut combined_text = String::new();
+                for part in parts {
+                    let is_thought = part
+                        .get("thought")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if !is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                         combined_text.push_str(text);
                     }
                 }
@@ -171,6 +231,7 @@ impl<S> GeminiSseParser<S> {
                     }
                 }
 
+                // Third pass: process function calls
                 for part in parts {
                     if let Some(call) = part.get("functionCall") {
                         let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -217,6 +278,18 @@ impl<S> GeminiSseParser<S> {
         {
             self.emitted_done = true;
 
+            // Close reasoning block with signature if present
+            if let Some(index) = self.reasoning_index.take() {
+                // Emit signature if we accumulated one
+                if let Some(signature) = self.pending_signature.take() {
+                    self.pending
+                        .push_back(StreamEvent::ReasoningSignatureDelta { index, signature });
+                }
+                self.pending
+                    .push_back(StreamEvent::ContentBlockCompleted { index });
+            }
+
+            // Close text block
             if let Some(index) = self.text_index.take() {
                 self.pending
                     .push_back(StreamEvent::ContentBlockCompleted { index });
@@ -285,5 +358,312 @@ pub fn map_finish_reason(reason: &str) -> String {
         "MAX_TOKENS" | "max_tokens" => "max_tokens".to_string(),
         "STOP" | "stop" => "stop".to_string(),
         other => other.to_lowercase(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bytes::Bytes;
+    use futures_util::stream;
+    use serde_json::json;
+
+    use super::*;
+
+    /// Creates a mock SSE parser for testing.
+    fn create_test_parser() -> GeminiSseParser<impl Stream<Item = Result<Bytes, std::io::Error>>> {
+        let empty_stream = stream::empty();
+        GeminiSseParser::new(empty_stream, "gemini-3-flash-preview".to_string(), "test")
+    }
+
+    /// Test: Part with `thought: true` and text emits full reasoning event sequence.
+    ///
+    /// When a chunk contains a thought part with text content, the parser should emit:
+    /// 1. ContentBlockStart { block_type: Reasoning }
+    /// 2. ReasoningDelta with the thought text
+    ///
+    /// The signature and completion events are emitted when finishReason is present.
+    #[test]
+    fn test_thought_part_with_text_emits_reasoning_events() {
+        let mut parser = create_test_parser();
+
+        // Simulate a chunk with thought content
+        let chunk = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "Let me think about this..."
+                    }]
+                }
+            }]
+        });
+
+        parser.handle_chunk(chunk).unwrap();
+
+        // Should have emitted ContentBlockStart + ReasoningDelta
+        assert_eq!(parser.pending.len(), 2);
+
+        let event1 = parser.pending.pop_front().unwrap();
+        assert!(matches!(
+            event1,
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                ..
+            }
+        ));
+
+        let event2 = parser.pending.pop_front().unwrap();
+        assert!(matches!(
+            event2,
+            StreamEvent::ReasoningDelta {
+                index: 0,
+                ref reasoning,
+            } if reasoning == "Let me think about this..."
+        ));
+
+        // Verify reasoning_index is set
+        assert_eq!(parser.reasoning_index, Some(0));
+    }
+
+    /// Test: Part with `thought: true` and empty text captures signature, emits no reasoning block.
+    ///
+    /// When a thought part has empty text but has a signature, we should capture the signature
+    /// but not emit a reasoning block (no ContentBlockStart, no ReasoningDelta).
+    #[test]
+    fn test_thought_part_empty_text_with_signature_captures_signature_only() {
+        let mut parser = create_test_parser();
+
+        // Simulate a chunk with thought part but empty text (signature-only)
+        let chunk = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "",
+                        "thoughtSignature": "base64signature=="
+                    }]
+                }
+            }]
+        });
+
+        parser.handle_chunk(chunk).unwrap();
+
+        // Should not emit any events (empty thought text)
+        assert!(
+            parser.pending.is_empty(),
+            "Should not emit events for empty thought text"
+        );
+
+        // But signature should be captured
+        assert_eq!(
+            parser.pending_signature,
+            Some("base64signature==".to_string())
+        );
+
+        // reasoning_index should NOT be set since we didn't start a block
+        assert!(parser.reasoning_index.is_none());
+    }
+
+    /// Test: Signature arriving in separate chunk after text is captured and emitted at completion.
+    ///
+    /// This tests the real-world scenario where:
+    /// 1. First chunk has thought text
+    /// 2. Second chunk has signature (possibly with empty text)
+    /// 3. Third chunk has finishReason which triggers block completion with signature
+    #[test]
+    fn test_signature_arriving_in_separate_chunk() {
+        let mut parser = create_test_parser();
+
+        // Chunk 1: Thought text arrives
+        let chunk1 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "I need to analyze this carefully"
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk1).unwrap();
+
+        // Clear the pending events from chunk 1
+        parser.pending.clear();
+        assert!(parser.pending_signature.is_none());
+
+        // Chunk 2: Signature arrives (may have empty or same text due to rolling)
+        let chunk2 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "I need to analyze this carefully",
+                        "thoughtSignature": "late_arriving_signature_base64"
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk2).unwrap();
+
+        // No new delta since text is the same (rolling incremental)
+        // But signature should be captured
+        assert_eq!(
+            parser.pending_signature,
+            Some("late_arriving_signature_base64".to_string())
+        );
+
+        // Clear any events
+        parser.pending.clear();
+
+        // Chunk 3: Finish reason triggers completion
+        let chunk3 = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": {
+                    "parts": []
+                }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50
+            }
+        });
+        parser.handle_chunk(chunk3).unwrap();
+
+        // Should have completion events including ReasoningSignatureDelta
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Find the signature delta event
+        let has_signature_delta = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ReasoningSignatureDelta {
+                    index: 0,
+                    signature,
+                } if signature == "late_arriving_signature_base64"
+            )
+        });
+        assert!(
+            has_signature_delta,
+            "Should emit ReasoningSignatureDelta at completion"
+        );
+
+        // Find the reasoning block completion
+        let has_block_completed = events
+            .iter()
+            .any(|e| matches!(e, StreamEvent::ContentBlockCompleted { index: 0 }));
+        assert!(
+            has_block_completed,
+            "Should emit ContentBlockCompleted for reasoning block"
+        );
+    }
+
+    /// Test: Mixed thought and regular text parts are processed separately.
+    ///
+    /// Gemini may return both thought parts and regular text parts in the same response.
+    /// They should be processed into separate content blocks.
+    #[test]
+    fn test_mixed_thought_and_text_parts() {
+        let mut parser = create_test_parser();
+
+        // Chunk with both thought and regular text
+        let chunk = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        {
+                            "thought": true,
+                            "text": "Thinking about the answer..."
+                        },
+                        {
+                            "text": "Here is my response."
+                        }
+                    ]
+                }
+            }]
+        });
+
+        parser.handle_chunk(chunk).unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Should have 4 events: reasoning start + delta, text start + delta
+        assert_eq!(events.len(), 4);
+
+        // First two should be reasoning
+        assert!(matches!(
+            &events[0],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ReasoningDelta { index: 0, .. }
+        ));
+
+        // Second two should be text
+        assert!(matches!(
+            &events[2],
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block_type: ContentBlockType::Text,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &events[3],
+            StreamEvent::TextDelta { index: 1, .. }
+        ));
+    }
+
+    /// Test: Incremental thought text uses delta calculation correctly.
+    ///
+    /// Gemini sends rolling incremental text (full accumulated text each time).
+    /// The parser should only emit the delta (new portion).
+    #[test]
+    fn test_incremental_thought_text_delta_calculation() {
+        let mut parser = create_test_parser();
+
+        // First chunk: initial thought text
+        let chunk1 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "First"
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk1).unwrap();
+        parser.pending.clear();
+
+        // Second chunk: more text (rolling incremental)
+        let chunk2 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "thought": true,
+                        "text": "First, second"
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk2).unwrap();
+
+        // Should emit only the delta ", second"
+        let events: Vec<_> = parser.pending.drain(..).collect();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning,
+            } if reasoning == ", second"
+        ));
     }
 }

@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 
+use crate::providers::gemini_shared::GeminiThinkingConfig;
 use crate::providers::oauth::gemini_cli as oauth_gemini_cli;
 
 /// Runtime config for Gemini CLI requests.
@@ -11,14 +12,21 @@ pub struct GeminiCliConfig {
     pub max_tokens: u32,
     /// Session ID for rate limit grouping (persists across requests in a session).
     pub session_id: String,
+    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
+    pub thinking_config: Option<GeminiThinkingConfig>,
 }
 
 impl GeminiCliConfig {
-    pub fn new(model: String, max_tokens: u32) -> Self {
+    pub fn new(
+        model: String,
+        max_tokens: u32,
+        thinking_config: Option<GeminiThinkingConfig>,
+    ) -> Self {
         Self {
             model,
             max_tokens,
             session_id: uuid::Uuid::new_v4().to_string(),
+            thinking_config,
         }
     }
 }
