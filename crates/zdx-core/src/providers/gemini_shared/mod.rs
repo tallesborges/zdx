@@ -13,10 +13,126 @@ use std::collections::HashMap;
 use anyhow::Result;
 use serde_json::{Value, json};
 
+use crate::config::ThinkingLevel;
 use crate::providers::{
-    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind,
+    ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, ReplayToken,
 };
 use crate::tools::{ToolDefinition, ToolResultBlock, ToolResultContent};
+
+/// Thinking configuration for Gemini models.
+///
+/// Gemini 3 models use `thinkingLevel` (string levels).
+/// Gemini 2.5 models use `thinkingBudget` (token count).
+#[derive(Debug, Clone)]
+pub enum GeminiThinkingConfig {
+    /// For Gemini 3 models: use thinking level strings.
+    /// Valid values depend on model:
+    /// - Gemini 3 Pro: "low", "high"
+    /// - Gemini 3 Flash: "minimal", "low", "medium", "high"
+    Level(String),
+    /// For Gemini 2.5 models: use token budget.
+    /// -1 = dynamic (default), 0 = disabled, positive = specific budget.
+    Budget(i32),
+    /// Use model's default (don't include thinkingConfig in request).
+    Default,
+}
+
+impl GeminiThinkingConfig {
+    /// Maps zdx's ThinkingLevel to Gemini-specific config based on model name.
+    ///
+    /// For Gemini 3 models: maps to thinkingLevel strings.
+    /// For Gemini 2.5 models: maps to thinkingBudget tokens.
+    pub fn from_thinking_level(level: ThinkingLevel, model: &str) -> Self {
+        // Check if model is Gemini 3 (use thinkingLevel)
+        let is_gemini_3 = model.contains("gemini-3");
+        let is_gemini_3_pro = model.contains("gemini-3-pro");
+
+        if is_gemini_3 {
+            // Gemini 3 models use thinkingLevel
+            match level {
+                ThinkingLevel::Off => {
+                    // Cannot disable thinking on Gemini 3 Pro
+                    // For Flash, use "minimal" (closest to off)
+                    if is_gemini_3_pro {
+                        Self::Level("low".to_string())
+                    } else {
+                        Self::Level("minimal".to_string())
+                    }
+                }
+                ThinkingLevel::Minimal => {
+                    // Gemini 3 Pro doesn't support minimal
+                    if is_gemini_3_pro {
+                        Self::Level("low".to_string())
+                    } else {
+                        Self::Level("minimal".to_string())
+                    }
+                }
+                ThinkingLevel::Low => Self::Level("low".to_string()),
+                ThinkingLevel::Medium => {
+                    // Gemini 3 Pro doesn't support medium
+                    if is_gemini_3_pro {
+                        Self::Level("high".to_string())
+                    } else {
+                        Self::Level("medium".to_string())
+                    }
+                }
+                ThinkingLevel::High | ThinkingLevel::XHigh => Self::Level("high".to_string()),
+            }
+        } else {
+            // Gemini 2.5 models use thinkingBudget
+            // Map thinking levels to appropriate token budgets
+            let is_flash_lite = model.contains("flash-lite");
+
+            match level {
+                ThinkingLevel::Off => {
+                    // 2.5 Pro cannot disable thinking, use minimum budget
+                    if model.contains("2.5-pro") || model.contains("2.5 pro") {
+                        Self::Budget(128)
+                    } else {
+                        Self::Budget(0)
+                    }
+                }
+                ThinkingLevel::Minimal => {
+                    // Flash Lite minimum is 512, others can go to 0
+                    if is_flash_lite {
+                        Self::Budget(512)
+                    } else {
+                        Self::Budget(1024)
+                    }
+                }
+                ThinkingLevel::Low => Self::Budget(2048),
+                ThinkingLevel::Medium => Self::Budget(8192),
+                ThinkingLevel::High => Self::Budget(16384),
+                ThinkingLevel::XHigh => {
+                    // Max budget depends on model
+                    if model.contains("2.5-pro") || model.contains("2.5 pro") {
+                        Self::Budget(32768)
+                    } else {
+                        Self::Budget(24576)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Converts to JSON value for inclusion in generationConfig.
+    /// Returns None if Default (don't include in request).
+    pub fn to_json(&self) -> Option<Value> {
+        match self {
+            GeminiThinkingConfig::Level(level) => Some(json!({
+                "thinkingConfig": {
+                    "thinkingLevel": level
+                }
+            })),
+            GeminiThinkingConfig::Budget(tokens) => Some(json!({
+                "thinkingConfig": {
+                    "thinkingBudget": tokens
+                }
+            })),
+            GeminiThinkingConfig::Default => None,
+        }
+    }
+}
 
 /// Synthetic thought signature for active loop messages.
 pub const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
@@ -66,6 +182,20 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
             ("assistant", MessageContent::Blocks(blocks)) => {
                 let mut parts = Vec::new();
                 let mut added_signature = false;
+
+                // Extract real thought signature from Gemini reasoning blocks (if present).
+                // This is used for multi-turn function calling to satisfy Gemini's signature
+                // validation requirement. Falls back to synthetic signature if no real one exists.
+                let real_signature: Option<String> = blocks.iter().find_map(|block| match block {
+                    ChatContentBlock::Reasoning(reasoning) => {
+                        reasoning.replay.as_ref().and_then(|replay| match replay {
+                            ReplayToken::Gemini { signature } => Some(signature.clone()),
+                            _ => None,
+                        })
+                    }
+                    _ => None,
+                });
+
                 for block in blocks {
                     match block {
                         ChatContentBlock::Text(text) => {
@@ -88,12 +218,16 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
                                 }
                             });
                             if add_thought_signature && !added_signature {
-                                part["thoughtSignature"] = json!(SYNTHETIC_THOUGHT_SIGNATURE);
+                                // Use real signature if available, fall back to synthetic
+                                let sig = real_signature
+                                    .as_deref()
+                                    .unwrap_or(SYNTHETIC_THOUGHT_SIGNATURE);
+                                part["thoughtSignature"] = json!(sig);
                                 added_signature = true;
                             }
                             parts.push(part);
                         }
-                        // Skip all reasoning blocks for Gemini
+                        // Skip reasoning blocks (signature already extracted above)
                         ChatContentBlock::Reasoning(_) => {}
                         ChatContentBlock::ToolResult(_) => {}
                     }
@@ -214,6 +348,7 @@ pub fn build_gemini_request(
     tools: &[ToolDefinition],
     system: Option<&str>,
     max_output_tokens: u32,
+    thinking_config: Option<&GeminiThinkingConfig>,
 ) -> Result<Value> {
     let (contents, _) = build_contents(messages);
     let tools_value = build_tools(tools);
@@ -234,10 +369,28 @@ pub fn build_gemini_request(
         request["tools"] = tools_value;
     }
 
+    // Build generationConfig with max_output_tokens and optional thinkingConfig
+    let mut generation_config = json!({});
     if max_output_tokens > 0 {
-        request["generation_config"] = json!({
-            "max_output_tokens": max_output_tokens
-        });
+        generation_config["maxOutputTokens"] = json!(max_output_tokens);
+    }
+
+    // Add thinking config if specified and not Default
+    if let Some(thinking) = thinking_config
+        && let Some(thinking_json) = thinking.to_json()
+        && let Some(thinking_config_obj) = thinking_json.get("thinkingConfig")
+    {
+        generation_config["thinkingConfig"] = thinking_config_obj.clone();
+        // Request thought summaries when thinking is enabled (Gemini 3 only)
+        // includeThoughts is not supported by Gemini 2.5 models (which use thinkingBudget)
+        if matches!(thinking, GeminiThinkingConfig::Level(_)) {
+            generation_config["includeThoughts"] = json!(true);
+        }
+    }
+
+    // Only add generationConfig if it has content
+    if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
+        request["generationConfig"] = generation_config;
     }
 
     Ok(request)
@@ -250,6 +403,7 @@ pub struct CloudCodeRequestParams<'a> {
     pub max_output_tokens: Option<u32>,
     pub session_id: &'a str,
     pub prompt_seq: u32,
+    pub thinking_config: Option<&'a GeminiThinkingConfig>,
 }
 
 /// Builds a Cloud Code Assist request body (for OAuth auth).
@@ -281,12 +435,27 @@ pub fn build_cloud_code_assist_request(
         inner_request["tools"] = tools_value;
     }
 
+    // Build generationConfig with max_output_tokens and optional thinkingConfig
+    let mut generation_config = json!({});
     if let Some(tokens) = params.max_output_tokens
         && tokens > 0
     {
-        inner_request["generationConfig"] = json!({
-            "maxOutputTokens": tokens
-        });
+        generation_config["maxOutputTokens"] = json!(tokens);
+    }
+
+    // Add thinking config if specified and not Default
+    // Note: Cloud Code Assist API does NOT support includeThoughts field
+    // (unlike the standard Gemini API at generativelanguage.googleapis.com)
+    if let Some(thinking) = params.thinking_config
+        && let Some(thinking_json) = thinking.to_json()
+        && let Some(thinking_config_obj) = thinking_json.get("thinkingConfig")
+    {
+        generation_config["thinkingConfig"] = thinking_config_obj.clone();
+    }
+
+    // Only add generationConfig if it has content
+    if generation_config.as_object().is_some_and(|o| !o.is_empty()) {
+        inner_request["generationConfig"] = generation_config;
     }
 
     // Format matches official Gemini CLI: <session_id>########<seq>
@@ -345,5 +514,402 @@ fn extract_tool_result_with_image(
 
             (text, image)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Gemini 3 Pro: maps to thinkingLevel, no minimal/medium support.
+    #[test]
+    fn test_thinking_config_gemini_3_pro() {
+        // Off -> low (Pro can't disable)
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-3-pro-preview");
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
+
+        // Minimal -> low (Pro doesn't support minimal)
+        let config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Minimal,
+            "gemini-3-pro-preview",
+        );
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
+
+        // Low -> low
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-3-pro-preview");
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "low"));
+
+        // Medium -> high (Pro doesn't support medium)
+        let config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Medium,
+            "gemini-3-pro-preview",
+        );
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "high"));
+
+        // High -> high
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::High, "gemini-3-pro-preview");
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "high"));
+    }
+
+    /// Gemini 3 Flash: maps to thinkingLevel with full support.
+    #[test]
+    fn test_thinking_config_gemini_3_flash() {
+        // Off -> minimal (Flash can use minimal)
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-3-flash-preview");
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
+
+        // Minimal -> minimal
+        let config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Minimal,
+            "gemini-3-flash-preview",
+        );
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "minimal"));
+
+        // Medium -> medium (Flash supports medium)
+        let config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Medium,
+            "gemini-3-flash-preview",
+        );
+        assert!(matches!(config, GeminiThinkingConfig::Level(ref l) if l == "medium"));
+    }
+
+    /// Gemini 2.5 Flash: maps to thinkingBudget tokens.
+    #[test]
+    fn test_thinking_config_gemini_25_flash() {
+        // Off -> 0 (can disable)
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(0)));
+
+        // Low -> 2048
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Low, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(2048)));
+
+        // Medium -> 8192
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Medium, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(8192)));
+
+        // XHigh -> 24576 (max for flash)
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::XHigh, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(24576)));
+    }
+
+    /// Gemini 2.5 Flash Lite: minimal starts at 512.
+    #[test]
+    fn test_thinking_config_gemini_25_flash_lite() {
+        // Minimal -> 512 (flash-lite minimum)
+        let config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Minimal,
+            "gemini-2.5-flash-lite",
+        );
+        assert!(matches!(config, GeminiThinkingConfig::Budget(512)));
+    }
+
+    /// GeminiThinkingConfig::to_json produces correct format.
+    #[test]
+    fn test_thinking_config_to_json() {
+        // Level produces thinkingLevel
+        let config = GeminiThinkingConfig::Level("medium".to_string());
+        let json = config.to_json().unwrap();
+        assert_eq!(json["thinkingConfig"]["thinkingLevel"], "medium");
+
+        // Budget produces thinkingBudget
+        let config = GeminiThinkingConfig::Budget(8192);
+        let json = config.to_json().unwrap();
+        assert_eq!(json["thinkingConfig"]["thinkingBudget"], 8192);
+
+        // Default produces None
+        let config = GeminiThinkingConfig::Default;
+        assert!(config.to_json().is_none());
+    }
+
+    /// build_contents uses real Gemini thought signature when available.
+    #[test]
+    fn test_build_contents_uses_real_gemini_signature() {
+        use crate::providers::{ReasoningBlock, ReplayToken};
+
+        // Create a message history with:
+        // 1. User message
+        // 2. Assistant message with reasoning block (Gemini signature) + tool use
+        // 3. Tool result
+        let messages = vec![
+            ChatMessage::user("What files are here?"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("I'll check the files".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "real_thought_signature_base64".to_string(),
+                        }),
+                    }),
+                    ChatContentBlock::ToolUse {
+                        id: "tool-1".to_string(),
+                        name: "bash".to_string(),
+                        input: serde_json::json!({"command": "ls"}),
+                    },
+                ]),
+            },
+        ];
+
+        let (contents, _) = build_contents(&messages);
+
+        // The assistant message should have the real signature attached to functionCall
+        let assistant_msg = &contents[1];
+        let parts = assistant_msg["parts"].as_array().unwrap();
+
+        // Should have one part (just the functionCall, reasoning is skipped)
+        assert_eq!(parts.len(), 1);
+
+        let function_call_part = &parts[0];
+        assert!(function_call_part.get("functionCall").is_some());
+        assert_eq!(
+            function_call_part["thoughtSignature"],
+            "real_thought_signature_base64"
+        );
+    }
+
+    /// build_contents falls back to synthetic signature when no Gemini signature available.
+    #[test]
+    fn test_build_contents_fallback_to_synthetic_signature() {
+        // Create a message history without reasoning blocks
+        let messages = vec![
+            ChatMessage::user("What files are here?"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
+                    id: "tool-1".to_string(),
+                    name: "bash".to_string(),
+                    input: serde_json::json!({"command": "ls"}),
+                }]),
+            },
+        ];
+
+        let (contents, _) = build_contents(&messages);
+
+        let assistant_msg = &contents[1];
+        let parts = assistant_msg["parts"].as_array().unwrap();
+        let function_call_part = &parts[0];
+
+        // Should fall back to synthetic signature
+        assert_eq!(
+            function_call_part["thoughtSignature"],
+            SYNTHETIC_THOUGHT_SIGNATURE
+        );
+    }
+}
+
+#[cfg(test)]
+mod integration_tests {
+    use super::*;
+    use crate::config::ThinkingLevel;
+
+    /// Cloud Code Assist API does NOT support includeThoughts for any model
+    #[test]
+    fn test_build_cloud_code_request_no_include_thoughts_for_25() {
+        let messages = vec![ChatMessage::user("hello")];
+        let tools = vec![];
+        let system = Some("You are helpful");
+
+        // Gemini 2.5 Flash with minimal thinking
+        let thinking_config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Minimal, "gemini-2.5-flash");
+
+        let request = build_cloud_code_assist_request(
+            &messages,
+            &tools,
+            system,
+            CloudCodeRequestParams {
+                model: "gemini-2.5-flash",
+                project_id: "test-project",
+                max_output_tokens: Some(8192),
+                session_id: "test-session",
+                prompt_seq: 0,
+                thinking_config: Some(&thinking_config),
+            },
+        )
+        .unwrap();
+
+        // Check that includeThoughts is NOT present (Cloud Code Assist doesn't support it)
+        let gen_config = &request["request"]["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_some(),
+            "thinkingConfig should be present"
+        );
+        assert!(
+            gen_config.get("includeThoughts").is_none(),
+            "includeThoughts should NOT be present for Cloud Code Assist API"
+        );
+    }
+
+    /// Cloud Code Assist API does NOT support includeThoughts even for Gemini 3 models
+    #[test]
+    fn test_build_cloud_code_request_no_include_thoughts_for_3() {
+        let messages = vec![ChatMessage::user("hello")];
+        let tools = vec![];
+        let system = Some("You are helpful");
+
+        // Gemini 3 Flash with minimal thinking
+        let thinking_config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Minimal,
+            "gemini-3-flash-preview",
+        );
+
+        let request = build_cloud_code_assist_request(
+            &messages,
+            &tools,
+            system,
+            CloudCodeRequestParams {
+                model: "gemini-3-flash-preview",
+                project_id: "test-project",
+                max_output_tokens: Some(8192),
+                session_id: "test-session",
+                prompt_seq: 0,
+                thinking_config: Some(&thinking_config),
+            },
+        )
+        .unwrap();
+
+        // Cloud Code Assist does NOT support includeThoughts (unlike standard Gemini API)
+        let gen_config = &request["request"]["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_some(),
+            "thinkingConfig should be present"
+        );
+        assert!(
+            gen_config.get("includeThoughts").is_none(),
+            "includeThoughts should NOT be present for Cloud Code Assist API"
+        );
+    }
+
+    /// Standard Gemini API DOES support includeThoughts for Gemini 3 models
+    #[test]
+    fn test_build_gemini_request_include_thoughts_for_3() {
+        let messages = vec![ChatMessage::user("hello")];
+        let tools = vec![];
+        let system = Some("You are helpful");
+
+        // Gemini 3 Flash with minimal thinking
+        let thinking_config = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::Minimal,
+            "gemini-3-flash-preview",
+        );
+
+        let request =
+            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+
+        // Standard Gemini API supports includeThoughts for Gemini 3
+        let gen_config = &request["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_some(),
+            "thinkingConfig should be present"
+        );
+        assert_eq!(
+            gen_config.get("includeThoughts"),
+            Some(&serde_json::json!(true)),
+            "includeThoughts should be true for Gemini 3 on standard API"
+        );
+    }
+
+    /// Standard Gemini API does NOT include includeThoughts for Gemini 2.5 (uses thinkingBudget)
+    #[test]
+    fn test_build_gemini_request_no_include_thoughts_for_25() {
+        let messages = vec![ChatMessage::user("hello")];
+        let tools = vec![];
+        let system = Some("You are helpful");
+
+        // Gemini 2.5 Flash
+        let thinking_config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Medium, "gemini-2.5-flash");
+
+        let request =
+            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+
+        // Gemini 2.5 uses thinkingBudget, not thinkingLevel, so no includeThoughts
+        let gen_config = &request["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_some(),
+            "thinkingConfig should be present"
+        );
+        assert!(
+            gen_config["thinkingConfig"].get("thinkingBudget").is_some(),
+            "should use thinkingBudget for 2.5"
+        );
+        assert!(
+            gen_config.get("includeThoughts").is_none(),
+            "includeThoughts should NOT be present for Gemini 2.5"
+        );
+    }
+
+    /// When thinking_config is None or Default, no thinkingConfig should be present
+    #[test]
+    fn test_build_gemini_request_no_thinking_config_when_disabled() {
+        let messages = vec![ChatMessage::user("hello")];
+        let tools = vec![];
+        let system = Some("You are helpful");
+
+        // Test with None
+        let request = build_gemini_request(&messages, &tools, system, 8192, None).unwrap();
+        let gen_config = &request["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_none(),
+            "thinkingConfig should NOT be present when None"
+        );
+
+        // Test with Default variant
+        let thinking_config = GeminiThinkingConfig::Default;
+        let request =
+            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+        let gen_config = &request["generationConfig"];
+        assert!(
+            gen_config.get("thinkingConfig").is_none(),
+            "thinkingConfig should NOT be present for Default"
+        );
+    }
+
+    /// Gemini 2.5 Pro: Off maps to minimum budget (128)
+    #[test]
+    fn test_thinking_config_gemini_25_pro_off() {
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Off, "gemini-2.5-pro");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(128)));
+    }
+
+    /// Gemini 2.5 Pro: XHigh maps to max budget (32768)
+    #[test]
+    fn test_thinking_config_gemini_25_pro_xhigh() {
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::XHigh, "gemini-2.5-pro");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(32768)));
+    }
+
+    /// Non-flash-lite Gemini 2.5: Minimal maps to 1024
+    #[test]
+    fn test_thinking_config_gemini_25_flash_minimal() {
+        let config =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Minimal, "gemini-2.5-flash");
+        assert!(matches!(config, GeminiThinkingConfig::Budget(1024)));
+    }
+
+    /// Gemini 3 XHigh maps to high (since XHigh isn't a Gemini level)
+    #[test]
+    fn test_thinking_config_gemini_3_xhigh() {
+        // Both Pro and Flash should map XHigh to "high"
+        let config_pro =
+            GeminiThinkingConfig::from_thinking_level(ThinkingLevel::XHigh, "gemini-3-pro-preview");
+        assert!(matches!(config_pro, GeminiThinkingConfig::Level(ref l) if l == "high"));
+
+        let config_flash = GeminiThinkingConfig::from_thinking_level(
+            ThinkingLevel::XHigh,
+            "gemini-3-flash-preview",
+        );
+        assert!(matches!(config_flash, GeminiThinkingConfig::Level(ref l) if l == "high"));
     }
 }

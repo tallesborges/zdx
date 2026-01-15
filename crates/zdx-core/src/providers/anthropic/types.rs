@@ -205,8 +205,10 @@ impl ApiMessage {
                                         })
                                     }
                                 }
-                                // Skip OpenAI-specific reasoning blocks
-                                Some(ReplayToken::OpenAI { .. }) => None,
+                                // Skip OpenAI and Gemini reasoning blocks (provider-specific)
+                                Some(ReplayToken::OpenAI { .. } | ReplayToken::Gemini { .. }) => {
+                                    None
+                                }
                                 // No replay data; treat as text-only thinking for compatibility
                                 None => text.as_ref().map(|thinking| ApiContentBlock::Text {
                                     text: format!("<thinking>\n{}\n</thinking>", thinking),

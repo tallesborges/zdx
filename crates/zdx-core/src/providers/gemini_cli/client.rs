@@ -57,6 +57,7 @@ impl GeminiCliClient {
                 max_output_tokens: Some(self.config.max_tokens),
                 session_id: &self.config.session_id,
                 prompt_seq: seq,
+                thinking_config: self.config.thinking_config.as_ref(),
             },
         )?;
 

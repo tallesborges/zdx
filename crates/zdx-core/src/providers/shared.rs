@@ -21,6 +21,9 @@ pub enum ReplayToken {
         id: String,
         encrypted_content: String,
     },
+    /// Gemini thought signature - required for multi-turn function calling
+    #[serde(rename = "gemini")]
+    Gemini { signature: String },
 }
 
 /// Provider-agnostic reasoning/thinking content with optional replay token.
@@ -280,4 +283,53 @@ pub enum StreamEvent {
     Ping,
     /// Error event from API
     Error { error_type: String, message: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Test: ReplayToken::Gemini serialization round-trips correctly.
+    ///
+    /// Verifies that Gemini replay tokens serialize to JSON with the correct
+    /// tagged format and deserialize back to the same value.
+    #[test]
+    fn test_replay_token_gemini_roundtrip() {
+        let token = ReplayToken::Gemini {
+            signature: "base64_encoded_thought_signature".to_string(),
+        };
+
+        // Serialize
+        let json = serde_json::to_string(&token).unwrap();
+
+        // Verify JSON format
+        assert!(json.contains(r#""provider":"gemini""#));
+        assert!(json.contains(r#""signature":"base64_encoded_thought_signature""#));
+
+        // Deserialize
+        let parsed: ReplayToken = serde_json::from_str(&json).unwrap();
+        assert_eq!(token, parsed);
+    }
+
+    /// Test: ContentBlockType parsing for reasoning variants.
+    #[test]
+    fn test_content_block_type_reasoning_parsing() {
+        // Both "thinking" and "reasoning" should parse to Reasoning
+        assert_eq!(
+            ContentBlockType::from_str("thinking").unwrap(),
+            ContentBlockType::Reasoning
+        );
+        assert_eq!(
+            ContentBlockType::from_str("reasoning").unwrap(),
+            ContentBlockType::Reasoning
+        );
+        assert_eq!(
+            ContentBlockType::from_str("text").unwrap(),
+            ContentBlockType::Text
+        );
+        assert_eq!(
+            ContentBlockType::from_str("tool_use").unwrap(),
+            ContentBlockType::ToolUse
+        );
+    }
 }

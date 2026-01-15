@@ -1358,6 +1358,19 @@ mod tests {
         assert!(json.contains("\"id\":\"r1\""));
         assert!(json.contains("\"encrypted_content\":\"encrypted\""));
         assert!(json.contains("\"text\":\"summary\""));
+
+        // Test Gemini replay token serialization
+        let reasoning_gemini = ThreadEvent::reasoning(
+            Some("thought summary".to_string()),
+            Some(crate::providers::ReplayToken::Gemini {
+                signature: "base64sig".to_string(),
+            }),
+        );
+        let json = serde_json::to_string(&reasoning_gemini).unwrap();
+        assert!(json.contains("\"type\":\"reasoning\""));
+        assert!(json.contains("\"provider\":\"gemini\""));
+        assert!(json.contains("\"signature\":\"base64sig\""));
+        assert!(json.contains("\"text\":\"thought summary\""));
     }
 
     #[test]
@@ -1477,6 +1490,24 @@ mod tests {
                     Some(crate::providers::ReplayToken::OpenAI {
                         id: "r1".to_string(),
                         encrypted_content: "enc".to_string(),
+                    })
+                );
+            }
+            _ => panic!("Expected Reasoning event"),
+        }
+    }
+
+    #[test]
+    fn test_gemini_reasoning_event_deserialization() {
+        let json = r#"{"type":"reasoning","text":"thought summary","replay":{"provider":"gemini","signature":"base64sig"},"ts":"2024-01-01T00:00:00Z"}"#;
+        let event: ThreadEvent = serde_json::from_str(json).unwrap();
+        match event {
+            ThreadEvent::Reasoning { text, replay, .. } => {
+                assert_eq!(text, Some("thought summary".to_string()));
+                assert_eq!(
+                    replay,
+                    Some(crate::providers::ReplayToken::Gemini {
+                        signature: "base64sig".to_string(),
                     })
                 );
             }

@@ -23,6 +23,7 @@ use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::providers::claude_cli::{ClaudeCliClient, ClaudeCliConfig};
 use crate::providers::gemini::{GeminiClient, GeminiConfig};
 use crate::providers::gemini_cli::{GeminiCliClient, GeminiCliConfig};
+use crate::providers::gemini_shared::GeminiThinkingConfig;
 use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
@@ -358,21 +359,35 @@ pub async fn run_turn(
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
+            let cache_key = config
+                .providers
+                .openai_codex
+                .prompt_cache_key
+                .clone()
+                .or_else(|| thread_id.map(|s| s.to_string()));
+
             let openai_config = OpenAICodexConfig::new(
                 selection.model.clone(),
                 max_tokens,
                 reasoning_effort,
-                thread_id.map(|s| s.to_string()),
+                cache_key,
             );
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
         }
         ProviderKind::OpenAI => {
+            let cache_key = config
+                .providers
+                .openai
+                .prompt_cache_key
+                .clone()
+                .or_else(|| thread_id.map(|s| s.to_string()));
+
             let openai_config = OpenAIConfig::from_env(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.openai.effective_base_url(),
                 config.providers.openai.effective_api_key(),
-                thread_id.map(|s| s.to_string()),
+                cache_key,
             )?;
             ProviderClient::OpenAI(OpenAIClient::new(openai_config))
         }
@@ -388,16 +403,38 @@ pub async fn run_turn(
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
         }
         ProviderKind::Gemini => {
+            // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)
+            let thinking_config = if thinking_level.is_enabled() {
+                Some(GeminiThinkingConfig::from_thinking_level(
+                    thinking_level,
+                    &selection.model,
+                ))
+            } else {
+                None
+            };
+
             let gemini_config = GeminiConfig::from_env(
                 selection.model.clone(),
                 max_tokens,
                 config.providers.gemini.effective_base_url(),
                 config.providers.gemini.effective_api_key(),
+                thinking_config,
             )?;
             ProviderClient::Gemini(GeminiClient::new(gemini_config))
         }
         ProviderKind::GeminiCli => {
-            let gemini_cli_config = GeminiCliConfig::new(selection.model.clone(), max_tokens);
+            // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)
+            let thinking_config = if thinking_level.is_enabled() {
+                Some(GeminiThinkingConfig::from_thinking_level(
+                    thinking_level,
+                    &selection.model,
+                ))
+            } else {
+                None
+            };
+
+            let gemini_cli_config =
+                GeminiCliConfig::new(selection.model.clone(), max_tokens, thinking_config);
             ProviderClient::GeminiCli(GeminiCliClient::new(gemini_cli_config))
         }
     };
@@ -554,8 +591,17 @@ pub async fn run_turn(
                     // Check if this is a thinking block finishing
                     if let Some(tb) = turn.find_thinking_mut(index) {
                         if tb.replay.is_none() && !tb.signature.is_empty() {
-                            tb.replay = Some(ReplayToken::Anthropic {
-                                signature: tb.signature.clone(),
+                            // Create provider-specific replay token
+                            tb.replay = Some(match provider {
+                                ProviderKind::Gemini | ProviderKind::GeminiCli => {
+                                    ReplayToken::Gemini {
+                                        signature: tb.signature.clone(),
+                                    }
+                                }
+                                // Anthropic and Claude CLI use Anthropic format
+                                _ => ReplayToken::Anthropic {
+                                    signature: tb.signature.clone(),
+                                },
                             });
                         }
                         let text = if tb.text.is_empty() {
