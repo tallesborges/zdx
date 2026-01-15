@@ -69,7 +69,10 @@ fn update_default_models() -> Result<()> {
         bail!("models update did not produce {}", models_path.display());
     }
 
-    let dest = root.join("crates").join("zdx-core").join("default_models.toml");
+    let dest = root
+        .join("crates")
+        .join("zdx-core")
+        .join("default_models.toml");
     fs::copy(&models_path, &dest)
         .with_context(|| format!("copy {} to {}", models_path.display(), dest.display()))?;
 
@@ -79,7 +82,10 @@ fn update_default_models() -> Result<()> {
 
 fn update_default_config() -> Result<()> {
     let root = project_root()?;
-    let dest = root.join("crates").join("zdx-core").join("default_config.toml");
+    let dest = root
+        .join("crates")
+        .join("zdx-core")
+        .join("default_config.toml");
 
     let output = Command::new("cargo")
         .current_dir(&root)
