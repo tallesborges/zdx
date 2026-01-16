@@ -14,14 +14,15 @@ const RESPONSES_PATH: &str = "/codex/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 const DEFAULT_CODEX_PROMPT: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the ZDX CLI on a user's computer.";
 
-const HEADER_BETA: &str = "OpenAI-Beta";
+const HEADER_VERSION: &str = "version";
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
 const HEADER_ORIGINATOR: &str = "originator";
+const HEADER_USER_AGENT: &str = "user-agent";
 const HEADER_SESSION_ID: &str = "session_id";
-const HEADER_CONVERSATION_ID: &str = "conversation_id";
 
-const BETA_VALUE: &str = "responses=experimental";
-const ORIGINATOR_VALUE: &str = "codex_cli_rs";
+const ORIGINATOR_VALUE: &str = "zdx";
+const USER_AGENT_VALUE: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
+const VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 
 pub struct OpenAICodexClient {
     config: OpenAICodexConfig,
@@ -48,7 +49,6 @@ impl OpenAICodexClient {
             &creds.account_id,
             &creds.access,
             self.config.prompt_cache_key.as_deref(),
-            self.config.prompt_cache_key.as_deref(),
         );
         let config = ResponsesConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
@@ -70,12 +70,7 @@ impl OpenAICodexClient {
     }
 }
 
-fn build_headers(
-    account_id: &str,
-    access_token: &str,
-    conversation_id: Option<&str>,
-    session_id: Option<&str>,
-) -> HeaderMap {
+fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
@@ -86,18 +81,17 @@ fn build_headers(
         HEADER_ACCOUNT_ID,
         HeaderValue::from_str(account_id).unwrap_or_else(|_| HeaderValue::from_static("")),
     );
-    headers.insert(HEADER_BETA, HeaderValue::from_static(BETA_VALUE));
     headers.insert(
         HEADER_ORIGINATOR,
         HeaderValue::from_static(ORIGINATOR_VALUE),
     );
+    headers.insert(
+        HEADER_USER_AGENT,
+        HeaderValue::from_static(USER_AGENT_VALUE),
+    );
+    headers.insert(HEADER_VERSION, HeaderValue::from_static(VERSION_VALUE));
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
-    if let Some(value) = conversation_id
-        && let Ok(header_value) = HeaderValue::from_str(value)
-    {
-        headers.insert(HEADER_CONVERSATION_ID, header_value);
-    }
     if let Some(value) = session_id
         && let Ok(header_value) = HeaderValue::from_str(value)
     {
