@@ -8,10 +8,10 @@
   - `crates/zdx-core/src/lib.rs`: core crate exports
   - `crates/zdx-core/src/config.rs`: config loading + paths
   - `crates/zdx-core/src/models.rs`: model registry for TUI model picker
-  - `crates/zdx-core/src/prompts.rs`: `prompt_str!` macro for including prompts
+  - `crates/zdx-core/src/prompts.rs`: prompt template helpers
   - `crates/zdx-core/default_config.toml`: default configuration template
   - `crates/zdx-core/default_models.toml`: default model registry fallback
-  - `crates/zdx-core/prompts/`: prompt templates (included via `zdx_core::prompt_str!`)
+  - `crates/zdx-core/prompts/`: prompt templates
   - `crates/zdx-core/src/core/`: UI-agnostic domain + runtime
     - `crates/zdx-core/src/core/mod.rs`: core module exports
     - `crates/zdx-core/src/core/events.rs`: agent event types for streaming

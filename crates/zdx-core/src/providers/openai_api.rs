@@ -12,6 +12,7 @@ use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 const RESPONSES_PATH: &str = "/responses";
+const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
 /// OpenAI API configuration.
 #[derive(Debug, Clone)]
@@ -82,6 +83,7 @@ impl OpenAIClient {
             max_output_tokens: Some(self.config.max_output_tokens),
             reasoning_effort: None,
             instructions: None,
+            text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: None,
             prompt_cache_key: self.config.prompt_cache_key.clone(),
