@@ -15,6 +15,8 @@ pub struct RequestBody {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub text: Option<TextConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reasoning: Option<ReasoningConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub include: Option<Vec<String>>,
@@ -37,6 +39,11 @@ pub struct ReasoningConfig {
     pub effort: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub summary: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct TextConfig {
+    pub verbosity: String,
 }
 
 #[derive(Debug, Serialize)]

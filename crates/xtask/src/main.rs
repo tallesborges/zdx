@@ -14,22 +14,17 @@ struct Cli {
     command: Option<CommandName>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Default, Subcommand)]
 enum CommandName {
     /// Update default_models.toml by running `zdx models update`.
     UpdateDefaultModels,
     /// Update default_config.toml by running `zdx config init`.
     UpdateDefaultConfig,
     /// Update both default_config.toml and default_models.toml.
+    #[default]
     UpdateDefaults,
     /// Generate codebase.txt with all source files.
     Codebase,
-}
-
-impl Default for CommandName {
-    fn default() -> Self {
-        CommandName::UpdateDefaults
-    }
 }
 
 fn main() -> Result<()> {

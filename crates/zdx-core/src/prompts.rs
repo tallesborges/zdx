@@ -11,11 +11,3 @@ pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/thread_title_prompt.md"
 ));
-
-/// Includes a prompt from the top-level `prompts/` directory.
-#[macro_export]
-macro_rules! prompt_str {
-    ($path:literal) => {
-        include_str!(concat!(env!("CARGO_MANIFEST_DIR"), "/prompts/", $path))
-    };
-}

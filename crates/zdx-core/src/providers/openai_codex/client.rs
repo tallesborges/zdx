@@ -6,12 +6,13 @@ use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::StreamEvent;
 use crate::providers::openai_codex::auth::{OpenAICodexConfig, resolve_credentials};
-use crate::providers::openai_codex::prompts::{get_codex_instructions, normalize_model};
 use crate::providers::openai_responses::{ResponsesConfig, send_responses_stream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH: &str = "/codex/responses";
+const DEFAULT_TEXT_VERBOSITY: &str = "medium";
+const DEFAULT_CODEX_PROMPT: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the ZDX CLI on a user's computer.";
 
 const HEADER_BETA: &str = "OpenAI-Beta";
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
@@ -43,8 +44,6 @@ impl OpenAICodexClient {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let creds = resolve_credentials().await?;
 
-        let normalized_model = normalize_model(&self.config.model);
-        let instructions = Some(get_codex_instructions(&normalized_model));
         let headers = build_headers(
             &creds.account_id,
             &creds.access,
@@ -54,10 +53,11 @@ impl OpenAICodexClient {
         let config = ResponsesConfig {
             base_url: DEFAULT_BASE_URL.to_string(),
             path: RESPONSES_PATH.to_string(),
-            model: normalized_model,
+            model: self.config.model.clone(),
             max_output_tokens: None,
             reasoning_effort: self.config.reasoning_effort.clone(),
-            instructions,
+            instructions: Some(DEFAULT_CODEX_PROMPT.to_string()),
+            text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
             prompt_cache_key: self.config.prompt_cache_key.clone(),

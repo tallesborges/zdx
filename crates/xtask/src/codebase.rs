@@ -38,7 +38,7 @@ pub fn run() -> anyhow::Result<()> {
         output.push_str(&format!("  - {}\n", dir));
     }
     output.push_str(&format!("\nTotal files: {}\n", files.len()));
-    output.push_str("\n");
+    output.push('\n');
     output.push_str(&"=".repeat(80));
     output.push_str("\n\n");
 
@@ -138,7 +138,7 @@ fn format_file_content(file_path: &Path) -> anyhow::Result<String> {
 
     let mut output = String::new();
     output.push_str(&"=".repeat(80));
-    output.push_str("\n");
+    output.push('\n');
     output.push_str(&format!("FILE: {}\n", file_path.display()));
     output.push_str(&format!("SIZE: {} bytes\n", size_bytes));
     output.push_str(&"=".repeat(80));
