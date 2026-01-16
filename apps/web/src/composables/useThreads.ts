@@ -1,0 +1,22 @@
+import { ref } from 'vue'
+import { apiGet } from '@/lib/api'
+import type { ThreadSummary } from '@/lib/api'
+
+export function useThreads() {
+  const threads = ref<ThreadSummary[] | null>(null)
+  const error = ref<string | null>(null)
+  const loading = ref(false)
+
+  async function loadThreads() {
+    try {
+      loading.value = true
+      threads.value = await apiGet<ThreadSummary[]>('/api/threads')
+    } catch (err) {
+      error.value = (err as Error).message
+    } finally {
+      loading.value = false
+    }
+  }
+
+  return { threads, error, loading, loadThreads }
+}
