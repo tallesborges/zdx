@@ -3,14 +3,85 @@
 //! Allows the agent to run shell commands with safety guards.
 //! Requires `--allow-bash` flag or the tool returns "denied".
 
+use std::fs::File;
+use std::io::Write;
 use std::process::Stdio;
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
+
+/// Maximum bytes per output stream (stdout/stderr) before truncation.
+const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
+
+/// Writes full output to a temp file and returns the file path.
+///
+/// Used when output is truncated so the AI can use the Read tool to access
+/// the complete data with offset/limit parameters.
+fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
+    let temp_dir = std::env::temp_dir();
+    let filename = format!("zdx-bash-{}-{}.txt", Uuid::new_v4(), stream_name);
+    let path = temp_dir.join(filename);
+
+    let mut file = File::create(&path).ok()?;
+    file.write_all(bytes).ok()?;
+
+    Some(path.to_string_lossy().into_owned())
+}
+
+/// Truncates a byte slice at a valid UTF-8 character boundary.
+///
+/// Returns the truncated string and whether truncation occurred.
+fn truncate_at_utf8_boundary(bytes: &[u8], max_bytes: usize) -> (String, bool, usize) {
+    let total_bytes = bytes.len();
+
+    if total_bytes <= max_bytes {
+        // No truncation needed
+        return (
+            String::from_utf8_lossy(bytes).into_owned(),
+            false,
+            total_bytes,
+        );
+    }
+
+    // Find the last valid UTF-8 boundary at or before max_bytes
+    let truncated_bytes = &bytes[..max_bytes];
+
+    // Walk backwards to find a valid UTF-8 boundary
+    // UTF-8 continuation bytes start with 10xxxxxx (0x80-0xBF)
+    let mut end = max_bytes;
+    while end > 0 && (truncated_bytes[end - 1] & 0xC0) == 0x80 {
+        end -= 1;
+    }
+
+    // If we hit a multi-byte sequence start, back up one more
+    // to avoid cutting in the middle of a character
+    if end > 0 && truncated_bytes[end - 1] >= 0x80 {
+        // Check if this is a valid start of a multi-byte sequence
+        let byte = truncated_bytes[end - 1];
+        let char_len = if byte >= 0xF0 {
+            4
+        } else if byte >= 0xE0 {
+            3
+        } else if byte >= 0xC0 {
+            2
+        } else {
+            1
+        };
+
+        // If the sequence would extend beyond our truncation point, remove it
+        if end - 1 + char_len > max_bytes {
+            end -= 1;
+        }
+    }
+
+    let truncated = String::from_utf8_lossy(&bytes[..end]).into_owned();
+    (truncated, true, total_bytes)
+}
 
 /// Returns the tool definition for the bash tool.
 pub fn definition() -> ToolDefinition {
@@ -45,17 +116,39 @@ pub struct BashOutput {
     pub stderr: String,
     pub exit_code: i32,
     pub timed_out: bool,
+    pub stdout_truncated: bool,
+    pub stderr_truncated: bool,
+    pub stdout_total_bytes: usize,
+    pub stderr_total_bytes: usize,
+    /// Path to temp file containing full stdout (when truncated).
+    pub stdout_file: Option<String>,
+    /// Path to temp file containing full stderr (when truncated).
+    pub stderr_file: Option<String>,
 }
 
 impl BashOutput {
     /// Converts to structured envelope format.
     pub fn into_tool_output(self) -> ToolOutput {
-        ToolOutput::success(json!({
+        let mut data = json!({
             "stdout": self.stdout,
             "stderr": self.stderr,
             "exit_code": self.exit_code,
-            "timed_out": self.timed_out
-        }))
+            "timed_out": self.timed_out,
+            "stdout_truncated": self.stdout_truncated,
+            "stderr_truncated": self.stderr_truncated,
+            "stdout_total_bytes": self.stdout_total_bytes,
+            "stderr_total_bytes": self.stderr_total_bytes
+        });
+
+        // Add file paths when truncated (for AI to use Read tool)
+        if let Some(path) = self.stdout_file {
+            data["stdout_file"] = json!(path);
+        }
+        if let Some(path) = self.stderr_file {
+            data["stderr_file"] = json!(path);
+        }
+
+        ToolOutput::success(data)
     }
 }
 
@@ -121,6 +214,12 @@ async fn run_command(
                     stderr: format!("Command timed out after {} seconds", timeout.as_secs()),
                     exit_code: -1,
                     timed_out: true,
+                    stdout_truncated: false,
+                    stderr_truncated: false,
+                    stdout_total_bytes: 0,
+                    stderr_total_bytes: 0,
+                    stdout_file: None,
+                    stderr_file: None,
                 });
             }
         },
@@ -134,11 +233,34 @@ async fn run_command(
         )
     })?;
 
+    let (stdout, stdout_truncated, stdout_total_bytes) =
+        truncate_at_utf8_boundary(&output.stdout, MAX_OUTPUT_BYTES);
+    let (stderr, stderr_truncated, stderr_total_bytes) =
+        truncate_at_utf8_boundary(&output.stderr, MAX_OUTPUT_BYTES);
+
+    // Write full output to temp files when truncated
+    let stdout_file = if stdout_truncated {
+        write_temp_file(&output.stdout, "stdout")
+    } else {
+        None
+    };
+    let stderr_file = if stderr_truncated {
+        write_temp_file(&output.stderr, "stderr")
+    } else {
+        None
+    };
+
     Ok(BashOutput {
-        stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-        stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+        stdout,
+        stderr,
         exit_code: output.status.code().unwrap_or(-1),
         timed_out: false,
+        stdout_truncated,
+        stderr_truncated,
+        stdout_total_bytes,
+        stderr_total_bytes,
+        stdout_file,
+        stderr_file,
     })
 }
 
@@ -156,11 +278,12 @@ mod tests {
 
         let result = execute(&input, &ctx, None).await;
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""ok":true"#));
-        assert!(json_str.contains(r#""stdout":"hello"#));
-        assert!(json_str.contains(r#""exit_code":0"#));
-        assert!(json_str.contains(r#""timed_out":false"#));
+        let data = result.data().expect("should have data");
+        assert!(data["stdout"].as_str().unwrap().contains("hello"));
+        assert_eq!(data["exit_code"], 0);
+        assert_eq!(data["timed_out"], false);
+        assert_eq!(data["stdout_truncated"], false);
+        assert_eq!(data["stderr_truncated"], false);
     }
 
     #[tokio::test]
@@ -171,8 +294,8 @@ mod tests {
 
         let result = execute(&input, &ctx, None).await;
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""stderr":"error"#));
+        let data = result.data().expect("should have data");
+        assert!(data["stderr"].as_str().unwrap().contains("error"));
     }
 
     #[tokio::test]
@@ -183,8 +306,8 @@ mod tests {
 
         let result = execute(&input, &ctx, None).await;
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""exit_code":42"#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["exit_code"], 42);
     }
 
     #[tokio::test]
@@ -197,8 +320,8 @@ mod tests {
 
         let result = execute(&input, &ctx, None).await;
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains("test.txt"));
+        let data = result.data().expect("should have data");
+        assert!(data["stdout"].as_str().unwrap().contains("test.txt"));
     }
 
     #[tokio::test]
@@ -209,8 +332,10 @@ mod tests {
 
         let result = execute(&input, &ctx, Some(Duration::from_millis(100))).await;
         assert!(result.is_ok()); // timed_out is success with timed_out=true
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""timed_out":true"#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["timed_out"], true);
+        assert_eq!(data["stdout_truncated"], false);
+        assert_eq!(data["stderr_truncated"], false);
     }
 
     #[tokio::test]
@@ -223,5 +348,126 @@ mod tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    #[test]
+    fn test_truncate_at_utf8_boundary_no_truncation() {
+        let input = "Hello, world!".as_bytes();
+        let (result, truncated, total) = truncate_at_utf8_boundary(input, 100);
+        assert_eq!(result, "Hello, world!");
+        assert!(!truncated);
+        assert_eq!(total, 13);
+    }
+
+    #[test]
+    fn test_truncate_at_utf8_boundary_multibyte() {
+        // "こんにちは" - each character is 3 bytes in UTF-8
+        let input = "こんにちは".as_bytes();
+        assert_eq!(input.len(), 15); // 5 chars * 3 bytes
+
+        // Truncate at 10 bytes - should keep 3 full characters (9 bytes)
+        let (result, truncated, total) = truncate_at_utf8_boundary(input, 10);
+        assert_eq!(result, "こんに");
+        assert!(truncated);
+        assert_eq!(total, 15);
+    }
+
+    #[test]
+    fn test_truncate_at_utf8_boundary_emoji() {
+        // Emoji "😀" is 4 bytes in UTF-8
+        let input = "Hi😀there".as_bytes();
+        // "Hi" = 2 bytes, "😀" = 4 bytes, "there" = 5 bytes = 11 total
+
+        // Truncate at 5 bytes - should keep "Hi" (2 bytes), skip partial emoji
+        let (result, truncated, total) = truncate_at_utf8_boundary(input, 5);
+        assert_eq!(result, "Hi");
+        assert!(truncated);
+        assert_eq!(total, 11);
+    }
+
+    #[tokio::test]
+    async fn test_bash_stdout_truncated_writes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Generate more than 40KB of output (50KB of 'x' characters)
+        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'x'"});
+
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+
+        // Should have a stdout_file path
+        let stdout_file = data["stdout_file"]
+            .as_str()
+            .expect("should have stdout_file");
+        assert!(stdout_file.contains("zdx-bash-"));
+        assert!(stdout_file.contains("-stdout.txt"));
+
+        // File should exist and contain full output
+        let file_contents = std::fs::read_to_string(stdout_file).expect("should read temp file");
+        assert_eq!(file_contents.len(), 51200);
+        assert!(file_contents.chars().all(|c| c == 'x'));
+
+        // Clean up
+        let _ = std::fs::remove_file(stdout_file);
+    }
+
+    #[tokio::test]
+    async fn test_bash_stderr_truncated_writes_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Generate more than 40KB of stderr output (50KB)
+        let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'y' >&2"});
+
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+
+        // Should have a stderr_file path
+        let stderr_file = data["stderr_file"]
+            .as_str()
+            .expect("should have stderr_file");
+        assert!(stderr_file.contains("zdx-bash-"));
+        assert!(stderr_file.contains("-stderr.txt"));
+
+        // File should exist and contain full output
+        let file_contents = std::fs::read_to_string(stderr_file).expect("should read temp file");
+        assert_eq!(file_contents.len(), 51200);
+        assert!(file_contents.chars().all(|c| c == 'y'));
+
+        // Clean up
+        let _ = std::fs::remove_file(stderr_file);
+    }
+
+    #[tokio::test]
+    async fn test_bash_no_truncation_no_temp_file() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Generate less than 40KB of output (1KB)
+        let input = json!({"command": "head -c 1024 /dev/zero | tr '\\0' 'z'"});
+
+        let result = execute(&input, &ctx, None).await;
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+
+        // Should NOT have stdout_file or stderr_file
+        assert!(data.get("stdout_file").is_none());
+        assert!(data.get("stderr_file").is_none());
+    }
+
+    #[test]
+    fn test_write_temp_file() {
+        let content = b"Hello, temp file!";
+        let path = write_temp_file(content, "test").expect("should write temp file");
+
+        assert!(path.contains("zdx-bash-"));
+        assert!(path.contains("-test.txt"));
+
+        // Verify file contents
+        let read_content = std::fs::read_to_string(&path).expect("should read temp file");
+        assert_eq!(read_content.as_bytes(), content);
+
+        // Clean up
+        let _ = std::fs::remove_file(&path);
     }
 }

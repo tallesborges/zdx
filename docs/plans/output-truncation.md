@@ -71,16 +71,16 @@
 
 # MVP slices (ship-shaped, demoable)
 
-## Slice 1: Read tool - line-based truncation
+## Slice 1: Read tool - line-based truncation ✅
 
 - **Goal**: Replace byte truncation with line-aware truncation (like codex-rs)
 - **Scope checklist**:
-  - [ ] Add constants: `MAX_LINES = 2000`, `MAX_LINE_LENGTH = 500`
-  - [ ] Implement `read_text_lines()` that reads line-by-line with limits
-  - [ ] Use hard byte limit per line to prevent memory issues with huge single-line files
-  - [ ] Truncate individual lines exceeding `MAX_LINE_LENGTH` at char boundary (silent, no marker)
-  - [ ] Always scan entire file for `total_lines` (simpler code, one path)
-  - [ ] Return structured output with pure content + metadata:
+  - [x] Add constants: `MAX_LINES = 2000`, `MAX_LINE_LENGTH = 500`
+  - [x] Implement `read_text()` that reads line-by-line with limits
+  - [x] Use hard byte limit per line to prevent memory issues with huge single-line files
+  - [x] Truncate individual lines exceeding `MAX_LINE_LENGTH` at char boundary (silent, no marker)
+  - [x] Always scan entire file for `total_lines` (simpler code, one path)
+  - [x] Return structured output with pure content + metadata:
     ```json
     {
       "path": "file.txt",
@@ -90,8 +90,8 @@
       "truncated": true
     }
     ```
-  - [ ] `truncated: true` only when `lines_shown < total_lines` (not for char truncation)
-  - [ ] Update existing tests, add line truncation tests
+  - [x] `truncated: true` only when `lines_shown < total_lines` (not for char truncation)
+  - [x] Update existing tests, add line truncation tests
 - ✅ **Demo**:
   - Create 3000-line file → Read returns 2000 lines, `total_lines: 3000`, `truncated: true`
   - Create file with 1000-char line → Line silently truncated at 500 chars, `truncated: false`
@@ -101,30 +101,30 @@
   - Memory usage for line collection → acceptable for 2000 lines
   - Huge single-line files → hard byte limit per line prevents OOM
 
-## Slice 2: Read tool - offset/limit parameters
+## Slice 2: Read tool - offset/limit parameters ✅
 
 - **Goal**: Allow AI to request specific portions of truncated files
 - **Scope checklist**:
-  - [ ] Add `offset` parameter (1-indexed line number, default 1)
-  - [ ] Add `limit` parameter (max lines to return, default 2000)
-  - [ ] Update tool schema with new parameters
-  - [ ] Update output to include `offset` in response
-  - [ ] Add tests for offset/limit combinations
+  - [x] Add `offset` parameter (1-indexed line number, default 1)
+  - [x] Add `limit` parameter (max lines to return, default 2000)
+  - [x] Update tool schema with new parameters
+  - [x] Update output to include `offset` in response
+  - [x] Add tests for offset/limit combinations
 - ✅ **Demo**:
   - Read with `offset: 1000, limit: 500` returns lines 1000-1499
   - AI can "page through" a large file
-  - `cargo test -p zdx-core read` passes
+  - `cargo test -p zdx-core read` passes (53 tests)
 - **Risks / failure modes**:
-  - Off-by-one errors → careful 1-indexed handling + tests
-  - Offset beyond file → return empty with `total_lines` info
+  - Off-by-one errors → mitigated by careful 1-indexed handling + tests
+  - Offset beyond file → returns `content: ""`, `lines_shown: 0`, `total_lines: N`, `truncated: false`
 
-## Slice 3: Bash tool - basic output truncation
+## Slice 3: Bash tool - basic output truncation ✅
 
 - **Goal**: Truncate large command outputs to prevent context overflow
 - **Scope checklist**:
-  - [ ] Add constants: `MAX_OUTPUT_BYTES = 50 * 1024` (50KB per stream)
-  - [ ] Truncate stdout/stderr independently at byte limit (at UTF-8 char boundary)
-  - [ ] Add metadata fields (not inline markers):
+  - [x] Add constants: `MAX_OUTPUT_BYTES = 40 * 1024` (40KB per stream)
+  - [x] Truncate stdout/stderr independently at byte limit (at UTF-8 char boundary)
+  - [x] Add metadata fields (not inline markers):
     ```json
     {
       "stdout": "...",
@@ -137,12 +137,12 @@
       "stderr_total_bytes": 256
     }
     ```
-  - [ ] Update tests
+  - [x] Update tests
 - ✅ **Demo**:
   - Run `cat /dev/urandom | head -c 100000 | base64` → stdout truncated, `stdout_truncated: true`
-  - `cargo test -p zdx-core bash` passes
+  - `cargo test -p zdx-core bash` passes (13 tests)
 - **Risks / failure modes**:
-  - Truncation at invalid UTF-8 boundary → truncate at valid char boundary
+  - Truncation at invalid UTF-8 boundary → mitigated by `truncate_at_utf8_boundary()` helper
 
 ---
 
@@ -159,7 +159,7 @@
 1. **Line limits vs byte limits for Read**: Use line limits (2000 lines) - matches codex-rs, more useful for code
 2. **No inline markers**: Truncation info in metadata fields only - keeps content pure for parsing/patching
 3. **Default offset**: 1-indexed (like codex-rs) for human readability
-4. **Stdout/stderr truncation**: Independent limits (50KB each) - simpler reasoning
+4. **Stdout/stderr truncation**: Independent limits (40KB each) - simpler reasoning
 5. **Always scan for total_lines**: Simpler code (one loop, one path), accept O(n) cost for large files
 6. **Silent line char-truncation**: AI doesn't need to know; uses Bash for huge single-line edge cases (codex approach)
 7. **YAGNI fields removed**: No `bytes`, no `line_truncation_count`, no `max_line_length` parameter
@@ -169,26 +169,93 @@
 11. **Empty files**: Return `content: ""`, `lines_shown: 0`, `total_lines: 0`, `truncated: false`
 12. **Line endings**: Preserve as-is (no CRLF→LF normalization)
 13. **Invalid UTF-8**: Use `String::from_utf8_lossy` (replace bad bytes with �)
+14. **Secondary byte limit for Read**: 40KB per page, matching Bash tool limit, to prevent context bloat from long lines
 
 # Testing
 
 - **Manual smoke demos per slice**: Listed in ✅ Demo sections
 - **Minimal regression tests**:
-  - `test_read_large_file_truncated` → update for line-based
-  - `test_read_line_truncation` → new (verify silent char truncation)
-  - `test_read_offset_limit` → new
-  - `test_read_huge_single_line` → new (verify no OOM)
-  - `test_bash_stdout_truncated` → new
+  - `test_read_large_file_truncated` → updated for line-based ✅
+  - `test_read_line_truncation` → new (verify silent char truncation) ✅
+  - `test_read_huge_single_line` → new (verify no OOM) ✅
+  - `test_read_with_offset` → new ✅
+  - `test_read_with_limit` → new ✅
+  - `test_read_with_offset_and_limit` → new ✅
+  - `test_read_offset_beyond_file` → new ✅
+  - `test_read_offset_zero_treated_as_one` → new ✅
+  - `test_read_limit_capped_at_max` → new ✅
+  - `test_read_paging_through_file` → new ✅
+  - `test_bash_stdout_truncated` → new ✅
+  - `test_bash_stderr_truncated` → new ✅
+  - `test_bash_no_truncation_under_limit` → new ✅
+  - `test_truncate_at_utf8_boundary_*` → new (UTF-8 boundary unit tests) ✅
+  - `test_format_byte_truncation_*` → new (byte formatting helper tests) ✅
+  - `test_tool_bash_truncation_warning_displayed` → new (TUI warning display) ✅
+  - `test_tool_bash_stderr_truncation_warning` → new (TUI stderr warning) ✅
+  - `test_tool_read_truncation_warning_displayed` → new (TUI file truncation warning) ✅
+  - `test_tool_no_truncation_no_warning` → new (no warning when not truncated) ✅
+  - `test_truncation_warning_style` → new (verify correct style applied) ✅
+  - `test_bash_stdout_truncated_writes_temp_file` → new (Phase 1: verify temp file creation for stdout) ✅
+  - `test_bash_stderr_truncated_writes_temp_file` → new (Phase 1: verify temp file creation for stderr) ✅
+  - `test_bash_no_truncation_no_temp_file` → new (Phase 1: no temp file when not truncated) ✅
+  - `test_write_temp_file` → new (Phase 1: temp file helper unit test) ✅
+  - `test_read_byte_limit_with_long_lines` → new (Phase 2: verify byte limit with 200-char lines) ✅
+  - `test_read_line_limit_before_byte_limit` → new (Phase 2: verify line limit wins for short lines) ✅
+  - `test_read_no_truncation_byte_limited_false` → new (Phase 2: verify byte_limited=false when not truncated) ✅
 
 ---
 
 # Polish phases (after MVP)
 
-## Phase 1: Bash temp file storage (deferred feature)
-- Write full output to temp file when truncated
-- Include temp file path in response for AI to Read with offset
-- Temp files in OS temp dir with session-scoped cleanup
-- ✅ Check-in: AI can recover full bash output via Read tool
+## Phase 0: TUI truncation warnings ✅
+
+- **Goal**: Display truncation warnings to users in the TUI transcript when tool output was truncated
+- **Scope checklist**:
+  - [x] Add `ToolTruncation` style for distinct visual styling (yellow/dim)
+  - [x] Display truncation warnings in tool cell output:
+    - Bash: Show `[⚠ stdout truncated: X KB total]` when `stdout_truncated: true`
+    - Bash: Show `[⚠ stderr truncated: X KB total]` when `stderr_truncated: true`
+    - Read: Show `[⚠ file truncated: showing N of M lines]` when `truncated: true`
+  - [x] Add `format_byte_truncation()` helper for human-readable byte formatting (bytes/KB/MB)
+  - [x] Add unit tests for truncation warning display
+- ✅ **Demo**:
+  - `cargo test -p zdx-tui truncation` passes (8 tests)
+  - Tool cells with truncated output show yellow warning line below output preview
+- **Why it matters**: Users can see at a glance when large outputs were truncated, making context window limits visible
+
+## Phase 1: Bash temp file storage ✅
+
+- **Goal**: Write full, un-truncated output to temp files when Bash output is truncated, enabling AI to access the complete data via the Read tool
+- **Scope checklist**:
+  - [x] Add `write_temp_file()` helper to write bytes to temp file with unique name (zdx-bash-{uuid}-{stream}.txt)
+  - [x] Add `stdout_file: Option<String>` and `stderr_file: Option<String>` fields to `BashOutput`
+  - [x] When stdout is truncated, write full stdout bytes to temp file and set `stdout_file`
+  - [x] When stderr is truncated, write full stderr bytes to temp file and set `stderr_file`
+  - [x] Include file paths in JSON response only when present (conditional serialization)
+  - [x] Add tests for temp file creation and content verification
+- ✅ **Demo**:
+  - Run command with >40KB stdout → response includes `stdout_file` path
+  - AI can use Read tool on `stdout_file` path with offset/limit to access full data
+  - `cargo test -p zdx-core bash` passes (17 tests)
+- **Contract**: Temp files are created in OS temp dir (`std::env::temp_dir()`) with zdx-bash-{uuid}-{stream}.txt naming
+- **Why it matters**: AI can now recover full command output when truncated, using the Read tool's paging capabilities
+
+## Phase 2: Read tool byte limit ✅
+
+- **Goal**: Enforce a secondary 40KB byte limit per page to prevent context bloat from files with many long lines
+- **Scope checklist**:
+  - [x] Add `MAX_PAGE_BYTES = 40 * 1024` constant (matches Bash tool)
+  - [x] Track accumulated bytes during line collection
+  - [x] Stop collecting when either line limit OR byte limit is reached (whichever comes first)
+  - [x] Add `byte_limited: bool` field to output (true when byte limit caused truncation)
+  - [x] Update `truncated` flag logic: true if either line-limited OR byte-limited
+  - [x] Add tests: byte limit with long lines, line limit before byte limit, no truncation
+- ✅ **Demo**:
+  - File with 300 lines × 200 chars each → byte limit kicks in at ~204 lines, `byte_limited: true`
+  - File with 3000 short lines → line limit kicks in at 2000 lines, `byte_limited: false`
+  - `cargo test -p zdx-core read` passes (37 tests)
+- **Contract**: Read tool now guarantees pages never exceed 40KB, regardless of line count
+- **Why it matters**: Prevents edge case where files with extremely long lines could bloat context even within line count limits
 
 ---
 

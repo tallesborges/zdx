@@ -10,6 +10,18 @@ use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
 use crate::common::sanitize_for_display;
 
+/// Formats a byte truncation warning with human-readable byte counts.
+fn format_byte_truncation(stream: &str, total_bytes: u64) -> String {
+    let size_str = if total_bytes >= 1024 * 1024 {
+        format!("{:.1} MB", total_bytes as f64 / (1024.0 * 1024.0))
+    } else if total_bytes >= 1024 {
+        format!("{:.1} KB", total_bytes as f64 / 1024.0)
+    } else {
+        format!("{} bytes", total_bytes)
+    };
+    format!("{} truncated: {} total", stream, size_str)
+}
+
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -573,6 +585,64 @@ impl HistoryCell {
                                 }],
                             });
                         }
+                    }
+
+                    // Show tool-level truncation warnings (when the tool itself truncated output)
+                    let mut truncation_warnings = Vec::new();
+
+                    // Check for Bash tool truncation (stdout_truncated, stderr_truncated)
+                    let stdout_truncated = data
+                        .get("stdout_truncated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    let stderr_truncated = data
+                        .get("stderr_truncated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+
+                    if stdout_truncated {
+                        let total = data
+                            .get("stdout_total_bytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        truncation_warnings.push(format_byte_truncation("stdout", total));
+                    }
+                    if stderr_truncated {
+                        let total = data
+                            .get("stderr_total_bytes")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        truncation_warnings.push(format_byte_truncation("stderr", total));
+                    }
+
+                    // Check for Read tool truncation (truncated, total_lines, lines_shown)
+                    let file_truncated = data
+                        .get("truncated")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if file_truncated {
+                        let total_lines = data
+                            .get("total_lines")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        let lines_shown = data
+                            .get("lines_shown")
+                            .and_then(|v| v.as_u64())
+                            .unwrap_or(0);
+                        truncation_warnings.push(format!(
+                            "file truncated: showing {} of {} lines",
+                            lines_shown, total_lines
+                        ));
+                    }
+
+                    // Display truncation warnings
+                    for warning in truncation_warnings {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: format!("[⚠ {}]", warning),
+                                style: Style::ToolTruncation,
+                            }],
+                        });
                     }
                 }
 
@@ -1312,5 +1382,169 @@ mod tests {
                 width
             );
         }
+    }
+
+    // ========================================================================
+    // Truncation warning display tests
+    // ========================================================================
+
+    #[test]
+    fn test_format_byte_truncation_sizes() {
+        assert_eq!(
+            format_byte_truncation("stdout", 512),
+            "stdout truncated: 512 bytes total"
+        );
+        assert_eq!(
+            format_byte_truncation("stdout", 51200),
+            "stdout truncated: 50.0 KB total"
+        );
+        assert_eq!(
+            format_byte_truncation("stderr", 1048576),
+            "stderr truncated: 1.0 MB total"
+        );
+    }
+
+    #[test]
+    fn test_tool_bash_truncation_warnings_displayed() {
+        let mut cell =
+            HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "cat bigfile"}));
+
+        // Simulate a bash tool result with truncated stdout + stderr
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "stdout": "truncated output...",
+            "stderr": "error output...",
+            "exit_code": 1,
+            "timed_out": false,
+            "stdout_truncated": true,
+            "stderr_truncated": true,
+            "stdout_total_bytes": 102400,
+            "stderr_total_bytes": 1048576
+        })));
+
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        // Should show truncation warnings with sizes
+        assert!(
+            all_text.contains("stdout truncated"),
+            "Expected stdout truncation warning, got: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("100.0 KB total"),
+            "Expected stdout size info"
+        );
+        assert!(
+            all_text.contains("stderr truncated"),
+            "Expected stderr truncation warning"
+        );
+        assert!(
+            all_text.contains("1.0 MB total"),
+            "Expected stderr size info"
+        );
+    }
+
+    #[test]
+    fn test_tool_read_truncation_warning_displayed() {
+        let mut cell =
+            HistoryCell::tool_running("1", "read", serde_json::json!({"path": "large.txt"}));
+
+        // Simulate a read tool result with truncated file
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "path": "large.txt",
+            "content": "first 2000 lines...",
+            "offset": 1,
+            "lines_shown": 2000,
+            "total_lines": 5000,
+            "truncated": true
+        })));
+
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        // Should show file truncation warning
+        assert!(
+            all_text.contains("file truncated"),
+            "Expected file truncation warning, got: {}",
+            all_text
+        );
+        assert!(
+            all_text.contains("showing 2000 of 5000 lines"),
+            "Expected line counts"
+        );
+    }
+
+    #[test]
+    fn test_tool_no_truncation_no_warning() {
+        let mut cell =
+            HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "echo hi"}));
+
+        // Simulate bash result without truncation
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "stdout": "hi\n",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": false,
+            "stdout_truncated": false,
+            "stderr_truncated": false,
+            "stdout_total_bytes": 3,
+            "stderr_total_bytes": 0
+        })));
+
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        // Should NOT show any truncation warning
+        assert!(
+            !all_text.contains("truncated"),
+            "Should not show truncation warning for non-truncated output"
+        );
+    }
+
+    #[test]
+    fn test_truncation_warning_style() {
+        let mut cell =
+            HistoryCell::tool_running("1", "bash", serde_json::json!({"command": "big"}));
+
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "stdout": "x",
+            "stderr": "",
+            "exit_code": 0,
+            "timed_out": false,
+            "stdout_truncated": true,
+            "stderr_truncated": false,
+            "stdout_total_bytes": 51200,
+            "stderr_total_bytes": 0
+        })));
+
+        let lines = cell.display_lines(80, 0);
+
+        // Find the line with the truncation warning
+        let truncation_line = lines
+            .iter()
+            .find(|l| l.spans.iter().any(|s| s.text.contains("stdout truncated")));
+
+        assert!(
+            truncation_line.is_some(),
+            "Should have truncation warning line"
+        );
+
+        // Verify the style is ToolTruncation
+        let span = truncation_line
+            .unwrap()
+            .spans
+            .iter()
+            .find(|s| s.text.contains("stdout truncated"))
+            .unwrap();
+        assert_eq!(span.style, Style::ToolTruncation);
     }
 }

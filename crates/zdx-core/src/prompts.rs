@@ -11,3 +11,9 @@ pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/thread_title_prompt.md"
 ));
+
+/// Prompt template for Codex (openai_codex provider).
+pub const CODEX_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/openai_codex.md"
+));
