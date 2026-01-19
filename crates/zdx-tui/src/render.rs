@@ -202,22 +202,47 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     app.overlay.render(frame, area, chunks[2].y);
 }
 
+/// Formats a duration for the status line display.
+fn format_elapsed(d: std::time::Duration) -> String {
+    let secs = d.as_secs();
+    if secs >= 60 {
+        let mins = secs / 60;
+        let remaining_secs = secs % 60;
+        format!("{}m{:02}s", mins, remaining_secs)
+    } else {
+        format!("{}s", secs)
+    }
+}
+
 /// Renders the status line below the input.
 fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let spinner_idx =
         (state.spinner_frame / transcript::SPINNER_SPEED_DIVISOR) % SPINNER_FRAMES.len();
     let spinner = SPINNER_FRAMES[spinner_idx];
 
+    // Get turn elapsed time for display
+    let elapsed = state.status_line.snapshot().turn_elapsed;
+    let elapsed_span = elapsed.map(|d| format!(" ({})", format_elapsed(d)));
+
     // Check for bash execution first (takes priority over idle state)
     let spans: Vec<Span> = if state.bash_running.is_some() {
-        vec![
+        let mut spans = vec![
             Span::styled(spinner, Style::default().fg(Color::Green)),
             Span::raw(" "),
             Span::styled("Running bash...", Style::default().fg(Color::Green)),
+        ];
+        if let Some(ref elapsed) = elapsed_span {
+            spans.push(Span::styled(
+                elapsed.clone(),
+                Style::default().fg(Color::DarkGray),
+            ));
+        }
+        spans.extend([
             Span::raw("  "),
             Span::styled("Esc", Style::default().fg(Color::DarkGray)),
             Span::raw(" to cancel"),
-        ]
+        ]);
+        spans
     } else {
         match &state.agent_state {
             AgentState::Idle => {
@@ -230,24 +255,42 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
                 ]
             }
             AgentState::Waiting { .. } => {
-                vec![
+                let mut spans = vec![
                     Span::styled(spinner, Style::default().fg(Color::Yellow)),
                     Span::raw(" "),
                     Span::styled("Waiting...", Style::default().fg(Color::Yellow)),
+                ];
+                if let Some(ref elapsed) = elapsed_span {
+                    spans.push(Span::styled(
+                        elapsed.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                spans.extend([
                     Span::raw("  "),
                     Span::styled("Esc", Style::default().fg(Color::DarkGray)),
                     Span::raw(" to cancel"),
-                ]
+                ]);
+                spans
             }
             AgentState::Streaming { .. } => {
-                vec![
+                let mut spans = vec![
                     Span::styled(spinner, Style::default().fg(Color::Cyan)),
                     Span::raw(" "),
                     Span::styled("Streaming...", Style::default().fg(Color::Cyan)),
+                ];
+                if let Some(ref elapsed) = elapsed_span {
+                    spans.push(Span::styled(
+                        elapsed.clone(),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+                spans.extend([
                     Span::raw("  "),
                     Span::styled("Esc", Style::default().fg(Color::DarkGray)),
                     Span::raw(" to cancel"),
-                ]
+                ]);
+                spans
             }
         }
     };
