@@ -47,6 +47,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             );
             apply_mutations(&mut app.tui, mutations);
 
+            // Mark tool used for turn timing (only show "Worked for Xs" if tools were used)
+            if matches!(
+                &agent_event,
+                zdx_core::core::events::AgentEvent::ToolRequested { .. }
+            ) {
+                app.tui.status_line.mark_tool_used();
+            }
+
             // Save usage to thread after each request completes.
             // A request is complete when we receive output tokens (MessageDelta with usage).
             // This ensures tool-use turns with multiple requests save all usage, not just the last.
@@ -88,9 +96,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     | zdx_core::core::events::AgentEvent::Error { .. }
             );
 
-            // End turn timer when turn completes
+            // End turn timer and push timing cell when turn completes
             if should_dequeue {
-                app.tui.status_line.end_turn();
+                if let Some((duration, tool_count)) = app.tui.status_line.end_turn() {
+                    // Only show timing for turns that ran for at least 1 second
+                    if duration.as_secs_f64() >= 1.0 {
+                        app.tui
+                            .transcript
+                            .push_cell(HistoryCell::timing(duration, tool_count));
+                    }
+                }
             }
 
             if should_dequeue

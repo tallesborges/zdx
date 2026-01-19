@@ -16,6 +16,8 @@ pub struct StatusLineAccumulator {
     fps_ema: f32,
     /// When the current turn started (None if idle).
     turn_started_at: Option<Instant>,
+    /// Number of tools used during the current turn.
+    turn_tool_count: usize,
 }
 
 impl Default for StatusLineAccumulator {
@@ -29,6 +31,7 @@ impl StatusLineAccumulator {
         Self {
             fps_ema: 60.0,
             turn_started_at: None,
+            turn_tool_count: 0,
         }
     }
 
@@ -45,11 +48,24 @@ impl StatusLineAccumulator {
     /// Mark the start of a new turn.
     pub fn start_turn(&mut self) {
         self.turn_started_at = Some(Instant::now());
+        self.turn_tool_count = 0;
     }
 
-    /// Clear turn timing (turn completed or interrupted).
-    pub fn end_turn(&mut self) {
-        self.turn_started_at = None;
+    /// Increment tool count for this turn.
+    pub fn mark_tool_used(&mut self) {
+        self.turn_tool_count += 1;
+    }
+
+    /// Clear turn timing and return elapsed duration with tool count.
+    ///
+    /// Returns (duration, tool_count) if tools were used, None otherwise.
+    pub fn end_turn(&mut self) -> Option<(Duration, usize)> {
+        let tool_count = self.turn_tool_count;
+        self.turn_tool_count = 0;
+        self.turn_started_at
+            .take()
+            .filter(|_| tool_count > 0)
+            .map(|start| (start.elapsed(), tool_count))
     }
 
     /// Get snapshot for rendering.
@@ -88,9 +104,25 @@ mod tests {
         let snapshot = acc.snapshot();
         assert!(snapshot.turn_elapsed.is_some());
 
-        // End the turn
-        acc.end_turn();
+        // End turn without tools - should return None
+        let result = acc.end_turn();
+        assert!(result.is_none());
         let snapshot = acc.snapshot();
         assert!(snapshot.turn_elapsed.is_none());
+
+        // Start another turn with tools
+        acc.start_turn();
+        acc.mark_tool_used();
+        acc.mark_tool_used();
+        acc.mark_tool_used();
+        let result = acc.end_turn();
+        assert!(result.is_some());
+        let (duration, tool_count) = result.unwrap();
+        assert!(duration.as_nanos() > 0);
+        assert_eq!(tool_count, 3);
+
+        // End again - should return None
+        let result = acc.end_turn();
+        assert!(result.is_none());
     }
 }

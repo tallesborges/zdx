@@ -310,6 +310,7 @@ fn cells_to_events(cells: &[HistoryCell]) -> Vec<ThreadEvent> {
                 }
             }
             HistoryCell::System { .. } => {}
+            HistoryCell::Timing { .. } => {}
         }
     }
 

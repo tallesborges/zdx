@@ -63,6 +63,8 @@ pub enum Style {
     ThinkingPrefix,
     /// Thinking block content (dim/italic).
     Thinking,
+    /// Timing/duration message (muted, shows tool execution time).
+    Timing,
 
     // Markdown styles
     /// Inline code (`code`).
