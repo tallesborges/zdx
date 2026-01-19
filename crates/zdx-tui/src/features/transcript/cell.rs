@@ -135,6 +135,17 @@ pub enum HistoryCell {
         is_streaming: bool,
         is_interrupted: bool,
     },
+
+    /// Timing/duration cell (shows tool execution time).
+    ///
+    /// Displayed after a tool completes to show how long it took,
+    /// similar to Codex's "Worked for Xs" indicator.
+    Timing {
+        id: CellId,
+        created_at: DateTime<Utc>,
+        duration: std::time::Duration,
+        tool_count: usize,
+    },
 }
 
 impl HistoryCell {
@@ -146,6 +157,7 @@ impl HistoryCell {
             HistoryCell::Tool { id, .. } => *id,
             HistoryCell::System { id, .. } => *id,
             HistoryCell::Thinking { id, .. } => *id,
+            HistoryCell::Timing { id, .. } => *id,
         }
     }
 
@@ -218,6 +230,16 @@ impl HistoryCell {
             replay: None,
             is_streaming: true,
             is_interrupted: false,
+        }
+    }
+
+    /// Creates a timing cell showing turn/execution duration.
+    pub fn timing(duration: std::time::Duration, tool_count: usize) -> Self {
+        HistoryCell::Timing {
+            id: CellId::new(),
+            created_at: Utc::now(),
+            duration,
+            tool_count,
         }
     }
 
@@ -734,6 +756,51 @@ impl HistoryCell {
                 }
                 lines
             }
+            HistoryCell::Timing {
+                duration,
+                tool_count,
+                ..
+            } => {
+                // Format duration for display
+                let secs = duration.as_secs_f64();
+                let duration_str = if secs >= 60.0 {
+                    let mins = (secs / 60.0).floor() as u64;
+                    let remaining_secs = secs % 60.0;
+                    format!("{}m{:.1}s", mins, remaining_secs)
+                } else {
+                    format!("{:.1}s", secs)
+                };
+
+                // Format tool count
+                let tool_str = if *tool_count == 1 {
+                    "1 tool".to_string()
+                } else {
+                    format!("{} tools", tool_count)
+                };
+
+                let message = format!("{} · {}", tool_str, duration_str);
+
+                // Build centered separator line: ─── 3 tools · 3.5s ───
+                let text_with_padding = format!(" {} ", message);
+                let text_width = text_with_padding.chars().count();
+                let remaining = width.saturating_sub(text_width);
+                let left_dashes = remaining / 2;
+                let right_dashes = remaining - left_dashes;
+
+                let line = format!(
+                    "{}{}{}",
+                    "─".repeat(left_dashes),
+                    text_with_padding,
+                    "─".repeat(right_dashes)
+                );
+
+                vec![StyledLine {
+                    spans: vec![StyledSpan {
+                        text: line,
+                        style: Style::Timing,
+                    }],
+                }]
+            }
         }
     }
 
@@ -748,6 +815,7 @@ impl HistoryCell {
             HistoryCell::Tool { state, .. } => *state != ToolState::Running,
             HistoryCell::System { .. } => true,
             HistoryCell::Thinking { is_streaming, .. } => !*is_streaming,
+            HistoryCell::Timing { .. } => true,
         }
     }
 
@@ -785,6 +853,10 @@ impl HistoryCell {
             } => {
                 // Include is_interrupted in discriminator
                 content.len() + if *is_interrupted { 1 } else { 0 }
+            }
+            HistoryCell::Timing { duration, .. } => {
+                // Duration doesn't change, use millis as discriminator
+                duration.as_millis() as usize
             }
         }
     }
@@ -1546,5 +1618,57 @@ mod tests {
             .find(|s| s.text.contains("stdout truncated"))
             .unwrap();
         assert_eq!(span.style, Style::ToolTruncation);
+    }
+
+    #[test]
+    fn test_timing_cell_display() {
+        use std::time::Duration;
+
+        // Test sub-minute duration with 1 tool
+        let cell = HistoryCell::timing(Duration::from_secs_f64(3.5), 1);
+        let lines = cell.display_lines(40, 0);
+
+        assert_eq!(lines.len(), 1);
+        assert_eq!(lines[0].spans.len(), 1);
+        // Should contain the text centered with dashes
+        assert!(lines[0].spans[0].text.contains("1 tool"));
+        assert!(lines[0].spans[0].text.contains("3.5s"));
+        assert!(lines[0].spans[0].text.starts_with("─"));
+        assert!(lines[0].spans[0].text.ends_with("─"));
+        assert_eq!(lines[0].spans[0].style, Style::Timing);
+    }
+
+    #[test]
+    fn test_timing_cell_display_multiple_tools() {
+        use std::time::Duration;
+
+        // Test with multiple tools
+        let cell = HistoryCell::timing(Duration::from_secs_f64(5.0), 3);
+        let lines = cell.display_lines(40, 0);
+
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].spans[0].text.contains("3 tools"));
+        assert!(lines[0].spans[0].text.contains("5.0s"));
+    }
+
+    #[test]
+    fn test_timing_cell_display_minutes() {
+        use std::time::Duration;
+
+        // Test duration over a minute
+        let cell = HistoryCell::timing(Duration::from_secs_f64(125.3), 2);
+        let lines = cell.display_lines(40, 0);
+
+        assert_eq!(lines.len(), 1);
+        assert!(lines[0].spans[0].text.contains("2m5.3s"));
+        assert!(lines[0].spans[0].text.contains("2 tools"));
+    }
+
+    #[test]
+    fn test_timing_cell_cacheable() {
+        use std::time::Duration;
+
+        let cell = HistoryCell::timing(Duration::from_secs(5), 1);
+        assert!(cell.is_cacheable());
     }
 }
