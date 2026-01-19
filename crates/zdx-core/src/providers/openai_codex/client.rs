@@ -12,7 +12,7 @@ use crate::tools::ToolDefinition;
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH: &str = "/codex/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
-const DEFAULT_CODEX_PROMPT: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the ZDX CLI on a user's computer.";
+const DEFAULT_CODEX_PROMPT: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the zdx CLI on a user's computer.\n\nAdditional notes:\n- Always maximize parallelism. Never read files one-by-one unless logically unavoidable.\n- Batch everything. If you need multiple files (even from different places), read them together.\n- Only make sequential calls if you truly cannot know the next file without seeing a result first.\n- Workflow: (a) plan all needed reads → (b) issue one parallel batch → (c) analyze results → (d) repeat if new, unpredictable reads arise.";
 
 const HEADER_VERSION: &str = "version";
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
