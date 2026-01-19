@@ -88,6 +88,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     | zdx_core::core::events::AgentEvent::Error { .. }
             );
 
+            // End turn timer when turn completes
+            if should_dequeue {
+                app.tui.status_line.end_turn();
+            }
+
             if should_dequeue
                 && !app.tui.agent_state.is_running()
                 && app.tui.bash_running.is_none()
@@ -107,6 +112,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::AgentSpawned { rx } => {
             app.tui.agent_state = AgentState::Waiting { rx };
             app.tui.transcript.activate_pending_user_cell();
+            app.tui.status_line.start_turn();
             vec![]
         }
         UiEvent::LoginResult { result } => {
