@@ -1,5 +1,7 @@
 //! LLM provider implementations.
 
+mod debug_metrics;
+
 pub mod anthropic;
 pub mod claude_cli;
 pub mod gemini;

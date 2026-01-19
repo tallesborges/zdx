@@ -31,6 +31,7 @@ use types::{
     StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
 
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, StreamEvent};
 use crate::tools::ToolDefinition;
 
@@ -108,7 +109,7 @@ pub(crate) async fn send_streaming_request(
 
     let byte_stream = response.bytes_stream();
     let event_stream = sse::SseParser::new(byte_stream);
-    Ok(Box::pin(event_stream))
+    Ok(maybe_wrap_with_metrics(event_stream))
 }
 
 fn apply_cache_control_to_last_user_block(api_messages: &mut [ApiMessage]) {

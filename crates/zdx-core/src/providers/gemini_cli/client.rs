@@ -7,6 +7,7 @@ use anyhow::Result;
 use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::gemini_cli::auth::{GeminiCliConfig, resolve_credentials};
 use crate::providers::gemini_shared::sse::GeminiSseParser;
 use crate::providers::gemini_shared::{
@@ -82,7 +83,7 @@ impl GeminiCliClient {
         let byte_stream = response.bytes_stream();
         let event_stream =
             GeminiSseParser::new(byte_stream, self.config.model.clone(), "gemini-cli");
-        Ok(Box::pin(event_stream))
+        Ok(maybe_wrap_with_metrics(event_stream))
     }
 }
 

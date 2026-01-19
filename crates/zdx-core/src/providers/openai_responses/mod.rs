@@ -6,17 +6,16 @@ use anyhow::{Result, bail};
 use futures_util::Stream;
 use reqwest::header::HeaderMap;
 
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
     ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ReasoningBlock, ReplayToken,
     StreamEvent,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
 
-mod debug_metrics;
 mod sse;
 mod types;
 
-pub use debug_metrics::{MetricsStream, StreamMetrics, debug_stream_path, maybe_wrap_with_metrics};
 pub use sse::ResponsesSseParser;
 pub use types::{
     FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, SummaryItem, TextConfig,
@@ -107,7 +106,6 @@ pub async fn send_responses_stream(
     let byte_stream = response.bytes_stream();
     let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());
 
-    // Wrap with metrics if ZDX_DEBUG_STREAM is set
     Ok(maybe_wrap_with_metrics(event_stream))
 }
 
