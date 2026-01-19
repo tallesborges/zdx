@@ -821,6 +821,8 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
 /// each frame: layout updates, delta coalescing, and cell line info for
 /// lazy rendering.
 fn handle_frame(tui: &mut TuiState, width: u16, height: u16) {
+    let previous_width = tui.transcript.terminal_size.0;
+
     // Update transcript layout with current terminal dimensions
     let viewport_height = render::calculate_transcript_height_with_state(tui, height);
     tui.transcript
@@ -833,10 +835,13 @@ fn handle_frame(tui: &mut TuiState, width: u16, height: u16) {
     transcript::apply_scroll_delta(&mut tui.transcript);
 
     // Update cell line info for lazy rendering and scroll calculations
-    let cell_line_counts = render::calculate_cell_line_counts(tui, width as usize);
-    tui.transcript
-        .scroll
-        .update_cell_line_info(cell_line_counts);
+    let width_changed = previous_width != width;
+    if width_changed || tui.transcript.scroll.cell_line_info.is_empty() {
+        let cell_line_counts = render::calculate_cell_line_counts(tui, width as usize);
+        tui.transcript
+            .scroll
+            .update_cell_line_info(cell_line_counts);
+    }
 }
 
 // ============================================================================
@@ -857,6 +862,7 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
         Event::Resize(_, _) => {
             // Clear wrap cache on resize since line wrapping depends on width
             app.tui.transcript.wrap_cache.clear();
+            app.tui.transcript.invalidate_line_info();
             vec![]
         }
         _ => vec![],
