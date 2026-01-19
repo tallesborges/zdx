@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::Read;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 use base64::Engine;
@@ -13,11 +13,47 @@ use base64::engine::general_purpose::STANDARD as BASE64;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+/// Deserialize an optional usize that may be provided as either a number or a string.
+///
+/// This handles cases where the AI passes `"600"` instead of `600` for numeric fields.
+fn deserialize_optional_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de::Error;
+
+    let value: Option<Value> = Option::deserialize(deserializer)?;
+    match value {
+        None => Ok(None),
+        Some(Value::Number(n)) => n
+            .as_u64()
+            .map(|n| Some(n as usize))
+            .ok_or_else(|| D::Error::custom("expected positive integer")),
+        Some(Value::String(s)) => s
+            .parse::<usize>()
+            .map(Some)
+            .map_err(|_| D::Error::custom(format!("invalid number string: {}", s))),
+        Some(_) => Err(D::Error::custom("expected number or numeric string")),
+    }
+}
+
 use super::{ToolContext, ToolDefinition, resolve_existing_path};
 use crate::core::events::{ImageContent, ToolOutput};
 
-/// Maximum text file size before truncation (50KB).
-const MAX_TEXT_BYTES: usize = 50 * 1024;
+/// Maximum number of lines to return (truncation threshold).
+const MAX_LINES: usize = 2000;
+
+/// Maximum characters per line before silent truncation.
+const MAX_LINE_LENGTH: usize = 500;
+
+/// Maximum bytes to read per line (memory-safe buffer for huge single-line files).
+/// Set to MAX_LINE_LENGTH * 4 to accommodate multi-byte UTF-8 characters.
+const MAX_LINE_BYTES: usize = MAX_LINE_LENGTH * 4;
+
+/// Maximum bytes per page (secondary safety limit).
+/// Even within line-count constraints, a single page should not exceed 40KB
+/// to prevent context window bloat from files with many long lines.
+const MAX_PAGE_BYTES: usize = 40 * 1024; // 40KB
 
 /// Maximum image file size (3.75MB).
 /// Anthropic API limit is ~5MB for base64-encoded data.
@@ -66,6 +102,14 @@ pub fn definition() -> ToolDefinition {
                 "path": {
                     "type": "string",
                     "description": "Path to the file to read (relative to root directory)"
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Line number to start reading from (1-indexed, default: 1)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of lines to return (default: 2000)"
                 }
             },
             "required": ["path"],
@@ -77,6 +121,12 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct ReadInput {
     path: String,
+    /// Line number to start reading from (1-indexed, default: 1)
+    #[serde(default, deserialize_with = "deserialize_optional_usize")]
+    offset: Option<usize>,
+    /// Maximum number of lines to return (default: MAX_LINES)
+    #[serde(default, deserialize_with = "deserialize_optional_usize")]
+    limit: Option<usize>,
 }
 
 /// Executes the read tool and returns a structured envelope.
@@ -102,8 +152,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return read_image(&file_path, &mime_type);
     }
 
-    // Read as text file
-    read_text(&file_path)
+    // Read as text file with offset/limit
+    let offset = input.offset.unwrap_or(1).max(1); // 1-indexed, minimum 1
+    let limit = input.limit.unwrap_or(MAX_LINES).min(MAX_LINES); // Cap at MAX_LINES
+    read_text(&file_path, offset, limit)
 }
 
 /// Reads an image file and returns it as base64-encoded content.
@@ -163,10 +215,17 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
     )
 }
 
-/// Reads a text file with truncation for large files.
-fn read_text(path: &Path) -> ToolOutput {
-    let content = match fs::read_to_string(path) {
-        Ok(c) => c,
+/// Reads a text file with line-based truncation and offset/limit support.
+///
+/// - Skips to `offset` line (1-indexed)
+/// - Returns at most `limit` lines
+/// - Enforces a secondary `MAX_PAGE_BYTES` (40KB) limit per page
+/// - Silently truncates individual lines at `MAX_LINE_LENGTH` characters
+/// - Uses `MAX_LINE_BYTES` buffer to prevent OOM on huge single-line files
+/// - Always scans entire file for `total_lines` count
+fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
+    let file = match File::open(path) {
+        Ok(f) => f,
         Err(e) => {
             return ToolOutput::failure(
                 "read_error",
@@ -176,18 +235,134 @@ fn read_text(path: &Path) -> ToolOutput {
         }
     };
 
-    let bytes = content.len();
-    let (content, truncated) = if bytes > MAX_TEXT_BYTES {
-        (content[..MAX_TEXT_BYTES].to_string(), true)
-    } else {
-        (content, false)
-    };
+    let mut reader = BufReader::new(file);
+    let mut collected_lines: Vec<String> = Vec::with_capacity(limit.min(1000));
+    let mut total_lines: usize = 0;
+    let mut accumulated_bytes: usize = 0;
+    let mut byte_limited = false;
+    let mut buffer = Vec::with_capacity(MAX_LINE_BYTES);
+
+    // Convert 1-indexed offset to 0-indexed for comparison
+    let start_line = offset.saturating_sub(1);
+
+    loop {
+        buffer.clear();
+        let mut drained_line_ending_for_line: Option<&'static str> = None;
+
+        // Read up to MAX_LINE_BYTES or until newline
+        let bytes_read = match reader
+            .by_ref()
+            .take(MAX_LINE_BYTES as u64)
+            .read_until(b'\n', &mut buffer)
+        {
+            Ok(n) => n,
+            Err(e) => {
+                return ToolOutput::failure(
+                    "read_error",
+                    format!("Failed to read file '{}'", path.display()),
+                    Some(format!("OS error: {}", e)),
+                );
+            }
+        };
+
+        if bytes_read == 0 {
+            break; // EOF
+        }
+
+        total_lines += 1;
+
+        // Check if we hit MAX_LINE_BYTES without finding newline (huge line)
+        // Need to drain remainder of line to count properly
+        let found_newline = buffer.last() == Some(&b'\n');
+        if !found_newline && bytes_read == MAX_LINE_BYTES {
+            // Drain rest of this line without discarding bytes after newline.
+            let mut drained_line_ending = None;
+            loop {
+                let available = match reader.fill_buf() {
+                    Ok(buf) => buf,
+                    Err(e) => {
+                        return ToolOutput::failure(
+                            "read_error",
+                            format!("Failed to read file '{}'", path.display()),
+                            Some(format!("OS error: {}", e)),
+                        );
+                    }
+                };
+
+                if available.is_empty() {
+                    break; // EOF
+                }
+
+                if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+                    drained_line_ending = Some(if pos > 0 && available[pos - 1] == b'\r' {
+                        "\r\n"
+                    } else {
+                        "\n"
+                    });
+                    reader.consume(pos + 1);
+                    break;
+                }
+
+                let len = available.len();
+                reader.consume(len);
+            }
+            drained_line_ending_for_line = drained_line_ending;
+        }
+
+        // Current line index (0-indexed)
+        let current_line_idx = total_lines - 1;
+
+        // Collect line if within range [start_line, start_line + limit)
+        // AND we haven't hit the byte limit yet
+        if current_line_idx >= start_line && collected_lines.len() < limit && !byte_limited {
+            // Convert to string (lossy for invalid UTF-8)
+            let line_str = String::from_utf8_lossy(&buffer);
+            let line_str = line_str.as_ref();
+            let (line_body, line_ending) = if let Some(stripped) = line_str.strip_suffix("\r\n") {
+                (stripped, "\r\n")
+            } else if let Some(stripped) = line_str.strip_suffix('\n') {
+                (stripped, "\n")
+            } else {
+                let ending = if bytes_read == MAX_LINE_BYTES {
+                    // We drained the rest of this line; preserve detected line ending.
+                    drained_line_ending_for_line.unwrap_or("")
+                } else {
+                    ""
+                };
+                (line_str, ending)
+            };
+
+            // Truncate at MAX_LINE_LENGTH chars (silent, no marker), preserve line ending.
+            let mut truncated_line: String = line_body.chars().take(MAX_LINE_LENGTH).collect();
+            truncated_line.push_str(line_ending);
+
+            // Check if adding this line would exceed the byte limit
+            let line_bytes = truncated_line.len();
+            if accumulated_bytes + line_bytes > MAX_PAGE_BYTES {
+                byte_limited = true;
+                // Don't add this line; we've hit the byte limit
+            } else {
+                accumulated_bytes += line_bytes;
+                collected_lines.push(truncated_line);
+            }
+        }
+    }
+
+    let lines_shown = collected_lines.len();
+    // Truncated if there are more lines after our window OR we hit byte limit
+    let truncated = (start_line + lines_shown) < total_lines || byte_limited;
+
+    // Join lines (they already include trailing newlines if present in original)
+    let content = collected_lines.concat();
 
     ToolOutput::success(json!({
         "path": path.display().to_string(),
         "content": content,
+        "offset": offset,
+        "lines_shown": lines_shown,
+        "total_lines": total_lines,
         "truncated": truncated,
-        "bytes": bytes
+        "byte_limited": byte_limited
     }))
 }
 
@@ -208,11 +383,12 @@ mod tests {
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""ok":true"#));
-        assert!(json_str.contains(r#""content":"hello world""#));
-        assert!(json_str.contains(r#""truncated":false"#));
-        assert!(json_str.contains(r#""bytes":11"#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "hello world");
+        assert_eq!(data["truncated"], false);
+        assert_eq!(data["lines_shown"], 1);
+        assert_eq!(data["total_lines"], 1);
+        assert_eq!(data["offset"], 1);
     }
 
     #[test]
@@ -227,8 +403,8 @@ mod tests {
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""content":"nested content""#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "nested content");
     }
 
     #[test]
@@ -256,27 +432,198 @@ mod tests {
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""content":"external content""#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "external content");
     }
 
     #[test]
-    fn test_read_large_file_truncated() {
+    fn test_read_huge_single_line() {
         let temp = TempDir::new().unwrap();
-        let file_path = temp.path().join("large.txt");
-        // Create a file larger than MAX_BYTES (50KB)
-        let content = "x".repeat(60 * 1024);
-        fs::write(&file_path, &content).unwrap();
+        let file_path = temp.path().join("huge_line.txt");
+        // Create a file with a 100KB single line (tests memory safety)
+        let huge_line = "y".repeat(100 * 1024);
+        fs::write(&file_path, &huge_line).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "large.txt"});
+        let input = json!({"path": "huge_line.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
-        let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""truncated":true"#));
-        // bytes should reflect original size
-        assert!(json_str.contains(r#""bytes":61440"#));
+        let data = result.data().expect("should have data");
+        assert_eq!(data["truncated"], false);
+        assert_eq!(data["lines_shown"], 1);
+        assert_eq!(data["total_lines"], 1);
+        // Content should be truncated to MAX_LINE_LENGTH (500) chars
+        let content = data["content"].as_str().unwrap();
+        assert_eq!(content.len(), 500);
+    }
+
+    #[test]
+    fn test_read_empty_file() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("empty.txt");
+        fs::write(&file_path, "").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "empty.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "");
+        assert_eq!(data["lines_shown"], 0);
+        assert_eq!(data["total_lines"], 0);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_read_preserves_line_endings() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "line1\nline2\nline3").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "lines.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "line1\nline2\nline3");
+        assert_eq!(data["lines_shown"], 3);
+        assert_eq!(data["total_lines"], 3);
+    }
+
+    #[test]
+    fn test_read_offset_beyond_file() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "lines.txt", "offset": 100});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "");
+        assert_eq!(data["offset"], 100);
+        assert_eq!(data["lines_shown"], 0);
+        assert_eq!(data["total_lines"], 3);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_read_offset_zero_treated_as_one() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "line1\nline2\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // offset: 0 should be treated as offset: 1
+        let input = json!({"path": "lines.txt", "offset": 0});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "line1\nline2\n");
+        assert_eq!(data["offset"], 1); // Normalized to 1
+        assert_eq!(data["lines_shown"], 2);
+    }
+
+    #[test]
+    fn test_read_limit_capped_at_max() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("large.txt");
+        // Create a file with 100 lines
+        let content: String = (0..100).map(|i| format!("line {}\n", i)).collect();
+        fs::write(&file_path, &content).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Request more than MAX_LINES (2000) - should be capped
+        let input = json!({"path": "large.txt", "limit": 10000});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        // Should return all 100 lines (under cap)
+        assert_eq!(data["lines_shown"], 100);
+        assert_eq!(data["total_lines"], 100);
+    }
+
+    #[test]
+    fn test_read_paging_through_file() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "a\nb\nc\nd\ne\nf\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+
+        // Page 1: lines 1-2
+        let input = json!({"path": "lines.txt", "offset": 1, "limit": 2});
+        let result = execute(&input, &ctx);
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "a\nb\n");
+        assert_eq!(data["truncated"], true);
+
+        // Page 2: lines 3-4
+        let input = json!({"path": "lines.txt", "offset": 3, "limit": 2});
+        let result = execute(&input, &ctx);
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "c\nd\n");
+        assert_eq!(data["truncated"], true);
+
+        // Page 3: lines 5-6
+        let input = json!({"path": "lines.txt", "offset": 5, "limit": 2});
+        let result = execute(&input, &ctx);
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "e\nf\n");
+        assert_eq!(data["truncated"], false); // Last page
+    }
+
+    #[test]
+    fn test_read_byte_limit_with_long_lines() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("long_lines.txt");
+        // Create file with 300 lines of 200 chars each = 60KB total
+        // Should hit 40KB byte limit around line 204
+        let content: String = (0..300)
+            .map(|i| format!("{:0>199}\n", i)) // 199 digits + newline = 200 bytes
+            .collect();
+        fs::write(&file_path, &content).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "long_lines.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["byte_limited"], true);
+        assert_eq!(data["total_lines"], 300);
+        // 40KB / 200 bytes = 204 lines (last one puts us over)
+        let lines_shown = data["lines_shown"].as_u64().unwrap();
+        assert!(lines_shown >= 200 && lines_shown <= 210);
+    }
+
+    #[test]
+    fn test_read_line_limit_before_byte_limit() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("tiny_lines.txt");
+        // Create file with 3000 very short lines (2 bytes each = 6KB total)
+        // Line limit (2000) should kick in before byte limit (40KB)
+        let content: String = (0..3000).map(|_| "x\n").collect();
+        fs::write(&file_path, &content).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "tiny_lines.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["byte_limited"], false); // Line limit hit first
+        assert_eq!(data["lines_shown"], 2000);
+        assert_eq!(data["total_lines"], 3000);
     }
 
     #[test]
@@ -289,6 +636,26 @@ mod tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    // String-to-number coercion tests (AI sometimes passes "600" instead of 600)
+
+    #[test]
+    fn test_read_offset_and_limit_as_strings() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "line1\nline2\nline3\nline4\nline5\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Pass both offset and limit as strings
+        let input = json!({"path": "lines.txt", "offset": "2", "limit": "2"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "line2\nline3\n");
+        assert_eq!(data["offset"], 2);
+        assert_eq!(data["lines_shown"], 2);
     }
 
     // MIME detection tests

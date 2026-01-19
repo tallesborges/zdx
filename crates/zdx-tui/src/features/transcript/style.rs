@@ -55,6 +55,8 @@ pub enum Style {
     ToolCancelled,
     /// Tool output (stdout from bash, etc).
     ToolOutput,
+    /// Tool truncation warning (yellow/dim).
+    ToolTruncation,
     /// Interrupted suffix indicator (dim).
     Interrupted,
     /// Thinking block prefix ("Thinking: ").

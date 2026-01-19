@@ -4,6 +4,7 @@ use anyhow::Result;
 use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use crate::prompts::CODEX_PROMPT_TEMPLATE;
 use crate::providers::StreamEvent;
 use crate::providers::openai_codex::auth::{OpenAICodexConfig, resolve_credentials};
 use crate::providers::openai_responses::{ResponsesConfig, send_responses_stream};
@@ -12,7 +13,6 @@ use crate::tools::ToolDefinition;
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH: &str = "/codex/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
-const DEFAULT_CODEX_PROMPT: &str = "You are Codex, based on GPT-5. You are running as a coding agent in the zdx CLI on a user's computer.\n\nAdditional notes:\n- Always maximize parallelism. Never read files one-by-one unless logically unavoidable.\n- Batch everything. If you need multiple files (even from different places), read them together.\n- Only make sequential calls if you truly cannot know the next file without seeing a result first.\n- Workflow: (a) plan all needed reads → (b) issue one parallel batch → (c) analyze results → (d) repeat if new, unpredictable reads arise.";
 
 const HEADER_VERSION: &str = "version";
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
@@ -56,7 +56,7 @@ impl OpenAICodexClient {
             model: self.config.model.clone(),
             max_output_tokens: None,
             reasoning_effort: self.config.reasoning_effort.clone(),
-            instructions: Some(DEFAULT_CODEX_PROMPT.to_string()),
+            instructions: Some(CODEX_PROMPT_TEMPLATE.to_string()),
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),

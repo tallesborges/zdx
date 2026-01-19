@@ -326,6 +326,9 @@ fn convert_style(style: TranscriptStyle) -> Style {
             .fg(Color::Yellow)
             .add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD),
         TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
+        TranscriptStyle::ToolTruncation => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::DIM),
         TranscriptStyle::ThinkingPrefix => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::DIM),
