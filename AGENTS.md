@@ -25,6 +25,7 @@
       - `crates/zdx-core/src/tools/apply_patch/parser.rs`: patch parser for file hunks
       - `crates/zdx-core/src/tools/apply_patch/types.rs`: Hunk enum, UpdateFileChunk, ParseError
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
+    - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
 - `crates/zdx-tui/`: full-screen interactive TUI library
   - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)
   - `crates/zdx-tui/src/terminal.rs`: terminal setup, restore, panic hooks

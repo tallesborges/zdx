@@ -10,6 +10,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use serde::Serialize;
 use serde_json::Value;
 
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
     ProviderErrorKind, StreamEvent, Usage,
@@ -110,7 +111,7 @@ impl OpenRouterClient {
 
         let byte_stream = response.bytes_stream();
         let event_stream = ChatCompletionsSseParser::new(byte_stream, self.config.model.clone());
-        Ok(Box::pin(event_stream))
+        Ok(maybe_wrap_with_metrics(event_stream))
     }
 }
 
