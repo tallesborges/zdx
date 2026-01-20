@@ -18,7 +18,8 @@ mod types;
 
 pub use sse::ResponsesSseParser;
 pub use types::{
-    FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, SummaryItem, TextConfig,
+    FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, StreamOptions,
+    SummaryItem, TextConfig,
 };
 
 /// Shared configuration for Responses API requests.
@@ -33,6 +34,7 @@ pub struct ResponsesConfig {
     pub text_verbosity: Option<String>,
     pub store: Option<bool>,
     pub include: Option<Vec<String>>,
+    pub stream_options: Option<StreamOptions>,
     pub prompt_cache_key: Option<String>,
     pub parallel_tool_calls: Option<bool>,
     /// Tool selection strategy: "auto" (default), "required", or "none"
@@ -65,6 +67,7 @@ pub async fn send_responses_stream(
     let request = RequestBody {
         model: config.model.clone(),
         stream: true,
+        stream_options: config.stream_options.clone(),
         store: config.store,
         max_output_tokens: config.max_output_tokens,
         instructions: config.instructions.clone(),
@@ -76,7 +79,7 @@ pub async fn send_responses_stream(
             .as_ref()
             .map(|effort| ReasoningConfig {
                 effort: effort.clone(),
-                summary: Some("auto".to_string()),
+                summary: Some("detailed".to_string()),
             }),
         include: config.include.clone(),
         input,
