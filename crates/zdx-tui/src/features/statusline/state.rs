@@ -115,6 +115,7 @@ mod tests {
         acc.mark_tool_used();
         acc.mark_tool_used();
         acc.mark_tool_used();
+        std::thread::sleep(Duration::from_millis(1));
         let result = acc.end_turn();
         assert!(result.is_some());
         let (duration, tool_count) = result.unwrap();
