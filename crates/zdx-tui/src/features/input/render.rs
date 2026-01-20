@@ -12,6 +12,7 @@ use zdx_core::config::ThinkingLevel;
 use zdx_core::models::{ModelOption, model_supports_reasoning};
 use zdx_core::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
 
+use crate::input::TextBuffer;
 use crate::state::TuiState;
 use crate::thread::ThreadUsage;
 
@@ -106,7 +107,7 @@ fn split_into_segments<'a>(line: &'a str, placeholders: &[String]) -> Vec<TextSe
 /// display width instead of character count for line breaking.
 /// Placeholders are treated as atomic units that won't be broken mid-text.
 fn wrap_textarea(
-    textarea: &tui_textarea::TextArea,
+    textarea: &TextBuffer,
     available_width: usize,
     placeholders: &[String],
 ) -> WrappedTextarea {

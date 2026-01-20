@@ -2,6 +2,7 @@
 //!
 //! Manages the text area, command history, and history navigation.
 
+use super::{CursorMove, TextBuffer};
 use crate::mutations::InputMutation;
 
 /// Threshold for replacing large pastes with placeholders (in chars).
@@ -78,7 +79,7 @@ impl HandoffState {
 /// Encapsulates the text area, command history, and navigation state.
 pub struct InputState {
     /// Text area for user input.
-    pub textarea: tui_textarea::TextArea<'static>,
+    pub textarea: TextBuffer,
 
     /// Command history for ↑/↓ navigation.
     pub history: Vec<String>,
@@ -114,7 +115,7 @@ impl InputState {
         use ratatui::style::{Color, Style};
         use ratatui::widgets::{Block, Borders};
 
-        let mut textarea = tui_textarea::TextArea::default();
+        let mut textarea = TextBuffer::default();
         textarea.set_cursor_line_style(Style::default());
         textarea.set_block(
             Block::default()
@@ -394,7 +395,6 @@ impl InputState {
         // Move cursor to end of placeholder
         let (new_row, new_col) = Self::byte_offset_to_cursor(&text, target_byte);
 
-        use tui_textarea::CursorMove;
         self.textarea.move_cursor(CursorMove::Top);
         self.textarea.move_cursor(CursorMove::Head);
         for _ in 0..new_row {
@@ -432,7 +432,6 @@ impl InputState {
         // Move cursor to target position
         let (new_row, new_col) = Self::byte_offset_to_cursor(&text, target_byte);
 
-        use tui_textarea::CursorMove;
         self.textarea.move_cursor(CursorMove::Top);
         self.textarea.move_cursor(CursorMove::Head);
         for _ in 0..new_row {
@@ -467,7 +466,6 @@ impl InputState {
         }
 
         // Position cursor at where the placeholder started
-        use tui_textarea::CursorMove;
         self.textarea.move_cursor(CursorMove::Top);
         self.textarea.move_cursor(CursorMove::Head);
         for _ in 0..new_row {
@@ -509,7 +507,6 @@ impl InputState {
         }
 
         // Position cursor at end of expanded content
-        use tui_textarea::CursorMove;
         self.textarea.move_cursor(CursorMove::Top);
         self.textarea.move_cursor(CursorMove::Head);
         for _ in 0..new_row {
@@ -591,8 +588,6 @@ impl InputState {
                 cursor_row,
                 cursor_col,
             } => {
-                use tui_textarea::CursorMove;
-
                 self.set_text(&text);
                 self.textarea.move_cursor(CursorMove::Top);
                 self.textarea.move_cursor(CursorMove::Head);
