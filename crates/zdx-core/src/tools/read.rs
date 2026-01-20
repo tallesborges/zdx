@@ -602,7 +602,7 @@ mod tests {
         assert_eq!(data["total_lines"], 300);
         // 40KB / 200 bytes = 204 lines (last one puts us over)
         let lines_shown = data["lines_shown"].as_u64().unwrap();
-        assert!(lines_shown >= 200 && lines_shown <= 210);
+        assert!((200..=210).contains(&lines_shown));
     }
 
     #[test]
