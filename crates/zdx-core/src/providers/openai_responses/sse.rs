@@ -40,7 +40,6 @@ enum BlockKind {
 struct ReasoningState {
     index: usize,
     id: String,
-    encrypted_content: String,
     summary: String,
 }
 
@@ -50,7 +49,7 @@ struct StreamState {
     current_index: Option<usize>,
     current_kind: Option<BlockKind>,
     saw_tool: bool,
-    /// Tracks reasoning item being streamed (for encrypted_content replay)
+    /// Tracks reasoning item being streamed (for summary replay)
     current_reasoning: Option<ReasoningState>,
 }
 
@@ -153,7 +152,6 @@ impl<S> ResponsesSseParser<S> {
                         self.state.current_reasoning = Some(ReasoningState {
                             index,
                             id: item.get_string("id"),
-                            encrypted_content: item.get_string("encrypted_content"),
                             summary: String::new(),
                         });
 
@@ -224,16 +222,11 @@ impl<S> ResponsesSseParser<S> {
                     // Merge with current_reasoning state if available
                     let (index, id, encrypted_content, summary, had_streamed_summary) =
                         if let Some(reasoning) = self.state.current_reasoning.take() {
-                            // Use done event values if current_reasoning has empty values
+                            // Use done event values for encrypted_content
                             let id = if reasoning.id.is_empty() {
                                 done_id
                             } else {
                                 reasoning.id
-                            };
-                            let encrypted_content = if reasoning.encrypted_content.is_empty() {
-                                done_encrypted
-                            } else {
-                                reasoning.encrypted_content
                             };
                             // Prefer streamed summary, fall back to done event summary
                             let had_streamed = !reasoning.summary.is_empty();
@@ -242,13 +235,7 @@ impl<S> ResponsesSseParser<S> {
                             } else {
                                 done_summary
                             };
-                            (
-                                reasoning.index,
-                                id,
-                                encrypted_content,
-                                summary,
-                                had_streamed,
-                            )
+                            (reasoning.index, id, done_encrypted, summary, had_streamed)
                         } else {
                             // No current_reasoning state - use done event values directly
                             // This shouldn't happen in normal flow, but handle it gracefully
