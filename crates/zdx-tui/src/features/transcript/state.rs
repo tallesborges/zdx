@@ -281,8 +281,9 @@ impl ScrollAccumulator {
 
     /// Takes the accumulated delta and returns the lines to scroll.
     ///
-    /// Implements acceleration: starts at 1 line, increases with consecutive
-    /// frames scrolling in the same direction, resets on direction change.
+    /// Implements linear acceleration: starts at 1 line, increases by 1
+    /// per consecutive frame scrolling in the same direction, resets on
+    /// direction change.
     pub fn take_delta(&mut self) -> i32 {
         let raw_delta = std::mem::take(&mut self.pending_delta);
         if raw_delta == 0 {
@@ -302,13 +303,8 @@ impl ScrollAccumulator {
             self.consecutive_frames = self.consecutive_frames.saturating_add(1);
         }
 
-        // Log2-based acceleration: smooth, unbounded growth.
-        // Formula: 1 + floor(log2(max(1, consecutive_frames - 1)))
-        // This gives: frames 1-2 → 1, frame 3+ → grows logarithmically.
-        let multiplier = {
-            let adjusted = self.consecutive_frames.saturating_sub(1).max(1) as f64;
-            (1.0 + adjusted.log2()).floor() as u32
-        };
+        // Linear acceleration: 1, 2, 3, ... per consecutive frame.
+        let multiplier = self.consecutive_frames as u32;
 
         // Apply multiplier but cap at the raw delta magnitude
         let max_lines = raw_delta.unsigned_abs().max(1);
@@ -767,13 +763,13 @@ mod tests {
         acc.accumulate(5);
         assert_eq!(acc.take_delta(), 1);
 
-        // Second frame same direction: still 1 line
-        acc.accumulate(5);
-        assert_eq!(acc.take_delta(), 1);
-
-        // Third frame same direction: accelerates to 2
+        // Second frame same direction: accelerates to 2
         acc.accumulate(5);
         assert_eq!(acc.take_delta(), 2);
+
+        // Third frame same direction: accelerates to 3
+        acc.accumulate(5);
+        assert_eq!(acc.take_delta(), 3);
 
         // Direction change resets acceleration
         acc.accumulate(-5);
