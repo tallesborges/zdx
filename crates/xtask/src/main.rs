@@ -24,7 +24,15 @@ enum CommandName {
     #[default]
     UpdateDefaults,
     /// Generate codebase.txt with all source files.
-    Codebase,
+    ///
+    /// If no directory is specified, it includes all default directories.
+    /// If directories are specified (e.g., "crates/zdx-tui"), it only includes those.
+    Codebase {
+        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-core").
+        /// If not provided, defaults to all workspace directories.
+        #[arg(value_name = "DIR")]
+        dirs: Vec<String>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -35,7 +43,7 @@ fn main() -> Result<()> {
         CommandName::UpdateDefaultModels => update_default_models(),
         CommandName::UpdateDefaultConfig => update_default_config(),
         CommandName::UpdateDefaults => update_defaults(),
-        CommandName::Codebase => codebase::run(),
+        CommandName::Codebase { dirs } => codebase::run(Some(dirs)),
     }
 }
 
