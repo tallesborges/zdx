@@ -3,7 +3,7 @@
 //! Handles keyboard input, history navigation, and handoff state transitions.
 //! All state mutations for input-related events happen here.
 
-use crossterm::event::{KeyCode, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
@@ -15,6 +15,22 @@ use crate::mutations::{InputMutation, StateMutation, ThreadMutation, TranscriptM
 use crate::overlays::{LoginState, Overlay, OverlayRequest};
 use crate::state::AgentState;
 use crate::transcript::HistoryCell;
+
+/// Result type for key handlers.
+type KeyResult = (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>);
+
+/// Context for handling main key input.
+///
+/// Groups the contextual state needed to decide how to handle a key press,
+/// avoiding excessive function parameters.
+pub struct InputContext<'a> {
+    pub agent_state: &'a AgentState,
+    pub bash_running: bool,
+    pub thread_id: Option<String>,
+    pub thread_is_empty: bool,
+    pub rename_loading: bool,
+    pub model_id: &'a str,
+}
 
 /// Handles paste events for input.
 ///
@@ -49,24 +65,76 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 }
 
 /// Handles main key input when no overlay is active.
-#[allow(clippy::too_many_arguments)]
-pub fn handle_main_key(
-    input: &mut InputState,
-    agent_state: &AgentState,
-    bash_running: bool,
-    thread_id: Option<String>,
-    thread_is_empty: bool,
-    rename_loading: bool,
-    model_id: &str,
-    key: crossterm::event::KeyEvent,
-) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
-    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    let alt = key.modifiers.contains(KeyModifiers::ALT);
+pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyEvent) -> KeyResult {
+    let mods = Modifiers::from(&key);
 
-    let (effects, mutations, overlay_request) = match key.code {
-        // Ctrl+U (or Command+Backspace on macOS): clear the current line
-        KeyCode::Char('u') if ctrl && !shift && !alt => {
+    // Try each handler category in order; first match wins
+    handle_line_editing(input, key.code, &mods)
+        .or_else(|| handle_word_editing(input, key.code, &mods))
+        .or_else(|| handle_navigation(input, key, &mods))
+        .or_else(|| handle_control_keys(input, ctx, key.code, &mods))
+        .or_else(|| handle_overlays(input, ctx.model_id, key.code, &mods))
+        .or_else(|| handle_submission(input, ctx, key.code, &mods))
+        .unwrap_or_else(|| handle_default_input(input, key))
+}
+
+/// Parsed key modifiers for cleaner pattern matching.
+struct Modifiers {
+    ctrl: bool,
+    shift: bool,
+    alt: bool,
+    super_key: bool,
+}
+
+impl Modifiers {
+    fn from(key: &KeyEvent) -> Self {
+        Self {
+            ctrl: key.modifiers.contains(CrosstermKeyModifiers::CONTROL),
+            shift: key.modifiers.contains(CrosstermKeyModifiers::SHIFT),
+            alt: key.modifiers.contains(CrosstermKeyModifiers::ALT),
+            super_key: key.modifiers.contains(CrosstermKeyModifiers::SUPER),
+        }
+    }
+
+    fn none(&self) -> bool {
+        !self.ctrl && !self.shift && !self.alt && !self.super_key
+    }
+
+    fn only_ctrl(&self) -> bool {
+        self.ctrl && !self.shift && !self.alt && !self.super_key
+    }
+
+    fn only_alt(&self) -> bool {
+        self.alt && !self.ctrl && !self.shift && !self.super_key
+    }
+
+    fn only_super(&self) -> bool {
+        self.super_key && !self.ctrl && !self.shift && !self.alt
+    }
+}
+
+// =============================================================================
+// Line editing: Ctrl+A, Ctrl+E, Ctrl+U, Ctrl+K
+// =============================================================================
+
+fn handle_line_editing(
+    input: &mut InputState,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    match code {
+        // Ctrl+A: move to beginning of line
+        KeyCode::Char('a') if mods.only_ctrl() => {
+            input.textarea.move_cursor(CursorMove::Head);
+            Some((vec![], vec![], None))
+        }
+        // Ctrl+E: move to end of line
+        KeyCode::Char('e') if mods.only_ctrl() => {
+            input.textarea.move_cursor(CursorMove::End);
+            Some((vec![], vec![], None))
+        }
+        // Ctrl+U: kill from cursor to beginning of line (unix line-kill)
+        KeyCode::Char('u') if mods.only_ctrl() => {
             let (row, _) = input.textarea.cursor();
             let current_line = input
                 .textarea
@@ -80,260 +148,349 @@ pub fn handle_main_key(
                 input.textarea.move_cursor(CursorMove::End);
                 input.textarea.delete_next_char(); // delete the newline
             } else {
-                // Clear current line
+                // Clear from cursor to beginning of line
                 input.textarea.move_cursor(CursorMove::Head);
                 input.textarea.delete_line_by_end();
             }
             input.sync_pending_pastes();
-            (vec![], vec![], None)
+            Some((vec![], vec![], None))
         }
-        KeyCode::Char('/') if !ctrl && !shift && !alt => {
-            if input.get_text().is_empty() {
-                (
-                    vec![],
-                    vec![],
-                    Some(OverlayRequest::CommandPalette {
-                        command_mode: false,
-                    }),
-                )
+        // Ctrl+K: kill from cursor to end of line
+        KeyCode::Char('k') if mods.only_ctrl() => {
+            input.textarea.delete_line_by_end();
+            input.sync_pending_pastes();
+            Some((vec![], vec![], None))
+        }
+        // Ctrl+J: insert newline (like Shift+Enter in some editors)
+        KeyCode::Char('j') if mods.only_ctrl() => {
+            input.textarea.insert_newline();
+            Some((vec![], vec![], None))
+        }
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Word editing: Ctrl+W, Alt+Backspace, Alt+f/b (word movement)
+// =============================================================================
+
+fn handle_word_editing(
+    input: &mut InputState,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    match code {
+        // Ctrl+W: delete word backward (common readline binding)
+        KeyCode::Char('w') if mods.only_ctrl() => {
+            input.reset_navigation();
+            if !input.try_delete_placeholder_at_bracket(true) {
+                input.textarea.delete_word_left();
+                input.sync_pending_pastes();
+            }
+            Some((vec![], vec![], None))
+        }
+        // Alt+Backspace: delete word backward
+        // (macOS sends this for Option+Delete)
+        KeyCode::Backspace if mods.only_alt() => {
+            input.reset_navigation();
+            if !input.try_delete_placeholder_at_bracket(true) {
+                input.textarea.delete_word_left();
+                input.sync_pending_pastes();
+            }
+            Some((vec![], vec![], None))
+        }
+        // Alt+b or Alt+Left: move word backward
+        // (macOS terminal sends Alt+b for Option+Left)
+        KeyCode::Char('b') | KeyCode::Left if mods.only_alt() => {
+            if !input.try_jump_over_placeholder(true) {
+                input.textarea.move_word_left();
+            }
+            Some((vec![], vec![], None))
+        }
+        // Alt+f or Alt+Right: move word forward
+        // (macOS terminal sends Alt+f for Option+Right)
+        KeyCode::Char('f') | KeyCode::Right if mods.only_alt() => {
+            if !input.try_jump_over_placeholder(false) {
+                input.textarea.move_word_right();
+            }
+            Some((vec![], vec![], None))
+        }
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Navigation: arrows, PageUp/Down, Home/End
+// =============================================================================
+
+fn handle_navigation(input: &mut InputState, key: KeyEvent, mods: &Modifiers) -> Option<KeyResult> {
+    match key.code {
+        // PageUp/PageDown: scroll transcript
+        KeyCode::PageUp => Some((
+            vec![],
+            vec![StateMutation::Transcript(TranscriptMutation::PageUp)],
+            None,
+        )),
+        KeyCode::PageDown => Some((
+            vec![],
+            vec![StateMutation::Transcript(TranscriptMutation::PageDown)],
+            None,
+        )),
+        // Ctrl+Home: scroll to top
+        KeyCode::Home if mods.ctrl => Some((
+            vec![],
+            vec![StateMutation::Transcript(TranscriptMutation::ScrollToTop)],
+            None,
+        )),
+        // Ctrl+End: scroll to bottom
+        KeyCode::End if mods.ctrl => Some((
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::ScrollToBottom,
+            )],
+            None,
+        )),
+        // Super+Left (Command+Left on macOS): move to beginning of line
+        KeyCode::Left if mods.only_super() => {
+            input.textarea.move_cursor(CursorMove::Head);
+            Some((vec![], vec![], None))
+        }
+        // Super+Right (Command+Right on macOS): move to end of line
+        KeyCode::Right if mods.only_super() => {
+            input.textarea.move_cursor(CursorMove::End);
+            Some((vec![], vec![], None))
+        }
+        // Alt+Up: move cursor to first line of input
+        KeyCode::Up if mods.only_alt() => {
+            input.textarea.move_cursor(CursorMove::Top);
+            Some((vec![], vec![], None))
+        }
+        // Alt+Down: move cursor to last line of input
+        KeyCode::Down if mods.only_alt() => {
+            input.textarea.move_cursor(CursorMove::Bottom);
+            Some((vec![], vec![], None))
+        }
+        // Up: history navigation or cursor movement
+        KeyCode::Up if mods.none() => {
+            if input.should_navigate_up() {
+                input.navigate_up();
             } else {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
-                (vec![], vec![], None)
+                input.snap_to_placeholder_end();
             }
+            Some((vec![], vec![], None))
         }
-        KeyCode::Char('p') if ctrl && !shift && !alt => (
-            vec![],
-            vec![],
-            Some(OverlayRequest::CommandPalette {
-                command_mode: false,
-            }),
-        ),
-        KeyCode::Char('a') if ctrl && !shift && !alt => {
-            input.textarea.move_cursor(CursorMove::Head);
-            (vec![], vec![], None)
-        }
-        KeyCode::Char('e') if ctrl && !shift && !alt => {
-            input.textarea.move_cursor(CursorMove::End);
-            (vec![], vec![], None)
-        }
-        KeyCode::Char('t') if ctrl && !shift && !alt => {
-            if zdx_core::models::model_supports_reasoning(model_id) {
-                (vec![], vec![], Some(OverlayRequest::ThinkingPicker))
+        // Down: history navigation or cursor movement
+        KeyCode::Down if mods.none() => {
+            if input.should_navigate_down() {
+                input.navigate_down();
             } else {
-                (vec![], vec![], None)
+                input.textarea.input(key);
+                input.sync_pending_pastes();
+                input.snap_to_placeholder_end();
             }
+            Some((vec![], vec![], None))
         }
-        KeyCode::Char('c') if ctrl => {
-            // Ctrl+C: interrupt agent, clear input, or quit
-            if agent_state.is_running() {
-                (vec![UiEffect::InterruptAgent], vec![], None)
-            } else if bash_running {
-                (vec![UiEffect::InterruptBash], vec![], None)
+        // Left: character movement (with placeholder jumping)
+        KeyCode::Left if mods.none() => {
+            if !input.try_jump_over_placeholder(true) {
+                input.textarea.input(key);
+            }
+            Some((vec![], vec![], None))
+        }
+        // Right: character movement (with placeholder jumping)
+        KeyCode::Right if mods.none() => {
+            if !input.try_jump_over_placeholder(false) {
+                input.textarea.input(key);
+            }
+            Some((vec![], vec![], None))
+        }
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Control keys: Ctrl+C, Escape
+// =============================================================================
+
+fn handle_control_keys(
+    input: &mut InputState,
+    ctx: &InputContext<'_>,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    match code {
+        // Ctrl+C: interrupt agent, clear input, or quit
+        KeyCode::Char('c') if mods.ctrl => {
+            if ctx.agent_state.is_running() {
+                Some((vec![UiEffect::InterruptAgent], vec![], None))
+            } else if ctx.bash_running {
+                Some((vec![UiEffect::InterruptBash], vec![], None))
             } else if !input.get_text().is_empty() {
                 input.clear();
-                (vec![], vec![], None)
+                Some((vec![], vec![], None))
             } else {
-                (vec![UiEffect::Quit], vec![], None)
+                Some((vec![UiEffect::Quit], vec![], None))
             }
         }
-        KeyCode::Enter if !shift && !alt => {
-            return submit_input(
-                input,
-                agent_state,
-                bash_running,
-                thread_id,
-                thread_is_empty,
-                rename_loading,
-            );
-        }
-        KeyCode::Char('j') if ctrl => {
-            input.textarea.insert_newline();
-            (vec![], vec![], None)
-        }
+        // Escape: cancel current operation or clear input
         KeyCode::Esc => {
             if input.handoff.is_generating() {
                 input.handoff = HandoffState::Idle;
                 input.clear();
-                (
+                Some((
                     vec![UiEffect::CancelTask {
                         kind: TaskKind::Handoff,
                         token: None,
                     }],
                     vec![],
                     None,
-                )
+                ))
             } else if input.handoff.is_active() {
-                // Cancel handoff mode
                 input.handoff = HandoffState::Idle;
                 input.clear();
-                (vec![], vec![], None)
-            } else if agent_state.is_running() {
-                (vec![UiEffect::InterruptAgent], vec![], None)
-            } else if bash_running {
-                (
+                Some((vec![], vec![], None))
+            } else if ctx.agent_state.is_running() {
+                Some((vec![UiEffect::InterruptAgent], vec![], None))
+            } else if ctx.bash_running {
+                Some((
                     vec![UiEffect::CancelTask {
                         kind: TaskKind::Bash,
                         token: None,
                     }],
                     vec![],
                     None,
-                )
+                ))
             } else {
                 input.clear();
-                (vec![], vec![], None)
+                Some((vec![], vec![], None))
             }
         }
-        KeyCode::PageUp => (
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Overlays: command palette, thinking picker
+// =============================================================================
+
+fn handle_overlays(
+    input: &mut InputState,
+    model_id: &str,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    match code {
+        // `/` when input is empty: open command palette
+        KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => Some((
             vec![],
-            vec![StateMutation::Transcript(TranscriptMutation::PageUp)],
-            None,
-        ),
-        KeyCode::PageDown => (
             vec![],
-            vec![StateMutation::Transcript(TranscriptMutation::PageDown)],
-            None,
-        ),
-        KeyCode::Home if ctrl => (
+            Some(OverlayRequest::CommandPalette {
+                command_mode: false,
+            }),
+        )),
+        // Ctrl+P: open command palette
+        KeyCode::Char('p') if mods.only_ctrl() => Some((
             vec![],
-            vec![StateMutation::Transcript(TranscriptMutation::ScrollToTop)],
-            None,
-        ),
-        KeyCode::End if ctrl => (
             vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::ScrollToBottom,
-            )],
-            None,
-        ),
-        KeyCode::Up if alt && !ctrl && !shift => {
-            // Alt+Up: Move cursor to first line of input
-            input.textarea.move_cursor(CursorMove::Top);
-            (vec![], vec![], None)
-        }
-        KeyCode::Down if alt && !ctrl && !shift => {
-            // Alt+Down: Move cursor to last line of input
-            input.textarea.move_cursor(CursorMove::Bottom);
-            (vec![], vec![], None)
-        }
-        KeyCode::Up if !ctrl && !shift && !alt => {
-            if input.should_navigate_up() {
-                input.navigate_up();
+            Some(OverlayRequest::CommandPalette {
+                command_mode: false,
+            }),
+        )),
+        // Ctrl+T: open thinking picker (if model supports reasoning)
+        KeyCode::Char('t') if mods.only_ctrl() => {
+            if zdx_core::models::model_supports_reasoning(model_id) {
+                Some((vec![], vec![], Some(OverlayRequest::ThinkingPicker)))
             } else {
-                input.textarea.input(key);
-                input.sync_pending_pastes();
-                // Snap cursor to placeholder end if it landed inside one
-                input.snap_to_placeholder_end();
+                Some((vec![], vec![], None))
             }
-            (vec![], vec![], None)
         }
-        KeyCode::Down if !ctrl && !shift && !alt => {
-            if input.should_navigate_down() {
-                input.navigate_down();
-            } else {
-                input.textarea.input(key);
-                input.sync_pending_pastes();
-                // Snap cursor to placeholder end if it landed inside one
-                input.snap_to_placeholder_end();
-            }
-            (vec![], vec![], None)
-        }
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Submission: Enter key
+// =============================================================================
+
+fn handle_submission(
+    input: &mut InputState,
+    ctx: &InputContext<'_>,
+    code: KeyCode,
+    mods: &Modifiers,
+) -> Option<KeyResult> {
+    match code {
+        KeyCode::Enter if !mods.shift && !mods.alt => Some(submit_input(
+            input,
+            ctx.agent_state,
+            ctx.bash_running,
+            ctx.thread_id.clone(),
+            ctx.thread_is_empty,
+            ctx.rename_loading,
+        )),
+        _ => None,
+    }
+}
+
+// =============================================================================
+// Default input handling: character insertion, Tab, Backspace, Delete
+// =============================================================================
+
+fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
+    let mods = Modifiers::from(&key);
+
+    match key.code {
+        // Tab: insert spaces (tabs cause rendering issues)
         KeyCode::Tab => {
-            // Convert tabs to spaces for consistent width calculation.
-            // Tabs cause rendering issues because unicode_width treats them as 0-width,
-            // but terminals render them as variable-width (to next tab stop).
             input.textarea.insert_str("    ");
             (vec![], vec![], None)
         }
-        KeyCode::Backspace if alt && !ctrl && !shift => {
-            input.reset_navigation();
-            if !input.try_delete_placeholder_at_bracket(true) {
-                input.textarea.delete_word_left();
-                input.sync_pending_pastes();
-            }
-            (vec![], vec![], None)
-        }
+        // Backspace: delete character (with placeholder handling)
         KeyCode::Backspace => {
             input.reset_navigation();
-            // If deleting the closing `]` of a placeholder, remove the entire placeholder
             if !input.try_delete_placeholder_at_bracket(true) {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
             }
             (vec![], vec![], None)
         }
+        // Delete: delete forward (with placeholder handling)
         KeyCode::Delete => {
             input.reset_navigation();
-            // If deleting the closing `]` of a placeholder, remove the entire placeholder
             if !input.try_delete_placeholder_at_bracket(false) {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
             }
             (vec![], vec![], None)
         }
-        KeyCode::Char('b') | KeyCode::Left if alt && !ctrl && !shift => {
-            if !input.try_jump_over_placeholder(true) {
-                input.textarea.move_word_left();
-            }
-            (vec![], vec![], None)
-        }
-        KeyCode::Char('f') | KeyCode::Right if alt && !ctrl && !shift => {
-            if !input.try_jump_over_placeholder(false) {
-                input.textarea.move_word_right();
-            }
-            (vec![], vec![], None)
-        }
-        KeyCode::Left if !ctrl && !shift && !alt => {
-            // Jump over placeholder if cursor is inside one, otherwise move normally
-            if !input.try_jump_over_placeholder(true) {
-                input.textarea.input(key);
-            }
-            (vec![], vec![], None)
-        }
-        KeyCode::Right if !ctrl && !shift && !alt => {
-            // Jump over placeholder if cursor is inside one, otherwise move normally
-            if !input.try_jump_over_placeholder(false) {
-                input.textarea.input(key);
-            }
-            (vec![], vec![], None)
-        }
-        KeyCode::Char(' ') if !ctrl && !shift && !alt => {
-            // If cursor is inside a placeholder, expand it to original content
+        // Space: expand placeholder or insert normally
+        KeyCode::Char(' ') if mods.none() => {
             if input.try_expand_placeholder_at_cursor() {
                 return (vec![], vec![], None);
             }
-            // Otherwise, insert space normally
             input.reset_navigation();
             input.textarea.input(key);
             input.sync_pending_pastes();
             (vec![], vec![], None)
         }
+        // `/` when input is not empty: insert normally
+        KeyCode::Char('/') if mods.none() => {
+            input.textarea.input(key);
+            input.sync_pending_pastes();
+            (vec![], vec![], None)
+        }
+        // Default: insert character
         _ => {
             input.reset_navigation();
             input.textarea.input(key);
             input.sync_pending_pastes();
 
             // Detect `@` trigger for file picker
-            if key.code == KeyCode::Char('@') && !key.modifiers.contains(KeyModifiers::CONTROL) {
-                // Find the position of the `@` we just typed
-                // It's the cursor position minus 1 (since cursor is now after the `@`)
-                let text = input.get_text();
-                let cursor_pos = {
-                    let (row, col) = input.textarea.cursor();
-                    let lines: Vec<&str> = text.lines().collect();
-                    let mut pos = 0;
-                    for (i, line) in lines.iter().enumerate() {
-                        if i < row {
-                            pos += line.len() + 1; // +1 for newline
-                        } else {
-                            pos += col;
-                            break;
-                        }
-                    }
-                    pos
-                };
-                // trigger_pos is the byte position of `@` (cursor - 1 since we just typed it)
-                let trigger_pos = cursor_pos.saturating_sub(1);
+            if key.code == KeyCode::Char('@')
+                && !key.modifiers.contains(CrosstermKeyModifiers::CONTROL)
+            {
+                let trigger_pos = compute_at_trigger_position(input);
                 return (
                     vec![],
                     vec![],
@@ -343,10 +500,30 @@ pub fn handle_main_key(
 
             (vec![], vec![], None)
         }
-    };
-
-    (effects, mutations, overlay_request)
+    }
 }
+
+/// Computes the byte position of the `@` character just typed.
+fn compute_at_trigger_position(input: &InputState) -> usize {
+    let text = input.get_text();
+    let (row, col) = input.textarea.cursor();
+    let lines: Vec<&str> = text.lines().collect();
+    let mut pos = 0;
+    for (i, line) in lines.iter().enumerate() {
+        if i < row {
+            pos += line.len() + 1; // +1 for newline
+        } else {
+            pos += col;
+            break;
+        }
+    }
+    // trigger_pos is cursor - 1 since we just typed the `@`
+    pos.saturating_sub(1)
+}
+
+// =============================================================================
+// Input submission logic
+// =============================================================================
 
 /// Handles input submission.
 fn submit_input(
@@ -356,7 +533,7 @@ fn submit_input(
     thread_id: Option<String>,
     thread_is_empty: bool,
     rename_loading: bool,
-) -> (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>) {
+) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
         return (
@@ -375,174 +552,30 @@ fn submit_input(
 
     let agent_running = agent_state.is_running();
     if agent_running {
-        if trimmed.is_empty() {
-            return (vec![], vec![], None);
-        }
-        if input.handoff.is_active() {
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "Finish or cancel handoff before queueing.".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
-        if trimmed.starts_with('/') || trimmed.starts_with('!') {
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "Commands can't be queued while streaming.".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
-
-        input.history.push(text.clone());
-        input.reset_navigation();
-        input.enqueue_prompt(text.clone());
-        input.clear();
-        return (vec![], vec![], None);
+        return handle_submit_while_agent_running(input, trimmed, &text);
     }
 
     if bash_running {
         return (vec![], vec![], None);
     }
 
-    // Slash command: /rename <title>
-    if let Some(rest) = trimmed.strip_prefix("/rename") {
-        let title = rest.trim();
-        if title.is_empty() {
-            input.clear();
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage("Usage: /rename <title>".to_string()),
-                )],
-                None,
-            );
-        }
-        if rename_loading {
-            input.clear();
-            return (vec![], vec![], None);
-        }
-        if let Some(thread_id) = thread_id.as_ref() {
-            input.clear();
-            return (
-                vec![UiEffect::RenameThread {
-                    task: None,
-                    thread_id: thread_id.clone(),
-                    title: Some(title.to_string()),
-                }],
-                vec![],
-                None,
-            );
-        } else {
-            input.clear();
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "No active thread to rename.".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
+    // Try slash commands
+    if let Some(result) = handle_slash_commands(input, trimmed, &thread_id, rename_loading) {
+        return result;
     }
 
-    // Bang command: !<command> - execute bash directly
-    if let Some(command) = trimmed.strip_prefix('!') {
-        let command = command.trim();
-        if command.is_empty() {
-            input.clear();
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "Usage: !<command> (e.g., !ls -la)".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
-        input.history.push(text.clone());
-        input.reset_navigation();
-        input.clear();
-        return (
-            vec![UiEffect::ExecuteBash {
-                task: None,
-                command: command.to_string(),
-            }],
-            vec![],
-            None,
-        );
+    // Try bang commands
+    if let Some(result) = handle_bang_commands(input, trimmed, &text) {
+        return result;
     }
 
-    // Check if we're submitting the handoff goal (to trigger generation)
-    // This check must come before the empty check to show proper error
-    if input.handoff.is_pending() {
-        if text.trim().is_empty() {
-            // Show error for empty goal (spec requirement)
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "Handoff goal cannot be empty.".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
-        input.clear();
-
-        return (
-            vec![UiEffect::StartHandoff {
-                task: None,
-                goal: text.clone(),
-            }],
-            vec![],
-            None,
-        );
-    }
-
-    // Check if we're submitting the generated handoff prompt (to create new thread)
-    if input.handoff.is_ready() {
-        if text.trim().is_empty() {
-            // Edge case: user cleared the generated prompt
-            return (
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "Handoff prompt cannot be empty.".to_string(),
-                    ),
-                )],
-                None,
-            );
-        }
-        input.handoff = HandoffState::Idle;
-        input.clear_history();
-
-        return (
-            vec![UiEffect::HandoffSubmit {
-                prompt: text.clone(),
-                handoff_from: thread_id.clone(),
-            }],
-            vec![
-                StateMutation::Transcript(TranscriptMutation::Clear),
-                StateMutation::Thread(ThreadMutation::ClearMessages),
-                StateMutation::Thread(ThreadMutation::ResetUsage),
-                StateMutation::Input(InputMutation::ClearQueue),
-            ],
-            None,
-        );
+    // Try handoff submissions
+    if let Some(result) = handle_handoff_submission(input, trimmed, &text, &thread_id) {
+        return result;
     }
 
     // Normal message submission
-    if text.trim().is_empty() {
+    if trimmed.is_empty() {
         return (vec![], vec![], None);
     }
 
@@ -552,6 +585,189 @@ fn submit_input(
     let (effects, mutations) = build_send_effects(&text, thread_id, thread_is_empty);
 
     (effects, mutations, None)
+}
+
+fn handle_submit_while_agent_running(
+    input: &mut InputState,
+    trimmed: &str,
+    text: &str,
+) -> KeyResult {
+    if trimmed.is_empty() {
+        return (vec![], vec![], None);
+    }
+    if input.handoff.is_active() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Finish or cancel handoff before queueing.".to_string(),
+                ),
+            )],
+            None,
+        );
+    }
+    if trimmed.starts_with('/') || trimmed.starts_with('!') {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Commands can't be queued while streaming.".to_string(),
+                ),
+            )],
+            None,
+        );
+    }
+
+    input.history.push(text.to_string());
+    input.reset_navigation();
+    input.enqueue_prompt(text.to_string());
+    input.clear();
+    (vec![], vec![], None)
+}
+
+fn handle_slash_commands(
+    input: &mut InputState,
+    trimmed: &str,
+    thread_id: &Option<String>,
+    rename_loading: bool,
+) -> Option<KeyResult> {
+    // /rename <title>
+    if let Some(rest) = trimmed.strip_prefix("/rename") {
+        let title = rest.trim();
+        if title.is_empty() {
+            input.clear();
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage("Usage: /rename <title>".to_string()),
+                )],
+                None,
+            ));
+        }
+        if rename_loading {
+            input.clear();
+            return Some((vec![], vec![], None));
+        }
+        if let Some(thread_id) = thread_id.as_ref() {
+            input.clear();
+            return Some((
+                vec![UiEffect::RenameThread {
+                    task: None,
+                    thread_id: thread_id.clone(),
+                    title: Some(title.to_string()),
+                }],
+                vec![],
+                None,
+            ));
+        } else {
+            input.clear();
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "No active thread to rename.".to_string(),
+                    ),
+                )],
+                None,
+            ));
+        }
+    }
+
+    None
+}
+
+fn handle_bang_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {
+    if let Some(command) = trimmed.strip_prefix('!') {
+        let command = command.trim();
+        if command.is_empty() {
+            input.clear();
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Usage: !<command> (e.g., !ls -la)".to_string(),
+                    ),
+                )],
+                None,
+            ));
+        }
+        input.history.push(text.to_string());
+        input.reset_navigation();
+        input.clear();
+        return Some((
+            vec![UiEffect::ExecuteBash {
+                task: None,
+                command: command.to_string(),
+            }],
+            vec![],
+            None,
+        ));
+    }
+
+    None
+}
+
+fn handle_handoff_submission(
+    input: &mut InputState,
+    trimmed: &str,
+    text: &str,
+    thread_id: &Option<String>,
+) -> Option<KeyResult> {
+    // Submitting handoff goal (to trigger generation)
+    if input.handoff.is_pending() {
+        if trimmed.is_empty() {
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Handoff goal cannot be empty.".to_string(),
+                    ),
+                )],
+                None,
+            ));
+        }
+        input.clear();
+        return Some((
+            vec![UiEffect::StartHandoff {
+                task: None,
+                goal: text.to_string(),
+            }],
+            vec![],
+            None,
+        ));
+    }
+
+    // Submitting generated handoff prompt (to create new thread)
+    if input.handoff.is_ready() {
+        if trimmed.is_empty() {
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Handoff prompt cannot be empty.".to_string(),
+                    ),
+                )],
+                None,
+            ));
+        }
+        input.handoff = HandoffState::Idle;
+        input.clear_history();
+        return Some((
+            vec![UiEffect::HandoffSubmit {
+                prompt: text.to_string(),
+                handoff_from: thread_id.clone(),
+            }],
+            vec![
+                StateMutation::Transcript(TranscriptMutation::Clear),
+                StateMutation::Thread(ThreadMutation::ClearMessages),
+                StateMutation::Thread(ThreadMutation::ResetUsage),
+                StateMutation::Input(InputMutation::ClearQueue),
+            ],
+            None,
+        ));
+    }
+
+    None
 }
 
 pub fn build_send_effects(
