@@ -14,12 +14,27 @@ const EXCLUDE_EXTENSIONS: &[&str] = &[
 ];
 const EXCLUDE_FILES: &[&str] = &["codebase.txt"];
 
-pub fn run() -> anyhow::Result<()> {
+/// Generate codebase.txt for the entire workspace or specific directories
+pub fn run(dirs: Option<Vec<String>>) -> anyhow::Result<()> {
     let current_dir = std::env::current_dir()?;
     let output_file = current_dir.join("codebase.txt");
 
     println!("Collecting files...");
-    let files = collect_files(&current_dir)?;
+
+    // Determine which directories to include
+    let dirs_to_include = if let Some(dirs) = dirs {
+        if dirs.is_empty() {
+            // If empty vector provided, use default include dirs
+            INCLUDE_DIRS.iter().map(|&s| s.to_string()).collect()
+        } else {
+            dirs
+        }
+    } else {
+        // No parameter provided, use default include dirs
+        INCLUDE_DIRS.iter().map(|&s| s.to_string()).collect()
+    };
+
+    let files = collect_files(&current_dir, &dirs_to_include)?;
 
     if files.is_empty() {
         anyhow::bail!("No files found to include!");
@@ -34,7 +49,7 @@ pub fn run() -> anyhow::Result<()> {
     output.push_str("CODEBASE CONTENTS\n");
     output.push_str(&"=".repeat(80));
     output.push_str("\n\nDirectories included:\n");
-    for dir in INCLUDE_DIRS {
+    for dir in &dirs_to_include {
         output.push_str(&format!("  - {}\n", dir));
     }
     output.push_str(&format!("\nTotal files: {}\n", files.len()));
@@ -68,10 +83,10 @@ pub fn run() -> anyhow::Result<()> {
     Ok(())
 }
 
-fn collect_files(root: &Path) -> io::Result<Vec<PathBuf>> {
+fn collect_files(root: &Path, dirs_to_include: &[String]) -> io::Result<Vec<PathBuf>> {
     let mut files = Vec::new();
 
-    for dir_name in INCLUDE_DIRS {
+    for dir_name in dirs_to_include {
         let dir_path = root.join(dir_name);
         if !dir_path.exists() {
             eprintln!("Warning: Directory '{}' not found, skipping...", dir_name);
