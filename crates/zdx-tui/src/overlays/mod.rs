@@ -5,13 +5,14 @@
 //!
 //! ## Module Structure
 //!
-//! - `command_palette.rs`: Command palette for slash commands
+//! - `command_palette.rs`: Command palette (Ctrl+P or `/` when input empty)
 //! - `model_picker.rs`: Model selection picker
 //! - `thinking_picker.rs`: Thinking level selection picker
 //! - `thread_picker.rs`: Thread history picker
 //! - `login.rs`: OAuth login flow overlay
 //! - `file_picker.rs`: File picker triggered by `@`
-//! - `view.rs`: Shared rendering utilities for overlays
+//! - `rename.rs`: Thread rename overlay
+//! - `render_utils.rs`: Shared rendering utilities for overlays
 //! - `update.rs`: Overlay key handling and update logic
 //!
 //! ## Extension Trait
@@ -23,6 +24,7 @@ pub mod command_palette;
 pub mod file_picker;
 pub mod login;
 pub mod model_picker;
+pub mod rename;
 pub mod render_utils;
 pub mod thinking_picker;
 pub mod thread_picker;
@@ -36,6 +38,7 @@ pub use login::LoginState;
 pub use model_picker::ModelPickerState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+pub use rename::RenameState;
 pub use thinking_picker::ThinkingPickerState;
 pub use thread_picker::{ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
@@ -53,12 +56,13 @@ use crate::state::TuiState;
 /// Requests to open a new overlay.
 #[derive(Debug)]
 pub enum OverlayRequest {
-    CommandPalette { command_mode: bool },
+    CommandPalette,
     ModelPicker,
     ThinkingPicker,
     Login,
     FilePicker { trigger_pos: usize },
     Timeline,
+    Rename,
 }
 
 /// Transition returned by overlay key handlers.
@@ -122,6 +126,7 @@ pub enum Overlay {
     Login(LoginState),
     FilePicker(FilePickerState),
     Timeline(TimelineState),
+    Rename(RenameState),
 }
 
 /// Effects that can be emitted by overlays.
@@ -146,6 +151,7 @@ impl Overlay {
             Overlay::FilePicker(p) => p.render(frame, area, input_y),
             Overlay::Login(l) => l.render(frame, area, input_y),
             Overlay::Timeline(t) => t.render(frame, area, input_y),
+            Overlay::Rename(r) => r.render(frame, area, input_y),
         }
     }
 
@@ -158,6 +164,7 @@ impl Overlay {
             Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
             Overlay::Login(l) => l.handle_key(tui, key),
             Overlay::Timeline(t) => t.handle_key(tui, key),
+            Overlay::Rename(r) => r.handle_key(tui, key),
         }
     }
 
@@ -201,7 +208,6 @@ mod tests {
         assert!(none.is_none());
 
         let (palette, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
@@ -230,6 +236,10 @@ mod tests {
         let scroll = ScrollState::default();
         let (timeline, _, _) = TimelineState::open(&[], &scroll, ScrollMode::FollowLatest);
         let overlay: Option<Overlay> = Some(Overlay::Timeline(timeline));
+        assert!(overlay.is_some());
+
+        let (rename, _) = RenameState::open("test-id".to_string(), Some("Test Title".to_string()));
+        let overlay: Option<Overlay> = Some(Overlay::Rename(rename));
         assert!(overlay.is_some());
     }
 }

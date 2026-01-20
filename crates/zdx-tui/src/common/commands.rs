@@ -25,12 +25,12 @@ impl Command {
                 .any(|a| a.to_lowercase().contains(&filter_lower))
     }
 
-    /// Returns the display name with aliases, e.g., "clear (new)".
+    /// Returns the display name with aliases, e.g., "new (clear)".
     pub fn display_name(&self) -> String {
         if self.aliases.is_empty() {
-            format!("/{}", self.name)
+            self.name.to_string()
         } else {
-            format!("/{} ({})", self.name, self.aliases.join(", "))
+            format!("{} ({})", self.name, self.aliases.join(", "))
         }
     }
 }
@@ -143,25 +143,22 @@ mod tests {
 
     #[test]
     fn test_command_display_name() {
-        assert_eq!(find_command("config").display_name(), "/config (settings)");
-        assert_eq!(find_command("copy-id").display_name(), "/copy-id (copyid)");
-        assert_eq!(
-            find_command("debug").display_name(),
-            "/debug (perf, status)"
-        );
-        assert_eq!(find_command("handoff").display_name(), "/handoff");
-        assert_eq!(find_command("login").display_name(), "/login");
-        assert_eq!(find_command("logout").display_name(), "/logout");
-        assert_eq!(find_command("rename").display_name(), "/rename");
-        assert_eq!(find_command("model").display_name(), "/model");
+        assert_eq!(find_command("config").display_name(), "config (settings)");
+        assert_eq!(find_command("copy-id").display_name(), "copy-id (copyid)");
+        assert_eq!(find_command("debug").display_name(), "debug (perf, status)");
+        assert_eq!(find_command("handoff").display_name(), "handoff");
+        assert_eq!(find_command("login").display_name(), "login");
+        assert_eq!(find_command("logout").display_name(), "logout");
+        assert_eq!(find_command("rename").display_name(), "rename");
+        assert_eq!(find_command("model").display_name(), "model");
         assert_eq!(
             find_command("models").display_name(),
-            "/models (models-config)"
+            "models (models-config)"
         );
-        assert_eq!(find_command("new").display_name(), "/new (clear)");
-        assert_eq!(find_command("quit").display_name(), "/quit (q, exit)");
-        assert_eq!(find_command("threads").display_name(), "/threads (history)");
-        assert_eq!(find_command("thinking").display_name(), "/thinking");
-        assert_eq!(find_command("timeline").display_name(), "/timeline");
+        assert_eq!(find_command("new").display_name(), "new (clear)");
+        assert_eq!(find_command("quit").display_name(), "quit (q, exit)");
+        assert_eq!(find_command("threads").display_name(), "threads (history)");
+        assert_eq!(find_command("thinking").display_name(), "thinking");
+        assert_eq!(find_command("timeline").display_name(), "timeline");
     }
 }

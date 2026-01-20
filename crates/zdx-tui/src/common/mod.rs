@@ -15,4 +15,4 @@ pub mod text;
 pub use clipboard::Clipboard;
 pub use scrollbar::Scrollbar;
 pub use task::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskSeq, TaskStarted, Tasks};
-pub use text::{sanitize_for_display, truncate_with_ellipsis};
+pub use text::{sanitize_for_display, truncate_start_with_ellipsis, truncate_with_ellipsis};

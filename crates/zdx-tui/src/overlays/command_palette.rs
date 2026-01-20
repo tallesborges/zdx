@@ -8,6 +8,7 @@ use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use super::{OverlayRequest, OverlayUpdate};
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
+use crate::common::truncate_start_with_ellipsis;
 use crate::effects::UiEffect;
 use crate::input::HandoffState;
 use crate::mutations::{
@@ -21,13 +22,10 @@ pub struct CommandPaletteState {
     pub selected: usize,
     pub provider: zdx_core::providers::ProviderKind,
     pub model_id: String,
-    /// Whether to insert "/" on Escape (true if opened via "/", false if via Ctrl+P).
-    pub insert_slash_on_escape: bool,
 }
 
 impl CommandPaletteState {
     pub fn open(
-        insert_slash_on_escape: bool,
         provider: zdx_core::providers::ProviderKind,
         model_id: String,
     ) -> (Self, Vec<UiEffect>) {
@@ -37,7 +35,6 @@ impl CommandPaletteState {
                 selected: 0,
                 provider,
                 model_id,
-                insert_slash_on_escape,
             },
             vec![],
         )
@@ -51,13 +48,7 @@ impl CommandPaletteState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
-            KeyCode::Esc => {
-                let mut mutations = Vec::new();
-                if self.insert_slash_on_escape {
-                    mutations.push(StateMutation::Input(InputMutation::InsertChar('/')));
-                }
-                OverlayUpdate::close().with_mutations(mutations)
-            }
+            KeyCode::Esc => OverlayUpdate::close(),
             KeyCode::Char('c') if ctrl => OverlayUpdate::close(),
             KeyCode::Up => {
                 let count = self.filtered_commands().len();
@@ -146,8 +137,19 @@ fn execute_command(
             (None, effects, mutations)
         }
         "rename" => {
-            let (effects, mutations) = execute_rename(tui);
-            (None, effects, mutations)
+            if tui.thread.thread_log.is_none() {
+                (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "No active thread to rename.".to_string(),
+                        ),
+                    )],
+                )
+            } else {
+                (Some(OverlayRequest::Rename), vec![], vec![])
+            }
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
         "threads" => {
@@ -261,24 +263,6 @@ fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     }
 }
 
-fn execute_rename(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    if tui.thread.thread_log.is_none() {
-        (
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage("No active thread to rename.".to_string()),
-            )],
-        )
-    } else {
-        (
-            vec![],
-            vec![StateMutation::Input(InputMutation::SetText(
-                "/rename ".to_string(),
-            ))],
-        )
-    }
-}
-
 fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     if tui.thread.thread_log.is_none() {
         return (
@@ -367,14 +351,12 @@ pub fn render_command_palette(
         palette_area.height.saturating_sub(2),
     );
 
-    let max_filter_len = inner_area.width.saturating_sub(4) as usize;
+    let max_filter_width = inner_area.width.saturating_sub(4) as usize;
     let filter_display = if palette.filter.is_empty() {
-        "/".to_string()
-    } else if palette.filter.len() > max_filter_len {
-        let truncated = &palette.filter[palette.filter.len() - max_filter_len..];
-        format!("/…{}", truncated)
+        String::new()
     } else {
-        format!("/{}", palette.filter)
+        // Use unicode-safe truncation from the start
+        truncate_start_with_ellipsis(&palette.filter, max_filter_width)
     };
     let filter_line = Line::from(vec![
         Span::styled("> ", Style::default().fg(Color::DarkGray)),
@@ -475,7 +457,6 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
         let (state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
@@ -488,7 +469,6 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
         let (mut state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
@@ -503,7 +483,6 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_hides_thinking_when_unsupported() {
         let (state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::OpenAI,
             "openai:gpt-4.1".to_string(),
         );
@@ -515,7 +494,6 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
         let (mut state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
@@ -527,7 +505,6 @@ mod tests {
     #[test]
     fn test_palette_state_clamp_selection() {
         let (mut state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
@@ -539,7 +516,6 @@ mod tests {
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
         let (mut state, _) = CommandPaletteState::open(
-            true,
             zdx_core::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
