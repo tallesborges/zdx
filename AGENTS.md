@@ -61,6 +61,8 @@
       - `crates/zdx-tui/src/features/transcript/`: transcript feature slice
         - `crates/zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
     - `crates/zdx-tui/src/overlays/`: overlay feature slice
+      - `crates/zdx-tui/src/overlays/command_palette.rs`: command palette overlay (Ctrl+P or `/` when input empty)
+      - `crates/zdx-tui/src/overlays/rename.rs`: thread rename overlay
 - `crates/zdx-cli/`: zdx binary (CLI/router)
   - `crates/zdx-cli/src/main.rs`: binary entrypoint (delegates to `crates/zdx-cli/src/cli/`)
   - `crates/zdx-cli/src/cli/`: CLI arguments + command dispatch

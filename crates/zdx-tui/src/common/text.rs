@@ -36,6 +36,50 @@ pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
     truncated
 }
 
+/// Truncates a string from the start with ellipsis if it exceeds max_width (unicode-aware).
+///
+/// Shows the end of the string with `…` prefix when truncated.
+/// Uses unicode width for accurate terminal column calculation.
+///
+/// # Arguments
+/// * `text` - The string to truncate
+/// * `max_width` - Maximum display width in terminal columns
+///
+/// # Returns
+/// The original string if it fits, or a truncated version starting with `…`
+pub fn truncate_start_with_ellipsis(text: &str, max_width: usize) -> String {
+    if text.width() <= max_width {
+        return text.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+
+    // Collect chars with their widths from the end
+    let chars: Vec<char> = text.chars().collect();
+    let mut result_chars: Vec<char> = Vec::new();
+    let mut current_width = 0;
+    let available_width = max_width - 1; // Reserve 1 for ellipsis
+
+    // Iterate from the end
+    for &ch in chars.iter().rev() {
+        let ch_width = ch.width().unwrap_or(0);
+        if current_width + ch_width > available_width {
+            break;
+        }
+        result_chars.push(ch);
+        current_width += ch_width;
+    }
+
+    // Reverse to get correct order and prepend ellipsis
+    result_chars.reverse();
+    let mut result = String::from("…");
+    for ch in result_chars {
+        result.push(ch);
+    }
+    result
+}
+
 /// Sanitizes a line for display by removing ANSI escapes and expanding tabs.
 ///
 /// This combines common sanitization steps needed for tool output and other
@@ -139,5 +183,50 @@ mod tests {
         assert_eq!(truncate_with_ellipsis(text, 6), "a中b…");
         assert_eq!(truncate_with_ellipsis(text, 5), "a中b…");
         assert_eq!(truncate_with_ellipsis(text, 4), "a中…");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_short() {
+        assert_eq!(truncate_start_with_ellipsis("hello", 10), "hello");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_exact() {
+        assert_eq!(truncate_start_with_ellipsis("hello", 5), "hello");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_truncated() {
+        // "hello world" truncated from start with max 8
+        // available = 7 (8 - 1 for ellipsis), "o world" = 7 chars fits
+        assert_eq!(truncate_start_with_ellipsis("hello world", 8), "…o world");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_very_short() {
+        assert_eq!(truncate_start_with_ellipsis("hello", 1), "…");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_wide_cjk() {
+        // "test中文" = 4 + 4 = 8 columns
+        let text = "test中文";
+        // With max_width=6, available = 5, "t中文" = 1 + 4 = 5, fits
+        let result = truncate_start_with_ellipsis(text, 6);
+        assert_eq!(result, "…t中文");
+    }
+
+    #[test]
+    fn test_truncate_start_with_ellipsis_mixed_width() {
+        // Mix of narrow (1 col) and wide (2 col) characters
+        let text = "a中b文c";
+        // Width: 1 + 2 + 1 + 2 + 1 = 7 columns
+        assert_eq!(truncate_start_with_ellipsis(text, 7), "a中b文c");
+        // max=6, available=5: "b文c" = 1 + 2 + 1 = 4, fits
+        assert_eq!(truncate_start_with_ellipsis(text, 6), "…b文c");
+        // max=5, available=4: "b文c" = 1 + 2 + 1 = 4, fits
+        assert_eq!(truncate_start_with_ellipsis(text, 5), "…b文c");
+        // max=4, available=3: "文c" = 2 + 1 = 3, fits; "b文c" = 4, doesn't fit
+        assert_eq!(truncate_start_with_ellipsis(text, 4), "…文c");
     }
 }

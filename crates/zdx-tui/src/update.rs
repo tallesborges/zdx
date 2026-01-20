@@ -782,13 +782,10 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
 
 fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
-        overlays::OverlayRequest::CommandPalette { command_mode } => {
+        overlays::OverlayRequest::CommandPalette => {
             let provider = zdx_core::providers::provider_for_model(&app.tui.config.model);
-            let (state, effects) = overlays::CommandPaletteState::open(
-                command_mode,
-                provider,
-                app.tui.config.model.clone(),
-            );
+            let (state, effects) =
+                overlays::CommandPaletteState::open(provider, app.tui.config.model.clone());
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
             effects
         }
@@ -826,6 +823,18 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             app.overlay = Some(overlays::Overlay::Timeline(state));
             apply_mutations(&mut app.tui, mutations);
             effects
+        }
+        overlays::OverlayRequest::Rename => {
+            if let Some(thread_log) = &app.tui.thread.thread_log {
+                let (state, effects) = overlays::RenameState::open(
+                    thread_log.id.clone(),
+                    None, // Current title not readily available in ThreadLog
+                );
+                app.overlay = Some(overlays::Overlay::Rename(state));
+                effects
+            } else {
+                vec![]
+            }
         }
     }
 }
@@ -922,7 +931,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         bash_running: app.tui.bash_running.is_some(),
         thread_id,
         thread_is_empty,
-        rename_loading: app.tui.tasks.thread_rename.is_running(),
         model_id: &app.tui.config.model,
     };
     let (effects, mutations, overlay_request) =

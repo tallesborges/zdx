@@ -28,7 +28,6 @@ pub struct InputContext<'a> {
     pub bash_running: bool,
     pub thread_id: Option<String>,
     pub thread_is_empty: bool,
-    pub rename_loading: bool,
     pub model_id: &'a str,
 }
 
@@ -383,21 +382,13 @@ fn handle_overlays(
 ) -> Option<KeyResult> {
     match code {
         // `/` when input is empty: open command palette
-        KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => Some((
-            vec![],
-            vec![],
-            Some(OverlayRequest::CommandPalette {
-                command_mode: false,
-            }),
-        )),
+        KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => {
+            Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
+        }
         // Ctrl+P: open command palette
-        KeyCode::Char('p') if mods.only_ctrl() => Some((
-            vec![],
-            vec![],
-            Some(OverlayRequest::CommandPalette {
-                command_mode: false,
-            }),
-        )),
+        KeyCode::Char('p') if mods.only_ctrl() => {
+            Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
+        }
         // Ctrl+T: open thinking picker (if model supports reasoning)
         KeyCode::Char('t') if mods.only_ctrl() => {
             if zdx_core::models::model_supports_reasoning(model_id) {
@@ -427,7 +418,6 @@ fn handle_submission(
             ctx.bash_running,
             ctx.thread_id.clone(),
             ctx.thread_is_empty,
-            ctx.rename_loading,
         )),
         _ => None,
     }
@@ -532,7 +522,6 @@ fn submit_input(
     bash_running: bool,
     thread_id: Option<String>,
     thread_is_empty: bool,
-    rename_loading: bool,
 ) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -557,11 +546,6 @@ fn submit_input(
 
     if bash_running {
         return (vec![], vec![], None);
-    }
-
-    // Try slash commands
-    if let Some(result) = handle_slash_commands(input, trimmed, &thread_id, rename_loading) {
-        return result;
     }
 
     // Try bang commands
@@ -606,12 +590,12 @@ fn handle_submit_while_agent_running(
             None,
         );
     }
-    if trimmed.starts_with('/') || trimmed.starts_with('!') {
+    if trimmed.starts_with('!') {
         return (
             vec![],
             vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(
-                    "Commands can't be queued while streaming.".to_string(),
+                    "Bang commands can't be queued while streaming.".to_string(),
                 ),
             )],
             None,
@@ -623,57 +607,6 @@ fn handle_submit_while_agent_running(
     input.enqueue_prompt(text.to_string());
     input.clear();
     (vec![], vec![], None)
-}
-
-fn handle_slash_commands(
-    input: &mut InputState,
-    trimmed: &str,
-    thread_id: &Option<String>,
-    rename_loading: bool,
-) -> Option<KeyResult> {
-    // /rename <title>
-    if let Some(rest) = trimmed.strip_prefix("/rename") {
-        let title = rest.trim();
-        if title.is_empty() {
-            input.clear();
-            return Some((
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage("Usage: /rename <title>".to_string()),
-                )],
-                None,
-            ));
-        }
-        if rename_loading {
-            input.clear();
-            return Some((vec![], vec![], None));
-        }
-        if let Some(thread_id) = thread_id.as_ref() {
-            input.clear();
-            return Some((
-                vec![UiEffect::RenameThread {
-                    task: None,
-                    thread_id: thread_id.clone(),
-                    title: Some(title.to_string()),
-                }],
-                vec![],
-                None,
-            ));
-        } else {
-            input.clear();
-            return Some((
-                vec![],
-                vec![StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(
-                        "No active thread to rename.".to_string(),
-                    ),
-                )],
-                None,
-            ));
-        }
-    }
-
-    None
 }
 
 fn handle_bang_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {
