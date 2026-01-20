@@ -7,7 +7,7 @@ use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::StreamEvent;
-use crate::providers::openai_responses::{ResponsesConfig, send_responses_stream};
+use crate::providers::openai_responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -86,6 +86,9 @@ impl OpenAIClient {
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: None,
+            stream_options: Some(StreamOptions {
+                include_obfuscation: Some(false),
+            }),
             prompt_cache_key: self.config.prompt_cache_key.clone(),
             parallel_tool_calls: Some(true),
             tool_choice: Some("auto".to_string()),

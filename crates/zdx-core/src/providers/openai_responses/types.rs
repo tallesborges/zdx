@@ -9,6 +9,8 @@ pub struct RequestBody {
     pub model: String,
     pub stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub stream_options: Option<StreamOptions>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub store: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none", rename = "max_output_tokens")]
     pub max_output_tokens: Option<u32>,
@@ -44,6 +46,12 @@ pub struct ReasoningConfig {
 #[derive(Debug, Serialize)]
 pub struct TextConfig {
     pub verbosity: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamOptions {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub include_obfuscation: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
