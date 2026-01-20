@@ -97,9 +97,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             );
 
             // End turn timer and push timing cell when turn completes
-            if should_dequeue
-                && let Some((duration, tool_count)) = app.tui.status_line.end_turn()
-            {
+            if should_dequeue && let Some((duration, tool_count)) = app.tui.status_line.end_turn() {
                 // Only show timing for turns that ran for at least 1 second
                 if duration.as_secs_f64() >= 1.0 {
                     app.tui
