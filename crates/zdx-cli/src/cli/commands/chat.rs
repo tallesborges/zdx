@@ -23,7 +23,17 @@ pub async fn run(
         if prompt.is_empty() {
             anyhow::bail!("No input provided via pipe");
         }
-        return exec::run(root, thread_opts, prompt, config, None, None, None, false).await;
+        return exec::run(exec::ExecRunOptions {
+            root,
+            thread_opts,
+            prompt,
+            config,
+            model_override: None,
+            thinking_override: None,
+            tools_override: None,
+            no_tools: false,
+        })
+        .await;
     }
 
     let root_path = PathBuf::from(root);

@@ -208,16 +208,16 @@ async fn dispatch(cli: Cli) -> Result<()> {
             no_tools,
         } => {
             let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
-            commands::exec::run(
-                &cli.root,
-                &thread_opts,
-                &prompt,
-                &config,
-                model.as_deref(),
-                thinking.as_deref(),
-                tools.as_deref(),
+            commands::exec::run(commands::exec::ExecRunOptions {
+                root: &cli.root,
+                thread_opts: &thread_opts,
+                prompt: &prompt,
+                config: &config,
+                model_override: model.as_deref(),
+                thinking_override: thinking.as_deref(),
+                tools_override: tools.as_deref(),
                 no_tools,
-            )
+            })
             .await
         }
 
