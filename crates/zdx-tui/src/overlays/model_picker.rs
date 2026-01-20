@@ -149,7 +149,7 @@ pub fn render_model_picker(
     input_top_y: u16,
 ) {
     use super::render_utils::{
-        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
+        InputHint, InputLine, OverlayConfig, render_input_line, render_overlay, render_separator,
     };
 
     let filtered = picker.filtered_models();
@@ -167,38 +167,46 @@ pub fn render_model_picker(
     };
     let picker_height = (filtered.len() as u16 + 7).max(7);
 
-    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
-    render_overlay_container(frame, picker_area, "Select Model", Color::Magenta);
-
-    let inner_area = Rect::new(
-        picker_area.x + 1,
-        picker_area.y + 1,
-        picker_area.width.saturating_sub(2),
-        picker_area.height.saturating_sub(2),
+    let hints = [
+        InputHint::new("↑↓", "navigate"),
+        InputHint::new("Enter", "select"),
+        InputHint::new("Esc", "cancel"),
+    ];
+    let layout = render_overlay(
+        frame,
+        area,
+        input_top_y,
+        &OverlayConfig {
+            title: "Select Model",
+            border_color: Color::Magenta,
+            width: picker_width,
+            height: picker_height,
+            hints: &hints,
+        },
     );
 
-    let max_filter_len = inner_area.width.saturating_sub(4) as usize;
-    let filter_display = if picker.filter.len() > max_filter_len {
-        let truncated = &picker.filter[picker.filter.len() - max_filter_len..];
-        format!("…{}", truncated)
-    } else {
-        picker.filter.clone()
-    };
-    let filter_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::DarkGray)),
-        Span::styled(filter_display, Style::default().fg(Color::Magenta)),
-        Span::styled("█", Style::default().fg(Color::Magenta)),
-    ]);
-    let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
-    frame.render_widget(Paragraph::new(filter_line), filter_area);
+    let filter_area = Rect::new(layout.body.x, layout.body.y, layout.body.width, 1);
+    render_input_line(
+        frame,
+        filter_area,
+        &InputLine {
+            value: &picker.filter,
+            placeholder: None,
+            prompt: "> ",
+            prompt_color: Color::DarkGray,
+            text_color: Color::Magenta,
+            placeholder_color: Color::DarkGray,
+            cursor_color: Color::Magenta,
+        },
+    );
 
-    render_separator(frame, inner_area, 1);
+    render_separator(frame, layout.body, 1);
 
-    let list_height = inner_area.height.saturating_sub(5);
+    let list_height = layout.body.height.saturating_sub(4);
     let list_area = Rect::new(
-        inner_area.x,
-        inner_area.y + 2,
-        inner_area.width,
+        layout.body.x,
+        layout.body.y + 2,
+        layout.body.width,
         list_height,
     );
 
@@ -230,20 +238,9 @@ pub fn render_model_picker(
     }
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    render_separator(frame, inner_area, 2 + list_height);
+    render_separator(frame, layout.body, 2 + list_height);
     let selected_model = filtered.get(picker.selected).copied();
-    render_capabilities_line(frame, inner_area, 3 + list_height, selected_model);
-
-    render_hints(
-        frame,
-        inner_area,
-        &[
-            InputHint::new("↑↓", "navigate"),
-            InputHint::new("Enter", "select"),
-            InputHint::new("Esc", "cancel"),
-        ],
-        Color::Magenta,
-    );
+    render_capabilities_line(frame, layout.body, 3 + list_height, selected_model);
 }
 
 fn model_label(model: &ModelOption) -> String {

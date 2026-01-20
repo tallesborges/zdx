@@ -3,12 +3,11 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState, Paragraph};
+use ratatui::widgets::{List, ListItem, ListState};
 
 use super::{OverlayRequest, OverlayUpdate};
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
-use crate::common::truncate_start_with_ellipsis;
 use crate::effects::UiEffect;
 use crate::input::HandoffState;
 use crate::mutations::{
@@ -333,47 +332,55 @@ pub fn render_command_palette(
     input_top_y: u16,
 ) {
     use super::render_utils::{
-        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
+        InputHint, InputLine, OverlayConfig, render_input_line, render_overlay, render_separator,
     };
 
     let commands = palette.filtered_commands();
 
-    let palette_width = 50;
+    let max_width = area.width.saturating_sub(4);
+    let palette_width = max_width.clamp(20, 80);
     let palette_height = (commands.len() as u16 + 6).max(7);
 
-    let palette_area = calculate_overlay_area(area, input_top_y, palette_width, palette_height);
-    render_overlay_container(frame, palette_area, "Commands", Color::Yellow);
-
-    let inner_area = Rect::new(
-        palette_area.x + 1,
-        palette_area.y + 1,
-        palette_area.width.saturating_sub(2),
-        palette_area.height.saturating_sub(2),
+    let hints = [
+        InputHint::new("↑↓", "navigate"),
+        InputHint::new("Enter", "select"),
+        InputHint::new("Esc", "cancel"),
+    ];
+    let layout = render_overlay(
+        frame,
+        area,
+        input_top_y,
+        &OverlayConfig {
+            title: "Command Palette",
+            border_color: Color::Yellow,
+            width: palette_width,
+            height: palette_height,
+            hints: &hints,
+        },
     );
 
-    let max_filter_width = inner_area.width.saturating_sub(4) as usize;
-    let filter_display = if palette.filter.is_empty() {
-        String::new()
-    } else {
-        // Use unicode-safe truncation from the start
-        truncate_start_with_ellipsis(&palette.filter, max_filter_width)
-    };
-    let filter_line = Line::from(vec![
-        Span::styled("> ", Style::default().fg(Color::DarkGray)),
-        Span::styled(&filter_display, Style::default().fg(Color::Yellow)),
-        Span::styled("█", Style::default().fg(Color::Yellow)),
-    ]);
-    let filter_para = Paragraph::new(filter_line);
-    let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
-    frame.render_widget(filter_para, filter_area);
+    let filter_area = Rect::new(layout.body.x, layout.body.y, layout.body.width, 1);
+    render_input_line(
+        frame,
+        filter_area,
+        &InputLine {
+            value: &palette.filter,
+            placeholder: None,
+            prompt: "> ",
+            prompt_color: Color::DarkGray,
+            text_color: Color::Yellow,
+            placeholder_color: Color::DarkGray,
+            cursor_color: Color::Yellow,
+        },
+    );
 
-    render_separator(frame, inner_area, 1);
+    render_separator(frame, layout.body, 1);
 
-    let list_height = inner_area.height.saturating_sub(4);
+    let list_height = layout.body.height.saturating_sub(3);
     let list_area = Rect::new(
-        inner_area.x,
-        inner_area.y + 2,
-        inner_area.width,
+        layout.body.x,
+        layout.body.y + 2,
+        layout.body.width,
         list_height,
     );
 
@@ -387,27 +394,8 @@ pub fn render_command_palette(
             .iter()
             .map(|cmd| {
                 let name = cmd.display_name();
-                let desc = match cmd.name {
-                    "login" => {
-                        if palette.provider.supports_oauth() {
-                            format!("Login with {} OAuth", palette.provider.label())
-                        } else if let Some(env) = palette.provider.api_key_env_var() {
-                            format!("Set {} to authenticate", env)
-                        } else {
-                            "Login".to_string()
-                        }
-                    }
-                    "logout" => {
-                        if palette.provider.supports_oauth() {
-                            format!("Logout from {} OAuth", palette.provider.label())
-                        } else if let Some(env) = palette.provider.api_key_env_var() {
-                            format!("Unset {} to log out", env)
-                        } else {
-                            "Logout".to_string()
-                        }
-                    }
-                    _ => cmd.description.to_string(),
-                };
+                let desc = cmd.description.to_string();
+
                 let line = Line::from(vec![
                     Span::styled(
                         format!("{:<16}", name),
@@ -436,18 +424,7 @@ pub fn render_command_palette(
     }
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    render_separator(frame, inner_area, 2 + list_height);
-
-    render_hints(
-        frame,
-        inner_area,
-        &[
-            InputHint::new("↑↓", "navigate"),
-            InputHint::new("Enter", "select"),
-            InputHint::new("Esc", "cancel"),
-        ],
-        Color::Yellow,
-    );
+    render_separator(frame, layout.body, 2 + list_height);
 }
 
 #[cfg(test)]
