@@ -63,6 +63,7 @@ pub fn handle_main_key(
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let super_key = key.modifiers.contains(KeyModifiers::SUPER);
 
     let (effects, mutations, overlay_request) = match key.code {
         // Ctrl+U (or Command+Backspace on macOS): clear the current line
@@ -252,6 +253,26 @@ pub fn handle_main_key(
             if !input.try_delete_placeholder_at_bracket(false) {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Left if super_key && !ctrl && !shift && !alt => {
+            input.textarea.move_cursor(CursorMove::Head);
+            (vec![], vec![], None)
+        }
+        KeyCode::Right if super_key && !ctrl && !shift && !alt => {
+            input.textarea.move_cursor(CursorMove::End);
+            (vec![], vec![], None)
+        }
+        KeyCode::Left if alt && !ctrl && !shift => {
+            if !input.try_jump_over_placeholder(true) {
+                input.textarea.move_word_left();
+            }
+            (vec![], vec![], None)
+        }
+        KeyCode::Right if alt && !ctrl && !shift => {
+            if !input.try_jump_over_placeholder(false) {
+                input.textarea.move_word_right();
             }
             (vec![], vec![], None)
         }

@@ -235,6 +235,59 @@ impl TextBuffer {
         }
     }
 
+    /// Moves the cursor left by one word.
+    pub fn move_word_left(&mut self) {
+        self.ensure_line();
+
+        while self.cursor_row > 0 && self.cursor_col == 0 {
+            self.cursor_row -= 1;
+            self.cursor_col = line_char_len(&self.lines[self.cursor_row]);
+        }
+
+        let line = &self.lines[self.cursor_row];
+        let chars: Vec<char> = line.chars().collect();
+        let mut idx = self.cursor_col.min(chars.len());
+
+        while idx > 0 && chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        while idx > 0 && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        self.cursor_col = idx;
+    }
+
+    /// Moves the cursor right by one word.
+    pub fn move_word_right(&mut self) {
+        self.ensure_line();
+
+        loop {
+            let line_len = line_char_len(&self.lines[self.cursor_row]);
+            if self.cursor_col < line_len {
+                break;
+            }
+            if self.cursor_row + 1 >= self.lines.len() {
+                return;
+            }
+            self.cursor_row += 1;
+            self.cursor_col = 0;
+        }
+
+        let line = &self.lines[self.cursor_row];
+        let chars: Vec<char> = line.chars().collect();
+        let mut idx = self.cursor_col.min(chars.len());
+
+        while idx < chars.len() && chars[idx].is_whitespace() {
+            idx += 1;
+        }
+        while idx < chars.len() && !chars[idx].is_whitespace() {
+            idx += 1;
+        }
+
+        self.cursor_col = idx;
+    }
+
     /// Handles a key input for basic editing.
     pub fn input(&mut self, key: KeyEvent) {
         if matches!(key.kind, KeyEventKind::Release) {
