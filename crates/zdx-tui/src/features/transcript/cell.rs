@@ -22,6 +22,32 @@ fn format_byte_truncation(stream: &str, total_bytes: u64) -> String {
     format!("{} truncated: {} total", stream, size_str)
 }
 
+fn extract_u64(value: &Value) -> Option<u64> {
+    match value {
+        Value::Number(num) => num.as_u64(),
+        Value::String(text) => text.parse::<u64>().ok(),
+        _ => None,
+    }
+}
+
+fn format_read_preview(input: &Value) -> Option<String> {
+    let path = input.get("path")?.as_str()?;
+    let mut params = Vec::new();
+
+    if let Some(offset) = input.get("offset").and_then(extract_u64) {
+        params.push(format!("offset={}", offset));
+    }
+    if let Some(limit) = input.get("limit").and_then(extract_u64) {
+        params.push(format!("limit={}", limit));
+    }
+
+    if params.is_empty() {
+        Some(path.to_string())
+    } else {
+        Some(format!("{} ({})", path, params.join(", ")))
+    }
+}
+
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -498,10 +524,7 @@ impl HistoryCell {
                 } else {
                     // For other tools, show tool name and key input
                     let input_preview = match name.as_str() {
-                        "read" => input
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                        "read" => format_read_preview(input),
                         "write" => input
                             .get("path")
                             .and_then(|v| v.as_str())
