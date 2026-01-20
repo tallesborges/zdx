@@ -561,6 +561,7 @@ mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyEventState, KeyModifiers};
 
     use super::*;
+    use crate::input::CursorMove;
     use crate::overlays::OverlayTransition;
 
     fn make_key_event(code: KeyCode) -> KeyEvent {
@@ -577,7 +578,7 @@ mod tests {
     }
 
     fn apply_input_mutation(input: &mut InputState, mutation: InputMutation) {
-        use tui_textarea::CursorMove;
+        use crate::input::CursorMove;
 
         match mutation {
             InputMutation::SetTextAndCursor {
@@ -663,7 +664,7 @@ mod tests {
 
         input.textarea.insert_str("Hello @filter world");
         for _ in 0..6 {
-            input.textarea.move_cursor(tui_textarea::CursorMove::Back);
+            input.textarea.move_cursor(CursorMove::Back);
         }
 
         let (mut picker, _) = FilePickerState::open(6);

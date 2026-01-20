@@ -7,6 +7,7 @@ use crossterm::event::{KeyCode, KeyModifiers};
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
+use super::CursorMove;
 use super::state::{HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingPaste};
 use crate::common::{TaskKind, sanitize_for_display};
 use crate::effects::UiEffect;
@@ -75,12 +76,12 @@ pub fn handle_main_key(
                 .unwrap_or("");
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
-                input.textarea.move_cursor(tui_textarea::CursorMove::Up);
-                input.textarea.move_cursor(tui_textarea::CursorMove::End);
+                input.textarea.move_cursor(CursorMove::Up);
+                input.textarea.move_cursor(CursorMove::End);
                 input.textarea.delete_next_char(); // delete the newline
             } else {
                 // Clear current line
-                input.textarea.move_cursor(tui_textarea::CursorMove::Head);
+                input.textarea.move_cursor(CursorMove::Head);
                 input.textarea.delete_line_by_end();
             }
             input.sync_pending_pastes();
@@ -199,12 +200,12 @@ pub fn handle_main_key(
         ),
         KeyCode::Up if alt && !ctrl && !shift => {
             // Alt+Up: Move cursor to first line of input
-            input.textarea.move_cursor(tui_textarea::CursorMove::Top);
+            input.textarea.move_cursor(CursorMove::Top);
             (vec![], vec![], None)
         }
         KeyCode::Down if alt && !ctrl && !shift => {
             // Alt+Down: Move cursor to last line of input
-            input.textarea.move_cursor(tui_textarea::CursorMove::Bottom);
+            input.textarea.move_cursor(CursorMove::Bottom);
             (vec![], vec![], None)
         }
         KeyCode::Up if !ctrl && !shift && !alt => {

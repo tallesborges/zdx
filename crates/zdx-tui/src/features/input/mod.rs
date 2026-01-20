@@ -12,6 +12,7 @@
 
 mod render;
 mod state;
+mod text_buffer;
 mod update;
 
 // Re-export state types
@@ -19,4 +20,5 @@ mod update;
 // Re-export view functions
 pub use render::{calculate_input_height, render_input};
 pub use state::{HandoffState, InputState};
+pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{build_send_effects, handle_handoff_result, handle_main_key, handle_paste};

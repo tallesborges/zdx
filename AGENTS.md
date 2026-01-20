@@ -47,6 +47,7 @@
     - `crates/zdx-tui/src/features/`: feature slices (state/update/render per slice)
       - `crates/zdx-tui/src/features/auth/`: auth feature slice
       - `crates/zdx-tui/src/features/input/`: input feature slice
+        - `crates/zdx-tui/src/features/input/text_buffer.rs`: minimal text buffer + cursor editing for input
       - `crates/zdx-tui/src/features/statusline/`: debug status line feature slice
         - `crates/zdx-tui/src/features/statusline/mod.rs`: module exports
         - `crates/zdx-tui/src/features/statusline/state.rs`: StatusLineAccumulator (mutable), StatusLine (snapshot)
