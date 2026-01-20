@@ -419,9 +419,7 @@ pub fn render_file_picker(
     area: Rect,
     input_top_y: u16,
 ) {
-    use super::render_utils::{
-        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
-    };
+    use super::render_utils::{InputHint, OverlayConfig, render_overlay, render_separator};
 
     let file_count = picker.filtered.len();
     let visible_count = file_count.min(MAX_VISIBLE_FILES);
@@ -434,26 +432,34 @@ pub fn render_file_picker(
     };
     let picker_height = base_height.max(7);
 
-    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     let title = if picker.loading {
         "Files (loading...)".to_string()
     } else {
         format!("Files ({})", file_count)
     };
-    render_overlay_container(frame, picker_area, &title, Color::Blue);
-
-    let inner_area = Rect::new(
-        picker_area.x + 1,
-        picker_area.y + 1,
-        picker_area.width.saturating_sub(2),
-        picker_area.height.saturating_sub(2),
+    let hints = [
+        InputHint::new("↑↓", "nav"),
+        InputHint::new("Enter", "select"),
+        InputHint::new("Esc", "close"),
+    ];
+    let layout = render_overlay(
+        frame,
+        area,
+        input_top_y,
+        &OverlayConfig {
+            title: &title,
+            border_color: Color::Blue,
+            width: picker_width,
+            height: picker_height,
+            hints: &hints,
+        },
     );
 
     if picker.loading {
         let loading_msg = Paragraph::new("Loading files...")
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center);
-        frame.render_widget(loading_msg, inner_area);
+        frame.render_widget(loading_msg, layout.body);
         return;
     }
 
@@ -475,15 +481,15 @@ pub fn render_file_picker(
             )),
         ])
         .alignment(Alignment::Center);
-        frame.render_widget(msg, inner_area);
+        frame.render_widget(msg, layout.body);
         return;
     }
 
-    let list_height = inner_area.height.saturating_sub(2) as usize;
+    let list_height = layout.body.height.saturating_sub(1) as usize;
     let list_area = Rect::new(
-        inner_area.x,
-        inner_area.y,
-        inner_area.width,
+        layout.body.x,
+        layout.body.y,
+        layout.body.width,
         list_height as u16,
     );
 
@@ -495,7 +501,7 @@ pub fn render_file_picker(
         .filter_map(|file_match| {
             picker.files.get(file_match.file_idx).map(|path| {
                 let path_str = path.to_string_lossy();
-                let max_width = inner_area.width.saturating_sub(4) as usize;
+                let max_width = layout.body.width.saturating_sub(4) as usize;
 
                 // Handle path truncation with ellipsis
                 let (display, adjusted_indices) = if path_str.len() > max_width {
@@ -542,18 +548,7 @@ pub fn render_file_picker(
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    render_separator(frame, inner_area, list_height as u16);
-
-    render_hints(
-        frame,
-        inner_area,
-        &[
-            InputHint::new("↑↓", "nav"),
-            InputHint::new("Enter", "select"),
-            InputHint::new("Esc", "close"),
-        ],
-        Color::Blue,
-    );
+    render_separator(frame, layout.body, list_height as u16);
 }
 
 #[cfg(test)]

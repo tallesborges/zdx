@@ -51,7 +51,7 @@ pub fn render_thread_picker(
         ThreadScope::All => format!("Threads ({})", thread_count),
         ThreadScope::Current => format!("Threads ({}/{})", tree_items.len(), thread_count),
     };
-    render_overlay_container(frame, picker_area, &title, Color::Blue);
+    render_overlay_container(frame, picker_area, &title, Color::Magenta);
 
     let inner_area = Rect::new(
         picker_area.x + 1,
@@ -70,8 +70,8 @@ pub fn render_thread_picker(
     };
     let filter_line = Line::from(vec![
         Span::styled("> ", Style::default().fg(Color::DarkGray)),
-        Span::styled(filter_display, Style::default().fg(Color::Blue)),
-        Span::styled("█", Style::default().fg(Color::Blue)),
+        Span::styled(filter_display, Style::default().fg(Color::Magenta)),
+        Span::styled("█", Style::default().fg(Color::Magenta)),
     ]);
     let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
     frame.render_widget(Paragraph::new(filter_line), filter_area);
@@ -97,6 +97,9 @@ pub fn render_thread_picker(
         );
         frame.render_widget(empty_msg, empty_area);
 
+        let list_height = inner_area.height.saturating_sub(4);
+        render_separator(frame, inner_area, 2 + list_height);
+
         // Still render hints at bottom
         render_hints(
             frame,
@@ -114,7 +117,7 @@ pub fn render_thread_picker(
                 ),
                 InputHint::new("Esc", "cancel"),
             ],
-            Color::Blue,
+            Color::Magenta,
         );
         return;
     }
@@ -210,7 +213,8 @@ pub fn render_thread_picker(
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Magenta)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -220,7 +224,7 @@ pub fn render_thread_picker(
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    render_separator(frame, inner_area, list_height as u16);
+    render_separator(frame, inner_area, 2 + list_height as u16);
 
     // Show "Copied!" feedback briefly, otherwise show normal hint
     let copy_hint = if picker.should_show_copied() {
@@ -245,6 +249,6 @@ pub fn render_thread_picker(
             ),
             InputHint::new("Esc", "cancel"),
         ],
-        Color::Blue,
+        Color::Magenta,
     );
 }

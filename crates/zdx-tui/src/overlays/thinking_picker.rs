@@ -77,27 +77,33 @@ pub fn render_thinking_picker(
     area: Rect,
     input_top_y: u16,
 ) {
-    use super::render_utils::{
-        InputHint, calculate_overlay_area, render_hints, render_overlay_container, render_separator,
-    };
+    use super::render_utils::{InputHint, OverlayConfig, render_overlay, render_separator};
 
     let levels = ThinkingLevel::all();
 
     let picker_width = 45;
     let picker_height = (levels.len() as u16 + 5).max(7);
 
-    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
-    render_overlay_container(frame, picker_area, "Thinking Level", Color::Magenta);
-
-    let inner_area = Rect::new(
-        picker_area.x + 1,
-        picker_area.y + 1,
-        picker_area.width.saturating_sub(2),
-        picker_area.height.saturating_sub(2),
+    let hints = [
+        InputHint::new("↑↓", "navigate"),
+        InputHint::new("Enter", "select"),
+        InputHint::new("Esc", "cancel"),
+    ];
+    let layout = render_overlay(
+        frame,
+        area,
+        input_top_y,
+        &OverlayConfig {
+            title: "Thinking Level",
+            border_color: Color::Magenta,
+            width: picker_width,
+            height: picker_height,
+            hints: &hints,
+        },
     );
 
-    let list_height = inner_area.height.saturating_sub(2);
-    let list_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, list_height);
+    let list_height = layout.body.height.saturating_sub(1);
+    let list_area = Rect::new(layout.body.x, layout.body.y, layout.body.width, list_height);
 
     let items: Vec<ListItem> = levels
         .iter()
@@ -108,7 +114,7 @@ pub fn render_thinking_picker(
 
             // Calculate available width for description (account for borders, highlight symbol, name, right padding)
             // inner_area.width - 2 (highlight "▶ ") - name_width - 1 (right padding)
-            let desc_width = inner_area.width.saturating_sub(2 + name_width as u16 + 1) as usize;
+            let desc_width = layout.body.width.saturating_sub(2 + name_width as u16 + 1) as usize;
             let desc_padded = format!("{:>width$}", desc, width = desc_width);
 
             let line = Line::from(vec![
@@ -127,7 +133,8 @@ pub fn render_thinking_picker(
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::DarkGray)
+                .bg(Color::Magenta)
+                .fg(Color::Black)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -136,16 +143,5 @@ pub fn render_thinking_picker(
     list_state.select(Some(picker.selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
-    render_separator(frame, inner_area, list_height);
-
-    render_hints(
-        frame,
-        inner_area,
-        &[
-            InputHint::new("↑↓", "navigate"),
-            InputHint::new("Enter", "select"),
-            InputHint::new("Esc", "cancel"),
-        ],
-        Color::Magenta,
-    );
+    render_separator(frame, layout.body, list_height);
 }

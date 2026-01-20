@@ -4,6 +4,8 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
+use crate::common::truncate_start_with_ellipsis;
+
 /// Calculates the area for an overlay, centered horizontally and vertically
 /// within the available height (usually above the input bar).
 pub fn calculate_overlay_area(area: Rect, available_height: u16, width: u16, height: u16) -> Rect {
@@ -31,6 +33,57 @@ pub fn render_overlay_container(frame: &mut Frame, area: Rect, title: &str, bord
     frame.render_widget(block, area);
 }
 
+/// Input configuration for an overlay.
+pub struct OverlayConfig<'a> {
+    pub title: &'a str,
+    pub border_color: Color,
+    pub width: u16,
+    pub height: u16,
+    pub hints: &'a [InputHint<'a>],
+}
+
+/// Layout rectangles for an overlay.
+pub struct OverlayLayout {
+    pub popup: Rect,
+    pub inner: Rect,
+    pub body: Rect,
+    pub footer: Rect,
+}
+
+/// Render a standard overlay container and return its layout.
+pub fn render_overlay(
+    frame: &mut Frame,
+    area: Rect,
+    input_y: u16,
+    config: &OverlayConfig<'_>,
+) -> OverlayLayout {
+    let popup = calculate_overlay_area(area, input_y, config.width, config.height);
+    render_overlay_container(frame, popup, config.title, config.border_color);
+
+    let inner = Rect::new(
+        popup.x + 1,
+        popup.y + 1,
+        popup.width.saturating_sub(2),
+        popup.height.saturating_sub(2),
+    );
+
+    if !config.hints.is_empty() {
+        render_hints(frame, inner, config.hints, config.border_color);
+    }
+
+    let footer_height = if config.hints.is_empty() { 0 } else { 1 };
+    let body_height = inner.height.saturating_sub(footer_height);
+    let footer = Rect::new(inner.x, inner.y + body_height, inner.width, footer_height);
+    let body = Rect::new(inner.x, inner.y, inner.width, body_height);
+
+    OverlayLayout {
+        popup,
+        inner,
+        body,
+        footer,
+    }
+}
+
 /// Helper struct for keyboard hints.
 pub struct InputHint<'a> {
     pub key: &'a str,
@@ -41,6 +94,55 @@ impl<'a> InputHint<'a> {
     pub fn new(key: &'a str, action: &'a str) -> Self {
         Self { key, action }
     }
+}
+
+/// Configuration for rendering a prompt input line (e.g., filter or rename input).
+pub struct InputLine<'a> {
+    pub value: &'a str,
+    pub placeholder: Option<&'a str>,
+    pub prompt: &'a str,
+    pub prompt_color: Color,
+    pub text_color: Color,
+    pub placeholder_color: Color,
+    pub cursor_color: Color,
+}
+
+/// Renders a prompt-style input line: "> <text>█".
+pub fn render_input_line(frame: &mut Frame, area: Rect, input: &InputLine<'_>) {
+    let is_placeholder = input.value.is_empty() && input.placeholder.is_some();
+    let max_text_width = area.width.saturating_sub(input.prompt.len() as u16 + 1) as usize;
+
+    let display_text = if is_placeholder {
+        truncate_start_with_ellipsis(input.placeholder.unwrap_or(""), max_text_width)
+    } else if input.value.is_empty() {
+        String::new()
+    } else {
+        truncate_start_with_ellipsis(input.value, max_text_width)
+    };
+
+    let mut spans = Vec::new();
+    spans.push(Span::styled(
+        input.prompt,
+        Style::default().fg(input.prompt_color),
+    ));
+
+    if is_placeholder {
+        spans.push(Span::styled("█", Style::default().fg(input.cursor_color)));
+        if !display_text.is_empty() {
+            spans.push(Span::styled(
+                display_text,
+                Style::default().fg(input.placeholder_color),
+            ));
+        }
+    } else {
+        spans.push(Span::styled(
+            display_text,
+            Style::default().fg(input.text_color),
+        ));
+        spans.push(Span::styled("█", Style::default().fg(input.cursor_color)));
+    }
+
+    frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }
 
 /// Renders a line of keyboard hints at the bottom of the overlay.
