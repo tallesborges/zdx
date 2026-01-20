@@ -34,12 +34,17 @@ pub fn render_thread_picker(
     let tree_items = picker.visible_tree_items();
     let visible_count = tree_items.len().min(MAX_VISIBLE_THREADS);
     let thread_count = match picker.scope {
-        ThreadScope::All => tree_items.len(),
-        ThreadScope::Current => picker.all_threads.len(),
+        ThreadScope::All => picker.all_threads.len(),
+        ThreadScope::Current => picker
+            .all_threads
+            .iter()
+            .filter(|t| t.root_path.as_deref() == Some(picker.current_root.as_str()))
+            .count(),
     };
 
     let picker_width = 60;
-    let picker_height = (visible_count as u16 + 5).max(7);
+    // Add 2 rows for filter input + separator
+    let picker_height = (visible_count as u16 + 7).max(9);
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     let title = match picker.scope {
@@ -55,22 +60,71 @@ pub fn render_thread_picker(
         picker_area.height.saturating_sub(2),
     );
 
+    // Render filter input
+    let max_filter_len = inner_area.width.saturating_sub(4) as usize;
+    let filter_display = if picker.filter.len() > max_filter_len {
+        let truncated = &picker.filter[picker.filter.len() - max_filter_len..];
+        format!("…{}", truncated)
+    } else {
+        picker.filter.clone()
+    };
+    let filter_line = Line::from(vec![
+        Span::styled("> ", Style::default().fg(Color::DarkGray)),
+        Span::styled(filter_display, Style::default().fg(Color::Blue)),
+        Span::styled("█", Style::default().fg(Color::Blue)),
+    ]);
+    let filter_area = Rect::new(inner_area.x, inner_area.y, inner_area.width, 1);
+    frame.render_widget(Paragraph::new(filter_line), filter_area);
+
+    render_separator(frame, inner_area, 1);
+
     if tree_items.is_empty() {
-        let empty_msg = Paragraph::new(match picker.scope {
-            ThreadScope::Current => "No threads in this workspace",
-            ThreadScope::All => "No threads found",
+        let empty_msg = Paragraph::new(if !picker.filter.is_empty() {
+            "No matching threads"
+        } else {
+            match picker.scope {
+                ThreadScope::Current => "No threads in this workspace",
+                ThreadScope::All => "No threads found",
+            }
         })
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
-        frame.render_widget(empty_msg, inner_area);
+        let empty_area = Rect::new(
+            inner_area.x,
+            inner_area.y + 2,
+            inner_area.width,
+            inner_area.height.saturating_sub(4),
+        );
+        frame.render_widget(empty_msg, empty_area);
+
+        // Still render hints at bottom
+        render_hints(
+            frame,
+            inner_area,
+            &[
+                InputHint::new("↑↓", "navigate"),
+                InputHint::new("Enter", "select"),
+                InputHint::new("y", "copy id"),
+                InputHint::new(
+                    "Ctrl+T",
+                    match picker.scope {
+                        ThreadScope::Current => "all",
+                        ThreadScope::All => "current",
+                    },
+                ),
+                InputHint::new("Esc", "cancel"),
+            ],
+            Color::Blue,
+        );
         return;
     }
 
-    let list_height = inner_area.height.saturating_sub(2) as usize;
+    // Account for filter (1) + separator (1) + hints (2)
+    let list_height = inner_area.height.saturating_sub(4) as usize;
 
     let list_area = Rect::new(
         inner_area.x,
-        inner_area.y,
+        inner_area.y + 2,
         inner_area.width,
         list_height as u16,
     );

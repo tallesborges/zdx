@@ -43,6 +43,8 @@ pub struct ThreadPickerState {
     pub copied_at: Option<Instant>,
     /// ID of the currently active thread (for highlighting in picker).
     pub current_thread_id: Option<String>,
+    /// Search filter text (filters by thread ID or title).
+    pub filter: String,
 }
 
 impl ThreadPickerState {
@@ -66,6 +68,7 @@ impl ThreadPickerState {
             original_cells,
             copied_at: None,
             current_thread_id,
+            filter: String::new(),
         };
         let effects = state.preview_selected_effects();
         (state, effects)
@@ -78,6 +81,8 @@ impl ThreadPickerState {
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+        let alt = key.modifiers.contains(KeyModifiers::ALT);
+        let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
             KeyCode::Char('t') if ctrl => {
@@ -149,6 +154,26 @@ impl ThreadPickerState {
                     OverlayUpdate::stay()
                 }
             }
+            // Ctrl+U: clear the filter
+            KeyCode::Char('u') if ctrl && !shift && !alt => {
+                self.filter.clear();
+                self.clamp_selection();
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+            }
+            KeyCode::Backspace => {
+                if alt {
+                    clear_word_left(&mut self.filter);
+                } else {
+                    self.filter.pop();
+                }
+                self.clamp_selection();
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+            }
+            KeyCode::Char(c) if !ctrl => {
+                self.filter.push(c);
+                self.clamp_selection();
+                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+            }
             _ => OverlayUpdate::stay(),
         }
     }
@@ -167,13 +192,41 @@ impl ThreadPickerState {
     }
 
     pub fn visible_threads(&self) -> Vec<&ThreadSummary> {
-        match self.scope {
+        let scoped: Vec<_> = match self.scope {
             ThreadScope::All => self.all_threads.iter().collect(),
             ThreadScope::Current => self
                 .all_threads
                 .iter()
                 .filter(|thread| thread.root_path.as_deref() == Some(self.current_root.as_str()))
                 .collect(),
+        };
+
+        // Apply search filter
+        if self.filter.is_empty() {
+            scoped
+        } else {
+            scoped
+                .into_iter()
+                .filter(|thread| thread_matches_filter(thread, &self.filter))
+                .collect()
+        }
+    }
+
+    /// Clamps the selection index to valid range after filter changes.
+    fn clamp_selection(&mut self) {
+        let count = self.visible_tree_items().len();
+        if count == 0 {
+            self.selected = 0;
+            self.offset = 0;
+        } else if self.selected >= count {
+            self.selected = count - 1;
+            // Also adjust offset if needed
+            let visible_height = self.visible_height();
+            if self.selected < self.offset {
+                self.offset = self.selected;
+            } else if self.selected >= self.offset + visible_height {
+                self.offset = self.selected - visible_height + 1;
+            }
         }
     }
 
@@ -210,6 +263,52 @@ impl ThreadPickerState {
             Vec::new()
         }
     }
+}
+
+/// Returns true if the thread matches the given filter text.
+///
+/// Matches against thread ID (case-insensitive) and title (case-insensitive).
+fn thread_matches_filter(thread: &ThreadSummary, filter: &str) -> bool {
+    if filter.is_empty() {
+        return true;
+    }
+
+    let filter_lower = filter.to_lowercase();
+    let id_lower = thread.id.to_lowercase();
+
+    // Match against ID
+    if id_lower.contains(&filter_lower) {
+        return true;
+    }
+
+    // Match against title if present
+    if let Some(title) = &thread.title
+        && title.to_lowercase().contains(&filter_lower)
+    {
+        return true;
+    }
+
+    false
+}
+
+/// Clears characters from the end of the string back to the previous word boundary.
+fn clear_word_left(input: &mut String) {
+    let trimmed_len = input.trim_end().len();
+    if trimmed_len == 0 {
+        input.clear();
+        return;
+    }
+
+    input.truncate(trimmed_len);
+    let mut chars: Vec<char> = input.chars().collect();
+    while let Some(&ch) = chars.last() {
+        if ch.is_whitespace() {
+            break;
+        }
+        chars.pop();
+    }
+    input.clear();
+    input.extend(chars);
 }
 
 #[cfg(test)]
