@@ -112,17 +112,7 @@ impl Default for InputState {
 impl InputState {
     /// Creates a new InputState with default textarea styling.
     pub fn new() -> Self {
-        use ratatui::style::{Color, Style};
-        use ratatui::widgets::{Block, Borders};
-
-        let mut textarea = TextBuffer::default();
-        textarea.set_cursor_line_style(Style::default());
-        textarea.set_block(
-            Block::default()
-                .borders(Borders::TOP)
-                .border_style(Style::default().fg(Color::DarkGray))
-                .title(" Input (Enter=send, Shift+Enter=newline, Ctrl+J=newline) "),
-        );
+        let textarea = TextBuffer::default();
 
         Self {
             textarea,

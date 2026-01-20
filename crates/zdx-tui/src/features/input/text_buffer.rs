@@ -4,8 +4,6 @@
 //! It supports the subset of editing operations used by the input slice.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
-use ratatui::style::Style;
-use ratatui::widgets::Block;
 
 /// Cursor movement commands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -50,12 +48,6 @@ impl TextBuffer {
     pub fn cursor(&self) -> (usize, usize) {
         (self.cursor_row, self.cursor_col)
     }
-
-    /// No-op compatibility method for legacy textarea styling.
-    pub fn set_cursor_line_style(&mut self, _style: Style) {}
-
-    /// No-op compatibility method for legacy textarea styling.
-    pub fn set_block(&mut self, _block: Block) {}
 
     /// Inserts a string at the cursor, advancing the cursor.
     pub fn insert_str(&mut self, text: &str) {
