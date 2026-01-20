@@ -1,6 +1,7 @@
 # ZDX
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
+[![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
 A fast, beautiful agentic coding assistant.
 
