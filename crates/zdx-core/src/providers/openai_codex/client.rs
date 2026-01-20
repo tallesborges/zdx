@@ -7,7 +7,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use crate::prompts::CODEX_PROMPT_TEMPLATE;
 use crate::providers::StreamEvent;
 use crate::providers::openai_codex::auth::{OpenAICodexConfig, resolve_credentials};
-use crate::providers::openai_responses::{ResponsesConfig, StreamOptions, send_responses_stream};
+use crate::providers::openai_responses::{ResponsesConfig, send_responses_stream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
@@ -60,9 +60,7 @@ impl OpenAICodexClient {
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
-            stream_options: Some(StreamOptions {
-                include_obfuscation: Some(false),
-            }),
+            stream_options: None,
             prompt_cache_key: self.config.prompt_cache_key.clone(),
             parallel_tool_calls: Some(true),
             tool_choice: Some("auto".to_string()),
