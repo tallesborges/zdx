@@ -670,9 +670,10 @@ impl HistoryCell {
                             .get("byte_limited")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let read_has_explicit_limit = name == "read"
-                            && input.get("limit").and_then(extract_u64).is_some();
-                        let should_warn = name != "read" || byte_limited || !read_has_explicit_limit;
+                        let read_has_explicit_limit =
+                            name == "read" && input.get("limit").and_then(extract_u64).is_some();
+                        let should_warn =
+                            name != "read" || byte_limited || !read_has_explicit_limit;
 
                         if should_warn {
                             let total_lines = data
