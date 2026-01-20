@@ -227,16 +227,18 @@ impl TimelineState {
 
     fn fork_effect(&self, tui: &TuiState) -> Option<UiEffect> {
         let entry = self.selected_entry()?;
-        let cells = tui.transcript.cells().get(..=entry.cell_index)?;
-        let events = cells_to_events(cells);
-        if events.is_empty() {
+        let cells = tui.transcript.cells();
+        let selected_cell = cells.get(entry.cell_index)?;
+        let (events, user_input) = match selected_cell {
+            HistoryCell::User { content, .. } => (
+                cells_to_events(&cells[..entry.cell_index]),
+                Some(content.clone()),
+            ),
+            _ => (cells_to_events(&cells[..=entry.cell_index]), None),
+        };
+        if events.is_empty() && user_input.is_none() {
             return None;
         }
-
-        let user_input = match tui.transcript.cells().get(entry.cell_index) {
-            Some(HistoryCell::User { content, .. }) => Some(content.clone()),
-            _ => None,
-        };
 
         Some(UiEffect::ForkThread {
             task: None,
