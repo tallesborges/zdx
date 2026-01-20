@@ -917,16 +917,16 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .as_ref()
         .map(|thread_log| thread_log.id.clone());
     let thread_is_empty = app.tui.thread.messages.is_empty();
-    let (effects, mutations, overlay_request) = input::handle_main_key(
-        &mut app.tui.input,
-        &app.tui.agent_state,
-        app.tui.bash_running.is_some(),
+    let ctx = input::InputContext {
+        agent_state: &app.tui.agent_state,
+        bash_running: app.tui.bash_running.is_some(),
         thread_id,
         thread_is_empty,
-        app.tui.tasks.thread_rename.is_running(),
-        &app.tui.config.model,
-        key,
-    );
+        rename_loading: app.tui.tasks.thread_rename.is_running(),
+        model_id: &app.tui.config.model,
+    };
+    let (effects, mutations, overlay_request) =
+        input::handle_main_key(&mut app.tui.input, &ctx, key);
     apply_mutations(&mut app.tui, mutations);
     if let Some(request) = overlay_request
         && app.overlay.is_none()
