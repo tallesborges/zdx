@@ -313,7 +313,9 @@ fn convert_style(style: TranscriptStyle) -> Style {
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
         TranscriptStyle::System => Style::default().fg(Color::DarkGray),
-        TranscriptStyle::ToolBracket => Style::default().fg(Color::Gray),
+        TranscriptStyle::ToolBracket => Style::default()
+            .fg(Color::Yellow)
+            .add_modifier(Modifier::DIM),
         TranscriptStyle::ToolStatus => Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
