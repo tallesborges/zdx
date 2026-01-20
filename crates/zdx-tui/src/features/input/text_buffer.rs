@@ -262,21 +262,24 @@ impl TextBuffer {
     pub fn move_word_right(&mut self) {
         self.ensure_line();
 
+        let mut row = self.cursor_row;
+        let mut col = self.cursor_col;
+
         loop {
-            let line_len = line_char_len(&self.lines[self.cursor_row]);
-            if self.cursor_col < line_len {
+            let line_len = line_char_len(&self.lines[row]);
+            if col < line_len {
                 break;
             }
-            if self.cursor_row + 1 >= self.lines.len() {
+            if row + 1 >= self.lines.len() {
                 return;
             }
-            self.cursor_row += 1;
-            self.cursor_col = 0;
+            row += 1;
+            col = 0;
         }
 
-        let line = &self.lines[self.cursor_row];
+        let line = &self.lines[row];
         let chars: Vec<char> = line.chars().collect();
-        let mut idx = self.cursor_col.min(chars.len());
+        let mut idx = col.min(chars.len());
 
         while idx < chars.len() && chars[idx].is_whitespace() {
             idx += 1;
@@ -285,7 +288,29 @@ impl TextBuffer {
             idx += 1;
         }
 
+        self.cursor_row = row;
         self.cursor_col = idx;
+    }
+
+    /// Deletes the word immediately to the left of the cursor.
+    pub fn delete_word_left(&mut self) {
+        if self.selection_all {
+            self.clear();
+            return;
+        }
+
+        self.ensure_line();
+        if self.cursor_row == 0 && self.cursor_col == 0 {
+            return;
+        }
+
+        let (start_row, start_col) = self.word_left_target();
+        let end_row = self.cursor_row;
+        let end_col = self.cursor_col;
+
+        self.delete_range(start_row, start_col, end_row, end_col);
+        self.cursor_row = start_row;
+        self.cursor_col = start_col;
     }
 
     /// Handles a key input for basic editing.
@@ -335,6 +360,54 @@ impl TextBuffer {
         }
         let len = line_char_len(&self.lines[self.cursor_row]);
         self.cursor_col = self.cursor_col.min(len);
+    }
+
+    fn word_left_target(&self) -> (usize, usize) {
+        let mut row = self.cursor_row;
+        let mut col = self.cursor_col;
+
+        while row > 0 && col == 0 {
+            row -= 1;
+            col = line_char_len(&self.lines[row]);
+        }
+
+        let line = &self.lines[row];
+        let chars: Vec<char> = line.chars().collect();
+        let mut idx = col.min(chars.len());
+
+        while idx > 0 && chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+        while idx > 0 && !chars[idx - 1].is_whitespace() {
+            idx -= 1;
+        }
+
+        (row, idx)
+    }
+
+    fn delete_range(&mut self, start_row: usize, start_col: usize, end_row: usize, end_col: usize) {
+        if start_row > end_row || (start_row == end_row && start_col >= end_col) {
+            return;
+        }
+
+        if start_row == end_row {
+            let line = &mut self.lines[start_row];
+            let start = char_to_byte_index(line, start_col);
+            let end = char_to_byte_index(line, end_col);
+            line.replace_range(start..end, "");
+            return;
+        }
+
+        let start_line = self.lines[start_row].clone();
+        let end_line = self.lines[end_row].clone();
+        let start_byte = char_to_byte_index(&start_line, start_col);
+        let end_byte = char_to_byte_index(&end_line, end_col);
+
+        let prefix = &start_line[..start_byte];
+        let suffix = &end_line[end_byte..];
+        let merged = format!("{}{}", prefix, suffix);
+
+        self.lines.splice(start_row..=end_row, [merged]);
     }
 }
 
