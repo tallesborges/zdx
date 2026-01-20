@@ -9,33 +9,43 @@ use zdx_core::tools;
 
 use crate::modes;
 
-pub async fn run(
-    root: &str,
-    thread_opts: &ThreadPersistenceOptions,
-    prompt: &str,
-    config: &config::Config,
-    model_override: Option<&str>,
-    thinking_override: Option<&str>,
-    tools_override: Option<&str>,
-) -> Result<()> {
-    let root_path = PathBuf::from(root);
-    let thread = thread_opts.resolve(&root_path).context("resolve thread")?;
+pub struct ExecRunOptions<'a> {
+    pub root: &'a str,
+    pub thread_opts: &'a ThreadPersistenceOptions,
+    pub prompt: &'a str,
+    pub config: &'a config::Config,
+    pub model_override: Option<&'a str>,
+    pub thinking_override: Option<&'a str>,
+    pub tools_override: Option<&'a str>,
+    pub no_tools: bool,
+}
+
+pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
+    let root_path = PathBuf::from(options.root);
+    let thread = options
+        .thread_opts
+        .resolve(&root_path)
+        .context("resolve thread")?;
 
     // Apply overrides if provided
     let config = {
-        let mut c = config.clone();
-        if let Some(model) = model_override {
+        let mut c = options.config.clone();
+        if let Some(model) = options.model_override {
             c.model = model.to_string();
         }
-        if let Some(thinking) = thinking_override {
+        if let Some(thinking) = options.thinking_override {
             c.thinking_level = parse_thinking_level(thinking)?;
         }
         c
     };
 
-    let tools_override = match tools_override {
-        Some(raw) => Some(parse_tools_override(raw)?),
-        None => None,
+    let tools_override = if options.no_tools {
+        Some(Vec::new())
+    } else {
+        match options.tools_override {
+            Some(raw) => Some(parse_tools_override(raw)?),
+            None => None,
+        }
     };
 
     let exec_opts = modes::exec::ExecOptions {
@@ -44,7 +54,7 @@ pub async fn run(
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end
-    modes::exec::run_exec(prompt, &config, thread, &exec_opts)
+    modes::exec::run_exec(options.prompt, &config, thread, &exec_opts)
         .await
         .context("execute prompt")?;
 

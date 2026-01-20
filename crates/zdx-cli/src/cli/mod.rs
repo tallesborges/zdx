@@ -69,6 +69,10 @@ enum Commands {
         /// Comma-separated list of tools to enable (full override)
         #[arg(long, value_name = "TOOLS")]
         tools: Option<String>,
+
+        /// Disable all tools
+        #[arg(long = "no-tools", conflicts_with = "tools")]
+        no_tools: bool,
     },
 
     /// Manage saved threads
@@ -201,6 +205,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
             model,
             thinking,
             tools,
+            no_tools,
         } => {
             let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
             commands::exec::run(
@@ -211,6 +216,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
                 model.as_deref(),
                 thinking.as_deref(),
                 tools.as_deref(),
+                no_tools,
             )
             .await
         }

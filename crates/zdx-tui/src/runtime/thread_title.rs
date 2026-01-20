@@ -64,6 +64,7 @@ async fn run_subagent(
             &title_model,
             "-t",
             TITLE_THINKING,
+            "--no-tools",
             "-p",
             &prompt,
         ])
