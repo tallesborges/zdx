@@ -666,18 +666,28 @@ impl HistoryCell {
                         .and_then(|v| v.as_bool())
                         .unwrap_or(false);
                     if file_truncated {
-                        let total_lines = data
-                            .get("total_lines")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        let lines_shown = data
-                            .get("lines_shown")
-                            .and_then(|v| v.as_u64())
-                            .unwrap_or(0);
-                        truncation_warnings.push(format!(
-                            "file truncated: showing {} of {} lines",
-                            lines_shown, total_lines
-                        ));
+                        let byte_limited = data
+                            .get("byte_limited")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false);
+                        let read_has_explicit_limit = name == "read"
+                            && input.get("limit").and_then(extract_u64).is_some();
+                        let should_warn = name != "read" || byte_limited || !read_has_explicit_limit;
+
+                        if should_warn {
+                            let total_lines = data
+                                .get("total_lines")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            let lines_shown = data
+                                .get("lines_shown")
+                                .and_then(|v| v.as_u64())
+                                .unwrap_or(0);
+                            truncation_warnings.push(format!(
+                                "file truncated: showing {} of {} lines",
+                                lines_shown, total_lines
+                            ));
+                        }
                     }
 
                     // Display truncation warnings
@@ -1572,6 +1582,36 @@ mod tests {
         assert!(
             all_text.contains("showing 2000 of 5000 lines"),
             "Expected line counts"
+        );
+    }
+
+    #[test]
+    fn test_tool_read_explicit_limit_no_truncation_warning() {
+        let mut cell = HistoryCell::tool_running(
+            "1",
+            "read",
+            serde_json::json!({"path": "large.txt", "limit": 240}),
+        );
+
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "path": "large.txt",
+            "content": "first 240 lines...",
+            "offset": 1,
+            "lines_shown": 240,
+            "total_lines": 342,
+            "truncated": true,
+            "byte_limited": false
+        })));
+
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(
+            !all_text.contains("file truncated"),
+            "Should not show file truncation warning when limit is explicit"
         );
     }
 
