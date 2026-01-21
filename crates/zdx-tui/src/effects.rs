@@ -130,7 +130,7 @@ pub enum UiEffect {
         turn_number: usize,
     },
 
-    /// Execute a bash command directly (user `!` shortcut).
+    /// Execute a bash command directly (user `$` shortcut).
     ExecuteBash {
         task: Option<TaskId>,
         command: String,

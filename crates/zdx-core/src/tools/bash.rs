@@ -174,7 +174,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
 /// Executes a bash command directly (convenience wrapper).
 ///
 /// This is a simpler API that takes the command string directly,
-/// useful for direct user invocation (e.g., `!` shortcut).
+/// useful for direct user invocation (e.g., `$` shortcut).
 pub async fn run(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
     match run_command(command, ctx, timeout).await {
         Ok(output) => output.into_tool_output(),

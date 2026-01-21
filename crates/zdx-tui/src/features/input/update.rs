@@ -561,8 +561,8 @@ fn submit_input(
         return (vec![], vec![], None);
     }
 
-    // Try bang commands
-    if let Some(result) = handle_bang_commands(input, trimmed, &text) {
+    // Try bash commands
+    if let Some(result) = handle_bash_commands(input, trimmed, &text) {
         return result;
     }
 
@@ -603,12 +603,12 @@ fn handle_submit_while_agent_running(
             None,
         );
     }
-    if trimmed.starts_with('!') {
+    if trimmed.starts_with('$') {
         return (
             vec![],
             vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(
-                    "Bang commands can't be queued while streaming.".to_string(),
+                    "Bash commands ($<command>) can't be queued while streaming.".to_string(),
                 ),
             )],
             None,
@@ -622,8 +622,8 @@ fn handle_submit_while_agent_running(
     (vec![], vec![], None)
 }
 
-fn handle_bang_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {
-    if let Some(command) = trimmed.strip_prefix('!') {
+fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {
+    if let Some(command) = trimmed.strip_prefix('$') {
         let command = command.trim();
         if command.is_empty() {
             input.clear();
@@ -631,7 +631,7 @@ fn handle_bang_commands(input: &mut InputState, trimmed: &str, text: &str) -> Op
                 vec![],
                 vec![StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(
-                        "Usage: !<command> (e.g., !ls -la)".to_string(),
+                        "Usage: $<command> (e.g., $ls -la)".to_string(),
                     ),
                 )],
                 None,
