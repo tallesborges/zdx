@@ -46,6 +46,7 @@ pub enum ThreadUiEvent {
     ListLoaded {
         threads: Vec<ThreadSummary>,
         original_cells: Vec<HistoryCell>,
+        mode: crate::overlays::ThreadPickerMode,
     },
 
     /// Thread list load failed.

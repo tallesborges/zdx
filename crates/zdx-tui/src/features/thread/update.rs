@@ -21,6 +21,7 @@ pub enum ThreadOverlayAction {
     OpenThreadPicker {
         threads: Vec<ThreadSummary>,
         original_cells: Vec<HistoryCell>,
+        mode: crate::overlays::ThreadPickerMode,
     },
     None,
 }
@@ -34,10 +35,12 @@ pub fn handle_thread_event(
         ThreadUiEvent::ListLoaded {
             threads,
             original_cells,
+            mode,
         } => {
             overlay_action = ThreadOverlayAction::OpenThreadPicker {
                 threads,
                 original_cells,
+                mode,
             };
             vec![]
         }

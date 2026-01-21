@@ -26,6 +26,7 @@
       - `crates/zdx-core/src/tools/apply_patch/mod.rs`: tool definition, execution wrapper, patch application engine
       - `crates/zdx-core/src/tools/apply_patch/parser.rs`: patch parser for file hunks
       - `crates/zdx-core/src/tools/apply_patch/types.rs`: Hunk enum, UpdateFileChunk, ParseError
+    - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
     - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
 - `crates/zdx-tui/`: full-screen interactive TUI library
@@ -124,13 +125,6 @@ This runs in an isolated process with its own context window. Use for:
 - Any task where you only need the final result
 
 The `--no-thread` flag prevents thread file creation. Output is returned directly.
-
-**Reading previous threads:**
-```bash
-zdx threads show <thread_id>
-```
-
-Use this to fetch context from a previous thread when needed.
 
 ## ⚠️ IMPORTANT: Keep this file up to date
 

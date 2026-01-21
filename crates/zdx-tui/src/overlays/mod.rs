@@ -40,7 +40,7 @@ use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use rename::RenameState;
 pub use thinking_picker::ThinkingPickerState;
-pub use thread_picker::{ThreadPickerState, ThreadScope};
+pub use thread_picker::{ThreadPickerMode, ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};

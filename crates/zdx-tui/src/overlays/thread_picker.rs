@@ -7,7 +7,8 @@ use zdx_core::core::thread_log::ThreadSummary;
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
-use crate::mutations::{StateMutation, TranscriptMutation};
+use crate::input::InputState;
+use crate::mutations::{InputMutation, StateMutation, TranscriptMutation};
 use crate::state::TuiState;
 use crate::thread::{
     MAX_VISIBLE_THREADS, ThreadDisplayItem, flatten_refs_as_tree, render_thread_picker,
@@ -31,6 +32,25 @@ impl ThreadScope {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ThreadPickerMode {
+    Switch,
+    Insert { trigger_pos: usize },
+}
+
+impl ThreadPickerMode {
+    pub fn is_switch(self) -> bool {
+        matches!(self, ThreadPickerMode::Switch)
+    }
+
+    fn trigger_pos(self) -> Option<usize> {
+        match self {
+            ThreadPickerMode::Insert { trigger_pos } => Some(trigger_pos),
+            ThreadPickerMode::Switch => None,
+        }
+    }
+}
+
 #[derive(Debug)]
 pub struct ThreadPickerState {
     pub all_threads: Vec<ThreadSummary>,
@@ -39,6 +59,7 @@ pub struct ThreadPickerState {
     pub selected: usize,
     pub offset: usize,
     pub original_cells: Vec<HistoryCell>,
+    pub mode: ThreadPickerMode,
     /// When the last copy occurred (for showing brief "Copied!" feedback).
     pub copied_at: Option<Instant>,
     /// ID of the currently active thread (for highlighting in picker).
@@ -53,6 +74,7 @@ impl ThreadPickerState {
         original_cells: Vec<HistoryCell>,
         current_root: &std::path::Path,
         current_thread_id: Option<String>,
+        mode: ThreadPickerMode,
     ) -> (Self, Vec<UiEffect>) {
         let current_root = current_root
             .canonicalize()
@@ -66,6 +88,7 @@ impl ThreadPickerState {
             selected: 0,
             offset: 0,
             original_cells,
+            mode,
             copied_at: None,
             current_thread_id,
             filter: String::new(),
@@ -92,13 +115,17 @@ impl ThreadPickerState {
                 OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                OverlayUpdate::close().with_mutations(vec![
-                    StateMutation::Transcript(TranscriptMutation::ReplaceCells(
-                        self.original_cells.clone(),
-                    )),
-                    StateMutation::Transcript(TranscriptMutation::ResetScroll),
-                    StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
-                ])
+                if self.mode.is_switch() {
+                    OverlayUpdate::close().with_mutations(vec![
+                        StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+                            self.original_cells.clone(),
+                        )),
+                        StateMutation::Transcript(TranscriptMutation::ResetScroll),
+                        StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
+                    ])
+                } else {
+                    OverlayUpdate::close()
+                }
             }
             KeyCode::Up | KeyCode::Char('k') => {
                 let total = self.visible_tree_items().len();
@@ -122,29 +149,38 @@ impl ThreadPickerState {
                 }
                 OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
-            KeyCode::Enter => {
-                if tui.agent_state.is_running() {
-                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(
-                            "Stop the current task first.".to_string(),
-                        ),
-                    )]);
-                }
-
-                if let Some(thread) = self.selected_thread() {
-                    if tui.tasks.thread_load.is_running() {
-                        return OverlayUpdate::stay();
+            KeyCode::Enter => match self.mode {
+                ThreadPickerMode::Switch => {
+                    if tui.agent_state.is_running() {
+                        return OverlayUpdate::stay().with_mutations(vec![
+                            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
+                                "Stop the current task first.".to_string(),
+                            )),
+                        ]);
                     }
-                    OverlayUpdate::close()
-                        .with_ui_effects(vec![UiEffect::LoadThread {
-                            task: None,
-                            thread_id: thread.id.clone(),
-                        }])
-                        .with_mutations(vec![])
-                } else {
-                    OverlayUpdate::close()
+
+                    if let Some(thread) = self.selected_thread() {
+                        if tui.tasks.thread_load.is_running() {
+                            return OverlayUpdate::stay();
+                        }
+                        OverlayUpdate::close()
+                            .with_ui_effects(vec![UiEffect::LoadThread {
+                                task: None,
+                                thread_id: thread.id.clone(),
+                            }])
+                            .with_mutations(vec![])
+                    } else {
+                        OverlayUpdate::close()
+                    }
                 }
-            }
+                ThreadPickerMode::Insert { .. } => {
+                    let mut mutations = Vec::new();
+                    if let Some(mutation) = self.select_thread_and_insert(&tui.input) {
+                        mutations.push(StateMutation::Input(mutation));
+                    }
+                    OverlayUpdate::close().with_mutations(mutations)
+                }
+            },
             KeyCode::Char('y') => {
                 if let Some(thread) = self.selected_thread() {
                     OverlayUpdate::stay().with_ui_effects(vec![UiEffect::CopyToClipboard {
@@ -253,6 +289,9 @@ impl ThreadPickerState {
     }
 
     fn preview_selected_effects(&mut self) -> Vec<UiEffect> {
+        if !self.mode.is_switch() {
+            return Vec::new();
+        }
         let thread_id = self.selected_thread().map(|thread| thread.id.clone());
         if let Some(thread_id) = thread_id {
             vec![UiEffect::PreviewThread {
@@ -262,6 +301,68 @@ impl ThreadPickerState {
         } else {
             Vec::new()
         }
+    }
+
+    fn select_thread_and_insert(&self, input: &InputState) -> Option<InputMutation> {
+        let selected = self.selected_thread()?;
+        let trigger_pos = self.mode.trigger_pos()?;
+
+        let text = input.get_text();
+        let cursor_byte_pos = Self::get_cursor_byte_pos(input);
+
+        let before_at = &text[..=trigger_pos];
+        let after_cursor = if cursor_byte_pos < text.len() {
+            &text[cursor_byte_pos..]
+        } else {
+            ""
+        };
+
+        let new_text = format!("{}@{} {}", before_at, selected.id, after_cursor);
+        let new_cursor_byte_pos = trigger_pos + 2 + selected.id.len() + 1;
+
+        let new_lines: Vec<&str> = new_text.lines().collect();
+        let mut remaining = new_cursor_byte_pos;
+        let mut target_row = 0;
+        let mut target_col = 0;
+
+        for (i, line) in new_lines.iter().enumerate() {
+            if remaining <= line.len() {
+                target_row = i;
+                target_col = remaining;
+                break;
+            }
+            remaining -= line.len() + 1;
+            target_row = i + 1;
+            target_col = 0;
+        }
+
+        if target_row >= new_lines.len() {
+            target_row = new_lines.len().saturating_sub(1);
+            target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
+        }
+
+        Some(InputMutation::SetTextAndCursor {
+            text: new_text,
+            cursor_row: target_row,
+            cursor_col: target_col,
+        })
+    }
+
+    fn get_cursor_byte_pos(input: &InputState) -> usize {
+        let text = input.get_text();
+        let (row, col) = input.textarea.cursor();
+        let lines: Vec<&str> = text.lines().collect();
+
+        let mut pos = 0;
+        for (i, line) in lines.iter().enumerate() {
+            if i < row {
+                pos += line.len() + 1;
+            } else {
+                pos += col;
+                break;
+            }
+        }
+        pos
     }
 }
 
@@ -317,7 +418,13 @@ mod tests {
 
     #[test]
     fn test_thread_picker_state_new_empty() {
-        let (state, _) = ThreadPickerState::open(vec![], vec![], std::path::Path::new("."), None);
+        let (state, _) = ThreadPickerState::open(
+            vec![],
+            vec![],
+            std::path::Path::new("."),
+            None,
+            ThreadPickerMode::Switch,
+        );
         assert_eq!(state.selected, 0);
         assert_eq!(state.offset, 0);
         assert!(state.all_threads.is_empty());
@@ -348,7 +455,13 @@ mod tests {
                 handoff_from: None,
             },
         ];
-        let (state, _) = ThreadPickerState::open(threads, vec![], std::path::Path::new("."), None);
+        let (state, _) = ThreadPickerState::open(
+            threads,
+            vec![],
+            std::path::Path::new("."),
+            None,
+            ThreadPickerMode::Switch,
+        );
         assert_eq!(state.selected, 0);
         assert_eq!(state.all_threads.len(), 2);
         assert_eq!(state.selected_thread().unwrap().id, "thread-1");
@@ -372,6 +485,7 @@ mod tests {
             original_cells.clone(),
             std::path::Path::new("."),
             None,
+            ThreadPickerMode::Switch,
         );
         assert_eq!(state.original_cells.len(), 2);
     }
@@ -401,8 +515,13 @@ mod tests {
                 handoff_from: None,
             },
         ];
-        let (mut state, _) =
-            ThreadPickerState::open(threads, vec![], std::path::Path::new("."), None);
+        let (mut state, _) = ThreadPickerState::open(
+            threads,
+            vec![],
+            std::path::Path::new("."),
+            None,
+            ThreadPickerMode::Switch,
+        );
 
         assert_eq!(state.selected, 0);
 
@@ -428,6 +547,7 @@ mod tests {
             vec![],
             std::path::Path::new("."),
             None,
+            ThreadPickerMode::Switch,
         );
 
         // Switch to All scope so threads without root_path are visible
@@ -464,6 +584,7 @@ mod tests {
             vec![],
             std::path::Path::new("."),
             None,
+            ThreadPickerMode::Switch,
         );
 
         // Switch to All scope so threads without root_path are visible

@@ -18,6 +18,12 @@ pub const CODEX_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/openai_codex.md"
 ));
 
+/// Prompt template for read thread tool (shared with tool execution).
+pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/read_thread_prompt.md"
+));
+
 /// Prompt template for Gemini agentic coding.
 pub const GEMINI_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),

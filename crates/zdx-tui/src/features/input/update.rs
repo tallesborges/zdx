@@ -476,11 +476,24 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
             input.textarea.input(key);
             input.sync_pending_pastes();
 
-            // Detect `@` trigger for file picker
+            // Detect `@` trigger for file picker or thread picker (reference insert)
             if key.code == KeyCode::Char('@')
                 && !key.modifiers.contains(CrosstermKeyModifiers::CONTROL)
             {
                 let trigger_pos = compute_at_trigger_position(input);
+                let text = input.get_text();
+                if trigger_pos > 0 && text.as_bytes().get(trigger_pos - 1) == Some(&b'@') {
+                    return (
+                        vec![UiEffect::OpenThreadPicker {
+                            task: None,
+                            mode: crate::overlays::ThreadPickerMode::Insert {
+                                trigger_pos: trigger_pos - 1,
+                            },
+                        }],
+                        vec![],
+                        None,
+                    );
+                }
                 return (
                     vec![],
                     vec![],

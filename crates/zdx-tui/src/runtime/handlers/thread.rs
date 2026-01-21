@@ -9,7 +9,10 @@ use crate::transcript::{HistoryCell, build_transcript_from_events};
 /// Loads the list of threads.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
-pub async fn thread_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
+pub async fn thread_list_load(
+    original_cells: Vec<HistoryCell>,
+    mode: crate::overlays::ThreadPickerMode,
+) -> UiEvent {
     tokio::task::spawn_blocking(move || match thread_log::list_threads() {
         Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
             error: "No threads found.".to_string(),
@@ -17,6 +20,7 @@ pub async fn thread_list_load(original_cells: Vec<HistoryCell>) -> UiEvent {
         Ok(threads) => UiEvent::Thread(ThreadUiEvent::ListLoaded {
             threads,
             original_cells,
+            mode,
         }),
         Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
             error: format!("Failed to load threads: {}", e),

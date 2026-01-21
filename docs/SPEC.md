@@ -182,10 +182,10 @@ Error:
   - `[providers.gemini_cli].base_url` (unused; reserved)
 - Provider tool configuration:
   - `[providers.<provider>].tools` — list of enabled tools
-  - Available tools: `bash`, `apply_patch`, `edit`, `read`, `write`
+  - Available tools: `bash`, `apply_patch`, `edit`, `read`, `read_thread`, `write`
   - Default tool sets:
-    - Most providers: `["bash", "edit", "read", "write"]`
-    - OpenAI Codex: `["bash", "apply_patch", "read"]`
+    - Most providers: `["bash", "edit", "read", "read_thread", "write"]`
+    - OpenAI Codex: `["bash", "apply_patch", "read", "read_thread"]`
 - Models registry:
   - `[providers.<provider>]` (`enabled`, `models`)
   - `models` entries support `*` wildcards for `zdx models update`.

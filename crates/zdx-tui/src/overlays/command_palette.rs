@@ -157,7 +157,10 @@ fn execute_command(
             }
             (
                 None,
-                vec![UiEffect::OpenThreadPicker { task: None }],
+                vec![UiEffect::OpenThreadPicker {
+                    task: None,
+                    mode: crate::overlays::ThreadPickerMode::Switch,
+                }],
                 vec![],
             )
         }
