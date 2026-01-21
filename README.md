@@ -30,7 +30,7 @@ Built because I needed something:
 - **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
 - **File picker** — type `@` to browse and insert project files (respects .gitignore)
 - **Large paste placeholders** — pastes over 1000 chars display as `[Pasted Content N chars #1]`, expand on submit; press Space on placeholder to expand
-- **Bang commands** — type `!<command>` to execute bash commands directly (e.g., `!ls -la`, `!git status`)
+- **Bash commands** — type `$<command>` to execute bash commands directly (e.g., `$ls -la`, `$git status`)
 - **Text selection** — click and drag to select, double-click selects a word, auto-copies to clipboard
 - **Token usage** display with pricing
 - **Session persistence** — resume or switch between previous threads (filtered by workspace, Ctrl+T to show all)
