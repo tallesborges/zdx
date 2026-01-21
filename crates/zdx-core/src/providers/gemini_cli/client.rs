@@ -12,6 +12,7 @@ use crate::providers::gemini_cli::auth::{GeminiCliConfig, resolve_credentials};
 use crate::providers::gemini_shared::sse::GeminiSseParser;
 use crate::providers::gemini_shared::{
     CloudCodeRequestParams, build_cloud_code_assist_request, classify_reqwest_error,
+    merge_gemini_system_prompt,
 };
 use crate::providers::{ChatMessage, ProviderError, StreamEvent};
 use crate::tools::ToolDefinition;
@@ -47,11 +48,12 @@ impl GeminiCliClient {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
         let creds = resolve_credentials().await?;
         let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
+        let system_prompt = merge_gemini_system_prompt(system);
 
         let request = build_cloud_code_assist_request(
             messages,
             tools,
-            system,
+            system_prompt.as_deref(),
             CloudCodeRequestParams {
                 model: &self.config.model,
                 project_id: &creds.project_id,

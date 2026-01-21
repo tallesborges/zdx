@@ -9,7 +9,7 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::gemini_shared::sse::GeminiSseParser;
 use crate::providers::gemini_shared::{
-    GeminiThinkingConfig, build_gemini_request, classify_reqwest_error,
+    GeminiThinkingConfig, build_gemini_request, classify_reqwest_error, merge_gemini_system_prompt,
 };
 use crate::providers::{ChatMessage, ProviderError, StreamEvent};
 use crate::tools::ToolDefinition;
@@ -77,10 +77,11 @@ impl GeminiClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+        let system_prompt = merge_gemini_system_prompt(system);
         let request = build_gemini_request(
             messages,
             tools,
-            system,
+            system_prompt.as_deref(),
             self.config.max_output_tokens,
             self.config.thinking_config.as_ref(),
         )?;
