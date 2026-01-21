@@ -7,6 +7,7 @@ pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod read;
+pub mod read_thread;
 pub mod write;
 
 use std::path::{Path, PathBuf};
@@ -159,11 +160,28 @@ pub struct ToolContext {
 
     /// Optional timeout for tool execution.
     pub timeout: Option<Duration>,
+
+    /// Optional model override for tool subagents.
+    pub model: Option<String>,
+
+    /// Optional thinking level for tool subagents.
+    pub thinking_level: Option<crate::config::ThinkingLevel>,
 }
 
 impl ToolContext {
     pub fn new(root: PathBuf, timeout: Option<Duration>) -> Self {
-        Self { root, timeout }
+        Self {
+            root,
+            timeout,
+            model: None,
+            thinking_level: None,
+        }
+    }
+
+    pub fn with_config(mut self, config: &crate::config::Config) -> Self {
+        self.model = Some(config.model.clone());
+        self.thinking_level = Some(config.thinking_level);
+        self
     }
 }
 
@@ -174,6 +192,7 @@ pub fn all_tools() -> Vec<ToolDefinition> {
         apply_patch::definition(),
         edit::definition(),
         read::definition(),
+        read_thread::definition(),
         write::definition(),
     ]
 }
@@ -241,6 +260,7 @@ pub async fn execute_tool(
         "apply_patch" => execute_apply_patch(input, ctx).await,
         "edit" => execute_edit(input, ctx).await,
         "read" => execute_read(input, ctx).await,
+        "read_thread" => read_thread::execute(input, ctx).await,
         "write" => execute_write(input, ctx).await,
         _ => {
             // This shouldn't happen if enabled_tools is properly configured,
@@ -429,6 +449,7 @@ mod tests {
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"read".to_string()));
+        assert!(names.contains(&"read_thread".to_string()));
         assert!(names.contains(&"write".to_string()));
     }
 
@@ -442,6 +463,7 @@ mod tests {
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"read".to_string()));
+        assert!(names.contains(&"read_thread".to_string()));
         assert!(names.contains(&"write".to_string()));
     }
 

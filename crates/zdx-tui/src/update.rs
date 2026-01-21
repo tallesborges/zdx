@@ -337,17 +337,20 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             ThreadUiEvent::ListLoaded {
                 threads,
                 original_cells,
+                mode,
             } => {
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::ListLoaded {
                         threads,
                         original_cells,
+                        mode,
                     });
                 apply_mutations(&mut app.tui, mutations);
 
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
                     original_cells,
+                    mode,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
@@ -358,6 +361,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         original_cells,
                         &app.tui.agent_opts.root,
                         current_thread_id,
+                        mode,
                     );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
@@ -393,6 +397,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
                     original_cells,
+                    mode,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
@@ -403,6 +408,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         original_cells,
                         &app.tui.agent_opts.root,
                         current_thread_id,
+                        mode,
                     );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
@@ -431,6 +437,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     if let thread::ThreadOverlayAction::OpenThreadPicker {
                         threads,
                         original_cells,
+                        mode,
                     } = overlay_action
                         && app.overlay.is_none()
                     {
@@ -441,6 +448,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                             original_cells,
                             &app.tui.agent_opts.root,
                             current_thread_id,
+                            mode,
                         );
                         app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                         effects.extend(overlay_effects);
@@ -479,6 +487,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
                     original_cells,
+                    mode,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
@@ -489,6 +498,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         original_cells,
                         &app.tui.agent_opts.root,
                         current_thread_id,
+                        mode,
                     );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
@@ -522,6 +532,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
                     original_cells,
+                    mode,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
@@ -532,6 +543,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         original_cells,
                         &app.tui.agent_opts.root,
                         current_thread_id,
+                        mode,
                     );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
@@ -559,6 +571,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 if let thread::ThreadOverlayAction::OpenThreadPicker {
                     threads,
                     original_cells,
+                    mode,
                 } = overlay_action
                     && app.overlay.is_none()
                 {
@@ -569,6 +582,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         original_cells,
                         &app.tui.agent_opts.root,
                         current_thread_id,
+                        mode,
                     );
                     app.overlay = Some(overlays::Overlay::ThreadPicker(state));
                     effects.extend(overlay_effects);
@@ -620,9 +634,12 @@ fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> 
                     goal,
                 });
             }
-            UiEffect::OpenThreadPicker { task } => {
+            UiEffect::OpenThreadPicker { task, mode } => {
                 let task = ensure_task_id(tui, task);
-                out.push(UiEffect::OpenThreadPicker { task: Some(task) });
+                out.push(UiEffect::OpenThreadPicker {
+                    task: Some(task),
+                    mode,
+                });
             }
             UiEffect::CreateNewThread { task } => {
                 let task = ensure_task_id(tui, task);
@@ -905,6 +922,26 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         && FilePickerState::should_route_input_key(key)
     {
         app.tui.input.textarea.input(key);
+        let text = app.tui.input.get_text();
+        let should_switch = key.code == crossterm::event::KeyCode::Char('@')
+            && text.as_bytes().get(picker.trigger_pos) == Some(&b'@')
+            && text.as_bytes().get(picker.trigger_pos + 1) == Some(&b'@');
+
+        if should_switch {
+            let trigger_pos = picker.trigger_pos;
+            app.overlay = None;
+            return vec![
+                UiEffect::CancelTask {
+                    kind: TaskKind::FileDiscovery,
+                    token: None,
+                },
+                UiEffect::OpenThreadPicker {
+                    task: None,
+                    mode: crate::overlays::ThreadPickerMode::Insert { trigger_pos },
+                },
+            ];
+        }
+
         if picker.update_from_input(&app.tui.input) {
             app.overlay = None;
             return vec![UiEffect::CancelTask {

@@ -528,17 +528,21 @@ impl TuiRuntime {
                     move |_| handlers::thread_fork(events, user_input, turn_number, root),
                 );
             }
-            UiEffect::OpenThreadPicker { task } => {
+            UiEffect::OpenThreadPicker { task, mode } => {
                 let Some(task) = task else {
                     return;
                 };
-                let original_cells = self.state.tui.transcript.cells().to_vec();
+                let original_cells = if mode.is_switch() {
+                    self.state.tui.transcript.cells().to_vec()
+                } else {
+                    Vec::new()
+                };
                 self.spawn_task(
                     TaskKind::ThreadList,
                     task,
                     TaskMeta::None,
                     false,
-                    move |_| handlers::thread_list_load(original_cells),
+                    move |_| handlers::thread_list_load(original_cells, mode),
                 );
             }
             UiEffect::LoadThread { task, thread_id } => {

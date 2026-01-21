@@ -95,7 +95,10 @@ pub enum UiEffect {
     },
 
     /// Open the thread picker overlay (loads thread list via I/O).
-    OpenThreadPicker { task: Option<TaskId> },
+    OpenThreadPicker {
+        task: Option<TaskId>,
+        mode: crate::overlays::ThreadPickerMode,
+    },
 
     /// Load a thread by ID (switch to that thread).
     LoadThread {

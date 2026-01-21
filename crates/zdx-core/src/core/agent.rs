@@ -432,7 +432,8 @@ pub async fn run_turn(
     let tool_ctx = ToolContext::new(
         options.root.canonicalize().unwrap_or(options.root.clone()),
         config.tool_timeout(),
-    );
+    )
+    .with_config(config);
     // Cache tool definitions outside the loop (they're constant)
     // Filter tools based on provider configuration or override list.
     let tools = if let Some(override_tools) = options.tools_override.as_ref() {

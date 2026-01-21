@@ -624,6 +624,7 @@ fn default_tools() -> Vec<String> {
         "bash".to_string(),
         "edit".to_string(),
         "read".to_string(),
+        "read_thread".to_string(),
         "write".to_string(),
     ]
 }
@@ -634,6 +635,7 @@ fn codex_tools() -> Vec<String> {
         "bash".to_string(),
         "apply_patch".to_string(),
         "read".to_string(),
+        "read_thread".to_string(),
     ]
 }
 
@@ -1262,7 +1264,14 @@ max_tokens = 4096
     #[test]
     fn test_filter_tools_no_filtering() {
         let config = ProviderConfig::default();
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert_eq!(filtered, all_tools);
@@ -1275,7 +1284,14 @@ max_tokens = 4096
             tools: Some(vec!["bash".to_string(), "read".to_string()]),
             ..Default::default()
         };
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert_eq!(filtered, vec!["bash", "read"]);
@@ -1288,7 +1304,14 @@ max_tokens = 4096
             tools: Some(vec!["BASH".to_string(), "READ".to_string()]),
             ..Default::default()
         };
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert_eq!(filtered, vec!["bash", "read"]);
@@ -1301,7 +1324,14 @@ max_tokens = 4096
             tools: Some(vec![" bash ".to_string(), "\tread\n".to_string()]),
             ..Default::default()
         };
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert_eq!(filtered, vec!["bash", "read"]);
@@ -1319,7 +1349,14 @@ max_tokens = 4096
             ]),
             ..Default::default()
         };
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert_eq!(filtered, vec!["bash", "read"]);
@@ -1329,12 +1366,20 @@ max_tokens = 4096
     #[test]
     fn test_openai_codex_default_tools() {
         let config = default_openai_codex_provider();
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
         assert!(filtered.contains(&"bash"));
         assert!(filtered.contains(&"apply_patch"));
         assert!(filtered.contains(&"read"));
+        assert!(filtered.contains(&"read_thread"));
         assert!(!filtered.contains(&"edit"));
         assert!(!filtered.contains(&"write"));
     }
@@ -1343,13 +1388,21 @@ max_tokens = 4096
     #[test]
     fn test_anthropic_default_tools() {
         let config = default_anthropic_provider();
-        let all_tools = &["bash", "apply_patch", "edit", "read", "write"];
+        let all_tools = &[
+            "bash",
+            "apply_patch",
+            "edit",
+            "read",
+            "read_thread",
+            "write",
+        ];
 
         let filtered = config.filter_tools(all_tools);
-        assert_eq!(filtered.len(), 4);
+        assert_eq!(filtered.len(), 5);
         assert!(filtered.contains(&"bash"));
         assert!(filtered.contains(&"edit"));
         assert!(filtered.contains(&"read"));
+        assert!(filtered.contains(&"read_thread"));
         assert!(filtered.contains(&"write"));
         assert!(!filtered.contains(&"apply_patch"));
     }
@@ -1366,6 +1419,7 @@ max_tokens = 4096
         let anthropic_tools = anthropic.tools.as_ref().unwrap();
         assert!(anthropic_tools.contains(&"bash".to_string()));
         assert!(anthropic_tools.contains(&"edit".to_string()));
+        assert!(anthropic_tools.contains(&"read_thread".to_string()));
         assert!(!anthropic_tools.contains(&"apply_patch".to_string()));
 
         let codex = providers.get(ProviderKind::OpenAICodex);
@@ -1373,6 +1427,7 @@ max_tokens = 4096
         assert!(codex_tools.contains(&"bash".to_string()));
         assert!(codex_tools.contains(&"apply_patch".to_string()));
         assert!(codex_tools.contains(&"read".to_string()));
+        assert!(codex_tools.contains(&"read_thread".to_string()));
         assert!(!codex_tools.contains(&"edit".to_string()));
         assert!(!codex_tools.contains(&"write".to_string()));
     }
