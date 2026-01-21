@@ -38,6 +38,7 @@ Built because I needed something:
 - **Session persistence** — resume or switch between previous threads (filtered by workspace, Ctrl+T to show all)
 - **Timeline overlay** — jump to turns and fork from any message
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
+- **Skills** via `SKILL.md` (discoverable skill instructions with metadata)
 
 ## Inspiration
 
