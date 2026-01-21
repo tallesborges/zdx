@@ -5,4 +5,5 @@ pub mod core;
 pub mod models;
 pub mod prompts;
 pub mod providers;
+pub mod skills;
 pub mod tools;

@@ -15,6 +15,9 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 
 use crate::config::{Config, paths};
+use crate::skills::{
+    LoadSkillsOptions, LoadSkillsResult, Skill, format_skills_for_prompt, load_skills,
+};
 
 /// Maximum size for a single AGENTS.md file (64KB).
 /// Files larger than this are truncated with a warning.
@@ -202,6 +205,8 @@ pub struct EffectivePrompt {
     pub loaded_agents_paths: Vec<PathBuf>,
     /// Warnings generated during context loading.
     pub warnings: Vec<ContextWarning>,
+    /// Skills loaded from configured sources.
+    pub loaded_skills: Vec<Skill>,
 }
 
 /// Builds the effective system prompt by combining config and AGENTS.md files.
@@ -236,10 +241,48 @@ pub fn build_effective_system_prompt_with_paths(
         }
     }
 
+    let mut skill_options = LoadSkillsOptions::new(root);
+    skill_options.enable_zdx_user = config.skills.enable_zdx_user;
+    skill_options.enable_zdx_project = config.skills.enable_zdx_project;
+    skill_options.enable_codex_user = config.skills.enable_codex_user;
+    skill_options.enable_claude_user = config.skills.enable_claude_user;
+    skill_options.enable_claude_project = config.skills.enable_claude_project;
+    skill_options.ignored_skills = config.skills.ignored_skills.clone();
+    skill_options.include_skills = config.skills.include_skills.clone();
+
+    let skills_result = load_skills(&skill_options);
+    let LoadSkillsResult {
+        skills,
+        warnings: skill_warnings,
+    } = skills_result;
+
+    if let Some(skills_block) = format_skills_for_prompt(&skills) {
+        let combined = match system_prompt {
+            Some(sp) => format!("{}\n\n{}", sp, skills_block),
+            None => skills_block,
+        };
+        system_prompt = Some(combined);
+    }
+
+    if skills.len() > 20 {
+        warnings.push(ContextWarning {
+            path: None,
+            message: format!("Loaded {} skills; prompt may be large", skills.len()),
+        });
+    }
+
+    warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
+        path: Some(warning.skill_path),
+        message: warning.message,
+    }));
+
+    let loaded_skills = skills;
+
     Ok(EffectivePrompt {
         prompt: system_prompt,
         loaded_agents_paths,
         warnings,
+        loaded_skills,
     })
 }
 

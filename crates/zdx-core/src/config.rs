@@ -31,6 +31,35 @@ pub enum ThinkingLevel {
     XHigh,
 }
 
+/// Skill discovery configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SkillsConfig {
+    pub enable_zdx_user: bool,
+    pub enable_zdx_project: bool,
+    pub enable_codex_user: bool,
+    pub enable_claude_user: bool,
+    pub enable_claude_project: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub ignored_skills: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub include_skills: Vec<String>,
+}
+
+impl Default for SkillsConfig {
+    fn default() -> Self {
+        Self {
+            enable_zdx_user: true,
+            enable_zdx_project: true,
+            enable_codex_user: true,
+            enable_claude_user: true,
+            enable_claude_project: true,
+            ignored_skills: Vec::new(),
+            include_skills: Vec::new(),
+        }
+    }
+}
+
 impl ThinkingLevel {
     /// Returns the effort percentage of max tokens for this thinking level.
     /// Returns None for Off (thinking disabled).
@@ -258,6 +287,10 @@ pub struct Config {
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
+
+    /// Skill discovery configuration
+    #[serde(default)]
+    pub skills: SkillsConfig,
 }
 
 impl Config {
@@ -509,6 +542,7 @@ impl Default for Config {
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             providers: ProvidersConfig::default(),
             thinking_level: ThinkingLevel::default(),
+            skills: SkillsConfig::default(),
         }
     }
 }
