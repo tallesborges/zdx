@@ -121,8 +121,10 @@ fn update_defaults() -> Result<()> {
 
 fn project_root() -> Result<PathBuf> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    // crates/xtask -> crates -> workspace root
     let root = manifest_dir
         .parent()
+        .and_then(|p| p.parent())
         .context("locate workspace root from CARGO_MANIFEST_DIR")?;
     Ok(root.to_path_buf())
 }
