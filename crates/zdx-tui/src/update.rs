@@ -269,6 +269,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 thread::handle_thread_event(ThreadUiEvent::Created {
                     thread_log,
                     context_paths,
+                    skills: Vec::new(), // Handoff creation doesn't currently track skills here
                 });
             apply_mutations(&mut app.tui, mutations);
             app.tui.input.set_text(&prompt);
@@ -465,11 +466,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             ThreadUiEvent::Created {
                 thread_log,
                 context_paths,
+                skills,
             } => {
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Created {
                         thread_log,
                         context_paths,
+                        skills,
                     });
                 apply_mutations(&mut app.tui, mutations);
 
