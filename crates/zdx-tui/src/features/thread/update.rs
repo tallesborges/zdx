@@ -206,36 +206,15 @@ fn handle_thread_created(
     skills: Vec<zdx_core::skills::Skill>,
     mutations: &mut Vec<StateMutation>,
 ) {
-    let thread_path = thread_log.path().display().to_string();
+    let startup_messages =
+        crate::thread_startup_messages(Some(thread_log.path()), &context_paths, &skills);
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
-    // Show thread path
-    mutations.push(StateMutation::Transcript(
-        TranscriptMutation::AppendSystemMessage(format!("Thread path: {}", thread_path)),
-    ));
-
-    // Show loaded AGENTS.md files
-    if !context_paths.is_empty() {
-        let paths_list: Vec<String> = context_paths
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect();
-        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        mutations.push(StateMutation::Transcript(
-            TranscriptMutation::AppendSystemMessage(message),
-        ));
-    }
-
-    // Show loaded skills
-    if !skills.is_empty() {
-        let skills_list: Vec<String> = skills
-            .iter()
-            .map(|s| format!("  - {} ({})", s.name, s.source))
-            .collect();
-        let message = format!("Loaded skills:\n{}", skills_list.join("\n"));
+    // Show startup messages
+    for message in startup_messages {
         mutations.push(StateMutation::Transcript(
             TranscriptMutation::AppendSystemMessage(message),
         ));

@@ -22,6 +22,7 @@ pub use runtime::TuiRuntime;
 use zdx_core::config::Config;
 use zdx_core::core::thread_log::ThreadLog;
 use zdx_core::providers::ChatMessage;
+use zdx_core::skills::Skill;
 
 use crate::transcript::HistoryCell;
 
@@ -89,39 +90,18 @@ pub async fn run_interactive_chat_with_history(
             .push_cell(HistoryCell::system(message));
     }
 
-    // Add system message for thread path
-    if let Some(ref s) = runtime.state.tui.thread.thread_log {
-        let thread_path_msg = format!("Thread path: {}", s.path().display());
-        runtime
-            .state
-            .tui
-            .transcript
-            .push_cell(HistoryCell::system(thread_path_msg));
-    }
-
-    // Add system message for loaded AGENTS.md files to transcript
-    if !effective.loaded_agents_paths.is_empty() {
-        let paths_list: Vec<String> = effective
-            .loaded_agents_paths
-            .iter()
-            .map(|p| format!("  - {}", p.display()))
-            .collect();
-        let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
-        runtime
-            .state
-            .tui
-            .transcript
-            .push_cell(HistoryCell::system(message));
-    }
-
-    // Add system message for loaded skills to transcript
-    if !effective.loaded_skills.is_empty() {
-        let names_list: Vec<String> = effective
-            .loaded_skills
-            .iter()
-            .map(|skill| format!("  - {}", skill.name))
-            .collect();
-        let message = format!("Loaded skills:\n{}", names_list.join("\n"));
+    let thread_path = runtime
+        .state
+        .tui
+        .thread
+        .thread_log
+        .as_ref()
+        .map(|log| log.path().as_path());
+    for message in thread_startup_messages(
+        thread_path,
+        &effective.loaded_agents_paths,
+        &effective.loaded_skills,
+    ) {
         runtime
             .state
             .tui
@@ -135,4 +115,34 @@ pub async fn run_interactive_chat_with_history(
     writeln!(stderr(), "Goodbye!")?;
 
     Ok(())
+}
+
+pub(crate) fn thread_startup_messages(
+    thread_path: Option<&std::path::Path>,
+    context_paths: &[PathBuf],
+    skills: &[Skill],
+) -> Vec<String> {
+    let mut messages = Vec::new();
+
+    if let Some(path) = thread_path {
+        messages.push(format!("Thread path: {}", path.display()));
+    }
+
+    if !context_paths.is_empty() {
+        let paths_list: Vec<String> = context_paths
+            .iter()
+            .map(|p| format!("  - {}", p.display()))
+            .collect();
+        messages.push(format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n")));
+    }
+
+    if !skills.is_empty() {
+        let skills_list: Vec<String> = skills
+            .iter()
+            .map(|skill| format!("  - {} ({})", skill.name, skill.source))
+            .collect();
+        messages.push(format!("Loaded skills:\n{}", skills_list.join("\n")));
+    }
+
+    messages
 }
