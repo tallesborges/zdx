@@ -17,3 +17,9 @@ pub const CODEX_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/openai_codex.md"
 ));
+
+/// Prompt template for Gemini agentic coding.
+pub const GEMINI_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/gemini_agentic.md"
+));
