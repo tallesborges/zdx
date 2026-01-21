@@ -80,6 +80,17 @@ pub async fn run_exec(
         );
     }
 
+    // Emit loaded skills info
+    if !effective.loaded_skills.is_empty() {
+        let names: Vec<String> = effective
+            .loaded_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect();
+        use std::io::Write;
+        let _ = writeln!(std::io::stderr(), "Loaded skills: {}", names.join(", "));
+    }
+
     // Log user message to thread (ensures meta is written for new threads)
     if let Some(ref mut s) = thread {
         s.append(&ThreadEvent::user_message(prompt))?;

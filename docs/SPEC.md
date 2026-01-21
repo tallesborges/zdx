@@ -190,6 +190,9 @@ Error:
   - `[providers.<provider>]` (`enabled`, `models`)
   - `models` entries support `*` wildcards for `zdx models update`.
   - Registry path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
+- Skills:
+  - `[skills]` enable flags for sources (`enable_zdx_user`, `enable_zdx_project`, `enable_codex_user`, `enable_claude_user`, `enable_claude_project`).
+  - Optional glob filters: `ignored_skills`, `include_skills`.
 
 ---
 
@@ -198,6 +201,33 @@ Error:
 ZDX loads `AGENTS.md` hierarchically and appends the content to the system prompt (project-specific guidance). Unreadable files warn; empty files are skipped.
 
 ---
+
+## 13) Skills (SKILL.md)
+
+Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `description`) and Markdown instructions. At startup, only metadata is loaded. The model uses the `read` tool to load full instructions when a task matches a skill.
+
+### Discovery & sources
+
+- **Recursive sources:** `~/.config/zdx/skills/`, project `.zdx/skills/`, and `~/.codex/skills/` are scanned recursively for `SKILL.md`.
+- **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
+- **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project (first wins on name collision).
+
+### Validation & warnings
+
+- **Name:** required, ≤64 chars, lowercase alphanumeric + hyphens, no leading/trailing/consecutive hyphens.
+- **Description:** required, ≤1024 chars.
+- **Directory match:** name should match parent directory; mismatch emits a warning but still loads.
+- Invalid skills are skipped with warnings; startup never fails.
+
+### Prompt integration
+
+- Skill metadata is appended to the system prompt as an `<available_skills>` XML block.
+- Each skill includes `name`, `description`, `path` (absolute), and `source`.
+
+### Filtering
+
+- `include_skills`: optional glob allowlist (empty = all).
+- `ignored_skills`: optional glob blocklist (wins over include).
 
 ## Related Documentation
 

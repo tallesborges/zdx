@@ -36,6 +36,17 @@ title_model = "gemini-cli:gemini-2.5-flash"
 # Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
 # title_model = "gemini-cli:gemini-2.5-flash"
 
+# Skill discovery configuration
+# Enable/disable skill sources (all enabled by default)
+[skills]
+enable_zdx_user = true
+enable_zdx_project = true
+enable_codex_user = true
+enable_claude_user = true
+enable_claude_project = true
+# ignored_skills = ["test-*", "wip-*"]
+# include_skills = ["deploy-*", "release-*"]
+
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 

@@ -114,6 +114,21 @@ pub async fn run_interactive_chat_with_history(
             .push_cell(HistoryCell::system(message));
     }
 
+    // Add system message for loaded skills to transcript
+    if !effective.loaded_skills.is_empty() {
+        let names_list: Vec<String> = effective
+            .loaded_skills
+            .iter()
+            .map(|skill| format!("  - {}", skill.name))
+            .collect();
+        let message = format!("Loaded skills:\n{}", names_list.join("\n"));
+        runtime
+            .state
+            .tui
+            .transcript
+            .push_cell(HistoryCell::system(message));
+    }
+
     runtime.run()?;
 
     // Print goodbye after TUI exits (terminal restored)

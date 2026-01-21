@@ -9,6 +9,7 @@
   - `crates/zdx-core/src/config.rs`: config loading + paths
   - `crates/zdx-core/src/models.rs`: model registry for TUI model picker
   - `crates/zdx-core/src/prompts.rs`: prompt template helpers
+  - `crates/zdx-core/src/skills.rs`: skills discovery + parsing
   - `crates/zdx-core/default_config.toml`: default configuration template
   - `crates/zdx-core/default_models.toml`: default model registry fallback
   - `crates/zdx-core/prompts/`: prompt templates
