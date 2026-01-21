@@ -244,16 +244,19 @@ impl TextBuffer {
             self.cursor_col = line_char_len(&self.lines[self.cursor_row]);
         }
 
+        if self.cursor_col == 0 {
+            return;
+        }
+
         let line = &self.lines[self.cursor_row];
         let chars: Vec<char> = line.chars().collect();
         let mut idx = self.cursor_col.min(chars.len());
 
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
+        if idx == 0 {
+            return;
         }
-        while idx > 0 && !chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
+
+        idx = scan_left_segment(&chars, idx);
 
         self.cursor_col = idx;
     }
@@ -281,12 +284,13 @@ impl TextBuffer {
         let chars: Vec<char> = line.chars().collect();
         let mut idx = col.min(chars.len());
 
-        while idx < chars.len() && chars[idx].is_whitespace() {
-            idx += 1;
+        if idx >= chars.len() {
+            self.cursor_row = row;
+            self.cursor_col = idx;
+            return;
         }
-        while idx < chars.len() && !chars[idx].is_whitespace() {
-            idx += 1;
-        }
+
+        idx = scan_right_segment(&chars, idx);
 
         self.cursor_row = row;
         self.cursor_col = idx;
@@ -371,16 +375,19 @@ impl TextBuffer {
             col = line_char_len(&self.lines[row]);
         }
 
+        if col == 0 {
+            return (row, 0);
+        }
+
         let line = &self.lines[row];
         let chars: Vec<char> = line.chars().collect();
         let mut idx = col.min(chars.len());
 
-        while idx > 0 && chars[idx - 1].is_whitespace() {
-            idx -= 1;
+        if idx == 0 {
+            return (row, 0);
         }
-        while idx > 0 && !chars[idx - 1].is_whitespace() {
-            idx -= 1;
-        }
+
+        idx = scan_left_segment(&chars, idx);
 
         (row, idx)
     }
@@ -415,6 +422,51 @@ fn line_char_len(line: &str) -> usize {
     line.chars().count()
 }
 
+/// Returns true if the character is a word character (alphanumeric or underscore).
+/// Punctuation and other symbols are treated as word boundaries.
+fn is_word_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CharClass {
+    Whitespace,
+    Word,
+    Punct,
+}
+
+fn char_class(c: char) -> CharClass {
+    if c.is_whitespace() {
+        CharClass::Whitespace
+    } else if is_word_char(c) {
+        CharClass::Word
+    } else {
+        CharClass::Punct
+    }
+}
+
+fn scan_left_segment(chars: &[char], mut idx: usize) -> usize {
+    if idx == 0 {
+        return 0;
+    }
+    let class = char_class(chars[idx - 1]);
+    while idx > 0 && char_class(chars[idx - 1]) == class {
+        idx -= 1;
+    }
+    idx
+}
+
+fn scan_right_segment(chars: &[char], mut idx: usize) -> usize {
+    if idx >= chars.len() {
+        return idx;
+    }
+    let class = char_class(chars[idx]);
+    while idx < chars.len() && char_class(chars[idx]) == class {
+        idx += 1;
+    }
+    idx
+}
+
 fn char_to_byte_index(line: &str, col: usize) -> usize {
     if col == 0 {
         return 0;
@@ -423,4 +475,102 @@ fn char_to_byte_index(line: &str, col: usize) -> usize {
         .nth(col)
         .map(|(i, _)| i)
         .unwrap_or(line.len())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delete_word_left_url_segments() {
+        // URL: https://github.com/openai/codex/blob/main/README.md
+        // Option+Backspace should delete one segment at a time, not the whole URL
+        let mut buf = TextBuffer::default();
+        buf.insert_str("https://github.com/openai/codex/blob/main/README.md");
+
+        // cursor is at the end: "...README.md|"
+        buf.delete_word_left(); // delete "md" (word chars)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/README.");
+
+        buf.delete_word_left(); // delete "." (punctuation)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/README");
+
+        buf.delete_word_left(); // delete "README" (word chars)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/");
+
+        buf.delete_word_left(); // delete "/" (punctuation)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main");
+
+        buf.delete_word_left(); // delete "main" (word chars)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/");
+
+        buf.delete_word_left(); // delete "/" (punctuation)
+        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob");
+    }
+
+    #[test]
+    fn move_word_left_url_segments() {
+        let mut buf = TextBuffer::default();
+        buf.insert_str("https://example.com/path");
+        // len = 24, cursor at 24
+
+        // cursor at end (24)
+        buf.move_word_left(); // skip "path" (word)
+        assert_eq!(buf.cursor(), (0, 20)); // after "/"
+
+        buf.move_word_left(); // skip "/" (punctuation)
+        assert_eq!(buf.cursor(), (0, 19)); // after "com"
+
+        buf.move_word_left(); // skip "com" (word)
+        assert_eq!(buf.cursor(), (0, 16)); // after "."
+
+        buf.move_word_left(); // skip "." (punctuation)
+        assert_eq!(buf.cursor(), (0, 15)); // after "example"
+
+        buf.move_word_left(); // skip "example" (word)
+        assert_eq!(buf.cursor(), (0, 8)); // after "://"
+
+        buf.move_word_left(); // skip "://" (punctuation)
+        assert_eq!(buf.cursor(), (0, 5)); // after "https"
+
+        buf.move_word_left(); // skip "https" (word)
+        assert_eq!(buf.cursor(), (0, 0)); // at start
+    }
+
+    #[test]
+    fn move_word_right_url_segments() {
+        let mut buf = TextBuffer::default();
+        buf.insert_str("https://example.com");
+        buf.move_cursor(CursorMove::Head); // go to start (0)
+
+        buf.move_word_right(); // "https" (word)
+        assert_eq!(buf.cursor(), (0, 5));
+
+        buf.move_word_right(); // "://" (punctuation)
+        assert_eq!(buf.cursor(), (0, 8));
+
+        buf.move_word_right(); // "example" (word)
+        assert_eq!(buf.cursor(), (0, 15));
+
+        buf.move_word_right(); // "." (punctuation)
+        assert_eq!(buf.cursor(), (0, 16));
+
+        buf.move_word_right(); // "com" (word)
+        assert_eq!(buf.cursor(), (0, 19));
+    }
+
+    #[test]
+    fn delete_word_left_with_whitespace() {
+        let mut buf = TextBuffer::default();
+        buf.insert_str("hello world");
+
+        buf.delete_word_left(); // delete "world" (word)
+        assert_eq!(buf.lines()[0], "hello ");
+
+        buf.delete_word_left(); // delete " " (whitespace)
+        assert_eq!(buf.lines()[0], "hello");
+
+        buf.delete_word_left(); // delete "hello" (word)
+        assert_eq!(buf.lines()[0], "");
+    }
 }
