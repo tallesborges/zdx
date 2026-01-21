@@ -13,7 +13,7 @@ use crate::core::events::ToolOutput;
 use crate::core::thread_log;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 
-const READ_THREAD_MODEL: &str = "gemini-cli:gemini-3-flash-preview";
+const READ_THREAD_MODEL: &str = "gemini-cli:gemini-2.5-flash-lite";
 
 /// Returns the tool definition for the read thread tool.
 pub fn definition() -> ToolDefinition {
@@ -30,7 +30,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "goal": {
                     "type": "string",
-                    "description": "Goal to answer using the thread context"
+                    "description": "A clear description of what information you need from the thread. Be specific about what to extract."
                 }
             },
             "required": ["thread_id", "goal"],
