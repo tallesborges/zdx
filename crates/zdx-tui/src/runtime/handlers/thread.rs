@@ -139,17 +139,15 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
             }
         };
 
-        // Load AGENTS.md paths
-        let context_paths =
-            match zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &root)
-            {
-                Ok(effective) => effective.loaded_agents_paths,
-                Err(_) => Vec::new(), // Context loading failed, but thread was created
-            };
+        // Load AGENTS.md paths and skills
+        let context =
+            zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &root)
+                .unwrap_or_default();
 
         UiEvent::Thread(ThreadUiEvent::Created {
             thread_log: thread_log_handle,
-            context_paths,
+            context_paths: context.loaded_agents_paths,
+            skills: context.loaded_skills,
         })
     })
     .await

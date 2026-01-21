@@ -83,8 +83,9 @@ pub fn handle_thread_event(
         ThreadUiEvent::Created {
             thread_log,
             context_paths,
+            skills,
         } => {
-            handle_thread_created(thread_log, context_paths, &mut mutations);
+            handle_thread_created(thread_log, context_paths, skills, &mut mutations);
             vec![]
         }
         ThreadUiEvent::ForkedLoaded {
@@ -199,6 +200,7 @@ fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, mutations: &mut Vec<Sta
 fn handle_thread_created(
     thread_log: ThreadLog,
     context_paths: Vec<PathBuf>,
+    skills: Vec<zdx_core::skills::Skill>,
     mutations: &mut Vec<StateMutation>,
 ) {
     let thread_path = thread_log.path().display().to_string();
@@ -219,6 +221,18 @@ fn handle_thread_created(
             .map(|p| format!("  - {}", p.display()))
             .collect();
         let message = format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n"));
+        mutations.push(StateMutation::Transcript(
+            TranscriptMutation::AppendSystemMessage(message),
+        ));
+    }
+
+    // Show loaded skills
+    if !skills.is_empty() {
+        let skills_list: Vec<String> = skills
+            .iter()
+            .map(|s| format!("  - {} ({})", s.name, s.source))
+            .collect();
+        let message = format!("Loaded skills:\n{}", skills_list.join("\n"));
         mutations.push(StateMutation::Transcript(
             TranscriptMutation::AppendSystemMessage(message),
         ));

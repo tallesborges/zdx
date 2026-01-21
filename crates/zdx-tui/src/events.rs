@@ -75,6 +75,7 @@ pub enum ThreadUiEvent {
     Created {
         thread_log: ThreadLog,
         context_paths: Vec<PathBuf>,
+        skills: Vec<zdx_core::skills::Skill>,
     },
 
     /// Forked thread created successfully.

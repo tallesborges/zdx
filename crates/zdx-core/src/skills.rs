@@ -1,8 +1,8 @@
 //! Skills discovery and parsing.
 
 use std::collections::HashSet;
-use std::fs;
 use std::path::{Path, PathBuf};
+use std::{fmt, fs};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
@@ -17,6 +17,12 @@ pub enum SkillSource {
     CodexUser,
     ClaudeUser,
     ClaudeProject,
+}
+
+impl fmt::Display for SkillSource {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
 }
 
 impl SkillSource {

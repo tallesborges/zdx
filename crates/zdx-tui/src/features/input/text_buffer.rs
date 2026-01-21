@@ -490,10 +490,16 @@ mod tests {
 
         // cursor is at the end: "...README.md|"
         buf.delete_word_left(); // delete "md" (word chars)
-        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/README.");
+        assert_eq!(
+            buf.lines()[0],
+            "https://github.com/openai/codex/blob/main/README."
+        );
 
         buf.delete_word_left(); // delete "." (punctuation)
-        assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/README");
+        assert_eq!(
+            buf.lines()[0],
+            "https://github.com/openai/codex/blob/main/README"
+        );
 
         buf.delete_word_left(); // delete "README" (word chars)
         assert_eq!(buf.lines()[0], "https://github.com/openai/codex/blob/main/");

@@ -197,7 +197,7 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
 }
 
 /// Result of building the effective system prompt.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct EffectivePrompt {
     /// The combined system prompt (config + AGENTS.md files).
     pub prompt: Option<String>,
