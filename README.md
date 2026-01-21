@@ -20,12 +20,10 @@ Built because I needed something:
 
 ## Features
 
-- **4 tools:** `bash`, `read` (files + images), `edit`, `write` — all you need for real work
 - **Anthropic provider** with API key or OAuth authentication (Claude Pro/Max)
 - **OpenAI provider** with API key (OpenAI API) or OAuth (Codex Subscription)
 - **OpenRouter provider** with API key
-- **Gemini provider** with API key
-- **Gemini CLI provider** with OAuth (Cloud Code Assist)
+- **Gemini provider** with API key or subscription (Cloud Code Assist)
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display
