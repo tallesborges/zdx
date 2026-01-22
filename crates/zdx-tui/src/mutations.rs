@@ -69,6 +69,8 @@ pub enum ThreadMutation {
         cumulative: Usage,
         latest: Usage,
     },
+    /// Set the thread title (if any).
+    SetTitle(Option<String>),
     UpdateUsage {
         input: u64,
         output: u64,

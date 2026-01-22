@@ -489,12 +489,35 @@ impl TuiRuntime {
                     move |_| handlers::thread_rename(thread_id, title),
                 );
             }
-            UiEffect::SuggestThreadTitle { thread_id, message } => {
+            UiEffect::SuggestThreadTitle {
+                task,
+                thread_id,
+                message,
+            } => {
+                let Some(task) = task else {
+                    return;
+                };
+                let is_current = self
+                    .state
+                    .tui
+                    .thread
+                    .thread_log
+                    .as_ref()
+                    .is_some_and(|log| log.id == thread_id);
+                if !is_current {
+                    return;
+                }
                 let root = self.state.tui.agent_opts.root.clone();
                 let title_model = self.state.tui.config.title_model.clone();
-                self.spawn_effect(None, move || {
-                    thread_title::suggest_thread_title(thread_id, message, title_model, root)
-                });
+                self.spawn_task(
+                    TaskKind::ThreadTitle,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| {
+                        thread_title::suggest_thread_title(thread_id, message, title_model, root)
+                    },
+                );
             }
             UiEffect::CreateNewThread { task } => {
                 let Some(task) = task else {

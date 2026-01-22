@@ -849,12 +849,26 @@ pub fn extract_root_path_from_events(events: &[ThreadEvent]) -> Option<String> {
     })
 }
 
+/// Extracts the thread title from events (if present).
+pub fn extract_title_from_events(events: &[ThreadEvent]) -> Option<String> {
+    events.iter().find_map(|event| match event {
+        ThreadEvent::Meta { title, .. } => title.clone(),
+        _ => None,
+    })
+}
+
 /// Returns the ID of the most recently modified thread.
 ///
 /// Returns None if no threads exist.
 pub fn latest_thread_id() -> Result<Option<String>> {
     let threads = list_threads()?;
     Ok(threads.into_iter().next().map(|s| s.id))
+}
+
+/// Reads a thread's title by ID (if present in meta).
+pub fn read_thread_title(id: &str) -> Result<Option<String>> {
+    let path = threads_dir().join(format!("{}.jsonl", id));
+    Ok(read_meta_title(&path)?.flatten())
 }
 
 /// Loads thread events and converts them to ChatMessages for API use.

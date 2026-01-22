@@ -113,9 +113,11 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 && let Some(text) = app.tui.input.pop_queued_prompt()
             {
                 let thread_id = app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
-                let thread_is_empty = app.tui.thread.messages.is_empty();
+                let should_suggest_title = thread_id.is_some()
+                    && app.tui.thread.title.is_none()
+                    && !app.tui.tasks.thread_title.is_running();
                 let (queue_effects, queue_mutations) =
-                    input::build_send_effects(&text, thread_id, thread_is_empty);
+                    input::build_send_effects(&text, thread_id, should_suggest_title);
                 apply_mutations(&mut app.tui, queue_mutations);
                 effects.extend(queue_effects);
             }
@@ -237,6 +239,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 | TaskKind::ThreadList
                 | TaskKind::ThreadLoad
                 | TaskKind::ThreadRename
+                | TaskKind::ThreadTitle
                 | TaskKind::ThreadPreview
                 | TaskKind::ThreadCreate
                 | TaskKind::ThreadFork
@@ -381,6 +384,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 messages,
                 history,
                 thread_log,
+                title,
                 usage,
             } => {
                 let (mut effects, mutations, overlay_action) =
@@ -390,6 +394,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         messages,
                         history,
                         thread_log,
+                        title,
                         usage,
                     });
                 apply_mutations(&mut app.tui, mutations);
@@ -591,10 +596,23 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
             ThreadUiEvent::TitleSuggested { thread_id, title } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::TitleSuggested { thread_id, title });
-                apply_mutations(&mut app.tui, mutations);
-                effects
+                let is_current = app
+                    .tui
+                    .thread
+                    .thread_log
+                    .as_ref()
+                    .is_some_and(|log| log.id == thread_id);
+                if !is_current {
+                    vec![]
+                } else {
+                    let (effects, mutations, _) =
+                        thread::handle_thread_event(ThreadUiEvent::TitleSuggested {
+                            thread_id,
+                            title,
+                        });
+                    apply_mutations(&mut app.tui, mutations);
+                    effects
+                }
             }
             ThreadUiEvent::RenameFailed { error } => {
                 let (effects, mutations, _) =
@@ -698,6 +716,18 @@ fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> 
                     events,
                     user_input,
                     turn_number,
+                });
+            }
+            UiEffect::SuggestThreadTitle {
+                task,
+                thread_id,
+                message,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::SuggestThreadTitle {
+                    task: Some(task),
+                    thread_id,
+                    message,
                 });
             }
             UiEffect::CancelTask { kind, token } => {
@@ -965,12 +995,12 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .thread_log
         .as_ref()
         .map(|thread_log| thread_log.id.clone());
-    let thread_is_empty = app.tui.thread.messages.is_empty();
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         bash_running: app.tui.bash_running.is_some(),
         thread_id,
-        thread_is_empty,
+        thread_title: app.tui.thread.title.as_deref(),
+        title_task_running: app.tui.tasks.thread_title.is_running(),
         model_id: &app.tui.config.model,
     };
     let (effects, mutations, overlay_request) =

@@ -59,6 +59,7 @@ pub enum ThreadUiEvent {
         messages: Vec<ChatMessage>,
         history: Vec<String>,
         thread_log: Option<ThreadLog>,
+        title: Option<String>,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
     },

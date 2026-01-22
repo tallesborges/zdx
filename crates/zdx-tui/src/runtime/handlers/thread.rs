@@ -62,6 +62,8 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     // Extract usage from events before consuming them
     let usage = thread_log::extract_usage_from_thread_events(&events);
 
+    let title = thread_log::extract_title_from_events(&events);
+
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
 
@@ -107,6 +109,7 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         messages,
         history,
         thread_log: thread_log_handle,
+        title,
         usage,
     })
 }

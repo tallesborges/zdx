@@ -15,6 +15,9 @@ pub struct ThreadState {
     /// Active thread for persistence (if enabled).
     pub thread_log: Option<ThreadLog>,
 
+    /// Cached thread title (if known).
+    pub title: Option<String>,
+
     /// Thread messages (API format).
     pub messages: Vec<ChatMessage>,
 
@@ -33,6 +36,7 @@ impl ThreadState {
     pub fn new() -> Self {
         Self {
             thread_log: None,
+            title: None,
             messages: Vec::new(),
             usage: ThreadUsage::new(),
         }
@@ -40,8 +44,13 @@ impl ThreadState {
 
     /// Creates a ThreadState with an active thread and message history.
     pub fn with_thread(thread_log: Option<ThreadLog>, messages: Vec<ChatMessage>) -> Self {
+        let title = thread_log
+            .as_ref()
+            .and_then(|log| zdx_core::core::thread_log::read_thread_title(&log.id).ok())
+            .flatten();
         Self {
             thread_log,
+            title,
             messages,
             usage: ThreadUsage::new(),
         }
@@ -53,12 +62,18 @@ impl ThreadState {
             ThreadMutation::ClearMessages => self.messages.clear(),
             ThreadMutation::SetMessages(messages) => self.messages = messages,
             ThreadMutation::AppendMessage(message) => self.messages.push(message),
-            ThreadMutation::SetThread(thread_log) => self.thread_log = thread_log,
+            ThreadMutation::SetThread(thread_log) => {
+                self.thread_log = thread_log;
+                if self.thread_log.is_none() {
+                    self.title = None;
+                }
+            }
             ThreadMutation::ResetUsage => self.usage = ThreadUsage::new(),
             ThreadMutation::SetUsage { cumulative, latest } => {
                 self.usage = ThreadUsage::new();
                 self.usage.restore(cumulative, latest);
             }
+            ThreadMutation::SetTitle(title) => self.title = title,
             ThreadMutation::UpdateUsage {
                 input,
                 output,
