@@ -58,19 +58,17 @@ fn process_subagent_output(output: std::process::Output) -> Result<String, Strin
 
 /// Runs the subagent process with timeout and cancellation support.
 ///
-/// Pure async function - returns UiEvent::HandoffResult directly.
+/// Pure async function - returns the generated prompt or error.
 /// Uses `CancellationToken` for unified cancellation.
 async fn run_subagent(
     cancel: CancellationToken,
     handoff_model: String,
     generation_prompt: String,
     root: PathBuf,
-) -> UiEvent {
+) -> Result<String, String> {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
-        Err(e) => {
-            return UiEvent::HandoffResult(Err(format!("Failed to get executable: {}", e)));
-        }
+        Err(e) => return Err(format!("Failed to get executable: {}", e)),
     };
 
     let child = match Command::new(exe)
@@ -93,13 +91,11 @@ async fn run_subagent(
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => {
-            return UiEvent::HandoffResult(Err(format!("Failed to spawn subagent: {}", e)));
-        }
+        Err(e) => return Err(format!("Failed to spawn subagent: {}", e)),
     };
 
     // Use select! to race cancellation against the subagent completion
-    let result = tokio::select! {
+    tokio::select! {
         _ = cancel.cancelled() => Err("Handoff cancelled".to_string()),
         output = tokio::time::timeout(
             Duration::from_secs(HANDOFF_TIMEOUT_SECS),
@@ -110,9 +106,7 @@ async fn run_subagent(
                 .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {}", e)))
                 .and_then(process_subagent_output)
         }
-    };
-
-    UiEvent::HandoffResult(result)
+    }
 }
 
 /// Executes a handoff submit: creates a new thread with handoff source.
@@ -152,9 +146,15 @@ pub async fn handoff_generation(
 
     let content = match thread_content {
         Ok(content) => content,
-        Err(e) => return UiEvent::HandoffResult(Err(e)),
+        Err(e) => {
+            return UiEvent::HandoffResult {
+                goal,
+                result: Err(e),
+            };
+        }
     };
 
     let generation_prompt = build_handoff_prompt(&content, &goal);
-    run_subagent(cancel, handoff_model, generation_prompt, root).await
+    let result = run_subagent(cancel, handoff_model, generation_prompt, root).await;
+    UiEvent::HandoffResult { goal, result }
 }

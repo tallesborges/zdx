@@ -14,8 +14,8 @@ use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 
-use crate::common::Scrollbar;
 use crate::common::text::truncate_with_ellipsis;
+use crate::common::{Scrollbar, TaskKind};
 use crate::input;
 use crate::overlays::OverlayExt;
 use crate::state::{AgentState, AppState, TuiState};
@@ -225,7 +225,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
     let elapsed_span = elapsed.map(|d| format!(" ({})", format_elapsed(d)));
 
     // Check for bash execution first (takes priority over idle state)
-    let spans: Vec<Span> = if state.bash_running.is_some() {
+    let spans: Vec<Span> = if state.tasks.state(TaskKind::Bash).is_running() {
         let mut spans = vec![
             Span::styled(spinner, Style::default().fg(Color::Green)),
             Span::raw(" "),

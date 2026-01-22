@@ -14,6 +14,7 @@ chrono.workspace = true
 comfy-table.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
+enum-map.workspace = true
 ignore.workspace = true
 nucleo-matcher.workspace = true
 open.workspace = true

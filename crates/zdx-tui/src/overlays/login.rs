@@ -7,7 +7,6 @@ use super::OverlayUpdate;
 use crate::auth::render_login_overlay;
 use crate::common::TaskKind;
 use crate::effects::UiEffect;
-use crate::mutations::{AuthMutation, StateMutation};
 use crate::state::TuiState;
 
 #[derive(Debug, Clone)]
@@ -75,6 +74,7 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
+                        task: None,
                         provider,
                         state: Some(oauth_state),
                         port: Some(callback_port),
@@ -100,6 +100,7 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
+                        task: None,
                         provider,
                         state: Some(oauth_state_copy),
                         port: None,
@@ -125,6 +126,7 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
+                        task: None,
                         provider,
                         state: Some(oauth_state_copy),
                         port: None,
@@ -179,46 +181,37 @@ impl LoginState {
                         .unwrap_or(ProviderKind::OpenAICodex);
                     let (state, effects) = Self::open_with_provider(provider, None);
                     *self = state;
-                    // Set callback_in_progress when emitting StartLocalAuthCallback
-                    let has_callback = effects
-                        .iter()
-                        .any(|e| matches!(e, UiEffect::StartLocalAuthCallback { .. }));
-                    let mutations = if has_callback {
-                        vec![StateMutation::Auth(AuthMutation::SetCallbackInProgress(
-                            true,
-                        ))]
-                    } else {
-                        vec![]
-                    };
-                    OverlayUpdate::stay()
-                        .with_ui_effects(effects)
-                        .with_mutations(mutations)
+                    OverlayUpdate::stay().with_ui_effects(effects)
                 }
                 _ => OverlayUpdate::stay(),
             },
             LoginState::AwaitingCode { .. } => match key.code {
                 KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                    OverlayUpdate::close()
-                        .with_ui_effects(vec![UiEffect::CancelTask {
+                    OverlayUpdate::close().with_ui_effects(vec![
+                        UiEffect::CancelTask {
                             kind: TaskKind::LoginExchange,
                             token: None,
-                        }])
-                        .with_mutations(vec![StateMutation::Auth(
-                            AuthMutation::SetCallbackInProgress(false),
-                        )])
+                        },
+                        UiEffect::CancelTask {
+                            kind: TaskKind::LoginCallback,
+                            token: None,
+                        },
+                    ])
                 }
                 _ => OverlayUpdate::stay(),
             },
             LoginState::Exchanging { .. } => {
                 if key.code == KeyCode::Esc || (ctrl && key.code == KeyCode::Char('c')) {
-                    OverlayUpdate::close()
-                        .with_ui_effects(vec![UiEffect::CancelTask {
+                    OverlayUpdate::close().with_ui_effects(vec![
+                        UiEffect::CancelTask {
                             kind: TaskKind::LoginExchange,
                             token: None,
-                        }])
-                        .with_mutations(vec![StateMutation::Auth(
-                            AuthMutation::SetCallbackInProgress(false),
-                        )])
+                        },
+                        UiEffect::CancelTask {
+                            kind: TaskKind::LoginCallback,
+                            token: None,
+                        },
+                    ])
                 } else {
                     OverlayUpdate::stay()
                 }

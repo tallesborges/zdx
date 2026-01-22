@@ -32,6 +32,7 @@ pub async fn bash_execution(
     };
     UiEvent::BashExecuted {
         id: result_id,
+        command,
         result,
     }
 }

@@ -8,7 +8,7 @@ use serde_json::json;
 use zdx_core::core::thread_log::ThreadEvent;
 
 use super::OverlayUpdate;
-use crate::common::{sanitize_for_display, truncate_with_ellipsis};
+use crate::common::{TaskKind, sanitize_for_display, truncate_with_ellipsis};
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, TranscriptMutation};
 use crate::state::TuiState;
@@ -155,7 +155,7 @@ impl TimelineState {
                     )]);
                 }
 
-                if tui.tasks.thread_fork.is_running() {
+                if tui.tasks.state(TaskKind::ThreadFork).is_running() {
                     return OverlayUpdate::stay();
                 }
 

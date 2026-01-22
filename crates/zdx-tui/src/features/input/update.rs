@@ -9,7 +9,7 @@ use zdx_core::providers::ChatMessage;
 
 use super::CursorMove;
 use super::state::{HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingPaste};
-use crate::common::{TaskKind, sanitize_for_display};
+use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
 use crate::mutations::{InputMutation, StateMutation, ThreadMutation, TranscriptMutation};
 use crate::overlays::{LoginState, Overlay, OverlayRequest};
@@ -25,10 +25,9 @@ type KeyResult = (Vec<UiEffect>, Vec<StateMutation>, Option<OverlayRequest>);
 /// avoiding excessive function parameters.
 pub struct InputContext<'a> {
     pub agent_state: &'a AgentState,
-    pub bash_running: bool,
+    pub tasks: &'a Tasks,
     pub thread_id: Option<String>,
     pub thread_title: Option<&'a str>,
-    pub title_task_running: bool,
     pub model_id: &'a str,
 }
 
@@ -325,7 +324,7 @@ fn handle_control_keys(
         KeyCode::Char('c') if mods.ctrl => {
             if ctx.agent_state.is_running() {
                 Some((vec![UiEffect::InterruptAgent], vec![], None))
-            } else if ctx.bash_running {
+            } else if ctx.tasks.state(TaskKind::Bash).is_running() {
                 Some((vec![UiEffect::InterruptBash], vec![], None))
             } else if !input.get_text().is_empty() {
                 input.clear();
@@ -353,7 +352,7 @@ fn handle_control_keys(
                 Some((vec![], vec![], None))
             } else if ctx.agent_state.is_running() {
                 Some((vec![UiEffect::InterruptAgent], vec![], None))
-            } else if ctx.bash_running {
+            } else if ctx.tasks.state(TaskKind::Bash).is_running() {
                 Some((
                     vec![UiEffect::CancelTask {
                         kind: TaskKind::Bash,
@@ -416,10 +415,9 @@ fn handle_submission(
         KeyCode::Enter if !mods.shift && !mods.alt => Some(submit_input(
             input,
             ctx.agent_state,
-            ctx.bash_running,
+            ctx.tasks,
             ctx.thread_id.clone(),
             ctx.thread_title,
-            ctx.title_task_running,
         )),
         _ => None,
     }
@@ -534,10 +532,9 @@ fn compute_at_trigger_position(input: &InputState) -> usize {
 fn submit_input(
     input: &mut InputState,
     agent_state: &AgentState,
-    bash_running: bool,
+    tasks: &Tasks,
     thread_id: Option<String>,
     thread_title: Option<&str>,
-    title_task_running: bool,
 ) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -560,17 +557,17 @@ fn submit_input(
         return handle_submit_while_agent_running(input, trimmed, &text);
     }
 
+    let bash_running = tasks.state(TaskKind::Bash).is_running();
     if bash_running {
         return (vec![], vec![], None);
     }
 
+    let title_task_running = tasks.state(TaskKind::ThreadTitle).is_running();
     let should_suggest_title = thread_id.is_some() && thread_title.is_none() && !title_task_running;
 
     // Try bash commands
     if let Some((mut effects, mutations, overlay)) = handle_bash_commands(input, trimmed, &text) {
-        if should_suggest_title
-            && let Some(thread_id) = thread_id.as_ref()
-        {
+        if should_suggest_title && let Some(thread_id) = thread_id.as_ref() {
             effects.push(UiEffect::SuggestThreadTitle {
                 task: None,
                 thread_id: thread_id.clone(),
@@ -765,14 +762,10 @@ pub fn build_send_effects(
 /// Handles the handoff generation result.
 pub fn handle_handoff_result(
     input: &mut InputState,
+    goal: String,
     result: Result<String, String>,
 ) -> Vec<StateMutation> {
-    // Extract goal from Generating state before transitioning
-    let goal = if let HandoffState::Generating { goal } = &input.handoff {
-        Some(goal.clone())
-    } else {
-        None
-    };
+    let was_generating = input.handoff.is_generating();
 
     match result {
         Ok(generated_prompt) => {
@@ -793,7 +786,7 @@ pub fn handle_handoff_result(
             )];
 
             // Restore goal for retry (spec requirement)
-            if let Some(goal) = goal {
+            if was_generating {
                 input.set_text(&goal);
                 input.handoff = HandoffState::Pending;
                 mutations.push(StateMutation::Transcript(

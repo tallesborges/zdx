@@ -144,7 +144,7 @@ impl TuiRuntime {
             if interrupt::is_interrupted() {
                 if self.state.tui.agent_state.is_running() {
                     // Let the agent handle the interrupt.
-                } else if self.state.tui.bash_running.is_some() {
+                } else if self.state.tui.tasks.state(TaskKind::Bash).is_running() {
                     self.execute_effect(UiEffect::InterruptBash);
                     interrupt::reset();
                 } else {
@@ -227,9 +227,8 @@ impl TuiRuntime {
         // Otherwise use slow polling to save CPU.
         let recent_terminal_activity = self.last_terminal_event.elapsed() < IDLE_POLL_DURATION;
         let needs_fast_poll = self.state.tui.agent_state.is_running()
-            || self.state.tui.bash_running.is_some()
+            || self.state.tui.tasks.state(TaskKind::Bash).is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
-            || self.state.tui.auth.callback_in_progress
             || self.state.tui.input.handoff.is_generating()
             || self.state.tui.tasks.is_any_running()
             || recent_terminal_activity;
@@ -322,25 +321,6 @@ impl TuiRuntime {
         }
     }
 
-    /// Spawns an async effect, sending an optional "started" event immediately
-    /// and the result event when complete.
-    ///
-    /// This centralizes the spawn-and-send pattern: handlers become pure async
-    /// functions that return `UiEvent`, while the runtime handles spawning.
-    fn spawn_effect<F, Fut>(&self, started: Option<UiEvent>, f: F)
-    where
-        F: FnOnce() -> Fut + Send + 'static,
-        Fut: Future<Output = UiEvent> + Send + 'static,
-    {
-        let tx = self.inbox_tx.clone();
-        if let Some(ev) = started {
-            let _ = tx.send(ev);
-        }
-        tokio::spawn(async move {
-            let _ = tx.send(f().await);
-        });
-    }
-
     /// Spawns an async task with a uniform TaskStarted/TaskCompleted lifecycle.
     fn spawn_task<F, Fut>(&self, kind: TaskKind, id: TaskId, meta: TaskMeta, cancelable: bool, f: F)
     where
@@ -367,8 +347,7 @@ impl TuiRuntime {
 
     /// Executes a single effect by dispatching to the appropriate handler.
     ///
-    /// Uses `spawn_effect` for pure async handlers (thread ops, auth) and
-    /// `spawn_task` for async task lifecycles.
+    /// Uses `spawn_task` for async task lifecycles.
     fn execute_effect(&mut self, effect: UiEffect) {
         match effect {
             // Simple effects (inline)
@@ -389,7 +368,7 @@ impl TuiRuntime {
             }
             UiEffect::InterruptBash => {
                 // Unified cancellation: call cancel() on the token
-                if let Some(cancel) = self.state.tui.tasks.bash.cancel.clone() {
+                if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {
                     cancel.cancel();
                 }
             }
@@ -426,14 +405,21 @@ impl TuiRuntime {
                 );
             }
             UiEffect::StartLocalAuthCallback {
+                task,
                 provider,
                 state,
                 port,
             } => {
-                // Note: callback_in_progress is set by reducer via mutation when emitting this effect
-                self.spawn_effect(None, move || {
-                    handlers::local_auth_callback(provider, state, port)
-                });
+                let Some(task) = task else {
+                    return;
+                };
+                self.spawn_task(
+                    TaskKind::LoginCallback,
+                    task,
+                    TaskMeta::None,
+                    false,
+                    move |_| handlers::local_auth_callback(provider, state, port),
+                );
             }
 
             // Config effects
@@ -608,9 +594,10 @@ impl TuiRuntime {
                         handoff::handoff_generation(thread_id, goal, handoff_model, root, cancel)
                     });
                 } else {
-                    self.dispatch_event(UiEvent::HandoffResult(Err(
-                        "Handoff requires an active thread.".to_string(),
-                    )));
+                    self.dispatch_event(UiEvent::HandoffResult {
+                        goal,
+                        result: Err("Handoff requires an active thread.".to_string()),
+                    });
                 }
             }
             UiEffect::HandoffSubmit {
@@ -662,7 +649,7 @@ impl TuiRuntime {
                     return;
                 };
                 // Only spawn if not already running a bash command
-                if self.state.tui.bash_running.is_none() {
+                if !self.state.tui.tasks.state(TaskKind::Bash).is_running() {
                     let id = format!("user-bash-{}", chrono::Utc::now().timestamp_millis());
                     let root = self.state.tui.agent_opts.root.clone();
                     let meta = TaskMeta::Bash {

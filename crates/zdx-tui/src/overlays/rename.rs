@@ -8,6 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
 use super::OverlayUpdate;
+use crate::common::TaskKind;
 use crate::effects::UiEffect;
 use crate::state::TuiState;
 
@@ -60,7 +61,7 @@ impl RenameState {
                     // Empty title - show error but stay open
                     self.error = Some("Title cannot be empty".to_string());
                     OverlayUpdate::stay()
-                } else if tui.tasks.thread_rename.is_running() {
+                } else if tui.tasks.state(TaskKind::ThreadRename).is_running() {
                     // Already renaming - show feedback
                     self.error = Some("Rename in progress...".to_string());
                     OverlayUpdate::stay()

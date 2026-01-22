@@ -19,8 +19,6 @@ pub fn handle_login_result(
     result: Result<(), String>,
     provider: zdx_core::providers::ProviderKind,
 ) -> (Vec<StateMutation>, LoginOverlayAction) {
-    // Clear in-progress flags
-    auth.callback_in_progress = false;
     match result {
         Ok(()) => {
             auth.refresh();

@@ -157,8 +157,6 @@ pub struct TuiState {
     pub agent_state: AgentState,
     /// Spinner animation frame counter (for running tools).
     pub spinner_frame: usize,
-    /// Currently running bash command info (id, command) - results come via inbox.
-    pub bash_running: Option<(String, String)>,
     /// Git branch name (cached at startup).
     pub git_branch: Option<String>,
     /// Shortened display path (cached at startup).
@@ -230,7 +228,6 @@ impl TuiState {
             system_prompt,
             agent_state: AgentState::Idle,
             spinner_frame: 0,
-            bash_running: None,
             git_branch,
             display_path,
             status_line: crate::statusline::StatusLineAccumulator::new(),
