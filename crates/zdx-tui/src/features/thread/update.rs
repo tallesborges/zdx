@@ -56,6 +56,7 @@ pub fn handle_thread_event(
             messages,
             history,
             thread_log,
+            title,
             usage,
         } => {
             handle_thread_loaded(
@@ -64,6 +65,7 @@ pub fn handle_thread_event(
                 cells,
                 messages,
                 history,
+                title,
                 usage,
                 &mut mutations,
             );
@@ -134,8 +136,11 @@ pub fn handle_thread_event(
         }
         ThreadUiEvent::TitleSuggested {
             thread_id: _,
-            title: _,
+            title,
         } => {
+            if let Some(title) = title {
+                mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(Some(title))));
+            }
             vec![]
         }
         ThreadUiEvent::RenameFailed { error } => {
@@ -151,12 +156,14 @@ pub fn handle_thread_event(
 
 /// Handles thread list loaded - opens thread picker overlay.
 /// Handles thread loaded - switches to the thread.
+#[allow(clippy::too_many_arguments)]
 fn handle_thread_loaded(
     thread_log: Option<ThreadLog>,
     thread_id: &str,
     cells: Vec<HistoryCell>,
     messages: Vec<ChatMessage>,
     history: Vec<String>,
+    title: Option<String>,
     usage: (Usage, Usage),
     mutations: &mut Vec<StateMutation>,
 ) {
@@ -169,6 +176,7 @@ fn handle_thread_loaded(
         TranscriptMutation::ClearWrapCache,
     ));
     mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(title)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(thread_log)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
@@ -211,6 +219,7 @@ fn handle_thread_created(
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
     // Show startup messages
@@ -244,6 +253,7 @@ fn handle_thread_forked(
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_log,
     ))));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
         latest,
@@ -266,11 +276,12 @@ fn handle_thread_renamed(
     mutations: &mut Vec<StateMutation>,
 ) {
     let short_id = short_thread_id(thread_id);
-    let display_title = title.unwrap_or_else(|| short_id.clone());
+    let display_title = title.clone().unwrap_or_else(|| short_id.clone());
     mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!(
             "Thread {} renamed to \"{}\".",
             short_id, display_title
         )),
     ));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(title)));
 }

@@ -21,6 +21,7 @@ pub enum TaskKind {
     ThreadList,
     ThreadLoad,
     ThreadRename,
+    ThreadTitle,
     ThreadPreview,
     ThreadCreate,
     ThreadFork,
@@ -97,6 +98,7 @@ pub struct Tasks {
     pub thread_list: TaskState,
     pub thread_load: TaskState,
     pub thread_rename: TaskState,
+    pub thread_title: TaskState,
     pub thread_preview: TaskState,
     pub thread_create: TaskState,
     pub thread_fork: TaskState,
@@ -112,6 +114,7 @@ impl Tasks {
             TaskKind::ThreadList => &mut self.thread_list,
             TaskKind::ThreadLoad => &mut self.thread_load,
             TaskKind::ThreadRename => &mut self.thread_rename,
+            TaskKind::ThreadTitle => &mut self.thread_title,
             TaskKind::ThreadPreview => &mut self.thread_preview,
             TaskKind::ThreadCreate => &mut self.thread_create,
             TaskKind::ThreadFork => &mut self.thread_fork,
@@ -126,6 +129,7 @@ impl Tasks {
         self.thread_list.is_running()
             || self.thread_load.is_running()
             || self.thread_rename.is_running()
+            || self.thread_title.is_running()
             || self.thread_preview.is_running()
             || self.thread_create.is_running()
             || self.thread_fork.is_running()

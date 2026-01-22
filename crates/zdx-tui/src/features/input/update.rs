@@ -27,7 +27,8 @@ pub struct InputContext<'a> {
     pub agent_state: &'a AgentState,
     pub bash_running: bool,
     pub thread_id: Option<String>,
-    pub thread_is_empty: bool,
+    pub thread_title: Option<&'a str>,
+    pub title_task_running: bool,
     pub model_id: &'a str,
 }
 
@@ -417,7 +418,8 @@ fn handle_submission(
             ctx.agent_state,
             ctx.bash_running,
             ctx.thread_id.clone(),
-            ctx.thread_is_empty,
+            ctx.thread_title,
+            ctx.title_task_running,
         )),
         _ => None,
     }
@@ -534,7 +536,8 @@ fn submit_input(
     agent_state: &AgentState,
     bash_running: bool,
     thread_id: Option<String>,
-    thread_is_empty: bool,
+    thread_title: Option<&str>,
+    title_task_running: bool,
 ) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -561,9 +564,20 @@ fn submit_input(
         return (vec![], vec![], None);
     }
 
+    let should_suggest_title = thread_id.is_some() && thread_title.is_none() && !title_task_running;
+
     // Try bash commands
-    if let Some(result) = handle_bash_commands(input, trimmed, &text) {
-        return result;
+    if let Some((mut effects, mutations, overlay)) = handle_bash_commands(input, trimmed, &text) {
+        if should_suggest_title
+            && let Some(thread_id) = thread_id.as_ref()
+        {
+            effects.push(UiEffect::SuggestThreadTitle {
+                task: None,
+                thread_id: thread_id.clone(),
+                message: text.to_string(),
+            });
+        }
+        return (effects, mutations, overlay);
     }
 
     // Try handoff submissions
@@ -579,7 +593,7 @@ fn submit_input(
     input.history.push(text.clone());
     input.reset_navigation();
     input.clear();
-    let (effects, mutations) = build_send_effects(&text, thread_id, thread_is_empty);
+    let (effects, mutations) = build_send_effects(&text, thread_id, should_suggest_title);
 
     (effects, mutations, None)
 }
@@ -719,7 +733,7 @@ fn handle_handoff_submission(
 pub fn build_send_effects(
     text: &str,
     thread_id: Option<String>,
-    thread_is_empty: bool,
+    should_suggest_title: bool,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
     let mut effects = if thread_id.is_some() {
         vec![
@@ -737,8 +751,9 @@ pub fn build_send_effects(
         StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(text))),
     ];
 
-    if thread_is_empty && let Some(thread_id) = thread_id {
+    if should_suggest_title && let Some(thread_id) = thread_id {
         effects.push(UiEffect::SuggestThreadTitle {
+            task: None,
             thread_id,
             message: text.to_string(),
         });
