@@ -48,6 +48,7 @@ pub enum UiEffect {
 
     /// Start a local OAuth callback listener (if supported).
     StartLocalAuthCallback {
+        task: Option<TaskId>,
         provider: ProviderKind,
         state: Option<String>,
         port: Option<u16>,

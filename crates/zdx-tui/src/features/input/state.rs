@@ -35,10 +35,7 @@ pub enum HandoffState {
     Pending,
 
     /// Handoff generation is in progress.
-    Generating {
-        /// The goal text (preserved for retry on failure).
-        goal: String,
-    },
+    Generating,
 
     /// Generated prompt is in textarea, ready for user to review and submit.
     Ready,
@@ -52,7 +49,7 @@ impl HandoffState {
 
     /// Returns true if currently generating.
     pub fn is_generating(&self) -> bool {
-        matches!(self, HandoffState::Generating { .. })
+        matches!(self, HandoffState::Generating)
     }
 
     /// Returns true if in pending state (awaiting goal input).

@@ -53,9 +53,6 @@ impl AuthStatus {
 pub struct AuthState {
     /// Current auth type indicator (cached, refreshed on login/logout).
     pub auth_type: AuthStatus,
-
-    /// Whether a local OAuth callback is being awaited.
-    pub callback_in_progress: bool,
 }
 
 impl Default for AuthState {
@@ -69,7 +66,6 @@ impl AuthState {
     pub fn new() -> Self {
         Self {
             auth_type: AuthStatus::detect(),
-            callback_in_progress: false,
         }
     }
 
@@ -82,9 +78,6 @@ impl AuthState {
     pub fn apply(&mut self, mutation: AuthMutation) {
         match mutation {
             AuthMutation::RefreshStatus => self.refresh(),
-            AuthMutation::SetCallbackInProgress(in_progress) => {
-                self.callback_in_progress = in_progress
-            }
         }
     }
 }

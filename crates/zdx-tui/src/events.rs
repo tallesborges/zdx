@@ -152,7 +152,10 @@ pub enum UiEvent {
     LoginCallbackResult(Option<String>),
 
     /// Async handoff generation completed (Ok = generated prompt, Err = error message).
-    HandoffResult(Result<String, String>),
+    HandoffResult {
+        goal: String,
+        result: Result<String, String>,
+    },
 
     /// Handoff thread creation succeeded.
     HandoffThreadCreated {
@@ -171,7 +174,11 @@ pub enum UiEvent {
     ClipboardCopied,
 
     /// Direct bash execution completed.
-    BashExecuted { id: String, result: ToolOutput },
+    BashExecuted {
+        id: String,
+        command: String,
+        result: ToolOutput,
+    },
 
     /// Task lifecycle: runtime started a task (cancel token optional).
     TaskStarted {

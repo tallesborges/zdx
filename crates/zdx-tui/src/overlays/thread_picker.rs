@@ -6,6 +6,7 @@ use ratatui::layout::Rect;
 use zdx_core::core::thread_log::ThreadSummary;
 
 use super::OverlayUpdate;
+use crate::common::TaskKind;
 use crate::effects::UiEffect;
 use crate::input::InputState;
 use crate::mutations::{InputMutation, StateMutation, TranscriptMutation};
@@ -160,7 +161,7 @@ impl ThreadPickerState {
                     }
 
                     if let Some(thread) = self.selected_thread() {
-                        if tui.tasks.thread_load.is_running() {
+                        if tui.tasks.state(TaskKind::ThreadLoad).is_running() {
                             return OverlayUpdate::stay();
                         }
                         OverlayUpdate::close()

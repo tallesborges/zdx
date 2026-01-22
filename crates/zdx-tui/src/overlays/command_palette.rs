@@ -6,6 +6,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
 
 use super::{OverlayRequest, OverlayUpdate};
+use crate::common::TaskKind;
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
 use crate::effects::UiEffect;
@@ -152,7 +153,7 @@ fn execute_command(
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
         "threads" => {
-            if tui.tasks.thread_list.is_running() {
+            if tui.tasks.state(TaskKind::ThreadList).is_running() {
                 return (None, vec![], vec![]);
             }
             (
@@ -298,7 +299,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         );
     }
 
-    if tui.tasks.thread_create.is_running() {
+    if tui.tasks.state(TaskKind::ThreadCreate).is_running() {
         return (vec![], vec![]);
     }
 

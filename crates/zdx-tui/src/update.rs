@@ -108,14 +108,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
             if should_dequeue
                 && !app.tui.agent_state.is_running()
-                && app.tui.bash_running.is_none()
+                && !app.tui.tasks.state(TaskKind::Bash).is_running()
                 && !app.tui.transcript.has_pending_user_cell()
                 && let Some(text) = app.tui.input.pop_queued_prompt()
             {
                 let thread_id = app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
                 let should_suggest_title = thread_id.is_some()
                     && app.tui.thread.title.is_none()
-                    && !app.tui.tasks.thread_title.is_running();
+                    && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
                 let (queue_effects, queue_mutations) =
                     input::build_send_effects(&text, thread_id, should_suggest_title);
                 apply_mutations(&mut app.tui, queue_mutations);
@@ -158,8 +158,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::LoginCallbackResult(code) => {
-            // Clear in-progress flag
-            app.tui.auth.callback_in_progress = false;
             let mut effects = Vec::new();
             if let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay {
                 match login_state {
@@ -221,14 +219,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.tasks.state_mut(kind).on_started(&started);
             match kind {
                 TaskKind::Handoff => {
-                    if let TaskMeta::Handoff { goal } = &started.meta {
-                        app.tui.input.handoff = HandoffState::Generating { goal: goal.clone() };
+                    if matches!(&started.meta, TaskMeta::Handoff { .. }) {
+                        app.tui.input.handoff = HandoffState::Generating;
                     }
                 }
                 TaskKind::Bash => {
                     if let TaskMeta::Bash { id, command } = &started.meta {
-                        app.tui.bash_running = Some((id.clone(), command.clone()));
-
                         // Create a running tool cell immediately (shows spinner)
                         let input = serde_json::json!({ "command": command });
                         let cell = HistoryCell::tool_running(id, "bash", input);
@@ -243,7 +239,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 | TaskKind::ThreadPreview
                 | TaskKind::ThreadCreate
                 | TaskKind::ThreadFork
-                | TaskKind::LoginExchange => {}
+                | TaskKind::LoginExchange
+                | TaskKind::LoginCallback => {}
             }
             vec![]
         }
@@ -258,8 +255,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 update(app, *completed.result)
             }
         }
-        UiEvent::HandoffResult(result) => {
-            let mutations = input::handle_handoff_result(&mut app.tui.input, result);
+        UiEvent::HandoffResult { goal, result } => {
+            let mutations = input::handle_handoff_result(&mut app.tui.input, goal, result);
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }
@@ -299,24 +296,22 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
 
         // Direct bash execution events
-        UiEvent::BashExecuted { id, result } => {
-            // Get command from bash_running before clearing
-            let command = app.tui.bash_running.as_ref().map(|(_, cmd)| cmd.clone());
-            app.tui.bash_running = None;
-
+        UiEvent::BashExecuted {
+            id,
+            command,
+            result,
+        } => {
             // Find the existing tool cell and set the result
             app.tui.transcript.set_tool_result_for(&id, result.clone());
 
             // Persist to thread and add to messages for LLM context
             let mut effects = vec![];
-            if let Some(cmd) = command
-                && app.tui.thread.thread_log.is_some()
-            {
+            if app.tui.thread.thread_log.is_some() {
                 // Format as a user message describing what the user did
                 // This makes it clear to the LLM that the USER ran the command
                 let user_message = format!(
                     "[I executed a bash command]\n$ {}\n\nResult:\n{}",
-                    cmd,
+                    command,
                     result.to_json_string()
                 );
 
@@ -693,6 +688,20 @@ fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> 
                     redirect_uri,
                 });
             }
+            UiEffect::StartLocalAuthCallback {
+                task,
+                provider,
+                state,
+                port,
+            } => {
+                let task = ensure_task_id(tui, task);
+                out.push(UiEffect::StartLocalAuthCallback {
+                    task: Some(task),
+                    provider,
+                    state,
+                    port,
+                });
+            }
             UiEffect::DiscoverFiles { task } => {
                 let task = ensure_task_id(tui, task);
                 out.push(UiEffect::DiscoverFiles { task: Some(task) });
@@ -997,10 +1006,9 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .map(|thread_log| thread_log.id.clone());
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
-        bash_running: app.tui.bash_running.is_some(),
+        tasks: &app.tui.tasks,
         thread_id,
         thread_title: app.tui.thread.title.as_deref(),
-        title_task_running: app.tui.tasks.thread_title.is_running(),
         model_id: &app.tui.config.model,
     };
     let (effects, mutations, overlay_request) =
