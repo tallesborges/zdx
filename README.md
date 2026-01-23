@@ -37,6 +37,7 @@ Built because I needed something:
 - **Timeline overlay** — jump to turns and fork from any message
 - **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
 - **Skills** via `SKILL.md` (discoverable skill instructions with metadata)
+- **Telegram bot** — interact with ZDX via Telegram DMs (`zdx-bot`)
 
 ## Inspiration
 
