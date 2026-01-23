@@ -1,9 +1,6 @@
 //! Claude CLI client for Anthropic Messages API (OAuth).
 
-use std::pin::Pin;
-
 use anyhow::Result;
-use futures_util::Stream;
 
 use crate::providers::anthropic::types::StreamingMessagesRequest;
 use crate::providers::anthropic::{
@@ -11,7 +8,7 @@ use crate::providers::anthropic::{
     build_tool_defs, send_streaming_request,
 };
 use crate::providers::claude_cli::auth::{ClaudeCliConfig, resolve_credentials};
-use crate::providers::shared::{ChatMessage, StreamEvent};
+use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";
@@ -39,7 +36,7 @@ impl ClaudeCliClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
 
         // Convert messages to API format.

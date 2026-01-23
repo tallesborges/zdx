@@ -1,9 +1,6 @@
 //! Gemini provider (Google Generative Language API).
 
-use std::pin::Pin;
-
 use anyhow::{Context, Result};
-use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
@@ -11,7 +8,7 @@ use crate::providers::gemini_shared::sse::GeminiSseParser;
 use crate::providers::gemini_shared::{
     GeminiThinkingConfig, build_gemini_request, classify_reqwest_error, merge_gemini_system_prompt,
 };
-use crate::providers::{ChatMessage, ProviderError, StreamEvent};
+use crate::providers::{ChatMessage, ProviderError, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -76,7 +73,7 @@ impl GeminiClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let system_prompt = merge_gemini_system_prompt(system);
         let request = build_gemini_request(
             messages,

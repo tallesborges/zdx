@@ -16,7 +16,8 @@ pub mod shared;
 
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
-    ProviderErrorKind, ReasoningBlock, ReplayToken, StreamEvent, Usage,
+    ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent,
+    Usage,
 };
 
 /// Provider selection based on model naming.

@@ -1,11 +1,12 @@
 use std::pin::Pin;
 
-use anyhow::{Context, Result, bail};
 use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use serde::Deserialize;
 
-use crate::providers::shared::{ContentBlockType, StreamEvent, Usage};
+use crate::providers::shared::{
+    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
+};
 
 /// SSE parser that converts a byte stream into StreamEvents.
 pub struct SseParser<S> {
@@ -28,7 +29,7 @@ where
     S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
 {
-    type Item = Result<StreamEvent>;
+    type Item = ProviderResult<StreamEvent>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -40,9 +41,10 @@ where
             Poll::Ready(Some(Ok(event))) => {
                 Poll::Ready(Some(parse_sse_event_fields(&event.event, &event.data)))
             }
-            Poll::Ready(Some(Err(e))) => {
-                Poll::Ready(Some(Err(anyhow::anyhow!("SSE stream error: {}", e))))
-            }
+            Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProviderError::new(
+                ProviderErrorKind::Parse,
+                format!("SSE stream error: {}", e),
+            )))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
         }
@@ -51,7 +53,7 @@ where
 
 /// Parses a single SSE event block into a StreamEvent.
 #[allow(dead_code)]
-pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
+pub fn parse_sse_event(event_text: &str) -> ProviderResult<StreamEvent> {
     let mut event_type = None;
     let mut data = None;
 
@@ -69,7 +71,7 @@ pub fn parse_sse_event(event_text: &str) -> Result<StreamEvent> {
     parse_sse_event_fields(event_type, data)
 }
 
-fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
+fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<StreamEvent> {
     let data = if data.trim().is_empty() {
         None
     } else {
@@ -79,23 +81,38 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
     match event_type {
         "ping" => Ok(StreamEvent::Ping),
         "message_start" => {
-            let data = data.context("Missing data for message_start event")?;
-            let parsed: SseMessageStart =
-                serde_json::from_str(data).context("Failed to parse message_start")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(ProviderErrorKind::Parse, "Missing data for message_start")
+            })?;
+            let parsed: SseMessageStart = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse message_start: {}", err),
+                )
+            })?;
             Ok(StreamEvent::MessageStart {
                 model: parsed.message.model,
                 usage: parsed.message.usage.into(),
             })
         }
         "content_block_start" => {
-            let data = data.context("Missing data for content_block_start event")?;
-            let parsed: SseContentBlockStart =
-                serde_json::from_str(data).context("Failed to parse content_block_start")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    "Missing data for content_block_start",
+                )
+            })?;
+            let parsed: SseContentBlockStart = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse content_block_start: {}", err),
+                )
+            })?;
             let block_type = parsed
                 .content_block
                 .block_type
                 .parse::<ContentBlockType>()
-                .map_err(|e| anyhow::anyhow!(e))?;
+                .map_err(|e| ProviderError::new(ProviderErrorKind::Parse, e))?;
             Ok(StreamEvent::ContentBlockStart {
                 index: parsed.index,
                 block_type,
@@ -104,9 +121,18 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
             })
         }
         "content_block_delta" => {
-            let data = data.context("Missing data for content_block_delta event")?;
-            let parsed: SseContentBlockDelta =
-                serde_json::from_str(data).context("Failed to parse content_block_delta")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    "Missing data for content_block_delta",
+                )
+            })?;
+            let parsed: SseContentBlockDelta = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse content_block_delta: {}", err),
+                )
+            })?;
             match parsed.delta.delta_type.as_str() {
                 "text_delta" => Ok(StreamEvent::TextDelta {
                     index: parsed.index,
@@ -124,21 +150,39 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
                     index: parsed.index,
                     signature: parsed.delta.signature.unwrap_or_default(),
                 }),
-                other => bail!("Unknown delta type: {}", other),
+                other => Err(ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Unknown delta type: {}", other),
+                )),
             }
         }
         "content_block_stop" => {
-            let data = data.context("Missing data for content_block_stop event")?;
-            let parsed: SseContentBlockCompleted =
-                serde_json::from_str(data).context("Failed to parse content_block_stop")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    "Missing data for content_block_stop",
+                )
+            })?;
+            let parsed: SseContentBlockCompleted = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse content_block_stop: {}", err),
+                )
+            })?;
             Ok(StreamEvent::ContentBlockCompleted {
                 index: parsed.index,
             })
         }
         "message_delta" => {
-            let data = data.context("Missing data for message_delta event")?;
-            let parsed: SseMessageDelta =
-                serde_json::from_str(data).context("Failed to parse message_delta")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(ProviderErrorKind::Parse, "Missing data for message_delta")
+            })?;
+            let parsed: SseMessageDelta = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse message_delta: {}", err),
+                )
+            })?;
             Ok(StreamEvent::MessageDelta {
                 stop_reason: parsed.delta.stop_reason.clone(),
                 usage: parsed.usage.map(|u| u.into()),
@@ -146,14 +190,24 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> Result<StreamEvent> {
         }
         "message_stop" => Ok(StreamEvent::MessageCompleted),
         "error" => {
-            let data = data.context("Missing data for error event")?;
-            let parsed: SseError = serde_json::from_str(data).context("Failed to parse error")?;
+            let data = data.ok_or_else(|| {
+                ProviderError::new(ProviderErrorKind::Parse, "Missing data for error event")
+            })?;
+            let parsed: SseError = serde_json::from_str(data).map_err(|err| {
+                ProviderError::new(
+                    ProviderErrorKind::Parse,
+                    format!("Failed to parse error: {}", err),
+                )
+            })?;
             Ok(StreamEvent::Error {
                 error_type: parsed.error.error_type,
                 message: parsed.error.message,
             })
         }
-        other => bail!("Unknown SSE event type: {}", other),
+        other => Err(ProviderError::new(
+            ProviderErrorKind::Parse,
+            format!("Unknown SSE event type: {}", other),
+        )),
     }
 }
 

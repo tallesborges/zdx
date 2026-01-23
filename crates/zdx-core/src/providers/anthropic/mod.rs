@@ -20,19 +20,16 @@ mod client;
 pub(crate) mod sse;
 pub(crate) mod types;
 
-use std::pin::Pin;
-
 use anyhow::Result;
 pub use auth::{AnthropicConfig, DEFAULT_BASE_URL};
 pub use client::AnthropicClient;
-use futures_util::Stream;
 use types::{
     ApiContentBlock, ApiMessage, ApiMessageContent, ApiToolDef, CacheControl,
     StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
 
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, StreamEvent};
+use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, ProviderStream};
 use crate::tools::ToolDefinition;
 
 pub(crate) fn build_api_messages_with_cache_control(messages: &[ChatMessage]) -> Vec<ApiMessage> {
@@ -89,7 +86,7 @@ pub(crate) async fn send_streaming_request(
     url: &str,
     request: &StreamingMessagesRequest<'_>,
     header_fn: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
-) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+) -> Result<ProviderStream> {
     let builder = client
         .post(url)
         .header("content-type", "application/json")

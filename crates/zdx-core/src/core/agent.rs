@@ -5,11 +5,10 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use anyhow::{Result, bail};
-use futures_util::{Stream, StreamExt};
+use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
@@ -28,8 +27,8 @@ use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ReasoningBlock,
-    ReplayToken, StreamEvent, resolve_provider,
+    ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
+    ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
 };
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
 
@@ -158,7 +157,7 @@ impl ProviderClient {
         messages: &[ChatMessage],
         tools: &[crate::tools::ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         match self {
             ProviderClient::Anthropic(client) => {
                 client.send_messages_stream(messages, tools, system).await
@@ -592,7 +591,7 @@ pub async fn run_turn(
             let event = match event_result {
                 Ok(e) => e,
                 Err(e) => {
-                    return Err(emit_error_async(e, &sender).await);
+                    return Err(emit_error_async(anyhow::Error::new(e), &sender).await);
                 }
             };
 

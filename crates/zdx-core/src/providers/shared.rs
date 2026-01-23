@@ -3,6 +3,7 @@
 use std::fmt;
 use std::str::FromStr;
 
+use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -225,6 +226,9 @@ impl fmt::Display for ProviderError {
 
 impl std::error::Error for ProviderError {}
 
+/// Result type for provider operations.
+pub type ProviderResult<T> = std::result::Result<T, ProviderError>;
+
 /// Token usage information from Anthropic API.
 ///
 /// Tracks input/output tokens and cache-related tokens for cost calculation.
@@ -284,6 +288,9 @@ pub enum StreamEvent {
     /// Error event from API
     Error { error_type: String, message: String },
 }
+
+/// Boxed stream of provider events.
+pub type ProviderStream = BoxStream<'static, ProviderResult<StreamEvent>>;
 
 #[cfg(test)]
 mod tests {

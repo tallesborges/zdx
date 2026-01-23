@@ -3,12 +3,13 @@
 use std::collections::VecDeque;
 use std::pin::Pin;
 
-use anyhow::{Result, anyhow};
 use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use serde_json::Value;
 
-use crate::providers::{ContentBlockType, StreamEvent, Usage};
+use crate::providers::{
+    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
+};
 
 /// Extension trait for extracting strings from JSON values.
 trait JsonExt {
@@ -86,20 +87,24 @@ impl<S> ResponsesSseParser<S> {
         }
     }
 
-    fn handle_event_data(&mut self, data: &str) -> Result<()> {
+    fn handle_event_data(&mut self, data: &str) -> ProviderResult<()> {
         let trimmed = data.trim();
         if trimmed.is_empty() || trimmed == "[DONE]" {
             return Ok(());
         }
 
-        let value = serde_json::from_str::<Value>(trimmed)
-            .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
+        let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
+            ProviderError::new(
+                ProviderErrorKind::Parse,
+                format!("Failed to parse SSE JSON: {}", err),
+            )
+        })?;
         let event = self.map_event(value)?;
         self.pending.push_back(event);
         Ok(())
     }
 
-    fn map_event(&mut self, value: Value) -> Result<StreamEvent> {
+    fn map_event(&mut self, value: Value) -> ProviderResult<StreamEvent> {
         let event_type = value.get_str("type");
 
         match event_type {
@@ -361,7 +366,7 @@ where
     S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
 {
-    type Item = Result<StreamEvent>;
+    type Item = ProviderResult<StreamEvent>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -382,7 +387,10 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(anyhow!("SSE stream error: {}", e))));
+                    return Poll::Ready(Some(Err(ProviderError::new(
+                        ProviderErrorKind::Parse,
+                        format!("SSE stream error: {}", e),
+                    ))));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
                 Poll::Pending => return Poll::Pending,
