@@ -3,7 +3,7 @@
 use std::collections::{HashMap, VecDeque};
 use std::pin::Pin;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -13,7 +13,7 @@ use serde_json::Value;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
-    ProviderErrorKind, StreamEvent, Usage,
+    ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
 };
 use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
 
@@ -81,7 +81,7 @@ impl OpenRouterClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let request = ChatCompletionRequest::new(
             self.config.model.clone(),
             self.config.max_tokens,
@@ -658,18 +658,22 @@ impl<S> ChatCompletionsSseParser<S> {
         self.pending.push_back(StreamEvent::MessageCompleted);
     }
 
-    fn handle_event_data(&mut self, data: &str) -> Result<()> {
+    fn handle_event_data(&mut self, data: &str) -> ProviderResult<()> {
         let trimmed = data.trim();
         if trimmed.is_empty() || trimmed == "[DONE]" {
             return Ok(());
         }
 
-        let value = serde_json::from_str::<Value>(trimmed)
-            .map_err(|err| anyhow!("Failed to parse SSE JSON: {}", err))?;
+        let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
+            ProviderError::new(
+                ProviderErrorKind::Parse,
+                format!("Failed to parse SSE JSON: {}", err),
+            )
+        })?;
         self.handle_chunk(value)
     }
 
-    fn handle_chunk(&mut self, value: Value) -> Result<()> {
+    fn handle_chunk(&mut self, value: Value) -> ProviderResult<()> {
         // Handle errors first - these are terminal, no completion should follow
         if let Some(error) = value.get("error") {
             let error_type = error
@@ -807,7 +811,7 @@ where
     S: Stream<Item = std::result::Result<bytes::Bytes, E>> + Unpin,
     E: std::error::Error + Send + Sync + 'static,
 {
-    type Item = Result<StreamEvent>;
+    type Item = ProviderResult<StreamEvent>;
 
     fn poll_next(
         mut self: Pin<&mut Self>,
@@ -828,7 +832,10 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Some(Err(anyhow!("SSE stream error: {}", e))));
+                    return Poll::Ready(Some(Err(ProviderError::new(
+                        ProviderErrorKind::Parse,
+                        format!("SSE stream error: {}", e),
+                    ))));
                 }
                 Poll::Ready(None) => {
                     // Stream ended - force emit completion if we haven't yet

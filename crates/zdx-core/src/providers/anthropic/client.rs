@@ -1,7 +1,4 @@
-use std::pin::Pin;
-
 use anyhow::Result;
-use futures_util::Stream;
 
 use super::auth::{AnthropicConfig, DEFAULT_BASE_URL};
 use super::types::StreamingMessagesRequest;
@@ -9,7 +6,7 @@ use super::{
     build_api_messages_with_cache_control, build_system_blocks, build_thinking_config,
     build_tool_defs, send_streaming_request,
 };
-use crate::providers::shared::{ChatMessage, StreamEvent};
+use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";
@@ -70,7 +67,7 @@ impl AnthropicClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         // Convert messages to API format.
         // Only the last content block of the last user message gets cache_control
         // to respect Anthropic's limit of 4 cache_control blocks total.

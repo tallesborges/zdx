@@ -1,15 +1,12 @@
 //! Shared OpenAI-compatible Responses API helpers.
 
-use std::pin::Pin;
-
 use anyhow::{Result, bail};
-use futures_util::Stream;
 use reqwest::header::HeaderMap;
 
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ReasoningBlock, ReplayToken,
-    StreamEvent,
+    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ProviderStream,
+    ReasoningBlock, ReplayToken,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
 
@@ -52,7 +49,7 @@ pub async fn send_responses_stream(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system: Option<&str>,
-) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+) -> Result<ProviderStream> {
     let input = build_input(messages, system)?;
     if input.is_empty() {
         bail!("No input messages provided for OpenAI request");

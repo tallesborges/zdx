@@ -1,10 +1,8 @@
 //! Gemini CLI client for Cloud Code Assist API.
 
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use anyhow::Result;
-use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
@@ -14,7 +12,7 @@ use crate::providers::gemini_shared::{
     CloudCodeRequestParams, build_cloud_code_assist_request, classify_reqwest_error,
     merge_gemini_system_prompt,
 };
-use crate::providers::{ChatMessage, ProviderError, StreamEvent};
+use crate::providers::{ChatMessage, ProviderError, ProviderStream};
 use crate::tools::ToolDefinition;
 
 /// Cloud Code Assist API endpoint
@@ -45,7 +43,7 @@ impl GeminiCliClient {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
         let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
         let system_prompt = merge_gemini_system_prompt(system);

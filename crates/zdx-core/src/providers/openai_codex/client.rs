@@ -1,11 +1,8 @@
-use std::pin::Pin;
-
 use anyhow::Result;
-use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::prompts::CODEX_PROMPT_TEMPLATE;
-use crate::providers::StreamEvent;
+use crate::providers::ProviderStream;
 use crate::providers::openai_codex::auth::{OpenAICodexConfig, resolve_credentials};
 use crate::providers::openai_responses::{ResponsesConfig, send_responses_stream};
 use crate::tools::ToolDefinition;
@@ -42,7 +39,7 @@ impl OpenAICodexClient {
         messages: &[crate::providers::ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
 
         let headers = build_headers(

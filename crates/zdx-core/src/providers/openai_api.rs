@@ -1,12 +1,9 @@
 //! OpenAI API key provider (Responses API).
 
-use std::pin::Pin;
-
 use anyhow::{Context, Result};
-use futures_util::Stream;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::StreamEvent;
+use crate::providers::ProviderStream;
 use crate::providers::openai_responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::tools::ToolDefinition;
 
@@ -74,7 +71,7 @@ impl OpenAIClient {
         messages: &[crate::providers::ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>> {
+    ) -> Result<ProviderStream> {
         let headers = build_headers(&self.config.api_key);
         let config = ResponsesConfig {
             base_url: self.config.base_url.clone(),

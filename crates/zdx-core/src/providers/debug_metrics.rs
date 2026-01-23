@@ -11,11 +11,10 @@ use std::pin::Pin;
 use std::task::{Context, Poll};
 use std::time::{Duration, Instant};
 
-use anyhow::Result;
 use futures_util::Stream;
 use serde::Serialize;
 
-use crate::providers::StreamEvent;
+use crate::providers::{ProviderResult, ProviderStream, StreamEvent};
 
 /// How the stream ended.
 #[derive(Debug, Clone, Copy, Serialize)]
@@ -495,7 +494,7 @@ impl StreamMetrics {
 
 /// Wrapper stream that tracks timing metrics for debugging.
 pub struct MetricsStream<S> {
-    inner: S,
+    inner: Pin<Box<S>>,
     metrics: StreamMetrics,
     output_path: String,
     completed: bool,
@@ -504,7 +503,7 @@ pub struct MetricsStream<S> {
 impl<S> MetricsStream<S> {
     pub fn new(inner: S, output_path: String) -> Self {
         Self {
-            inner,
+            inner: Box::pin(inner),
             metrics: StreamMetrics::new(),
             output_path,
             completed: false,
@@ -539,16 +538,15 @@ impl<S> Drop for MetricsStream<S> {
 
 impl<S> Stream for MetricsStream<S>
 where
-    S: Stream<Item = Result<StreamEvent>> + Unpin,
+    S: Stream<Item = ProviderResult<StreamEvent>>,
 {
-    type Item = Result<StreamEvent>;
+    type Item = ProviderResult<StreamEvent>;
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         // Record poll timing for backpressure detection
         self.metrics.record_poll();
 
-        let inner = Pin::new(&mut self.inner);
-        match inner.poll_next(cx) {
+        match self.inner.as_mut().poll_next(cx) {
             Poll::Ready(Some(Ok(event))) => {
                 self.metrics.record_ready();
                 self.metrics.record_event(&event);
@@ -598,11 +596,9 @@ pub fn debug_stream_path() -> Option<String> {
 
 /// Wraps a stream with metrics tracking if `ZDX_DEBUG_STREAM` is set.
 /// Otherwise returns the stream unchanged.
-pub fn maybe_wrap_with_metrics<S>(
-    stream: S,
-) -> Pin<Box<dyn Stream<Item = Result<StreamEvent>> + Send>>
+pub fn maybe_wrap_with_metrics<S>(stream: S) -> ProviderStream
 where
-    S: Stream<Item = Result<StreamEvent>> + Send + Unpin + 'static,
+    S: Stream<Item = ProviderResult<StreamEvent>> + Send + 'static,
 {
     if let Some(path) = debug_stream_path() {
         Box::pin(MetricsStream::new(stream, path))
