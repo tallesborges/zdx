@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -117,6 +118,19 @@ async fn handle_message(
         incoming.user_id, incoming.chat_id
     );
 
+    if is_new_command(&incoming.text) {
+        let thread_id = thread_id_for_chat(incoming.chat_id);
+        clear_thread_history(&thread_id)?;
+        client
+            .send_message(
+                incoming.chat_id,
+                "History cleared. Start a new conversation anytime.",
+                Some(incoming.message_id),
+            )
+            .await?;
+        return Ok(());
+    }
+
     let thread_id = thread_id_for_chat(incoming.chat_id);
     let (mut thread, mut messages) = load_thread_state(&thread_id)?;
     record_user_message(&mut thread, &mut messages, &incoming.text)?;
@@ -161,6 +175,10 @@ async fn handle_message(
 
 fn thread_id_for_chat(chat_id: i64) -> String {
     format!("telegram-{}", chat_id)
+}
+
+fn is_new_command(text: &str) -> bool {
+    text.trim() == "/new"
 }
 
 struct IncomingMessage {
@@ -225,6 +243,16 @@ fn load_thread_state(thread_id: &str) -> Result<(ThreadLog, Vec<ChatMessage>)> {
     let messages = thread_log::load_thread_as_messages(thread_id)
         .map_err(|_| anyhow!("Failed to load thread history"))?;
     Ok((thread, messages))
+}
+
+fn clear_thread_history(thread_id: &str) -> Result<()> {
+    let thread = ThreadLog::with_id(thread_id.to_string())
+        .map_err(|_| anyhow!("Failed to resolve thread log"))?;
+    let path = thread.path();
+    if path.exists() {
+        fs::remove_file(path).map_err(|_| anyhow!("Failed to clear thread history"))?;
+    }
+    Ok(())
 }
 
 fn record_user_message(
