@@ -59,55 +59,48 @@ enable_claude_project = true
 # Provider configuration.
 # api_key: Optional API key (overrides environment variable)
 # base_url: Optional base URL (for proxies or test rigs)
-# tools: List of enabled tools (default varies by provider)
+# tools: Optional list of enabled tools. If set, overrides the default tool set.
 #
 # Available tools: bash, apply_patch, edit, read, read_thread, write
 # Default tool sets:
-#   - Most providers: ["bash", "edit", "read", "read_thread", "write"]
-#   - OpenAI Codex:   ["bash", "apply_patch", "read", "read_thread"]
+#   - default:       ["bash", "edit", "read", "read_thread", "write"]
+#   - openai_codex:  ["bash", "apply_patch", "read", "read_thread"]
 
 [providers.anthropic]
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
 models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
-tools = ["bash", "edit", "read", "read_thread", "write"]
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
 models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
-tools = ["bash", "edit", "read", "read_thread", "write"]
 
 [providers.openai]
 enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
 models = ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-4.1"]
-tools = ["bash", "edit", "read", "read_thread", "write"]
 
 [providers.openai_codex]
 enabled = true
 models = ["gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.2"]
 # Codex models have built-in apply_patch instructions
-tools = ["bash", "apply_patch", "read", "read_thread"]
 
 [providers.openrouter]
 enabled = true
 # api_key = "sk-or-..."  # Overrides OPENROUTER_API_KEY env var
 # base_url = "https://openrouter.ai/api/v1"
 models = ["*:exacto"]
-tools = ["bash", "edit", "read", "read_thread", "write"]
 
 [providers.gemini]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
 models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
-tools = ["bash", "edit", "read", "read_thread", "write"]
 
 [providers.gemini_cli]
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
 models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
-tools = ["bash", "edit", "read", "read_thread", "write"]

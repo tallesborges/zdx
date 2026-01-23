@@ -634,27 +634,6 @@ impl Default for ProvidersConfig {
     }
 }
 
-/// Default tools for most providers (excludes apply_patch which needs special instructions).
-fn default_tools() -> Vec<String> {
-    vec![
-        "bash".to_string(),
-        "edit".to_string(),
-        "read".to_string(),
-        "read_thread".to_string(),
-        "write".to_string(),
-    ]
-}
-
-/// Default tools for OpenAI Codex (has built-in apply_patch instructions).
-fn codex_tools() -> Vec<String> {
-    vec![
-        "bash".to_string(),
-        "apply_patch".to_string(),
-        "read".to_string(),
-        "read_thread".to_string(),
-    ]
-}
-
 fn default_anthropic_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
@@ -663,7 +642,6 @@ fn default_anthropic_provider() -> ProviderConfig {
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -676,7 +654,6 @@ fn default_claude_cli_provider() -> ProviderConfig {
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -694,7 +671,6 @@ fn default_openai_provider() -> ProviderConfig {
             "gpt-5.1-codex-mini".to_string(),
             "gpt-4.1".to_string(),
         ],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -708,7 +684,6 @@ fn default_openai_codex_provider() -> ProviderConfig {
             "gpt-5.1-codex-mini".to_string(),
             "gpt-5.2".to_string(),
         ],
-        tools: Some(codex_tools()),
         ..Default::default()
     }
 }
@@ -717,7 +692,6 @@ fn default_openrouter_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["*:exacto".to_string()],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -731,7 +705,6 @@ fn default_gemini_provider() -> ProviderConfig {
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
         ],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -745,7 +718,6 @@ fn default_gemini_cli_provider() -> ProviderConfig {
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
         ],
-        tools: Some(default_tools()),
         ..Default::default()
     }
 }
@@ -1378,10 +1350,11 @@ max_tokens = 4096
         assert_eq!(filtered, vec!["bash", "read"]);
     }
 
-    /// filter_tools: openai_codex default has specific tools.
+    /// filter_tools: openai_codex default has no tool filtering.
     #[test]
     fn test_openai_codex_default_tools() {
         let config = default_openai_codex_provider();
+        assert!(config.tools.is_none());
         let all_tools = &[
             "bash",
             "apply_patch",
@@ -1392,18 +1365,14 @@ max_tokens = 4096
         ];
 
         let filtered = config.filter_tools(all_tools);
-        assert!(filtered.contains(&"bash"));
-        assert!(filtered.contains(&"apply_patch"));
-        assert!(filtered.contains(&"read"));
-        assert!(filtered.contains(&"read_thread"));
-        assert!(!filtered.contains(&"edit"));
-        assert!(!filtered.contains(&"write"));
+        assert_eq!(filtered, all_tools);
     }
 
-    /// filter_tools: anthropic default uses default_tools (no apply_patch).
+    /// filter_tools: anthropic default has no tool filtering.
     #[test]
     fn test_anthropic_default_tools() {
         let config = default_anthropic_provider();
+        assert!(config.tools.is_none());
         let all_tools = &[
             "bash",
             "apply_patch",
@@ -1414,13 +1383,7 @@ max_tokens = 4096
         ];
 
         let filtered = config.filter_tools(all_tools);
-        assert_eq!(filtered.len(), 5);
-        assert!(filtered.contains(&"bash"));
-        assert!(filtered.contains(&"edit"));
-        assert!(filtered.contains(&"read"));
-        assert!(filtered.contains(&"read_thread"));
-        assert!(filtered.contains(&"write"));
-        assert!(!filtered.contains(&"apply_patch"));
+        assert_eq!(filtered, all_tools);
     }
 
     /// ProvidersConfig::get returns correct provider config.
@@ -1432,19 +1395,9 @@ max_tokens = 4096
 
         let anthropic = providers.get(ProviderKind::Anthropic);
         assert!(anthropic.enabled.unwrap());
-        let anthropic_tools = anthropic.tools.as_ref().unwrap();
-        assert!(anthropic_tools.contains(&"bash".to_string()));
-        assert!(anthropic_tools.contains(&"edit".to_string()));
-        assert!(anthropic_tools.contains(&"read_thread".to_string()));
-        assert!(!anthropic_tools.contains(&"apply_patch".to_string()));
+        assert!(anthropic.tools.is_none());
 
         let codex = providers.get(ProviderKind::OpenAICodex);
-        let codex_tools = codex.tools.as_ref().unwrap();
-        assert!(codex_tools.contains(&"bash".to_string()));
-        assert!(codex_tools.contains(&"apply_patch".to_string()));
-        assert!(codex_tools.contains(&"read".to_string()));
-        assert!(codex_tools.contains(&"read_thread".to_string()));
-        assert!(!codex_tools.contains(&"edit".to_string()));
-        assert!(!codex_tools.contains(&"write".to_string()));
+        assert!(codex.tools.is_none());
     }
 }

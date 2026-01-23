@@ -1,10 +1,14 @@
 use std::collections::HashSet;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
 use zdx_core::config::Config;
+use zdx_core::core::events::ToolOutput;
+use zdx_core::tools::{ToolContext, ToolDefinition, ToolHandler};
 
 pub struct TelegramSettings {
     pub bot_token: String,
@@ -44,6 +48,7 @@ impl TelegramSettings {
     }
 }
 
+#[derive(Clone)]
 pub struct TelegramClient {
     http: reqwest::Client,
     base_url: String,
@@ -108,6 +113,100 @@ impl TelegramClient {
 
         Ok(payload.result)
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct TelegramSendInput {
+    chat_id: i64,
+    text: String,
+    #[serde(default)]
+    reply_to_message_id: Option<i64>,
+}
+
+pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandler) {
+    let definition = ToolDefinition {
+        name: "Telegram_Send".to_string(),
+        description: "Send a Telegram DM to a chat_id.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "chat_id": {
+                    "type": "integer",
+                    "description": "Telegram chat ID (private DM)"
+                },
+                "text": {
+                    "type": "string",
+                    "description": "Message text to send"
+                },
+                "reply_to_message_id": {
+                    "type": "integer",
+                    "description": "Optional message ID to reply to"
+                }
+            },
+            "required": ["chat_id", "text"],
+            "additionalProperties": false
+        }),
+    };
+
+    let client = Arc::new(client);
+    let handler: ToolHandler = Arc::new(move |input: &Value, ctx: &ToolContext| {
+        let client = client.clone();
+        let input = input.clone();
+        let timeout = ctx.timeout;
+        Box::pin(async move {
+            let parsed: TelegramSendInput = match serde_json::from_value(input) {
+                Ok(parsed) => parsed,
+                Err(err) => {
+                    return ToolOutput::failure_with_details(
+                        "invalid_input",
+                        "Invalid input for Telegram_Send",
+                        err.to_string(),
+                    );
+                }
+            };
+
+            let text = parsed.text.trim();
+            if text.is_empty() {
+                return ToolOutput::failure("invalid_input", "text must not be empty", None);
+            }
+
+            let send_future = client.send_message(parsed.chat_id, text, parsed.reply_to_message_id);
+
+            let send_result = match timeout {
+                Some(timeout) => match tokio::time::timeout(timeout, send_future).await {
+                    Ok(result) => result,
+                    Err(_) => {
+                        return ToolOutput::failure(
+                            "timeout",
+                            format!(
+                                "Tool execution timed out after {} seconds",
+                                timeout.as_secs()
+                            ),
+                            Some(
+                                "Consider breaking up large tasks or increasing the timeout"
+                                    .to_string(),
+                            ),
+                        );
+                    }
+                },
+                None => send_future.await,
+            };
+
+            match send_result {
+                Ok(()) => ToolOutput::success(json!({
+                    "sent": true,
+                    "chat_id": parsed.chat_id,
+                })),
+                Err(err) => ToolOutput::failure_with_details(
+                    "telegram_error",
+                    "Failed to send Telegram message",
+                    err.to_string(),
+                ),
+            }
+        })
+    });
+
+    (definition, handler)
 }
 
 #[derive(Debug, Deserialize)]

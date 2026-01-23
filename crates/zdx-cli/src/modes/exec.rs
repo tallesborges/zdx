@@ -12,7 +12,7 @@ use std::time::Instant;
 use anyhow::Result;
 use tokio::task::JoinHandle;
 use zdx_core::config::Config;
-use zdx_core::core::agent::AgentOptions;
+use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::{AgentEvent, ToolOutput};
 use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
 use zdx_core::providers::ChatMessage;
@@ -22,15 +22,15 @@ use zdx_core::providers::ChatMessage;
 pub struct ExecOptions {
     /// Root directory for file operations.
     pub root: PathBuf,
-    /// Optional tools override list (full override).
-    pub tools_override: Option<Vec<String>>,
+    /// Tool configuration.
+    pub tool_config: ToolConfig,
 }
 
 impl From<&ExecOptions> for AgentOptions {
     fn from(opts: &ExecOptions) -> Self {
         AgentOptions {
             root: opts.root.clone(),
-            tools_override: opts.tools_override.clone(),
+            tool_config: opts.tool_config.clone(),
         }
     }
 }

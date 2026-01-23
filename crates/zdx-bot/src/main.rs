@@ -4,10 +4,11 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use zdx_core::config::Config;
-use zdx_core::core::agent::{self, AgentOptions};
+use zdx_core::core::agent::{self, AgentOptions, ToolConfig, ToolSelection};
 use zdx_core::core::context::build_effective_system_prompt_with_paths;
 use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
 use zdx_core::providers::ChatMessage;
+use zdx_core::tools::{ToolRegistry, ToolSet};
 
 use crate::telegram::{Message, TelegramClient, TelegramSettings};
 
@@ -34,6 +35,16 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     }
 
     let client = TelegramClient::new(settings.bot_token);
+    let mut tool_registry = ToolRegistry::builtins();
+    let (telegram_def, telegram_handler) = telegram::telegram_send_tool(client.clone());
+    tool_registry.register(telegram_def, telegram_handler);
+    let tool_config = ToolConfig::new(
+        tool_registry,
+        ToolSelection::Auto {
+            base: ToolSet::Default,
+            include: vec!["telegram_send".to_string()],
+        },
+    );
     let mut offset: Option<i64> = None;
     let poll_timeout = Duration::from_secs(30);
     let shutdown = tokio::signal::ctrl_c();
@@ -74,6 +85,7 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
                             &root,
                             effective.prompt.as_deref(),
                             message,
+                            &tool_config,
                         )
                         .await
                     {
@@ -94,6 +106,7 @@ async fn handle_message(
     root: &Path,
     system_prompt: Option<&str>,
     message: Message,
+    tool_config: &ToolConfig,
 ) -> Result<()> {
     let Some(incoming) = parse_incoming_message(client, allowlist, message).await? else {
         return Ok(());
@@ -108,9 +121,16 @@ async fn handle_message(
     let (mut thread, mut messages) = load_thread_state(&thread_id)?;
     record_user_message(&mut thread, &mut messages, &incoming.text)?;
 
-    let result =
-        run_agent_turn_with_persist(messages, config, root, system_prompt, &thread_id, &thread)
-            .await;
+    let result = run_agent_turn_with_persist(
+        messages,
+        config,
+        root,
+        system_prompt,
+        &thread_id,
+        &thread,
+        tool_config,
+    )
+    .await;
 
     match result {
         Ok((final_text, _messages)) => {
@@ -226,10 +246,11 @@ async fn run_agent_turn_with_persist(
     system_prompt: Option<&str>,
     thread_id: &str,
     thread: &ThreadLog,
+    tool_config: &ToolConfig,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
-        tools_override: None,
+        tool_config: tool_config.clone(),
     };
 
     let (agent_tx, agent_rx) = agent::create_event_channel();

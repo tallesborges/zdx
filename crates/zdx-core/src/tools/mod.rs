@@ -10,7 +10,11 @@ pub mod read;
 pub mod read_thread;
 pub mod write;
 
+use std::collections::HashMap;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
@@ -185,39 +189,235 @@ impl ToolContext {
     }
 }
 
+/// Named tool sets for common configurations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToolSet {
+    Default,
+    OpenAICodex,
+}
+
+impl ToolSet {
+    pub fn tool_names(self) -> &'static [&'static str] {
+        match self {
+            ToolSet::Default => &["bash", "edit", "read", "read_thread", "write"],
+            ToolSet::OpenAICodex => &["bash", "apply_patch", "read", "read_thread"],
+        }
+    }
+}
+
+pub fn toolset_tool_names(set: ToolSet) -> Vec<String> {
+    set.tool_names()
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect()
+}
+
+/// Async tool handler function.
+pub type ToolFuture = Pin<Box<dyn Future<Output = ToolOutput> + Send>>;
+pub type ToolHandler = Arc<dyn Fn(&Value, &ToolContext) -> ToolFuture + Send + Sync>;
+
+/// Tool registry (definitions + executors).
+#[derive(Clone, Default)]
+pub struct ToolRegistry {
+    definitions: Vec<ToolDefinition>,
+    handlers: HashMap<String, ToolHandler>,
+}
+
+impl std::fmt::Debug for ToolRegistry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolRegistry")
+            .field("definitions", &self.definitions)
+            .finish()
+    }
+}
+
+impl ToolRegistry {
+    pub fn new() -> Self {
+        Self {
+            definitions: Vec::new(),
+            handlers: HashMap::new(),
+        }
+    }
+
+    pub fn builtins() -> Self {
+        let mut registry = Self::new();
+        registry.register_builtin_tools();
+        registry
+    }
+
+    pub fn with_tool(mut self, definition: ToolDefinition, handler: ToolHandler) -> Self {
+        self.register(definition, handler);
+        self
+    }
+
+    pub fn register(&mut self, definition: ToolDefinition, handler: ToolHandler) {
+        let name_lower = definition.name.to_ascii_lowercase();
+        if let Some(pos) = self
+            .definitions
+            .iter()
+            .position(|t| t.name.eq_ignore_ascii_case(&definition.name))
+        {
+            self.definitions.remove(pos);
+        }
+        self.definitions.push(definition);
+        self.handlers.insert(name_lower, handler);
+    }
+
+    pub fn definitions(&self) -> &[ToolDefinition] {
+        &self.definitions
+    }
+
+    pub fn tool_names(&self) -> Vec<String> {
+        self.definitions
+            .iter()
+            .map(|t| t.name.to_lowercase())
+            .collect()
+    }
+
+    pub fn tools_from_names<'a, I>(&self, names: I) -> Vec<ToolDefinition>
+    where
+        I: IntoIterator<Item = &'a str>,
+    {
+        let include_set: std::collections::HashSet<_> = names
+            .into_iter()
+            .map(|name| name.trim().to_lowercase())
+            .filter(|name| !name.is_empty())
+            .collect();
+
+        self.definitions
+            .iter()
+            .filter(|t| include_set.contains(&t.name.to_lowercase()))
+            .cloned()
+            .collect()
+    }
+
+    pub fn tools_for_set(&self, tool_set: ToolSet) -> Vec<ToolDefinition> {
+        self.tools_from_names(tool_set.tool_names().iter().copied())
+    }
+
+    pub fn tools_for_provider(
+        &self,
+        provider_config: &crate::config::ProviderConfig,
+    ) -> Vec<ToolDefinition> {
+        let all_names = self.tool_names();
+        let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
+        let enabled_names = provider_config.filter_tools(&all_names_refs);
+        self.tools_from_names(enabled_names)
+    }
+
+    pub async fn execute_tool(
+        &self,
+        name: &str,
+        tool_use_id: &str,
+        input: &Value,
+        ctx: &ToolContext,
+        enabled_tools: &std::collections::HashSet<String>,
+    ) -> (ToolOutput, ToolResult) {
+        let name_lower = name.to_ascii_lowercase();
+        let is_enabled = enabled_tools
+            .iter()
+            .any(|t| t.to_ascii_lowercase() == name_lower);
+
+        if !is_enabled {
+            let output = unknown_tool_output(name, enabled_tools);
+            let result = ToolResult::from_output(tool_use_id.to_string(), &output);
+            return (output, result);
+        }
+
+        let output = match self.handlers.get(&name_lower) {
+            Some(handler) => handler(input, ctx).await,
+            None => unknown_tool_output(name, enabled_tools),
+        };
+
+        let result = ToolResult::from_output(tool_use_id.to_string(), &output);
+        (output, result)
+    }
+
+    fn register_builtin_tools(&mut self) {
+        self.register(
+            bash::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { bash::execute(&input, &ctx, ctx.timeout).await })
+            }),
+        );
+
+        self.register(
+            apply_patch::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_apply_patch(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            edit::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_edit(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            read::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_read(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            read_thread::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { read_thread::execute(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            write::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_write(&input, &ctx).await })
+            }),
+        );
+    }
+}
+
+fn unknown_tool_output(
+    name: &str,
+    enabled_tools: &std::collections::HashSet<String>,
+) -> ToolOutput {
+    let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
+    available.sort();
+    ToolOutput::failure_with_details(
+        "unknown_tool",
+        format!("Unknown tool: {}", name),
+        format!("Available tools: {}", available.join(", ")),
+    )
+}
+
 /// Returns all available tool definitions.
 pub fn all_tools() -> Vec<ToolDefinition> {
-    vec![
-        bash::definition(),
-        apply_patch::definition(),
-        edit::definition(),
-        read::definition(),
-        read_thread::definition(),
-        write::definition(),
-    ]
+    ToolRegistry::builtins().definitions
 }
 
 /// Returns all tool names (lowercase), derived from `all_tools()` to stay in sync.
 pub fn all_tool_names() -> Vec<String> {
-    all_tools()
-        .into_iter()
-        .map(|t| t.name.to_lowercase())
-        .collect()
+    ToolRegistry::builtins().tool_names()
 }
 
 /// Returns tool definitions filtered by provider configuration.
 ///
 /// Uses `ProviderConfig::filter_tools()` to determine which tools to include.
 pub fn tools_for_provider(provider_config: &crate::config::ProviderConfig) -> Vec<ToolDefinition> {
-    let all_names = all_tool_names();
-    let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
-    let enabled_names = provider_config.filter_tools(&all_names_refs);
-    let enabled_set: std::collections::HashSet<_> = enabled_names.into_iter().collect();
-
-    all_tools()
-        .into_iter()
-        .filter(|t| enabled_set.contains(t.name.to_lowercase().as_str()))
-        .collect()
+    ToolRegistry::builtins().tools_for_provider(provider_config)
 }
 
 /// Executes a tool by name with the given input.
@@ -236,47 +436,9 @@ pub async fn execute_tool(
     ctx: &ToolContext,
     enabled_tools: &std::collections::HashSet<String>,
 ) -> (ToolOutput, ToolResult) {
-    // Check if tool is enabled (case-insensitive comparison)
-    let name_lower = name.to_ascii_lowercase();
-    let is_enabled = enabled_tools
-        .iter()
-        .any(|t| t.to_ascii_lowercase() == name_lower);
-
-    if !is_enabled {
-        let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
-        available.sort();
-        let output = ToolOutput::failure_with_details(
-            "unknown_tool",
-            format!("Unknown tool: {}", name),
-            format!("Available tools: {}", available.join(", ")),
-        );
-        let result = ToolResult::from_output(tool_use_id.to_string(), &output);
-        return (output, result);
-    }
-
-    // Match on lowercase for dispatch
-    let output = match name_lower.as_str() {
-        "bash" => bash::execute(input, ctx, ctx.timeout).await,
-        "apply_patch" => execute_apply_patch(input, ctx).await,
-        "edit" => execute_edit(input, ctx).await,
-        "read" => execute_read(input, ctx).await,
-        "read_thread" => read_thread::execute(input, ctx).await,
-        "write" => execute_write(input, ctx).await,
-        _ => {
-            // This shouldn't happen if enabled_tools is properly configured,
-            // but handle it gracefully
-            let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
-            available.sort();
-            ToolOutput::failure_with_details(
-                "unknown_tool",
-                format!("Unknown tool: {}", name),
-                format!("Available tools: {}", available.join(", ")),
-            )
-        }
-    };
-
-    let result = ToolResult::from_output(tool_use_id.to_string(), &output);
-    (output, result)
+    ToolRegistry::builtins()
+        .execute_tool(name, tool_use_id, input, ctx, enabled_tools)
+        .await
 }
 
 async fn execute_edit(input: &Value, ctx: &ToolContext) -> ToolOutput {
