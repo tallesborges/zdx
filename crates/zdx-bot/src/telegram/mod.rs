@@ -10,6 +10,11 @@ use zdx_core::config::Config;
 use zdx_core::core::events::ToolOutput;
 use zdx_core::tools::{ToolContext, ToolDefinition, ToolHandler};
 
+mod types;
+
+#[allow(unused_imports)]
+pub use types::{Audio, Chat, Document, Message, PhotoSize, TelegramFile, Update, User, Voice};
+
 pub struct TelegramSettings {
     pub bot_token: String,
     pub allowlist_user_ids: HashSet<i64>,
@@ -71,6 +76,34 @@ impl TelegramClient {
             allowed_updates: Some(vec!["message"]),
         };
         self.post("getUpdates", &request).await
+    }
+
+    pub async fn get_file(&self, file_id: &str) -> Result<TelegramFile> {
+        let request = GetFileRequest { file_id };
+        self.post("getFile", &request).await
+    }
+
+    pub async fn download_file(&self, file_path: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/file/bot{}/{}", self.base_url, self.token, file_path);
+        let response = self
+            .http
+            .get(url)
+            .send()
+            .await
+            .map_err(|_| anyhow!("Telegram file download failed"))?;
+
+        if !response.status().is_success() {
+            bail!(
+                "Telegram file download failed with status {}",
+                response.status()
+            );
+        }
+
+        let bytes = response
+            .bytes()
+            .await
+            .map_err(|_| anyhow!("Failed to read Telegram file bytes"))?;
+        Ok(bytes.to_vec())
     }
 
     pub async fn send_message(
@@ -236,34 +269,7 @@ struct SendMessageRequest<'a> {
     allow_sending_without_reply: Option<bool>,
 }
 
-#[derive(Debug, Deserialize)]
-pub struct Update {
-    pub update_id: i64,
-    pub message: Option<Message>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Message {
-    pub message_id: i64,
-    pub chat: Chat,
-    pub from: Option<User>,
-    pub text: Option<String>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Chat {
-    pub id: i64,
-    #[serde(rename = "type")]
-    kind: String,
-}
-
-impl Chat {
-    pub fn is_private(&self) -> bool {
-        self.kind == "private"
-    }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct User {
-    pub id: i64,
+#[derive(Debug, Serialize)]
+struct GetFileRequest<'a> {
+    file_id: &'a str,
 }
