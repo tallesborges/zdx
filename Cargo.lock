@@ -3058,6 +3058,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "zdx-bot"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "reqwest",
+ "serde",
+ "tokio",
+ "zdx-core",
+]
+
+[[package]]
 name = "zdx-core"
 version = "0.1.0"
 dependencies = [

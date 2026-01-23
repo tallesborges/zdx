@@ -1,5 +1,11 @@
 [workspace]
-members = ["crates/zdx-cli", "crates/xtask", "crates/zdx-core", "crates/zdx-tui"]
+members = [
+    "crates/zdx-cli",
+    "crates/xtask",
+    "crates/zdx-core",
+    "crates/zdx-tui",
+    "crates/zdx-bot",
+]
 resolver = "2"
 
 [workspace.package]

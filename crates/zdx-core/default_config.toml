@@ -47,6 +47,12 @@ enable_claude_project = true
 # ignored_skills = ["test-*", "wip-*"]
 # include_skills = ["deploy-*", "release-*"]
 
+# Telegram bot configuration
+[telegram]
+# bot_token = "123456789:abcDEF..."
+# allowlist_user_ids = [123456789]
+# bot_token can also be set via ZDX_TELEGRAM_BOT_TOKEN
+
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 

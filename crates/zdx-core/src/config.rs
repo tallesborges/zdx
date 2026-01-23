@@ -60,6 +60,17 @@ impl Default for SkillsConfig {
     }
 }
 
+/// Telegram bot configuration.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TelegramConfig {
+    /// Bot token for Telegram API.
+    pub bot_token: Option<String>,
+    /// Allowlist of numeric Telegram user IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowlist_user_ids: Vec<i64>,
+}
+
 impl ThinkingLevel {
     /// Returns the effort percentage of max tokens for this thinking level.
     /// Returns None for Off (thinking disabled).
@@ -291,6 +302,10 @@ pub struct Config {
     /// Skill discovery configuration
     #[serde(default)]
     pub skills: SkillsConfig,
+
+    /// Telegram bot configuration
+    #[serde(default)]
+    pub telegram: TelegramConfig,
 }
 
 impl Config {
@@ -543,6 +558,7 @@ impl Default for Config {
             providers: ProvidersConfig::default(),
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
+            telegram: TelegramConfig::default(),
         }
     }
 }
