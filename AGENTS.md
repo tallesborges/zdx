@@ -70,6 +70,9 @@
   - `crates/zdx-cli/src/cli/`: CLI arguments + command dispatch
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
+- `crates/zdx-bot/`: Telegram bot binary (long-polling)
+  - `crates/zdx-bot/src/main.rs`: Telegram bot entrypoint + agent bridge
+  - `crates/zdx-bot/src/telegram.rs`: Telegram API types + client
 - `tools/scripts/`: optional repo scripts (seed/import/dev helpers)
 - `.github/workflows/`: CI workflows
 - `.cargo/config.toml`: cargo alias for `cargo xtask`
@@ -80,6 +83,7 @@
 
 - `cargo run -p zdx -- --help`
 - `cargo run -p zdx --` (interactive; needs provider key via env)
+- `cargo run -p zdx-bot --` (Telegram bot; requires config telegram.* keys)
 - `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
 - `cargo xtask update-default-config` (maintainer: refresh default_config.toml)
 - `cargo xtask update-defaults` (maintainer: refresh both defaults)
