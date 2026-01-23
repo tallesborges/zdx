@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use zdx_core::config::{self, ThinkingLevel};
+use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::core::thread_log::ThreadPersistenceOptions;
 use zdx_core::tools;
 
@@ -39,18 +40,15 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         c
     };
 
-    let tools_override = if options.no_tools {
-        Some(Vec::new())
-    } else {
-        match options.tools_override {
-            Some(raw) => Some(parse_tools_override(raw)?),
-            None => None,
-        }
-    };
-
     let exec_opts = modes::exec::ExecOptions {
         root: root_path,
-        tools_override,
+        tool_config: ToolConfig::default().with_selection(if options.no_tools {
+            ToolSelection::Explicit(Vec::new())
+        } else if let Some(raw) = options.tools_override {
+            ToolSelection::Explicit(parse_tools_override(raw)?)
+        } else {
+            ToolSelection::default()
+        }),
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end

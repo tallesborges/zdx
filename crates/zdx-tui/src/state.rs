@@ -34,7 +34,7 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use zdx_core::config::Config;
-use zdx_core::core::agent::AgentOptions;
+use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_log::ThreadLog;
 use zdx_core::providers::{ChatContentBlock, ChatMessage};
@@ -180,7 +180,7 @@ impl TuiState {
     ) -> Self {
         let agent_opts = AgentOptions {
             root,
-            tools_override: None,
+            tool_config: ToolConfig::default(),
         };
 
         // Cache display values at startup (avoids I/O during render)

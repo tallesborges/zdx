@@ -31,15 +31,67 @@ use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ReasoningBlock,
     ReplayToken, StreamEvent, resolve_provider,
 };
-use crate::tools::{self, ToolContext, ToolResult};
+use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
 
 /// Options for agent execution.
 #[derive(Debug, Clone)]
 pub struct AgentOptions {
     /// Root directory for file operations.
     pub root: PathBuf,
-    /// Optional tools override list (full override).
-    pub tools_override: Option<Vec<String>>,
+    /// Tool configuration (registry + selection).
+    pub tool_config: ToolConfig,
+}
+
+/// Tool configuration for agent execution.
+#[derive(Debug, Clone)]
+pub struct ToolConfig {
+    pub registry: ToolRegistry,
+    pub selection: ToolSelection,
+}
+
+impl ToolConfig {
+    pub fn new(registry: ToolRegistry, selection: ToolSelection) -> Self {
+        Self {
+            registry,
+            selection,
+        }
+    }
+
+    pub fn with_selection(mut self, selection: ToolSelection) -> Self {
+        self.selection = selection;
+        self
+    }
+}
+
+impl Default for ToolConfig {
+    fn default() -> Self {
+        Self {
+            registry: ToolRegistry::builtins(),
+            selection: ToolSelection::default(),
+        }
+    }
+}
+
+/// Tool selection strategy for agent execution.
+#[derive(Debug, Clone)]
+pub enum ToolSelection {
+    /// Use provider-configured tools if set; otherwise fall back to a tool set.
+    Auto { base: ToolSet, include: Vec<String> },
+    /// Use a named tool set (with optional includes).
+    ToolSet { base: ToolSet, include: Vec<String> },
+    /// Use an explicit list of tools (full override).
+    Explicit(Vec<String>),
+    /// Use all tools in the registry.
+    All,
+}
+
+impl Default for ToolSelection {
+    fn default() -> Self {
+        ToolSelection::Auto {
+            base: ToolSet::Default,
+            include: Vec::new(),
+        }
+    }
 }
 
 /// Channel-based event sender (async, bounded).
@@ -290,6 +342,29 @@ async fn emit_error_async(err: anyhow::Error, sender: &EventSender) -> anyhow::E
     err
 }
 
+fn merge_tool_defs(
+    mut base: Vec<ToolDefinition>,
+    include: &[String],
+    registry: &ToolRegistry,
+) -> Vec<ToolDefinition> {
+    if include.is_empty() {
+        return base;
+    }
+
+    let extra = registry.tools_from_names(include.iter().map(String::as_str));
+    if extra.is_empty() {
+        return base;
+    }
+
+    let mut seen: HashSet<String> = base.iter().map(|t| t.name.to_lowercase()).collect();
+    for tool in extra {
+        if seen.insert(tool.name.to_lowercase()) {
+            base.push(tool);
+        }
+    }
+    base
+}
+
 /// Timeout for stream polling to allow interrupt checks.
 const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 
@@ -434,24 +509,34 @@ pub async fn run_turn(
         config.tool_timeout(),
     )
     .with_config(config);
+
+    let tool_registry = options.tool_config.registry.clone();
+
     // Cache tool definitions outside the loop (they're constant)
-    // Filter tools based on provider configuration or override list.
-    let tools = if let Some(override_tools) = options.tools_override.as_ref() {
-        let all_names = tools::all_tool_names();
-        let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
-        let override_config = crate::config::ProviderConfig {
-            tools: Some(override_tools.clone()),
-            ..Default::default()
-        };
-        let enabled_names = override_config.filter_tools(&all_names_refs);
-        let enabled_set: HashSet<_> = enabled_names.into_iter().collect();
-        tools::all_tools()
-            .into_iter()
-            .filter(|t| enabled_set.contains(t.name.to_lowercase().as_str()))
-            .collect()
-    } else {
-        let provider_config = config.providers.get(provider);
-        tools::tools_for_provider(provider_config)
+    let tools = match &options.tool_config.selection {
+        ToolSelection::Auto { base, include } => {
+            let provider_config = config.providers.get(provider);
+            let base_tools = if provider_config.tools.is_some() {
+                tool_registry.tools_for_provider(provider_config)
+            } else {
+                let tool_set =
+                    if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex) {
+                        ToolSet::OpenAICodex
+                    } else {
+                        *base
+                    };
+                tool_registry.tools_for_set(tool_set)
+            };
+            merge_tool_defs(base_tools, include, &tool_registry)
+        }
+        ToolSelection::ToolSet { base, include } => {
+            let base_tools = tool_registry.tools_for_set(*base);
+            merge_tool_defs(base_tools, include, &tool_registry)
+        }
+        ToolSelection::Explicit(names) => {
+            tool_registry.tools_from_names(names.iter().map(String::as_str))
+        }
+        ToolSelection::All => tool_registry.definitions().to_vec(),
     };
 
     // Build the set of enabled tool names for validation in execute_tool
@@ -736,8 +821,14 @@ pub async fn run_turn(
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
             // Execute tools and get results (may be partial on interrupt)
-            let tool_results =
-                execute_tools_async(&finalized, &tool_ctx, &enabled_tools, &sender).await;
+            let tool_results = execute_tools_async(
+                &finalized,
+                &tool_ctx,
+                &enabled_tools,
+                &sender,
+                &tool_registry,
+            )
+            .await;
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Check if interrupted during tool execution
@@ -804,6 +895,7 @@ async fn execute_tools_async(
     ctx: &ToolContext,
     enabled_tools: &HashSet<String>,
     sender: &EventSender,
+    tool_registry: &ToolRegistry,
 ) -> Vec<ToolResult> {
     let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
@@ -822,10 +914,12 @@ async fn execute_tools_async(
         let tu = tu.clone();
         let ctx = ctx.clone();
         let enabled_tools = enabled_tools.clone();
+        let tool_registry = tool_registry.clone();
 
         join_set.spawn(async move {
-            let (output, result) =
-                tools::execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools).await;
+            let (output, result) = tool_registry
+                .execute_tool(&tu.name, &tu.id, &tu.input, &ctx, &enabled_tools)
+                .await;
             (i, tu.id.clone(), output, result)
         });
     }
@@ -930,8 +1024,9 @@ mod tests {
         let sender = EventSender::new(tx);
 
         // Run in a task so we can collect events
+        let tool_registry = ToolRegistry::builtins();
         let handle = tokio::spawn(async move {
-            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender).await
+            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender, &tool_registry).await
         });
 
         // Collect events with timeout to avoid hangs
