@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use zdx_core::config::Config;
+use zdx_core::config::{Config, ThinkingLevel};
 use zdx_core::core::agent::{self, AgentOptions, ToolConfig, ToolSelection};
 use zdx_core::core::context::build_effective_system_prompt_with_paths;
 use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
@@ -17,7 +17,9 @@ mod telegram;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
+    let mut config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
+    config.model = "claude-cli:claude-haiku-4-5".to_string();
+    config.thinking_level = ThinkingLevel::Minimal;
     let settings = TelegramSettings::from_config(&config)?;
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
