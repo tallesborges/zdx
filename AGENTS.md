@@ -72,7 +72,10 @@
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
 - `crates/zdx-bot/`: Telegram bot binary (long-polling)
   - `crates/zdx-bot/src/main.rs`: Telegram bot entrypoint + agent bridge
-  - `crates/zdx-bot/src/telegram.rs`: Telegram API types + client
+  - `crates/zdx-bot/src/telegram/mod.rs`: Telegram API client + tool wiring
+  - `crates/zdx-bot/src/telegram/types.rs`: Telegram API DTOs
+  - `crates/zdx-bot/src/transcribe.rs`: OpenAI audio transcription helper for Telegram audio
+  - `crates/zdx-bot/src/types.rs`: Telegram bot message/media structs
 - `tools/scripts/`: optional repo scripts (seed/import/dev helpers)
 - `.github/workflows/`: CI workflows
 - `.cargo/config.toml`: cargo alias for `cargo xtask`
