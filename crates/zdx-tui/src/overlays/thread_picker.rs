@@ -166,7 +166,6 @@ impl ThreadPickerState {
                         }
                         OverlayUpdate::close()
                             .with_ui_effects(vec![UiEffect::LoadThread {
-                                task: None,
                                 thread_id: thread.id.clone(),
                             }])
                             .with_mutations(vec![])
@@ -295,10 +294,7 @@ impl ThreadPickerState {
         }
         let thread_id = self.selected_thread().map(|thread| thread.id.clone());
         if let Some(thread_id) = thread_id {
-            vec![UiEffect::PreviewThread {
-                task: None,
-                thread_id,
-            }]
+            vec![UiEffect::PreviewThread { thread_id }]
         } else {
             Vec::new()
         }

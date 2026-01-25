@@ -241,7 +241,6 @@ impl TimelineState {
         }
 
         Some(UiEffect::ForkThread {
-            task: None,
             events,
             user_input,
             turn_number: self.selected + 1,
