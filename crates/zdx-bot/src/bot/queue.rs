@@ -13,7 +13,11 @@ pub(crate) fn new_chat_queues() -> ChatQueueMap {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
-pub(crate) async fn enqueue_message(queues: &ChatQueueMap, context: &BotContext, message: Message) {
+pub(crate) async fn enqueue_message(
+    queues: &ChatQueueMap,
+    context: &Arc<BotContext>,
+    message: Message,
+) {
     let chat_id = message.chat.id;
     let sender = {
         let mut queues = queues.lock().await;
@@ -21,7 +25,7 @@ pub(crate) async fn enqueue_message(queues: &ChatQueueMap, context: &BotContext,
             sender.clone()
         } else {
             let (sender, receiver) = mpsc::unbounded_channel();
-            spawn_chat_worker(chat_id, receiver, context.clone());
+            spawn_chat_worker(chat_id, receiver, Arc::clone(context));
             queues.insert(chat_id, sender.clone());
             sender
         }
@@ -30,7 +34,7 @@ pub(crate) async fn enqueue_message(queues: &ChatQueueMap, context: &BotContext,
     if let Err(err) = sender.send(message) {
         let message = err.0;
         let (sender, receiver) = mpsc::unbounded_channel();
-        spawn_chat_worker(chat_id, receiver, context.clone());
+        spawn_chat_worker(chat_id, receiver, Arc::clone(context));
         {
             let mut queues = queues.lock().await;
             queues.insert(chat_id, sender.clone());
@@ -42,11 +46,11 @@ pub(crate) async fn enqueue_message(queues: &ChatQueueMap, context: &BotContext,
 fn spawn_chat_worker(
     chat_id: i64,
     mut receiver: mpsc::UnboundedReceiver<Message>,
-    context: BotContext,
+    context: Arc<BotContext>,
 ) {
     tokio::spawn(async move {
         while let Some(message) = receiver.recv().await {
-            if let Err(err) = handle_message(&context, message).await {
+            if let Err(err) = handle_message(context.as_ref(), message).await {
                 eprintln!("Message handling error for chat {}: {}", chat_id, err);
             }
         }
