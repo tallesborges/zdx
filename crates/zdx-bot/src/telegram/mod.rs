@@ -60,6 +60,8 @@ pub struct TelegramClient {
     token: String,
 }
 
+const TELEGRAM_PARSE_MODE: &str = "Markdown";
+
 impl TelegramClient {
     pub fn new(token: String) -> Self {
         Self {
@@ -117,6 +119,7 @@ impl TelegramClient {
             text,
             reply_to_message_id,
             allow_sending_without_reply: Some(true),
+            parse_mode: Some(TELEGRAM_PARSE_MODE),
         };
         let _: Message = self.post("sendMessage", &request).await?;
         Ok(())
@@ -267,6 +270,8 @@ struct SendMessageRequest<'a> {
     reply_to_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     allow_sending_without_reply: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<&'a str>,
 }
 
 #[derive(Debug, Serialize)]

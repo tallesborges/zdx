@@ -19,6 +19,11 @@ mod telegram;
 mod transcribe;
 mod types;
 
+const TELEGRAM_SYSTEM_PROMPT: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/telegram_system.md"
+));
+
 #[tokio::main]
 async fn main() -> Result<()> {
     let mut config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
@@ -54,12 +59,13 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     );
 
     let allowlist_len = settings.allowlist_user_ids.len();
+    let system_prompt = append_system_prompt(effective.prompt, TELEGRAM_SYSTEM_PROMPT);
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
         settings.allowlist_user_ids,
         root,
-        effective.prompt,
+        system_prompt,
         tool_config,
     ));
     let chat_queues = new_chat_queues();
@@ -105,4 +111,19 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     }
 
     Ok(())
+}
+
+fn append_system_prompt(existing: Option<String>, appendix: &str) -> Option<String> {
+    let appendix = appendix.trim();
+    if appendix.is_empty() {
+        return existing;
+    }
+
+    let prefix = existing.unwrap_or_default();
+    let prefix = prefix.trim();
+    if prefix.is_empty() {
+        Some(appendix.to_string())
+    } else {
+        Some(format!("{}\n\n{}", prefix, appendix))
+    }
 }
