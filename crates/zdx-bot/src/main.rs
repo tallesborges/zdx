@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -53,14 +54,14 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     );
 
     let allowlist_len = settings.allowlist_user_ids.len();
-    let context = BotContext::new(
+    let context = Arc::new(BotContext::new(
         client.clone(),
         config,
         settings.allowlist_user_ids,
         root,
         effective.prompt,
         tool_config,
-    );
+    ));
     let chat_queues = new_chat_queues();
 
     let mut offset: Option<i64> = None;
