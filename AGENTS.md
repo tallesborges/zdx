@@ -71,7 +71,14 @@
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
 - `crates/zdx-bot/`: Telegram bot binary (long-polling)
-  - `crates/zdx-bot/src/main.rs`: Telegram bot entrypoint + agent bridge
+  - `crates/zdx-bot/src/main.rs`: Telegram bot entrypoint + polling loop
+  - `crates/zdx-bot/src/bot/mod.rs`: bot module exports
+  - `crates/zdx-bot/src/bot/context.rs`: shared bot context
+  - `crates/zdx-bot/src/bot/queue.rs`: per-chat queueing helpers
+  - `crates/zdx-bot/src/handlers/mod.rs`: message handler module exports
+  - `crates/zdx-bot/src/handlers/message.rs`: Telegram message flow orchestration
+  - `crates/zdx-bot/src/ingest/mod.rs`: Telegram message parsing + attachment loading
+  - `crates/zdx-bot/src/agent/mod.rs`: thread log + agent turn helpers
   - `crates/zdx-bot/src/telegram/mod.rs`: Telegram API client + tool wiring
   - `crates/zdx-bot/src/telegram/types.rs`: Telegram API DTOs
   - `crates/zdx-bot/src/transcribe.rs`: OpenAI audio transcription helper for Telegram audio
