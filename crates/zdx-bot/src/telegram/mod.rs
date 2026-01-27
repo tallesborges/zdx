@@ -132,6 +132,31 @@ impl TelegramClient {
         Ok(())
     }
 
+    pub async fn send_chat_action(&self, chat_id: i64, action: &str) -> Result<()> {
+        let request = SendChatActionRequest { chat_id, action };
+        let _: bool = self.post("sendChatAction", &request).await?;
+        Ok(())
+    }
+
+    pub fn start_typing(&self, chat_id: i64) -> TypingIndicator {
+        let client = self.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let _ = client.send_chat_action(chat_id, "typing").await;
+
+                tokio::select! {
+                    _ = cancel_clone.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(4)) => {}
+                }
+            }
+        });
+
+        TypingIndicator { cancel }
+    }
+
     async fn post<T: DeserializeOwned, B: Serialize>(&self, method: &str, body: &B) -> Result<T> {
         let url = format!("{}/bot{}/{}", self.base_url, self.token, method);
         let response = self
@@ -284,4 +309,20 @@ struct SendMessageRequest<'a> {
 #[derive(Debug, Serialize)]
 struct GetFileRequest<'a> {
     file_id: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct SendChatActionRequest<'a> {
+    chat_id: i64,
+    action: &'a str,
+}
+
+pub struct TypingIndicator {
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Drop for TypingIndicator {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
