@@ -27,7 +27,7 @@ const BOT_SYSTEM_PROMPT: &str = include_str!(concat!(
 async fn main() -> Result<()> {
     let mut config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
     config.model = "claude-cli:claude-opus-4-5".to_string();
-    config.thinking_level = ThinkingLevel::Off;
+    config.thinking_level = ThinkingLevel::Minimal;
     let settings = TelegramSettings::from_config(&config)?;
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
