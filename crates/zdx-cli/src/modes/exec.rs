@@ -286,6 +286,9 @@ impl ExecRenderer {
                 // TODO: Stream tool output in real-time
                 // For now, we only show final output in ToolCompleted
             }
+            AgentEvent::ToolInputDelta { .. } => {
+                // Ignored in exec mode
+            }
         }
     }
 
