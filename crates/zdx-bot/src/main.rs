@@ -5,7 +5,6 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use zdx_core::config::{Config, ThinkingLevel};
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
-use zdx_core::core::context::build_effective_system_prompt_with_paths;
 use zdx_core::tools::{ToolRegistry, ToolSet};
 
 use crate::bot::{BotContext, enqueue_message, new_chat_queues};
@@ -19,9 +18,9 @@ mod telegram;
 mod transcribe;
 mod types;
 
-const TELEGRAM_SYSTEM_PROMPT: &str = include_str!(concat!(
+const BOT_SYSTEM_PROMPT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/telegram_system.md"
+    "/prompts/bot_system_prompt.md"
 ));
 
 #[tokio::main]
@@ -39,13 +38,6 @@ async fn main() -> Result<()> {
 
 async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let effective = build_effective_system_prompt_with_paths(&config, &root)
-        .map_err(|_| anyhow!("Failed to load system prompt context (AGENTS/skills)"))?;
-
-    for warning in &effective.warnings {
-        eprintln!("Warning: {}", warning.message);
-    }
-
     let client = TelegramClient::new(settings.bot_token);
     let mut tool_registry = ToolRegistry::builtins();
     let (telegram_def, telegram_handler) = telegram::telegram_send_tool(client.clone());
@@ -59,7 +51,8 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     );
 
     let allowlist_len = settings.allowlist_user_ids.len();
-    let system_prompt = append_system_prompt(effective.prompt, TELEGRAM_SYSTEM_PROMPT);
+    let trimmed_prompt = BOT_SYSTEM_PROMPT.trim();
+    let system_prompt = (!trimmed_prompt.is_empty()).then(|| trimmed_prompt.to_string());
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
@@ -113,17 +106,3 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     Ok(())
 }
 
-fn append_system_prompt(existing: Option<String>, appendix: &str) -> Option<String> {
-    let appendix = appendix.trim();
-    if appendix.is_empty() {
-        return existing;
-    }
-
-    let prefix = existing.unwrap_or_default();
-    let prefix = prefix.trim();
-    if prefix.is_empty() {
-        Some(appendix.to_string())
-    } else {
-        Some(format!("{}\n\n{}", prefix, appendix))
-    }
-}
