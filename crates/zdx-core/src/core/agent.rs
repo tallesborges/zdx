@@ -229,6 +229,7 @@ pub struct ToolUseBuilder {
     pub id: String,
     pub name: String,
     pub input_json: String,
+    pub input_preview_len: usize,
 }
 
 /// Builder for accumulating thinking block data from streaming events.
@@ -319,6 +320,91 @@ impl ToolUseBuilder {
             input,
         })
     }
+}
+
+fn extract_partial_tool_input(name: &str, input_json: &str) -> Option<String> {
+    let field = match name {
+        "write" => "content",
+        "edit" => "new",
+        _ => return None,
+    };
+
+    extract_partial_json_string_field(input_json, field)
+}
+
+fn extract_partial_json_string_field(input_json: &str, field: &str) -> Option<String> {
+    let key = format!("\"{}\"", field);
+    let mut search_start = 0;
+
+    while let Some(rel_pos) = input_json[search_start..].find(&key) {
+        let key_pos = search_start + rel_pos;
+        let mut idx = key_pos + key.len();
+        let bytes = input_json.as_bytes();
+
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if bytes.get(idx) != Some(&b':') {
+            search_start = key_pos + key.len();
+            continue;
+        }
+        idx += 1;
+
+        while idx < bytes.len() && bytes[idx].is_ascii_whitespace() {
+            idx += 1;
+        }
+        if bytes.get(idx) != Some(&b'"') {
+            search_start = key_pos + key.len();
+            continue;
+        }
+        idx += 1;
+
+        return Some(decode_partial_json_string(&input_json[idx..]));
+    }
+
+    None
+}
+
+fn decode_partial_json_string(input: &str) -> String {
+    let mut out = String::new();
+    let mut chars = input.chars();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '"' => break,
+            '\\' => {
+                if let Some(esc) = chars.next() {
+                    match esc {
+                        'n' => out.push('\n'),
+                        'r' => out.push('\r'),
+                        't' => out.push('\t'),
+                        'b' => out.push('\u{0008}'),
+                        'f' => out.push('\u{000c}'),
+                        '"' => out.push('"'),
+                        '\\' => out.push('\\'),
+                        'u' => {
+                            let mut hex = String::new();
+                            for _ in 0..4 {
+                                if let Some(h) = chars.next() {
+                                    hex.push(h);
+                                } else {
+                                    return out;
+                                }
+                            }
+                            if let Ok(code) = u32::from_str_radix(&hex, 16)
+                                && let Some(decoded) = char::from_u32(code)
+                            {
+                                out.push(decoded);
+                            }
+                        }
+                        other => out.push(other),
+                    }
+                }
+            }
+            other => out.push(other),
+        }
+    }
+
+    out
 }
 
 /// Sends an error event via the async channel and returns the original error.
@@ -629,6 +715,7 @@ pub async fn run_turn(
                             id: tool_id,
                             name: tool_name,
                             input_json: String::new(),
+                            input_preview_len: 0,
                         });
                     } else if block_type == ContentBlockType::Reasoning {
                         turn.thinking_blocks.push(ThinkingBuilder {
@@ -646,6 +733,19 @@ pub async fn run_turn(
                 } => {
                     if let Some(tu) = turn.find_tool_use_mut(index) {
                         tu.input_json.push_str(&partial_json);
+                        if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
+                            && !delta.is_empty()
+                            && delta.len() > tu.input_preview_len
+                        {
+                            tu.input_preview_len = delta.len();
+                            sender
+                                .send_important(AgentEvent::ToolInputDelta {
+                                    id: tu.id.clone(),
+                                    name: tu.name.clone(),
+                                    delta,
+                                })
+                                .await;
+                        }
                     }
                 }
                 StreamEvent::ReasoningDelta { index, reasoning } => {
@@ -1098,6 +1198,7 @@ mod tests {
             id: "tool1".to_string(),
             name: "test".to_string(),
             input_json: "{invalid json}".to_string(),
+            input_preview_len: 0,
         };
 
         let result = builder.finalize();
