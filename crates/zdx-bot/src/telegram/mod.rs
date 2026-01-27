@@ -61,11 +61,18 @@ pub struct TelegramClient {
 }
 
 const TELEGRAM_PARSE_MODE: &str = "Markdown";
+const TELEGRAM_CONNECT_TIMEOUT_SECS: u64 = 2;
+const TELEGRAM_HTTP_TIMEOUT_SECS: u64 = 35;
 
 impl TelegramClient {
     pub fn new(token: String) -> Self {
+        let http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(TELEGRAM_CONNECT_TIMEOUT_SECS))
+            .timeout(Duration::from_secs(TELEGRAM_HTTP_TIMEOUT_SECS))
+            .build()
+            .unwrap_or_else(|_| reqwest::Client::new());
         Self {
-            http: reqwest::Client::new(),
+            http,
             base_url: "https://api.telegram.org".to_string(),
             token,
         }
