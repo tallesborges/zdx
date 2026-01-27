@@ -44,6 +44,8 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
+    let _typing = context.client().start_typing(incoming.chat_id);
+
     let result = agent::run_agent_turn_with_persist(
         messages,
         context.config(),
