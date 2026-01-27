@@ -12,7 +12,7 @@ use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";
-const BETA_HEADER: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14";
+const BETA_HEADER: &str = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 
 /// Claude CLI API client.

@@ -45,6 +45,14 @@ pub enum AgentEvent {
         input: Value,
     },
 
+    /// Incremental tool input preview derived from streaming JSON.
+    /// Used for UI streaming updates (not persisted).
+    ToolInputDelta {
+        id: String,
+        name: String,
+        delta: String,
+    },
+
     /// A tool invocation has started execution.
     ToolStarted { id: String, name: String },
 

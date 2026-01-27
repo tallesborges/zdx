@@ -85,6 +85,10 @@ pub fn handle_agent_event(
             transcript.set_tool_input_for(id, input.clone());
             vec![]
         }
+        AgentEvent::ToolInputDelta { id, delta, .. } => {
+            transcript.set_tool_input_delta_for(id, delta.clone());
+            vec![]
+        }
         AgentEvent::ToolStarted { .. } => vec![],
         AgentEvent::ToolCompleted { id, result } => {
             transcript.set_tool_result_for(id, result.clone());

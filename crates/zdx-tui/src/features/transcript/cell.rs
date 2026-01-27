@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
@@ -46,6 +47,38 @@ fn format_read_preview(input: &Value) -> Option<String> {
     } else {
         Some(format!("{} ({})", path, params.join(", ")))
     }
+}
+
+fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
+    match name {
+        "write" => input.get("content")?.as_str(),
+        "edit" => input.get("new")?.as_str(),
+        _ => None,
+    }
+}
+
+fn tail_rendered_rows(text: &str, width: usize, max_rows: usize) -> (Vec<String>, usize) {
+    let mut total_rows = 0;
+    let mut tail: VecDeque<String> = VecDeque::with_capacity(max_rows);
+
+    for line in text.lines() {
+        let safe_line = sanitize_for_display(line);
+        let wrapped: Vec<String> = if safe_line.width() > width {
+            wrap_chars(&safe_line, width)
+        } else {
+            vec![safe_line.into_owned()]
+        };
+
+        for row in wrapped {
+            total_rows += 1;
+            if tail.len() == max_rows {
+                tail.pop_front();
+            }
+            tail.push_back(row);
+        }
+    }
+
+    (tail.into_iter().collect(), total_rows)
 }
 
 /// Global counter for generating unique cell IDs.
@@ -134,6 +167,7 @@ pub enum HistoryCell {
         tool_use_id: String,
         name: String,
         input: Value,
+        input_delta: Option<String>,
         state: ToolState,
         started_at: DateTime<Utc>,
         /// Some when tool has finished (Done or Error).
@@ -232,6 +266,7 @@ impl HistoryCell {
             tool_use_id: tool_use_id.into(),
             name: name.into(),
             input,
+            input_delta: None,
             state: ToolState::Running,
             started_at: now,
             result: None,
@@ -330,10 +365,27 @@ impl HistoryCell {
     /// Panics if called on a non-tool cell.
     pub fn set_tool_input(&mut self, new_input: serde_json::Value) {
         match self {
-            HistoryCell::Tool { input, .. } => {
+            HistoryCell::Tool {
+                input, input_delta, ..
+            } => {
                 *input = new_input;
+                *input_delta = None;
             }
             _ => panic!("set_tool_input called on non-tool cell"),
+        }
+    }
+
+    /// Updates the streaming input preview on a tool cell.
+    ///
+    /// Used for tool input streaming before JSON is complete.
+    ///
+    /// Panics if called on a non-tool cell.
+    pub fn set_tool_input_delta(&mut self, delta: String) {
+        match self {
+            HistoryCell::Tool { input_delta, .. } => {
+                *input_delta = Some(delta);
+            }
+            _ => panic!("set_tool_input_delta called on non-tool cell"),
         }
     }
 
@@ -478,6 +530,7 @@ impl HistoryCell {
                 name,
                 state,
                 input,
+                input_delta,
                 result,
                 ..
             } => {
@@ -583,6 +636,48 @@ impl HistoryCell {
                             text: suf.to_string(),
                             style: Style::Interrupted,
                         });
+                    }
+                }
+
+                let delta_text = input_delta
+                    .as_deref()
+                    .or_else(|| tool_input_delta(name, input));
+                if let Some(delta_text) = delta_text {
+                    let max_preview_rows = 7;
+                    let (rows, total_rows) =
+                        tail_rendered_rows(delta_text, width, max_preview_rows);
+                    if !rows.is_empty() {
+                        let truncated = total_rows > rows.len();
+                        let label = match name.as_str() {
+                            "write" => "write delta",
+                            "edit" => "edit delta",
+                            _ => "delta",
+                        };
+
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: format!("[{}: last {} rows]", label, rows.len()),
+                                style: Style::ToolBracket,
+                            }],
+                        });
+
+                        if truncated {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: format!("[{} more rows ...]", total_rows - rows.len()),
+                                    style: Style::ToolBracket,
+                                }],
+                            });
+                        }
+
+                        for row in rows {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: row,
+                                    style: Style::ToolOutput,
+                                }],
+                            });
+                        }
                     }
                 }
 

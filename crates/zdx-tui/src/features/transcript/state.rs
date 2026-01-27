@@ -468,6 +468,16 @@ impl TranscriptState {
         }
     }
 
+    /// Sets tool input preview for a cell by tool_use_id.
+    pub fn set_tool_input_delta_for(&mut self, tool_id: &str, delta: String) {
+        if let Some(cell) = self.cells.iter_mut().find(
+            |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
+        ) {
+            cell.set_tool_input_delta(delta);
+            self.invalidate_line_info();
+        }
+    }
+
     /// Finalizes an assistant cell by cell_id (streaming → complete).
     pub fn finalize_assistant_cell(&mut self, cell_id: super::CellId) {
         if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
