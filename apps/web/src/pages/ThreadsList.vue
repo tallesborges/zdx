@@ -19,19 +19,19 @@ onMounted(() => {
 </script>
 
 <template>
-  <h1>Thread List</h1>
+  <h1>Thread List </h1>
 
   <input v-model="query" placeholder="Search" />
 
   <div v-if="error">
-    <p>Error loading the threads: {{ error }}</p>
+    <p>Error loading the threads: { { error } } </p>
   </div>
-  <p v-else-if="loading">Loading ...</p>
-  <p v-else-if="filtered.length === 0">Empty threads</p>
+  <p v-else-if="loading"> Loading ...</p>
+  <p v-else-if="filtered.length === 0"> Empty threads </p>
   <ul v-else>
     <li v-for="thread in filtered" :key="thread.id">
       <router-link :to="`/threads/${thread.id}`">
-        {{ thread.title }}
+        {{ thread.title }} - {{ thread.updatedAt }}
       </router-link>
     </li>
   </ul>

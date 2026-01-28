@@ -1,10 +1,10 @@
 import type { ThreadSummary, ThreadDetail } from './types';
-import {readdir, readFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path';
 
 const THREADS_DIR = "/Users/tallesborges/.config/zdx/threads"
 
-export async function listThreads(): Promise<ThreadSummary[]>{
+export async function listThreads(): Promise<ThreadSummary[]> {
   const files = await readdir(THREADS_DIR)
   const summaries: ThreadSummary[] = [];
 
@@ -24,12 +24,14 @@ export async function listThreads(): Promise<ThreadSummary[]>{
       summaries.push({ id: id, title: data.title ?? id, updatedAt: data.ts ?? '' })
       break
     }
+
+    summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
 
   return summaries;
 }
 
-export async function getThreadDetail(id: string): Promise<ThreadDetail | null>{
+export async function getThreadDetail(id: string): Promise<ThreadDetail | null> {
   const filePath = join(THREADS_DIR, id)
 
 
