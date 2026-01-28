@@ -90,7 +90,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         messages,
         context.config(),
         context.root(),
-        context.system_prompt(),
+        context.bot_system_prompt(),
         &thread_id,
         &thread,
         context.tool_config(),
