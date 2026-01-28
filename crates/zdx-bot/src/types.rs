@@ -7,6 +7,10 @@ pub struct IncomingMessage {
     pub text: Option<String>,
     pub images: Vec<IncomingImage>,
     pub audios: Vec<IncomingAudio>,
+    /// Forum topic ID (for supergroups with topics enabled).
+    pub message_thread_id: Option<i64>,
+    /// Whether the group is a forum-enabled supergroup.
+    pub is_forum: bool,
 }
 
 pub struct IncomingImage {

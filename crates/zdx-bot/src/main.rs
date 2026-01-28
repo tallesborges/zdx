@@ -50,13 +50,15 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
         },
     );
 
-    let allowlist_len = settings.allowlist_user_ids.len();
+    let allowlist_user_len = settings.allowlist_user_ids.len();
+    let allowlist_chat_len = settings.allowlist_chat_ids.len();
     let trimmed_prompt = BOT_SYSTEM_PROMPT.trim();
     let system_prompt = (!trimmed_prompt.is_empty()).then(|| trimmed_prompt.to_string());
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
         settings.allowlist_user_ids,
+        settings.allowlist_chat_ids,
         root,
         system_prompt,
         tool_config,
@@ -69,8 +71,8 @@ async fn run_bot(config: Config, settings: TelegramSettings) -> Result<()> {
     tokio::pin!(shutdown);
 
     eprintln!(
-        "zdx-bot started. Allowlist users: {}. Polling for updates...",
-        allowlist_len
+        "zdx-bot started. Allowlist: {} user(s), {} chat(s). Polling for updates...",
+        allowlist_user_len, allowlist_chat_len
     );
 
     loop {

@@ -22,6 +22,9 @@ pub struct Message {
     pub audio: Option<Audio>,
     #[serde(default)]
     pub document: Option<Document>,
+    /// Unique identifier of a message thread or forum topic.
+    #[serde(default)]
+    pub message_thread_id: Option<i64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -29,17 +32,31 @@ pub struct Chat {
     pub id: i64,
     #[serde(rename = "type")]
     kind: String,
+    /// True if the supergroup has topics/forum enabled.
+    #[serde(default)]
+    pub is_forum: Option<bool>,
 }
 
 impl Chat {
     pub fn is_private(&self) -> bool {
         self.kind == "private"
     }
+
+    pub fn is_group(&self) -> bool {
+        self.kind == "group" || self.kind == "supergroup"
+    }
+
+    /// Returns true if this is a forum-enabled supergroup.
+    pub fn is_forum_enabled(&self) -> bool {
+        self.is_forum.unwrap_or(false)
+    }
 }
 
 #[derive(Debug, Deserialize)]
 pub struct User {
     pub id: i64,
+    #[serde(default)]
+    pub is_bot: bool,
 }
 
 #[derive(Debug, Deserialize)]

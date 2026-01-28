@@ -9,7 +9,8 @@ use crate::telegram::TelegramClient;
 pub(crate) struct BotContext {
     client: TelegramClient,
     config: Config,
-    allowlist: HashSet<i64>,
+    allowlist_user_ids: HashSet<i64>,
+    allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
     system_prompt: Option<String>,
     tool_config: ToolConfig,
@@ -19,7 +20,8 @@ impl BotContext {
     pub(crate) fn new(
         client: TelegramClient,
         config: Config,
-        allowlist: HashSet<i64>,
+        allowlist_user_ids: HashSet<i64>,
+        allowlist_chat_ids: HashSet<i64>,
         root: PathBuf,
         system_prompt: Option<String>,
         tool_config: ToolConfig,
@@ -27,7 +29,8 @@ impl BotContext {
         Self {
             client,
             config,
-            allowlist,
+            allowlist_user_ids,
+            allowlist_chat_ids,
             root,
             system_prompt,
             tool_config,
@@ -42,8 +45,12 @@ impl BotContext {
         &self.config
     }
 
-    pub(crate) fn allowlist(&self) -> &HashSet<i64> {
-        &self.allowlist
+    pub(crate) fn allowlist_user_ids(&self) -> &HashSet<i64> {
+        &self.allowlist_user_ids
+    }
+
+    pub(crate) fn allowlist_chat_ids(&self) -> &HashSet<i64> {
+        &self.allowlist_chat_ids
     }
 
     pub(crate) fn root(&self) -> &Path {
