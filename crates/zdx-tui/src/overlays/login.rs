@@ -74,7 +74,6 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
-                        task: None,
                         provider,
                         state: Some(oauth_state),
                         port: Some(callback_port),
@@ -100,7 +99,6 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
-                        task: None,
                         provider,
                         state: Some(oauth_state_copy),
                         port: None,
@@ -126,7 +124,6 @@ impl LoginState {
                 let effects = vec![
                     UiEffect::OpenBrowser { url },
                     UiEffect::StartLocalAuthCallback {
-                        task: None,
                         provider,
                         state: Some(oauth_state_copy),
                         port: None,

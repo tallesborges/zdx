@@ -68,7 +68,6 @@ impl RenameState {
                 } else {
                     // Submit the rename
                     OverlayUpdate::close().with_ui_effects(vec![UiEffect::RenameThread {
-                        task: None,
                         thread_id: self.thread_id.clone(),
                         title: Some(title.to_string()),
                     }])

@@ -6,6 +6,12 @@
 //! This keeps the reducer pure: it only mutates state and returns effects,
 //! never performs I/O or spawns tasks directly.
 //!
+//! ## Task ID Allocation
+//!
+//! Task IDs are allocated by the runtime, not the reducer. Effects that spawn
+//! tasks simply describe _what_ to do; the runtime assigns IDs when executing.
+//! This keeps reducers fully deterministic and simplifies effect creation.
+//!
 //! ## Cancellation Effects
 //!
 //! Cancellation is initiated from the reducer via `UiEffect::CancelTask`.
@@ -17,7 +23,7 @@ use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::providers::ProviderKind;
 
-use crate::common::{TaskId, TaskKind};
+use crate::common::TaskKind;
 
 /// Effects returned by the reducer for the runtime to execute.
 ///
@@ -39,7 +45,6 @@ pub enum UiEffect {
 
     /// Spawn async token exchange for login.
     SpawnTokenExchange {
-        task: Option<TaskId>,
         provider: ProviderKind,
         code: String,
         verifier: String,
@@ -48,7 +53,6 @@ pub enum UiEffect {
 
     /// Start a local OAuth callback listener (if supported).
     StartLocalAuthCallback {
-        task: Option<TaskId>,
         provider: ProviderKind,
         state: Option<String>,
         port: Option<u16>,
@@ -62,14 +66,12 @@ pub enum UiEffect {
 
     /// Rename the current thread.
     RenameThread {
-        task: Option<TaskId>,
         thread_id: String,
         title: Option<String>,
     },
 
     /// Suggest a thread title from the first user message.
     SuggestThreadTitle {
-        task: Option<TaskId>,
         thread_id: String,
         message: String,
     },
@@ -81,7 +83,7 @@ pub enum UiEffect {
     PersistThinking { level: ThinkingLevel },
 
     /// Create a new thread (for /new command).
-    CreateNewThread { task: Option<TaskId> },
+    CreateNewThread,
 
     /// Open config file in default system editor/app.
     OpenConfig,
@@ -90,7 +92,7 @@ pub enum UiEffect {
     OpenModelsConfig,
 
     /// Start handoff generation with a goal.
-    StartHandoff { task: Option<TaskId>, goal: String },
+    StartHandoff { goal: String },
 
     /// Submit handoff prompt: create new thread and send prompt as first message.
     HandoffSubmit {
@@ -101,25 +103,18 @@ pub enum UiEffect {
 
     /// Open the thread picker overlay (loads thread list via I/O).
     OpenThreadPicker {
-        task: Option<TaskId>,
         mode: crate::overlays::ThreadPickerMode,
     },
 
     /// Load a thread by ID (switch to that thread).
-    LoadThread {
-        task: Option<TaskId>,
-        thread_id: String,
-    },
+    LoadThread { thread_id: String },
 
     /// Preview a thread (show transcript without full switch).
     /// Used during thread picker navigation.
-    PreviewThread {
-        task: Option<TaskId>,
-        thread_id: String,
-    },
+    PreviewThread { thread_id: String },
 
     /// Discover project files for the file picker.
-    DiscoverFiles { task: Option<TaskId> },
+    DiscoverFiles,
 
     /// Copy text to clipboard.
     CopyToClipboard {
@@ -129,17 +124,13 @@ pub enum UiEffect {
 
     /// Create a new thread from a truncated set of events.
     ForkThread {
-        task: Option<TaskId>,
         events: Vec<ThreadEvent>,
         user_input: Option<String>,
         turn_number: usize,
     },
 
     /// Execute a bash command directly (user `$` shortcut).
-    ExecuteBash {
-        task: Option<TaskId>,
-        command: String,
-    },
+    ExecuteBash { command: String },
 
     // ========================================================================
     // Cancellation Effects

@@ -56,7 +56,7 @@ impl FilePickerState {
                 offset: 0,
                 loading: true,
             },
-            vec![UiEffect::DiscoverFiles { task: None }],
+            vec![UiEffect::DiscoverFiles],
         )
     }
 

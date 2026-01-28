@@ -159,7 +159,6 @@ fn execute_command(
             (
                 None,
                 vec![UiEffect::OpenThreadPicker {
-                    task: None,
                     mode: crate::overlays::ThreadPickerMode::Switch,
                 }],
                 vec![],
@@ -312,7 +311,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
     ];
 
     if tui.thread.thread_log.is_some() {
-        (vec![UiEffect::CreateNewThread { task: None }], mutations)
+        (vec![UiEffect::CreateNewThread], mutations)
     } else {
         mutations.push(StateMutation::Transcript(
             TranscriptMutation::AppendSystemMessage("Thread cleared.".to_string()),

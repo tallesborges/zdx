@@ -7,7 +7,7 @@
 
 use crossterm::event::Event;
 
-use crate::common::{TaskId, TaskKind, TaskMeta};
+use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::input::HandoffState;
@@ -617,153 +617,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
         },
     };
-    taskify_effects(&mut app.tui, effects)
-}
-
-fn ensure_task_id(tui: &mut TuiState, task: Option<TaskId>) -> TaskId {
-    task.unwrap_or_else(|| tui.task_seq.next_id())
-}
-
-fn taskify_effects(tui: &mut TuiState, effects: Vec<UiEffect>) -> Vec<UiEffect> {
-    let mut out = Vec::with_capacity(effects.len());
-    for effect in effects {
-        match effect {
-            UiEffect::RenameThread {
-                task,
-                thread_id,
-                title,
-            } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::RenameThread {
-                    task: Some(task),
-                    thread_id,
-                    title,
-                });
-            }
-            UiEffect::StartHandoff { task, goal } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::StartHandoff {
-                    task: Some(task),
-                    goal,
-                });
-            }
-            UiEffect::OpenThreadPicker { task, mode } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::OpenThreadPicker {
-                    task: Some(task),
-                    mode,
-                });
-            }
-            UiEffect::CreateNewThread { task } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::CreateNewThread { task: Some(task) });
-            }
-            UiEffect::LoadThread { task, thread_id } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::LoadThread {
-                    task: Some(task),
-                    thread_id,
-                });
-            }
-            UiEffect::PreviewThread { task, thread_id } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::PreviewThread {
-                    task: Some(task),
-                    thread_id,
-                });
-            }
-            UiEffect::SpawnTokenExchange {
-                task,
-                provider,
-                code,
-                verifier,
-                redirect_uri,
-            } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::SpawnTokenExchange {
-                    task: Some(task),
-                    provider,
-                    code,
-                    verifier,
-                    redirect_uri,
-                });
-            }
-            UiEffect::StartLocalAuthCallback {
-                task,
-                provider,
-                state,
-                port,
-            } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::StartLocalAuthCallback {
-                    task: Some(task),
-                    provider,
-                    state,
-                    port,
-                });
-            }
-            UiEffect::DiscoverFiles { task } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::DiscoverFiles { task: Some(task) });
-            }
-            UiEffect::ExecuteBash { task, command } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::ExecuteBash {
-                    task: Some(task),
-                    command,
-                });
-            }
-            UiEffect::ForkThread {
-                task,
-                events,
-                user_input,
-                turn_number,
-            } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::ForkThread {
-                    task: Some(task),
-                    events,
-                    user_input,
-                    turn_number,
-                });
-            }
-            UiEffect::SuggestThreadTitle {
-                task,
-                thread_id,
-                message,
-            } => {
-                let task = ensure_task_id(tui, task);
-                out.push(UiEffect::SuggestThreadTitle {
-                    task: Some(task),
-                    thread_id,
-                    message,
-                });
-            }
-            UiEffect::CancelTask { kind, token } => {
-                if let Some(token) = token {
-                    out.push(UiEffect::CancelTask {
-                        kind,
-                        token: Some(token),
-                    });
-                } else {
-                    let token = {
-                        let state = tui.tasks.state_mut(kind);
-                        let token = state.cancel.clone();
-                        state.clear();
-                        token
-                    };
-                    if let Some(token) = token {
-                        out.push(UiEffect::CancelTask {
-                            kind,
-                            token: Some(token),
-                        });
-                    }
-                }
-            }
-            other => out.push(other),
-        }
-    }
-    out
+    effects
 }
 
 // ============================================================================
@@ -800,7 +654,6 @@ fn push_token_exchange(
     redirect_uri: Option<String>,
 ) {
     effects.push(UiEffect::SpawnTokenExchange {
-        task: None,
         provider,
         code,
         verifier,
@@ -975,7 +828,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
                     token: None,
                 },
                 UiEffect::OpenThreadPicker {
-                    task: None,
                     mode: crate::overlays::ThreadPickerMode::Insert { trigger_pos },
                 },
             ];

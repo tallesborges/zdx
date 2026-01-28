@@ -38,7 +38,7 @@ use zdx_core::core::interrupt;
 use zdx_core::core::thread_log::ThreadLog;
 use zdx_core::providers::ChatMessage;
 
-use crate::common::{TaskCompleted, TaskId, TaskKind, TaskMeta, TaskStarted};
+use crate::common::{TaskCompleted, TaskKind, TaskMeta, TaskStarted};
 use crate::effects::UiEffect;
 use crate::events::UiEvent;
 use crate::state::{AgentState, AppState};
@@ -322,11 +322,14 @@ impl TuiRuntime {
     }
 
     /// Spawns an async task with a uniform TaskStarted/TaskCompleted lifecycle.
-    fn spawn_task<F, Fut>(&self, kind: TaskKind, id: TaskId, meta: TaskMeta, cancelable: bool, f: F)
+    ///
+    /// Task IDs are allocated here in the runtime, keeping reducers deterministic.
+    fn spawn_task<F, Fut>(&mut self, kind: TaskKind, meta: TaskMeta, cancelable: bool, f: F)
     where
         F: FnOnce(Option<CancellationToken>) -> Fut + Send + 'static,
         Fut: Future<Output = UiEvent> + Send + 'static,
     {
+        let id = self.state.tui.task_seq.next_id();
         let tx = self.inbox_tx.clone();
         let cancel = cancelable.then(CancellationToken::new);
         let started = TaskStarted {
@@ -377,45 +380,41 @@ impl TuiRuntime {
             // Cancellation Effects
             // ================================================================
             // These are emitted by the reducer (e.g., on Esc key) to cancel
-            // in-progress operations. The runtime just calls cancel() on
-            // the provided token.
-            UiEffect::CancelTask { token, .. } => {
-                if let Some(cancel) = token {
+            // in-progress operations. If token is None, we look it up from
+            // the task state and clear the task.
+            UiEffect::CancelTask { kind, token } => {
+                let cancel = token.or_else(|| {
+                    let state = self.state.tui.tasks.state_mut(kind);
+                    let token = state.cancel.clone();
+                    state.clear();
+                    token
+                });
+                if let Some(cancel) = cancel {
                     cancel.cancel();
                 }
             }
 
             // Auth effects
             UiEffect::SpawnTokenExchange {
-                task,
                 provider,
                 code,
                 verifier,
                 redirect_uri,
             } => {
-                let Some(task) = task else {
-                    return;
-                };
                 self.spawn_task(
                     TaskKind::LoginExchange,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::token_exchange(provider, code, verifier, redirect_uri),
                 );
             }
             UiEffect::StartLocalAuthCallback {
-                task,
                 provider,
                 state,
                 port,
             } => {
-                let Some(task) = task else {
-                    return;
-                };
                 self.spawn_task(
                     TaskKind::LoginCallback,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::local_auth_callback(provider, state, port),
@@ -459,30 +458,15 @@ impl TuiRuntime {
                     // Errors are silently ignored for thread persistence
                 }
             }
-            UiEffect::RenameThread {
-                task,
-                thread_id,
-                title,
-            } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::RenameThread { thread_id, title } => {
                 self.spawn_task(
                     TaskKind::ThreadRename,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_rename(thread_id, title),
                 );
             }
-            UiEffect::SuggestThreadTitle {
-                task,
-                thread_id,
-                message,
-            } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::SuggestThreadTitle { thread_id, message } => {
                 let is_current = self
                     .state
                     .tui
@@ -497,7 +481,6 @@ impl TuiRuntime {
                 let title_model = self.state.tui.config.title_model.clone();
                 self.spawn_task(
                     TaskKind::ThreadTitle,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| {
@@ -505,42 +488,30 @@ impl TuiRuntime {
                     },
                 );
             }
-            UiEffect::CreateNewThread { task } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::CreateNewThread => {
                 let config = self.state.tui.config.clone();
                 let root = self.state.tui.agent_opts.root.clone();
                 self.spawn_task(
                     TaskKind::ThreadCreate,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_create(config, root),
                 );
             }
             UiEffect::ForkThread {
-                task,
                 events,
                 user_input,
                 turn_number,
             } => {
-                let Some(task) = task else {
-                    return;
-                };
                 let root = self.state.tui.agent_opts.root.clone();
                 self.spawn_task(
                     TaskKind::ThreadFork,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_fork(events, user_input, turn_number, root),
                 );
             }
-            UiEffect::OpenThreadPicker { task, mode } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::OpenThreadPicker { mode } => {
                 let original_cells = if mode.is_switch() {
                     self.state.tui.transcript.cells().to_vec()
                 } else {
@@ -548,32 +519,23 @@ impl TuiRuntime {
                 };
                 self.spawn_task(
                     TaskKind::ThreadList,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_list_load(original_cells, mode),
                 );
             }
-            UiEffect::LoadThread { task, thread_id } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::LoadThread { thread_id } => {
                 let root = self.state.tui.agent_opts.root.clone();
                 self.spawn_task(
                     TaskKind::ThreadLoad,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_load(thread_id, root),
                 );
             }
-            UiEffect::PreviewThread { task, thread_id } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::PreviewThread { thread_id } => {
                 self.spawn_task(
                     TaskKind::ThreadPreview,
-                    task,
                     TaskMeta::None,
                     false,
                     move |_| handlers::thread_preview(thread_id),
@@ -581,16 +543,13 @@ impl TuiRuntime {
             }
 
             // Handoff effects
-            UiEffect::StartHandoff { task, goal } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::StartHandoff { goal } => {
                 if let Some(ref thread_log) = self.state.tui.thread.thread_log {
                     let thread_id = thread_log.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let handoff_model = self.state.tui.config.handoff_model.clone();
                     let meta = TaskMeta::Handoff { goal: goal.clone() };
-                    self.spawn_task(TaskKind::Handoff, task, meta, true, move |cancel| {
+                    self.spawn_task(TaskKind::Handoff, meta, true, move |cancel| {
                         handoff::handoff_generation(thread_id, goal, handoff_model, root, cancel)
                     });
                 } else {
@@ -621,14 +580,10 @@ impl TuiRuntime {
             }
 
             // File picker effects
-            UiEffect::DiscoverFiles { task } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::DiscoverFiles => {
                 let root = self.state.tui.agent_opts.root.clone();
                 self.spawn_task(
                     TaskKind::FileDiscovery,
-                    task,
                     TaskMeta::None,
                     true,
                     move |cancel| handlers::file_discovery(root, cancel),
@@ -644,10 +599,7 @@ impl TuiRuntime {
             }
 
             // Direct bash execution effects
-            UiEffect::ExecuteBash { task, command } => {
-                let Some(task) = task else {
-                    return;
-                };
+            UiEffect::ExecuteBash { command } => {
                 // Only spawn if not already running a bash command
                 if !self.state.tui.tasks.state(TaskKind::Bash).is_running() {
                     let id = format!("user-bash-{}", chrono::Utc::now().timestamp_millis());
@@ -656,7 +608,7 @@ impl TuiRuntime {
                         id: id.clone(),
                         command: command.clone(),
                     };
-                    self.spawn_task(TaskKind::Bash, task, meta, true, move |cancel| {
+                    self.spawn_task(TaskKind::Bash, meta, true, move |cancel| {
                         handlers::bash_execution(id, command, root, cancel)
                     });
                 }
