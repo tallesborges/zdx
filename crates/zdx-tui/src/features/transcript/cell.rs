@@ -648,18 +648,6 @@ impl HistoryCell {
                         tail_rendered_rows(delta_text, width, max_preview_rows);
                     if !rows.is_empty() {
                         let truncated = total_rows > rows.len();
-                        let label = match name.as_str() {
-                            "write" => "write delta",
-                            "edit" => "edit delta",
-                            _ => "delta",
-                        };
-
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: format!("[{}: last {} rows]", label, rows.len()),
-                                style: Style::ToolBracket,
-                            }],
-                        });
 
                         if truncated {
                             lines.push(StyledLine {
