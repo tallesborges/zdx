@@ -18,12 +18,13 @@ onMounted(async () => {
 </script>
 
 <template>
+  <router-link to="/threads">Threads</router-link>
   <p v-if="error">Error: {{ error }}</p>
   <div v-else-if="thread">
     <h1>Thread {{ thread.title }}</h1>
     <ul>
       <li v-for="(message, index) in thread.messages" :key="index">
-        {{ message.role }}: {{ message.content }}
+        <span v-text="message.role" style="font-weight: bold;" /> - <span v-text="message.content" />
       </li>
     </ul>
   </div>
