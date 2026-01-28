@@ -426,7 +426,7 @@ impl TuiRuntime {
             UiEffect::OpenConfig => {
                 let config_path = zdx_core::config::paths::config_path();
                 if config_path.exists() {
-                    let _ = open::that(&config_path);
+                    let _ = open_in_editor(&config_path);
                     // Note: errors are silently ignored for simplicity
                     // Could add an event for error reporting if needed
                 }
@@ -439,7 +439,7 @@ impl TuiRuntime {
                     }
                     let _ = std::fs::write(&models_path, zdx_core::models::default_models_toml());
                 }
-                let _ = open::that(&models_path);
+                let _ = open_in_editor(&models_path);
                 // Note: errors are silently ignored for simplicity
                 // Could add an event for error reporting if needed
             }
@@ -668,5 +668,18 @@ impl TuiRuntime {
 impl Drop for TuiRuntime {
     fn drop(&mut self) {
         let _ = terminal::restore_terminal();
+    }
+}
+
+/// Opens a file in the user's preferred editor.
+///
+/// Checks `$EDITOR` environment variable first, then falls back to system default.
+fn open_in_editor(path: &std::path::Path) -> std::io::Result<()> {
+    match std::env::var("EDITOR") {
+        Ok(editor) if !editor.is_empty() => std::process::Command::new(&editor)
+            .arg(path)
+            .spawn()
+            .map(|_| ()),
+        _ => open::that(path),
     }
 }
