@@ -19,6 +19,7 @@ onMounted(() => {
 </script>
 
 <template>
+  <router-link to="/">Home</router-link>
   <h1>Thread List </h1>
 
   <input v-model="query" placeholder="Search" />

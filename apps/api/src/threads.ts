@@ -1,4 +1,4 @@
-import type { ThreadSummary, ThreadDetail } from './types';
+import type { ThreadSummary, ThreadDetail, ThreadMessage } from './types';
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path';
 
@@ -32,8 +32,29 @@ export async function listThreads(): Promise<ThreadSummary[]> {
 }
 
 export async function getThreadDetail(id: string): Promise<ThreadDetail | null> {
-  const filePath = join(THREADS_DIR, id)
+  const filePath = join(THREADS_DIR, `${id}.jsonl`)
 
+  const fileData = await readFile(filePath, 'utf-8').catch(() => null)
+  if (!fileData) return null
 
-  return null
+  const lines = fileData.split('\n').filter(l => l !== '')
+
+  let title = id
+  let messages: ThreadMessage[] = []
+
+  for (const l of lines) {
+    const data = JSON.parse(l)
+
+    if (data.type === 'meta') {
+      title = data.title ?? id
+    } else if (data.type === 'message') {
+      messages.push({ role: data.role, content: data.text })
+    }
+  }
+
+  return {
+    id,
+    title,
+    messages
+  }
 }
