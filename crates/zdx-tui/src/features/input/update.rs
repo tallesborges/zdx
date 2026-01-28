@@ -485,7 +485,6 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
                 if trigger_pos > 0 && text.as_bytes().get(trigger_pos - 1) == Some(&b'@') {
                     return (
                         vec![UiEffect::OpenThreadPicker {
-                            task: None,
                             mode: crate::overlays::ThreadPickerMode::Insert {
                                 trigger_pos: trigger_pos - 1,
                             },
@@ -569,7 +568,6 @@ fn submit_input(
     if let Some((mut effects, mutations, overlay)) = handle_bash_commands(input, trimmed, &text) {
         if should_suggest_title && let Some(thread_id) = thread_id.as_ref() {
             effects.push(UiEffect::SuggestThreadTitle {
-                task: None,
                 thread_id: thread_id.clone(),
                 message: text.to_string(),
             });
@@ -653,7 +651,6 @@ fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Op
         input.clear();
         return Some((
             vec![UiEffect::ExecuteBash {
-                task: None,
                 command: command.to_string(),
             }],
             vec![],
@@ -686,7 +683,6 @@ fn handle_handoff_submission(
         input.clear();
         return Some((
             vec![UiEffect::StartHandoff {
-                task: None,
                 goal: text.to_string(),
             }],
             vec![],
@@ -750,7 +746,6 @@ pub fn build_send_effects(
 
     if should_suggest_title && let Some(thread_id) = thread_id {
         effects.push(UiEffect::SuggestThreadTitle {
-            task: None,
             thread_id,
             message: text.to_string(),
         });
