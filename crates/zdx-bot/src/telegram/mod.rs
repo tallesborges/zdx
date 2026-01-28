@@ -18,6 +18,7 @@ pub use types::{Audio, Chat, Document, Message, PhotoSize, TelegramFile, Update,
 pub struct TelegramSettings {
     pub bot_token: String,
     pub allowlist_user_ids: HashSet<i64>,
+    pub allowlist_chat_ids: HashSet<i64>,
 }
 
 impl TelegramSettings {
@@ -46,9 +47,13 @@ impl TelegramSettings {
             bail!("telegram.allowlist_user_ids must contain at least one user ID");
         }
 
+        let allowlist_chat_ids: HashSet<i64> =
+            config.telegram.allowlist_chat_ids.iter().copied().collect();
+
         Ok(Self {
             bot_token: token,
             allowlist_user_ids,
+            allowlist_chat_ids,
         })
     }
 }
@@ -120,10 +125,12 @@ impl TelegramClient {
         chat_id: i64,
         text: &str,
         reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
     ) -> Result<()> {
         let request = SendMessageRequest {
             chat_id,
             text,
+            message_thread_id,
             reply_to_message_id,
             allow_sending_without_reply: Some(true),
             parse_mode: Some(TELEGRAM_PARSE_MODE),
@@ -132,20 +139,39 @@ impl TelegramClient {
         Ok(())
     }
 
-    pub async fn send_chat_action(&self, chat_id: i64, action: &str) -> Result<()> {
-        let request = SendChatActionRequest { chat_id, action };
+    pub async fn send_chat_action(
+        &self,
+        chat_id: i64,
+        action: &str,
+        message_thread_id: Option<i64>,
+    ) -> Result<()> {
+        let request = SendChatActionRequest {
+            chat_id,
+            action,
+            message_thread_id,
+        };
         let _: bool = self.post("sendChatAction", &request).await?;
         Ok(())
     }
 
-    pub fn start_typing(&self, chat_id: i64) -> TypingIndicator {
+    /// Create a forum topic in a supergroup.
+    /// Returns the message_thread_id of the created topic.
+    pub async fn create_forum_topic(&self, chat_id: i64, name: &str) -> Result<i64> {
+        let request = CreateForumTopicRequest { chat_id, name };
+        let topic: ForumTopic = self.post("createForumTopic", &request).await?;
+        Ok(topic.message_thread_id)
+    }
+
+    pub fn start_typing(&self, chat_id: i64, message_thread_id: Option<i64>) -> TypingIndicator {
         let client = self.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
         let cancel_clone = cancel.clone();
 
         tokio::spawn(async move {
             loop {
-                let _ = client.send_chat_action(chat_id, "typing").await;
+                let _ = client
+                    .send_chat_action(chat_id, "typing", message_thread_id)
+                    .await;
 
                 tokio::select! {
                     _ = cancel_clone.cancelled() => break,
@@ -189,18 +215,20 @@ struct TelegramSendInput {
     text: String,
     #[serde(default)]
     reply_to_message_id: Option<i64>,
+    #[serde(default)]
+    message_thread_id: Option<i64>,
 }
 
 pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandler) {
     let definition = ToolDefinition {
         name: "Telegram_Send".to_string(),
-        description: "Send a Telegram DM to a chat_id.".to_string(),
+        description: "Send a Telegram message to a chat_id (DM or group/supergroup).".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "chat_id": {
                     "type": "integer",
-                    "description": "Telegram chat ID (private DM)"
+                    "description": "Telegram chat ID (private DM or group/supergroup)"
                 },
                 "text": {
                     "type": "string",
@@ -209,6 +237,10 @@ pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandle
                 "reply_to_message_id": {
                     "type": "integer",
                     "description": "Optional message ID to reply to"
+                },
+                "message_thread_id": {
+                    "type": "integer",
+                    "description": "Optional forum topic ID (for supergroups with topics enabled)"
                 }
             },
             "required": ["chat_id", "text"],
@@ -238,7 +270,12 @@ pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandle
                 return ToolOutput::failure("invalid_input", "text must not be empty", None);
             }
 
-            let send_future = client.send_message(parsed.chat_id, text, parsed.reply_to_message_id);
+            let send_future = client.send_message(
+                parsed.chat_id,
+                text,
+                parsed.reply_to_message_id,
+                parsed.message_thread_id,
+            );
 
             let send_result = match timeout {
                 Some(timeout) => match tokio::time::timeout(timeout, send_future).await {
@@ -299,6 +336,8 @@ struct SendMessageRequest<'a> {
     chat_id: i64,
     text: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
+    message_thread_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     reply_to_message_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     allow_sending_without_reply: Option<bool>,
@@ -315,6 +354,19 @@ struct GetFileRequest<'a> {
 struct SendChatActionRequest<'a> {
     chat_id: i64,
     action: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_thread_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
+struct CreateForumTopicRequest<'a> {
+    chat_id: i64,
+    name: &'a str,
+}
+
+#[derive(Debug, Deserialize)]
+struct ForumTopic {
+    message_thread_id: i64,
 }
 
 pub struct TypingIndicator {

@@ -69,6 +69,9 @@ pub struct TelegramConfig {
     /// Allowlist of numeric Telegram user IDs.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowlist_user_ids: Vec<i64>,
+    /// Allowlist of numeric Telegram chat IDs (for groups/supergroups).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowlist_chat_ids: Vec<i64>,
 }
 
 impl ThinkingLevel {

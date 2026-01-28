@@ -15,32 +15,57 @@ const MAX_IMAGE_BYTES: u64 = 3_932_160; // 3.75MB
 const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024; // 25MB
 const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
+pub(crate) struct AllowlistConfig<'a> {
+    pub user_ids: &'a HashSet<i64>,
+    pub chat_ids: &'a HashSet<i64>,
+}
+
 pub(crate) async fn parse_incoming_message(
     client: &TelegramClient,
-    allowlist: &HashSet<i64>,
+    allowlist: AllowlistConfig<'_>,
     config: &Config,
     message: Message,
 ) -> Result<Option<IncomingMessage>> {
-    if !message.chat.is_private() {
-        eprintln!("Ignoring non-DM chat {}", message.chat.id);
-        return Ok(None);
-    }
-
     let chat_id = message.chat.id;
     let message_id = message.message_id;
+
+    // For groups/supergroups, check if chat is in the allowlist
+    if message.chat.is_group() {
+        if !allowlist.chat_ids.contains(&chat_id) {
+            eprintln!("Ignoring non-allowlisted group chat {}", chat_id);
+            return Ok(None);
+        }
+    } else if !message.chat.is_private() {
+        // Not a group, supergroup, or private chat - ignore
+        eprintln!("Ignoring unsupported chat type for chat {}", chat_id);
+        return Ok(None);
+    }
 
     let Some(user) = message.from.as_ref() else {
         eprintln!("Ignoring message without sender in chat {}", chat_id);
         return Ok(None);
     };
 
-    if !allowlist.contains(&user.id) {
+    // Skip messages from bots (including our own messages)
+    if user.is_bot {
+        return Ok(None);
+    }
+
+    if !allowlist.user_ids.contains(&user.id) {
         eprintln!("Denied user {} for chat {}", user.id, chat_id);
         let _ = client
-            .send_message(chat_id, "Access denied.", Some(message_id))
+            .send_message(
+                chat_id,
+                "Access denied.",
+                Some(message_id),
+                message.message_thread_id,
+            )
             .await;
         return Ok(None);
     }
+
+    // Use message_thread_id when present (don't require is_topic_message flag)
+    let message_thread_id = message.message_thread_id;
 
     let mut text = extract_text(&message);
     let mut images = Vec::new();
@@ -104,6 +129,7 @@ pub(crate) async fn parse_incoming_message(
                     chat_id,
                     "Sorry, I couldn't read that attachment.",
                     Some(message_id),
+                    message_thread_id,
                 )
                 .await;
         } else {
@@ -125,6 +151,8 @@ pub(crate) async fn parse_incoming_message(
         text,
         images,
         audios,
+        message_thread_id,
+        is_forum: message.chat.is_forum_enabled(),
     }))
 }
 
