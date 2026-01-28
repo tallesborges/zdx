@@ -26,7 +26,7 @@ pub struct OpenRouterConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
-    pub max_tokens: u32,
+    pub max_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
 }
 
@@ -44,7 +44,7 @@ impl OpenRouterConfig {
     /// - `OPENROUTER_APP_NAME` (optional)
     pub fn from_env(
         model: String,
-        max_tokens: u32,
+        max_tokens: Option<u32>,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         reasoning_effort: Option<String>,
@@ -312,7 +312,7 @@ impl From<&ToolDefinition> for ChatToolDefinition {
 impl ChatCompletionRequest {
     fn new(
         model: String,
-        max_tokens: u32,
+        max_tokens: Option<u32>,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
@@ -493,7 +493,7 @@ impl ChatCompletionRequest {
             stream: true,
             messages: out_messages,
             tools: tool_defs,
-            max_tokens: Some(max_tokens),
+            max_tokens,
             stream_options: Some(StreamOptions {
                 include_usage: true,
             }),
