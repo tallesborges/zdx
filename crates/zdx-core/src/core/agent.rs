@@ -545,7 +545,7 @@ pub async fn run_turn(
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
             let openrouter_config = OpenRouterConfig::from_env(
                 selection.model.clone(),
-                max_tokens,
+                config.max_tokens,
                 config.providers.openrouter.effective_base_url(),
                 config.providers.openrouter.effective_api_key(),
                 reasoning_effort,
