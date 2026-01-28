@@ -127,13 +127,45 @@ impl TelegramClient {
         reply_to_message_id: Option<i64>,
         message_thread_id: Option<i64>,
     ) -> Result<()> {
+        // First try with Markdown parse mode
+        let result = self
+            .send_message_raw(
+                chat_id,
+                text,
+                reply_to_message_id,
+                message_thread_id,
+                Some(TELEGRAM_PARSE_MODE),
+            )
+            .await;
+
+        // If Markdown parsing failed, retry as plain text
+        if let Err(ref e) = result {
+            let err_msg = e.to_string();
+            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
+                return self
+                    .send_message_raw(chat_id, text, reply_to_message_id, message_thread_id, None)
+                    .await;
+            }
+        }
+
+        result
+    }
+
+    async fn send_message_raw(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        parse_mode: Option<&str>,
+    ) -> Result<()> {
         let request = SendMessageRequest {
             chat_id,
             text,
             message_thread_id,
             reply_to_message_id,
             allow_sending_without_reply: Some(true),
-            parse_mode: Some(TELEGRAM_PARSE_MODE),
+            parse_mode,
         };
         let _: Message = self.post("sendMessage", &request).await?;
         Ok(())
@@ -193,19 +225,31 @@ impl TelegramClient {
             .await
             .map_err(|_| anyhow!("Telegram request failed"))?;
 
-        let payload: TelegramResponse<T> = response
-            .json()
+        // Read raw bytes so we can deserialize twice if needed
+        let bytes = response
+            .bytes()
             .await
-            .map_err(|_| anyhow!("Failed to decode Telegram response"))?;
+            .map_err(|_| anyhow!("Failed to read Telegram response"))?;
 
-        if !payload.ok {
-            let description = payload
+        // First check if request succeeded
+        let envelope: TelegramEnvelope =
+            serde_json::from_slice(&bytes).map_err(|_| anyhow!("Invalid Telegram response"))?;
+
+        if !envelope.ok {
+            // Parse error response (no result field)
+            let error: TelegramError = serde_json::from_slice(&bytes)
+                .map_err(|_| anyhow!("Failed to decode Telegram error"))?;
+            let description = error
                 .description
                 .unwrap_or_else(|| "Telegram API error".to_string());
             bail!("{}", description);
         }
 
-        Ok(payload.result)
+        // Parse success response (has result field)
+        let success: TelegramSuccess<T> = serde_json::from_slice(&bytes)
+            .map_err(|_| anyhow!("Failed to decode Telegram result"))?;
+
+        Ok(success.result)
     }
 }
 
@@ -314,12 +358,23 @@ pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandle
     (definition, handler)
 }
 
+/// Telegram API success response (ok: true, result present)
 #[derive(Debug, Deserialize)]
-struct TelegramResponse<T> {
-    ok: bool,
+struct TelegramSuccess<T> {
     result: T,
+}
+
+/// Telegram API error response (ok: false, no result)
+#[derive(Debug, Deserialize)]
+struct TelegramError {
     #[serde(default)]
     description: Option<String>,
+}
+
+/// Raw envelope to check ok field first
+#[derive(Debug, Deserialize)]
+struct TelegramEnvelope {
+    ok: bool,
 }
 
 #[derive(Debug, Serialize)]

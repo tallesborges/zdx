@@ -12,7 +12,7 @@ pub(crate) struct BotContext {
     allowlist_user_ids: HashSet<i64>,
     allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
-    system_prompt: Option<String>,
+    bot_system_prompt: Option<String>,
     tool_config: ToolConfig,
 }
 
@@ -23,7 +23,7 @@ impl BotContext {
         allowlist_user_ids: HashSet<i64>,
         allowlist_chat_ids: HashSet<i64>,
         root: PathBuf,
-        system_prompt: Option<String>,
+        bot_system_prompt: Option<String>,
         tool_config: ToolConfig,
     ) -> Self {
         Self {
@@ -32,7 +32,7 @@ impl BotContext {
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
-            system_prompt,
+            bot_system_prompt,
             tool_config,
         }
     }
@@ -57,8 +57,8 @@ impl BotContext {
         self.root.as_path()
     }
 
-    pub(crate) fn system_prompt(&self) -> Option<&str> {
-        self.system_prompt.as_deref()
+    pub(crate) fn bot_system_prompt(&self) -> Option<&str> {
+        self.bot_system_prompt.as_deref()
     }
 
     pub(crate) fn tool_config(&self) -> &ToolConfig {

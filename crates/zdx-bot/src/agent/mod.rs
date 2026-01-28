@@ -3,6 +3,7 @@ use std::path::Path;
 use anyhow::{Result, anyhow};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentOptions, ToolConfig};
+use zdx_core::core::context::build_effective_system_prompt_with_paths;
 use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
@@ -61,11 +62,23 @@ pub(crate) async fn run_agent_turn_with_persist(
     messages: Vec<ChatMessage>,
     config: &Config,
     root: &Path,
-    system_prompt: Option<&str>,
+    bot_system_prompt: Option<&str>,
     thread_id: &str,
     thread: &ThreadLog,
     tool_config: &ToolConfig,
 ) -> Result<(String, Vec<ChatMessage>)> {
+    // Build effective system prompt from config + AGENTS.md + skills
+    let effective = build_effective_system_prompt_with_paths(config, root)
+        .map_err(|_| anyhow!("Failed to build system prompt"))?;
+
+    // Append bot-specific prompt if provided
+    let system_prompt = match (effective.prompt, bot_system_prompt) {
+        (Some(base), Some(bot)) => Some(format!("{}\n\n{}", base, bot)),
+        (Some(base), None) => Some(base),
+        (None, Some(bot)) => Some(bot.to_string()),
+        (None, None) => None,
+    };
+
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
         tool_config: tool_config.clone(),
@@ -78,7 +91,7 @@ pub(crate) async fn run_agent_turn_with_persist(
         messages,
         config,
         &agent_opts,
-        system_prompt,
+        system_prompt.as_deref(),
         Some(thread_id),
         agent_tx,
     )
