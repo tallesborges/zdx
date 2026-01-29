@@ -871,6 +871,12 @@ pub fn read_thread_title(id: &str) -> Result<Option<String>> {
     Ok(read_meta_title(&path)?.flatten())
 }
 
+/// Reads a thread's root path by ID (if present in meta).
+pub fn read_thread_root_path(id: &str) -> Result<Option<String>> {
+    let path = threads_dir().join(format!("{}.jsonl", id));
+    Ok(read_meta_root_path(&path)?.flatten())
+}
+
 /// Loads thread events and converts them to ChatMessages for API use.
 ///
 /// Reconstructs the full thread including tool use/result pairs.

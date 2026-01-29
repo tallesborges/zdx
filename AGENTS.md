@@ -21,6 +21,7 @@
     - `crates/zdx-core/src/core/interrupt.rs`: signal handling
     - `crates/zdx-core/src/core/agent.rs`: agent loop + event channels
     - `crates/zdx-core/src/core/thread_log.rs`: thread persistence
+    - `crates/zdx-core/src/core/worktree.rs`: git worktree management helpers
   - `crates/zdx-core/src/tools/`: tool implementations + schemas
     - `crates/zdx-core/src/tools/apply_patch/`: apply_patch tool (Codex-style file patching)
       - `crates/zdx-core/src/tools/apply_patch/mod.rs`: tool definition, execution wrapper, patch application engine
@@ -77,6 +78,7 @@
 - `crates/zdx-cli/`: zdx binary (CLI/router)
   - `crates/zdx-cli/src/main.rs`: binary entrypoint (delegates to `crates/zdx-cli/src/cli/`)
   - `crates/zdx-cli/src/cli/`: CLI arguments + command dispatch
+  - `crates/zdx-cli/src/cli/commands/worktree.rs`: worktree command handler
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
 - `crates/zdx-bot/`: Telegram bot binary (long-polling)
@@ -94,7 +96,7 @@
   - `crates/zdx-bot/src/types.rs`: Telegram bot message/media structs
 - `tools/scripts/`: optional repo scripts (seed/import/dev helpers)
 - `.github/workflows/`: CI workflows
-- `.cargo/config.toml`: cargo alias for `cargo xtask`
+- `.cargo/config.toml`: cargo alias for `cargo xtask`, shared target dir config
 - `crates/xtask/`: maintainer utilities (update default models/config, codebase snapshot)
 - `crates/zdx-cli/tests/`: integration tests (`assert_cmd`, fixtures)
 

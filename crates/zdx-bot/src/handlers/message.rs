@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
-use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::thread_log::{self, ThreadEvent};
+use zdx_core::core::worktree;
 
 use crate::bot::context::BotContext;
 use crate::ingest::AllowlistConfig;
@@ -18,6 +19,29 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     else {
         return Ok(());
     };
+
+    // Always reply to the original message - this shows the original message
+    // context in the topic, which is useful for reference
+    let reply_to_message_id = Some(incoming.message_id);
+
+    if incoming.is_forum
+        && incoming.message_thread_id.is_none()
+        && incoming.images.is_empty()
+        && incoming.audios.is_empty()
+        && let Some(text) = incoming.text.as_deref()
+        && (is_new_command(text) || is_worktree_create_command(text))
+    {
+        let message = if is_new_command(text) {
+            "/new is not allowed in General."
+        } else {
+            "/worktree must be used inside a topic, not General."
+        };
+        context
+            .client()
+            .send_message(incoming.chat_id, message, reply_to_message_id, None)
+            .await?;
+        return Ok(());
+    }
 
     // For forum-enabled group messages without a topic, create a new topic
     // Only create topics in forums (is_forum=true), not regular groups
@@ -48,10 +72,6 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         incoming.message_thread_id
     };
 
-    // Always reply to the original message - this shows the original message
-    // context in the topic, which is useful for reference
-    let reply_to_message_id = Some(incoming.message_id);
-
     eprintln!(
         "Accepted message from user {} in chat {}{}",
         incoming.user_id,
@@ -61,26 +81,61 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             .unwrap_or_default()
     );
 
+    let thread_id = thread_id_for_chat(incoming.chat_id, topic_id);
     if incoming.images.is_empty()
         && incoming.audios.is_empty()
         && let Some(text) = incoming.text.as_deref()
-        && is_new_command(text)
     {
-        let thread_id = thread_id_for_chat(incoming.chat_id, topic_id);
-        agent::clear_thread_history(&thread_id)?;
-        context
-            .client()
-            .send_message(
-                incoming.chat_id,
-                "History cleared. Start a new conversation anytime.",
-                reply_to_message_id,
-                topic_id,
-            )
-            .await?;
-        return Ok(());
+        if is_new_command(text) {
+            if incoming.is_forum && topic_id.is_some() {
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        "/new is not allowed in topics.",
+                        reply_to_message_id,
+                        topic_id,
+                    )
+                    .await?;
+                return Ok(());
+            }
+            agent::clear_thread_history(&thread_id)?;
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    "History cleared. Start a new conversation anytime.",
+                    reply_to_message_id,
+                    topic_id,
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if is_worktree_create_command(text) {
+            let worktree_root = worktree::ensure_worktree(context.root(), &thread_id)
+                .map_err(|err| anyhow!("Failed to ensure worktree for {}: {}", thread_id, err))?;
+            let mut thread = zdx_core::core::thread_log::ThreadLog::with_id(thread_id.clone())
+                .map_err(|_| anyhow!("Failed to open thread log"))?;
+            thread
+                .set_root_path(&worktree_root)
+                .map_err(|err| anyhow!("Failed to set thread root: {}", err))?;
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    &format!("Worktree enabled: {}", worktree_root.display()),
+                    reply_to_message_id,
+                    topic_id,
+                )
+                .await?;
+            return Ok(());
+        }
     }
 
-    let thread_id = thread_id_for_chat(incoming.chat_id, topic_id);
+    let worktree_root = thread_log::read_thread_root_path(&thread_id)?
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| context.root().to_path_buf());
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
@@ -89,7 +144,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let result = agent::run_agent_turn_with_persist(
         messages,
         context.config(),
-        context.root(),
+        &worktree_root,
         context.bot_system_prompt(),
         &thread_id,
         &thread,
@@ -169,6 +224,23 @@ fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
     }
 }
 
+fn command_matches(text: &str, command: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed == command {
+        return true;
+    }
+    if let Some(stripped) = trimmed.strip_prefix(command) {
+        return stripped.starts_with('@');
+    }
+    false
+}
+
 fn is_new_command(text: &str) -> bool {
-    text.trim() == "/new"
+    command_matches(text, "/new")
+}
+
+fn is_worktree_create_command(text: &str) -> bool {
+    ["/worktree create", "/worktree", "/wt"]
+        .iter()
+        .any(|cmd| command_matches(text, cmd))
 }

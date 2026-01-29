@@ -1,2 +1,6 @@
 [alias]
 xtask = "run -p xtask --"
+
+[build]
+# Shared target directory across worktrees.
+target-dir = "../.zdx/cargo-target"
