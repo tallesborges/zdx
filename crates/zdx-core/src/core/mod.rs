@@ -6,9 +6,11 @@
 //! - `interrupt`: Signal handling for graceful interruption
 //! - `agent`: Agent loop and event channels
 //! - `thread_log`: Thread persistence
+//! - `worktree`: Git worktree management helpers
 
 pub mod agent;
 pub mod context;
 pub mod events;
 pub mod interrupt;
 pub mod thread_log;
+pub mod worktree;

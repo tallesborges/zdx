@@ -3,8 +3,8 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use zdx_core::config;
-use zdx_core::core::interrupt;
 use zdx_core::core::thread_log::ThreadPersistenceOptions;
+use zdx_core::core::{interrupt, worktree};
 
 mod commands;
 
@@ -20,6 +20,10 @@ struct Cli {
     /// Root directory for file operations (default: current directory)
     #[arg(long, default_value = ".")]
     root: String,
+
+    /// Use a git worktree for this ID (auto-create if missing)
+    #[arg(long, value_name = "ID")]
+    worktree: Option<String>,
 
     /// Override the system prompt from config
     #[arg(long)]
@@ -123,6 +127,12 @@ enum Commands {
         #[command(subcommand)]
         command: ModelsCommands,
     },
+
+    /// Manage git worktrees
+    Worktree {
+        #[command(subcommand)]
+        command: WorktreeCommands,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -168,6 +178,16 @@ enum ModelsCommands {
     Update,
 }
 
+#[derive(clap::Subcommand)]
+enum WorktreeCommands {
+    /// Ensure a worktree exists for an ID
+    Ensure {
+        /// Stable identifier
+        #[arg(value_name = "ID")]
+        id: String,
+    },
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -193,10 +213,30 @@ async fn dispatch(cli: Cli) -> Result<()> {
         }
     }
 
+    let resolve_root = |root: &str, worktree: Option<&str>| -> Result<std::path::PathBuf> {
+        let root_path = std::path::PathBuf::from(root);
+        if let Some(id) = worktree {
+            worktree::ensure_worktree(&root_path, id)
+                .with_context(|| format!("ensure worktree for '{}'", id))
+        } else {
+            Ok(root_path)
+        }
+    };
+
+    let Cli {
+        command,
+        root,
+        system_prompt: _,
+        thread_args,
+        worktree,
+    } = cli;
+
     // default to chat mode
-    let Some(command) = cli.command else {
-        let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
-        return commands::chat::run(&cli.root, &thread_opts, &config).await;
+    let Some(command) = command else {
+        let thread_opts: ThreadPersistenceOptions = (&thread_args).into();
+        let root_path = resolve_root(&root, worktree.as_deref())?;
+        let root_string = root_path.to_string_lossy().to_string();
+        return commands::chat::run(&root_string, &thread_opts, &config).await;
     };
 
     match command {
@@ -207,9 +247,11 @@ async fn dispatch(cli: Cli) -> Result<()> {
             tools,
             no_tools,
         } => {
-            let thread_opts: ThreadPersistenceOptions = (&cli.thread_args).into();
+            let thread_opts: ThreadPersistenceOptions = (&thread_args).into();
+            let root_path = resolve_root(&root, worktree.as_deref())?;
+            let root_string = root_path.to_string_lossy().to_string();
             commands::exec::run(commands::exec::ExecRunOptions {
-                root: &cli.root,
+                root: &root_string,
                 thread_opts: &thread_opts,
                 prompt: &prompt,
                 config: &config,
@@ -266,6 +308,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
 
         Commands::Models { command } => match command {
             ModelsCommands::Update => commands::models::update(&config).await,
+        },
+
+        Commands::Worktree { command } => match command {
+            WorktreeCommands::Ensure { id } => commands::worktree::ensure(&root, &id),
         },
     }
 }
