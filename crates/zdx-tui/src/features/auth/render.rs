@@ -27,6 +27,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             zdx_core::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
             zdx_core::providers::ProviderKind::OpenAI => "OpenAI Login",
             zdx_core::providers::ProviderKind::OpenRouter => "OpenRouter Login",
+            zdx_core::providers::ProviderKind::Moonshot => "Moonshot API Key",
             zdx_core::providers::ProviderKind::Gemini => "Gemini Login",
             zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
         },

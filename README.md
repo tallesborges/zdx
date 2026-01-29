@@ -23,6 +23,7 @@ Built because I needed something:
 - **Anthropic provider** with API key or OAuth authentication (Claude Pro/Max)
 - **OpenAI provider** with API key (OpenAI API) or OAuth (Codex Subscription)
 - **OpenRouter provider** with API key
+- **Moonshot provider** with API key (Kimi API)
 - **Gemini provider** with API key or subscription (Cloud Code Assist)
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation

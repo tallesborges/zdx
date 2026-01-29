@@ -94,6 +94,12 @@ enabled = true
 # base_url = "https://openrouter.ai/api/v1"
 models = ["*:exacto"]
 
+[providers.moonshot]
+enabled = true
+# api_key = "sk-..."  # Overrides MOONSHOT_API_KEY env var
+# base_url = "https://api.moonshot.ai/v1"
+models = ["kimi-k2.5"]
+
 [providers.gemini]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var

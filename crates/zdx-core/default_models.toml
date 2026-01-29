@@ -274,6 +274,23 @@ input_images = false
 output_limit = 16384
 
 [[model]]
+id = "moonshot:kimi-k2.5"
+provider = "moonshot"
+display_name = "Kimi K2.5"
+context_limit = 262144
+
+[model.pricing]
+input = 0.6
+output = 3.0
+cache_read = 0.1
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
+
+[[model]]
 id = "openrouter:openai/gpt-oss-120b:exacto"
 provider = "openrouter"
 display_name = "GPT OSS 120B (exacto)"
