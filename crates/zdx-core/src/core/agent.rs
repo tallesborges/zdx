@@ -23,8 +23,8 @@ use crate::providers::claude_cli::{ClaudeCliClient, ClaudeCliConfig};
 use crate::providers::gemini::{GeminiClient, GeminiConfig};
 use crate::providers::gemini_cli::{GeminiCliClient, GeminiCliConfig};
 use crate::providers::gemini_shared::GeminiThinkingConfig;
-use crate::providers::openai_api::{OpenAIClient, OpenAIConfig};
-use crate::providers::openai_codex::{OpenAICodexClient, OpenAICodexConfig};
+use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
+use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
@@ -147,6 +147,7 @@ enum ProviderClient {
     OpenAICodex(OpenAICodexClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
+    Moonshot(MoonshotClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
 }
@@ -172,6 +173,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::OpenRouter(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Moonshot(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Gemini(client) => {
@@ -551,6 +555,15 @@ pub async fn run_turn(
                 reasoning_effort,
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
+        }
+        ProviderKind::Moonshot => {
+            let moonshot_config = MoonshotConfig::from_env(
+                selection.model.clone(),
+                config.max_tokens,
+                config.providers.moonshot.effective_base_url(),
+                config.providers.moonshot.effective_api_key(),
+            )?;
+            ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
         }
         ProviderKind::Gemini => {
             // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)

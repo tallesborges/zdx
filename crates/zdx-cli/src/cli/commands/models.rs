@@ -130,6 +130,12 @@ pub async fn update(config: &config::Config) -> Result<()> {
             Some("openrouter"),
             &config.providers.openrouter,
         ),
+        (
+            "moonshot",
+            "moonshotai",
+            Some("moonshot"),
+            &config.providers.moonshot,
+        ),
         ("gemini", "google", Some("gemini"), &config.providers.gemini),
         (
             "gemini-cli",
@@ -155,7 +161,46 @@ pub async fn update(config: &config::Config) -> Result<()> {
         }
 
         let Some(provider_entry) = api.providers.get(api_id) else {
-            bail!("Provider '{}' not found in models.dev response", api_id);
+            eprintln!(
+                "Warning: provider '{}' not found in models.dev response; falling back to defaults",
+                api_id
+            );
+            let mut fallback = Vec::new();
+            for pattern in &provider_cfg.models {
+                let pattern = pattern.trim();
+                if pattern.is_empty() {
+                    continue;
+                }
+                if is_pure_wildcard(pattern) {
+                    eprintln!(
+                        "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
+                        pattern, provider_id
+                    );
+                    continue;
+                }
+                fallback.push(create_default_candidate(provider_id, prefix, pattern));
+            }
+
+            if fallback.is_empty() {
+                continue;
+            }
+
+            for candidate in fallback {
+                let record = ModelRecord {
+                    id: candidate.full_id,
+                    provider: provider_id.to_string(),
+                    display_name: candidate.display_name,
+                    context_limit: candidate.context_limit,
+                    pricing: candidate.pricing,
+                    capabilities: candidate.capabilities,
+                };
+                let key = record_key(&record);
+                if !seen_keys.insert(key) {
+                    continue;
+                }
+                records.push(record);
+            }
+            continue;
         };
 
         let Some(models_map) = provider_entry.models.as_ref() else {

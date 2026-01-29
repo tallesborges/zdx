@@ -80,14 +80,6 @@ pub struct InputItem {
     pub summary: Option<Vec<SummaryItem>>,
 }
 
-/// Summary item for reasoning replay
-#[derive(Debug, Serialize)]
-pub struct SummaryItem {
-    #[serde(rename = "type")]
-    pub item_type: &'static str,
-    pub text: String,
-}
-
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum InputContent {
@@ -110,14 +102,21 @@ pub enum InputContent {
 }
 
 #[derive(Debug, Serialize)]
+pub struct SummaryItem {
+    #[serde(rename = "type")]
+    pub item_type: &'static str,
+    pub text: String,
+}
+
+#[derive(Debug, Serialize)]
 pub struct FunctionTool {
     #[serde(rename = "type")]
-    pub tool_type: &'static str,
-    pub name: String,
-    pub description: String,
-    pub parameters: serde_json::Value,
+    tool_type: &'static str,
+    name: String,
+    description: String,
+    parameters: serde_json::Value,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub strict: Option<bool>,
+    strict: Option<bool>,
 }
 
 impl From<&ToolDefinition> for FunctionTool {
@@ -133,5 +132,32 @@ impl From<&ToolDefinition> for FunctionTool {
             // but Gemini doesn't support `["type", "null"]` syntax. Cross-provider compatibility wins.
             strict: None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::ToolDefinition;
+
+    #[test]
+    fn function_tool_serializes_name_at_top_level() {
+        let tool = ToolDefinition {
+            name: "Bash".to_string(),
+            description: "Run a command".to_string(),
+            input_schema: serde_json::json!({"type": "object"}),
+        };
+
+        let value = serde_json::to_value(FunctionTool::from(&tool)).unwrap();
+        assert_eq!(value.get("type").and_then(|v| v.as_str()), Some("function"));
+        assert_eq!(value.get("name").and_then(|v| v.as_str()), Some("bash"));
+        assert_eq!(
+            value.get("description").and_then(|v| v.as_str()),
+            Some("Run a command")
+        );
+        assert_eq!(
+            value.get("parameters"),
+            Some(&serde_json::json!({"type": "object"}))
+        );
     }
 }

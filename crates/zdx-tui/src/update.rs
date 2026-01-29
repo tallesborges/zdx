@@ -22,7 +22,7 @@ use crate::{auth, input, render, thread, transcript};
 /// Takes the current state and an event, mutates state, and returns effects
 /// for the runtime to execute.
 pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
-    let effects = match event {
+    match event {
         UiEvent::Tick => {
             // Advance spinner animation
             app.tui.spinner_frame = app.tui.spinner_frame.wrapping_add(1);
@@ -616,8 +616,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 effects
             }
         },
-    };
-    effects
+    }
 }
 
 // ============================================================================

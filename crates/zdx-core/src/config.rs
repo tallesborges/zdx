@@ -580,6 +580,8 @@ pub struct ProvidersConfig {
     pub openai_codex: ProviderConfig,
     #[serde(default = "default_openrouter_provider")]
     pub openrouter: ProviderConfig,
+    #[serde(default = "default_moonshot_provider")]
+    pub moonshot: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
@@ -600,6 +602,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::OpenAI.id() => &self.openai,
             id if id == ProviderKind::OpenAICodex.id() => &self.openai_codex,
             id if id == ProviderKind::OpenRouter.id() => &self.openrouter,
+            id if id == ProviderKind::Moonshot.id() => &self.moonshot,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             _ => return true, // Unknown providers default to enabled
@@ -617,6 +620,7 @@ impl ProvidersConfig {
             ProviderKind::OpenAI => &self.openai,
             ProviderKind::OpenAICodex => &self.openai_codex,
             ProviderKind::OpenRouter => &self.openrouter,
+            ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
         }
@@ -633,6 +637,7 @@ impl Default for ProvidersConfig {
             gemini: default_gemini_provider(),
             gemini_cli: default_gemini_cli_provider(),
             openrouter: default_openrouter_provider(),
+            moonshot: default_moonshot_provider(),
         }
     }
 }
@@ -695,6 +700,14 @@ fn default_openrouter_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["*:exacto".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_moonshot_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["kimi-k2.5".to_string()],
         ..Default::default()
     }
 }

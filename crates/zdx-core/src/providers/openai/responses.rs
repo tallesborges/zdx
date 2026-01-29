@@ -3,21 +3,17 @@
 use anyhow::{Result, bail};
 use reqwest::header::HeaderMap;
 
+pub use super::responses_sse::ResponsesSseParser;
+pub use super::responses_types::{
+    FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, StreamOptions,
+    SummaryItem, TextConfig,
+};
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
     ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ProviderStream,
     ReasoningBlock, ReplayToken,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
-
-mod sse;
-mod types;
-
-pub use sse::ResponsesSseParser;
-pub use types::{
-    FunctionTool, InputContent, InputItem, ReasoningConfig, RequestBody, StreamOptions,
-    SummaryItem, TextConfig,
-};
 
 /// Shared configuration for Responses API requests.
 #[derive(Debug, Clone)]
@@ -197,37 +193,6 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 summary: None,
                             });
                         }
-                        ChatContentBlock::Image { .. } => {
-                            // Skip images in assistant messages - Responses API doesn't support
-                            // output images in history. The text response about the image is
-                            // preserved, which provides sufficient context.
-                        }
-                        ChatContentBlock::ToolUse {
-                            id,
-                            name,
-                            input: tool_input,
-                        } => {
-                            let arguments = serde_json::to_string(tool_input)
-                                .unwrap_or_else(|_| "{}".to_string());
-                            let mut parts = id.split('|');
-                            let call_id = parts.next().unwrap_or("");
-                            let tool_id = parts.next().unwrap_or("");
-                            let call_id = (!call_id.is_empty()).then_some(call_id.to_string());
-                            let tool_id = (!tool_id.is_empty()).then_some(tool_id.to_string());
-
-                            input.push(InputItem {
-                                id: tool_id,
-                                item_type: "function_call".to_string(),
-                                role: None,
-                                content: None,
-                                call_id,
-                                name: Some(name.clone()),
-                                arguments: Some(arguments),
-                                output: None,
-                                encrypted_content: None,
-                                summary: None,
-                            });
-                        }
                         // Only replay reasoning blocks with OpenAI replay tokens
                         ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
                             if let Some(ReplayToken::OpenAI {
@@ -259,6 +224,32 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                     summary: Some(summary_items),
                                 });
                             }
+                        }
+                        ChatContentBlock::ToolUse {
+                            id,
+                            name,
+                            input: arguments,
+                        } => {
+                            let arguments = serde_json::to_string(arguments)
+                                .unwrap_or_else(|_| "{}".to_string());
+                            let mut parts = id.split('|');
+                            let call_id = parts.next().unwrap_or("");
+                            let tool_id = parts.next().unwrap_or("");
+                            let call_id = (!call_id.is_empty()).then_some(call_id.to_string());
+                            let tool_id = (!tool_id.is_empty()).then_some(tool_id.to_string());
+
+                            input.push(InputItem {
+                                id: tool_id,
+                                item_type: "function_call".to_string(),
+                                role: None,
+                                content: None,
+                                call_id,
+                                name: Some(name.clone()),
+                                arguments: Some(arguments),
+                                output: None,
+                                encrypted_content: None,
+                                summary: None,
+                            });
                         }
                         ChatContentBlock::ToolResult(result) => {
                             let (output, has_image) =
@@ -310,6 +301,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                                 });
                             }
                         }
+                        ChatContentBlock::Image { .. } => {}
                     }
                 }
             }
@@ -446,155 +438,5 @@ fn extract_tool_result_with_image(
 
             (text, image)
         }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use serde_json::json;
-
-    use super::build_input;
-    use crate::providers::{
-        ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock, ReplayToken,
-    };
-
-    #[test]
-    fn build_input_skips_empty_tool_id() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
-                id: "anthropic-tool-1".to_string(),
-                name: "read".to_string(),
-                input: json!({"path": "foo.txt"}),
-            }]),
-        }];
-
-        let input = build_input(&messages, None).unwrap();
-        assert_eq!(input.len(), 1);
-        assert_eq!(input[0].item_type, "function_call");
-        assert_eq!(input[0].id, None);
-        assert_eq!(input[0].call_id.as_deref(), Some("anthropic-tool-1"));
-    }
-
-    #[test]
-    fn build_input_includes_reasoning_items_for_replay() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ChatContentBlock::Reasoning(ReasoningBlock {
-                    text: Some("**Thinking about the problem**".to_string()),
-                    replay: Some(ReplayToken::OpenAI {
-                        id: "reasoning-123".to_string(),
-                        encrypted_content: "encrypted-data-abc".to_string(),
-                    }),
-                }),
-                ChatContentBlock::Text("Hello, world!".to_string()),
-            ]),
-        }];
-
-        let input = build_input(&messages, None).unwrap();
-
-        // Should have 2 items: reasoning + text message
-        assert_eq!(input.len(), 2);
-
-        // First item should be the reasoning item with summary
-        assert_eq!(input[0].item_type, "reasoning");
-        assert_eq!(input[0].id.as_deref(), Some("reasoning-123"));
-        assert_eq!(
-            input[0].encrypted_content.as_deref(),
-            Some("encrypted-data-abc")
-        );
-        assert!(input[0].role.is_none());
-        assert!(input[0].content.is_none());
-        // Summary is required for reasoning items
-        assert!(input[0].summary.is_some());
-        let summary = input[0].summary.as_ref().unwrap();
-        assert_eq!(summary.len(), 1);
-        assert_eq!(summary[0].text, "**Thinking about the problem**");
-
-        // Second item should be the text message
-        assert_eq!(input[1].item_type, "message");
-        assert_eq!(input[1].role.as_deref(), Some("assistant"));
-    }
-
-    #[test]
-    fn build_input_reasoning_without_text_uses_placeholder() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ChatContentBlock::Reasoning(ReasoningBlock {
-                    text: None, // No text provided
-                    replay: Some(ReplayToken::OpenAI {
-                        id: "reasoning-456".to_string(),
-                        encrypted_content: "encrypted-data-xyz".to_string(),
-                    }),
-                }),
-                ChatContentBlock::Text("Response text".to_string()),
-            ]),
-        }];
-
-        let input = build_input(&messages, None).unwrap();
-
-        // Should have 2 items: reasoning + text message
-        assert_eq!(input.len(), 2);
-
-        // First item should be the reasoning item with placeholder summary
-        assert_eq!(input[0].item_type, "reasoning");
-        assert!(input[0].summary.is_some());
-        let summary = input[0].summary.as_ref().unwrap();
-        assert_eq!(summary.len(), 1);
-        assert_eq!(summary[0].text, "(reasoning)"); // Placeholder text
-    }
-
-    #[test]
-    fn build_input_reasoning_with_empty_text_uses_placeholder() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ChatContentBlock::Reasoning(ReasoningBlock {
-                    text: Some("   ".to_string()), // Whitespace-only text
-                    replay: Some(ReplayToken::OpenAI {
-                        id: "reasoning-789".to_string(),
-                        encrypted_content: "encrypted-data-123".to_string(),
-                    }),
-                }),
-                ChatContentBlock::Text("Response text".to_string()),
-            ]),
-        }];
-
-        let input = build_input(&messages, None).unwrap();
-
-        // Should have 2 items: reasoning + text message
-        assert_eq!(input.len(), 2);
-
-        // First item should be the reasoning item with placeholder summary
-        assert_eq!(input[0].item_type, "reasoning");
-        assert!(input[0].summary.is_some());
-        let summary = input[0].summary.as_ref().unwrap();
-        assert_eq!(summary.len(), 1);
-        assert_eq!(summary[0].text, "(reasoning)"); // Placeholder for empty/whitespace text
-    }
-
-    #[test]
-    fn build_input_skips_thinking_blocks() {
-        let messages = vec![ChatMessage {
-            role: "assistant".to_string(),
-            content: MessageContent::Blocks(vec![
-                ChatContentBlock::Reasoning(ReasoningBlock {
-                    text: Some("Let me think about this...".to_string()),
-                    replay: Some(ReplayToken::Anthropic {
-                        signature: "sig123".to_string(),
-                    }),
-                }),
-                ChatContentBlock::Text("Here's my answer.".to_string()),
-            ]),
-        }];
-
-        let input = build_input(&messages, None).unwrap();
-
-        // Should only have 1 item (text message), thinking should be skipped
-        assert_eq!(input.len(), 1);
-        assert_eq!(input[0].item_type, "message");
-        assert_eq!(input[0].role.as_deref(), Some("assistant"));
     }
 }

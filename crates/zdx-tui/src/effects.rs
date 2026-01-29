@@ -71,10 +71,7 @@ pub enum UiEffect {
     },
 
     /// Suggest a thread title from the first user message.
-    SuggestThreadTitle {
-        thread_id: String,
-        message: String,
-    },
+    SuggestThreadTitle { thread_id: String, message: String },
 
     /// Persist the model preference to config.
     PersistModel { model: String },
