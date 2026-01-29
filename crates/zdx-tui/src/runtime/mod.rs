@@ -401,24 +401,18 @@ impl TuiRuntime {
                 verifier,
                 redirect_uri,
             } => {
-                self.spawn_task(
-                    TaskKind::LoginExchange,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::token_exchange(provider, code, verifier, redirect_uri),
-                );
+                self.spawn_task(TaskKind::LoginExchange, TaskMeta::None, false, move |_| {
+                    handlers::token_exchange(provider, code, verifier, redirect_uri)
+                });
             }
             UiEffect::StartLocalAuthCallback {
                 provider,
                 state,
                 port,
             } => {
-                self.spawn_task(
-                    TaskKind::LoginCallback,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::local_auth_callback(provider, state, port),
-                );
+                self.spawn_task(TaskKind::LoginCallback, TaskMeta::None, false, move |_| {
+                    handlers::local_auth_callback(provider, state, port)
+                });
             }
 
             // Config effects
@@ -459,12 +453,9 @@ impl TuiRuntime {
                 }
             }
             UiEffect::RenameThread { thread_id, title } => {
-                self.spawn_task(
-                    TaskKind::ThreadRename,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_rename(thread_id, title),
-                );
+                self.spawn_task(TaskKind::ThreadRename, TaskMeta::None, false, move |_| {
+                    handlers::thread_rename(thread_id, title)
+                });
             }
             UiEffect::SuggestThreadTitle { thread_id, message } => {
                 let is_current = self
@@ -479,24 +470,16 @@ impl TuiRuntime {
                 }
                 let root = self.state.tui.agent_opts.root.clone();
                 let title_model = self.state.tui.config.title_model.clone();
-                self.spawn_task(
-                    TaskKind::ThreadTitle,
-                    TaskMeta::None,
-                    false,
-                    move |_| {
-                        thread_title::suggest_thread_title(thread_id, message, title_model, root)
-                    },
-                );
+                self.spawn_task(TaskKind::ThreadTitle, TaskMeta::None, false, move |_| {
+                    thread_title::suggest_thread_title(thread_id, message, title_model, root)
+                });
             }
             UiEffect::CreateNewThread => {
                 let config = self.state.tui.config.clone();
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_task(
-                    TaskKind::ThreadCreate,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_create(config, root),
-                );
+                self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
+                    handlers::thread_create(config, root)
+                });
             }
             UiEffect::ForkThread {
                 events,
@@ -504,12 +487,9 @@ impl TuiRuntime {
                 turn_number,
             } => {
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_task(
-                    TaskKind::ThreadFork,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_fork(events, user_input, turn_number, root),
-                );
+                self.spawn_task(TaskKind::ThreadFork, TaskMeta::None, false, move |_| {
+                    handlers::thread_fork(events, user_input, turn_number, root)
+                });
             }
             UiEffect::OpenThreadPicker { mode } => {
                 let original_cells = if mode.is_switch() {
@@ -517,29 +497,20 @@ impl TuiRuntime {
                 } else {
                     Vec::new()
                 };
-                self.spawn_task(
-                    TaskKind::ThreadList,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_list_load(original_cells, mode),
-                );
+                self.spawn_task(TaskKind::ThreadList, TaskMeta::None, false, move |_| {
+                    handlers::thread_list_load(original_cells, mode)
+                });
             }
             UiEffect::LoadThread { thread_id } => {
                 let root = self.state.tui.agent_opts.root.clone();
-                self.spawn_task(
-                    TaskKind::ThreadLoad,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_load(thread_id, root),
-                );
+                self.spawn_task(TaskKind::ThreadLoad, TaskMeta::None, false, move |_| {
+                    handlers::thread_load(thread_id, root)
+                });
             }
             UiEffect::PreviewThread { thread_id } => {
-                self.spawn_task(
-                    TaskKind::ThreadPreview,
-                    TaskMeta::None,
-                    false,
-                    move |_| handlers::thread_preview(thread_id),
-                );
+                self.spawn_task(TaskKind::ThreadPreview, TaskMeta::None, false, move |_| {
+                    handlers::thread_preview(thread_id)
+                });
             }
 
             // Handoff effects

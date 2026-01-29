@@ -29,6 +29,15 @@
     - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
     - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
+    - `crates/zdx-core/src/providers/openai/`: OpenAI-compatible provider helpers (Responses + Chat Completions)
+      - `crates/zdx-core/src/providers/openai/mod.rs`: OpenAI provider module exports
+      - `crates/zdx-core/src/providers/openai/api.rs`: OpenAI API key provider (Responses API)
+      - `crates/zdx-core/src/providers/openai/codex.rs`: OpenAI Codex OAuth provider (Responses API)
+      - `crates/zdx-core/src/providers/openai/responses.rs`: Responses API helpers
+      - `crates/zdx-core/src/providers/openai/responses_sse.rs`: Responses SSE parser
+      - `crates/zdx-core/src/providers/openai/responses_types.rs`: Responses request/response types
+      - `crates/zdx-core/src/providers/openai/chat_completions.rs`: OpenAI-compatible Chat Completions helpers
+    - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
 - `crates/zdx-tui/`: full-screen interactive TUI library
   - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)
   - `crates/zdx-tui/src/terminal.rs`: terminal setup, restore, panic hooks

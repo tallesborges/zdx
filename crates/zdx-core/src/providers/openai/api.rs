@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::ProviderStream;
-use crate::providers::openai_responses::{ResponsesConfig, StreamOptions, send_responses_stream};
+use crate::providers::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
