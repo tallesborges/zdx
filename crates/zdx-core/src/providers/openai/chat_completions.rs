@@ -630,28 +630,13 @@ impl<S> ChatCompletionsSseParser<S> {
             return Ok(());
         }
 
-        // Parse usage (can arrive in any chunk, often in a separate final chunk)
-        if let Some(usage) = value.get("usage") {
-            let prompt = usage
-                .get("prompt_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            let completion = usage
-                .get("completion_tokens")
-                .and_then(|v| v.as_u64())
-                .unwrap_or(0);
-            self.final_usage = Some(Usage {
-                input_tokens: prompt,
-                output_tokens: completion,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            });
-        }
+        // Parse choices first (may be absent in usage-only chunks)
+        let first_choice = value
+            .get("choices")
+            .and_then(|v| v.as_array())
+            .and_then(|arr| arr.first());
 
-        // Parse choices (may be absent in usage-only chunks)
-        if let Some(choices) = value.get("choices").and_then(|v| v.as_array())
-            && let Some(choice) = choices.first()
-        {
+        if let Some(choice) = first_choice {
             // Extract finish_reason if present
             if let Some(finish_reason) = choice.get("finish_reason").and_then(|v| v.as_str()) {
                 self.final_finish_reason = Some(finish_reason.to_string());
@@ -661,6 +646,13 @@ impl<S> ChatCompletionsSseParser<S> {
             if let Some(delta) = choice.get("delta") {
                 self.process_delta(delta);
             }
+        }
+
+        // Parse usage (can arrive in any chunk, often in a separate final chunk)
+        // Check root level first (standard OpenAI), then choice level (Moonshot/Kimi)
+        let usage_value = value.get("usage").or_else(|| first_choice?.get("usage"));
+        if let Some(usage) = usage_value {
+            self.final_usage = Some(parse_usage(usage));
         }
 
         // Emit completion when we have BOTH finish_reason AND usage
@@ -817,5 +809,39 @@ fn map_finish_reason(reason: &str) -> String {
         "length" => "max_tokens".to_string(),
         "content_filter" => "error".to_string(),
         other => other.to_string(),
+    }
+}
+
+/// Parse usage from a JSON value.
+/// Handles both standard OpenAI format and provider-specific variations (e.g., Moonshot/Kimi's `cached_tokens`).
+fn parse_usage(usage: &Value) -> Usage {
+    let prompt_tokens = usage
+        .get("prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let completion_tokens = usage
+        .get("completion_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    // Parse cached tokens - different providers use different field names:
+    // - `cached_tokens` (Moonshot/Kimi)
+    // - `prompt_tokens_details.cached_tokens` (OpenAI)
+    let cached_tokens = usage
+        .get("cached_tokens")
+        .and_then(|v| v.as_u64())
+        .or_else(|| {
+            usage
+                .get("prompt_tokens_details")
+                .and_then(|d| d.get("cached_tokens"))
+                .and_then(|v| v.as_u64())
+        })
+        .unwrap_or(0);
+
+    Usage {
+        input_tokens: prompt_tokens,
+        output_tokens: completion_tokens,
+        cache_read_input_tokens: cached_tokens,
+        cache_creation_input_tokens: 0,
     }
 }
