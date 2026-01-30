@@ -248,7 +248,7 @@ fn render_status_line(state: &TuiState, frame: &mut Frame, area: Rect) {
             AgentState::Idle => {
                 // Show helpful shortcuts when idle
                 vec![
-                    Span::styled("Ctrl+P", Style::default().fg(Color::DarkGray)),
+                    Span::styled("Ctrl+O", Style::default().fg(Color::DarkGray)),
                     Span::raw(" commands  "),
                     Span::styled("Ctrl+C", Style::default().fg(Color::DarkGray)),
                     Span::raw(" quit"),

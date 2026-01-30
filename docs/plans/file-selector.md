@@ -46,7 +46,7 @@
 
 ## Overlay system
 - **What exists**: `OverlayState` enum, overlay handlers (model_picker, session_picker, thinking_picker), render dispatch in view.rs
-- **✅ Demo**: Run zdx, press Ctrl+P, see command palette overlay
+- **✅ Demo**: Run zdx, press Ctrl+O, see command palette overlay
 - **Gaps**: None - pattern is well established
 
 ## Input state
@@ -143,7 +143,7 @@
 5. **Input not corrupted**: Selection must cleanly replace `@[filter]` without extra text
 6. **Cancel on cursor escape**: Close picker if cursor moves before `@` position
 7. **Backspace past `@` closes**: If backspace deletes the `@`, close picker
-8. **Overlay exclusivity**: File picker blocks other overlays (Ctrl+P ignored while open)
+8. **Overlay exclusivity**: File picker blocks other overlays (Ctrl+O ignored while open)
 9. **Non-blocking file walk**: File discovery uses `UiEffect`, reducer never blocks
 10. **Multiple `@` handling**: Only the `@` nearest to cursor (and being typed) triggers picker
 

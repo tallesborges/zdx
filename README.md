@@ -28,7 +28,7 @@ Built because I needed something:
 - **Interactive TUI** with streaming markdown, syntax highlighting, and table support
 - **Exec mode** — non-interactive mode for scripts and automation
 - **Extended thinking** with configurable levels and block display
-- **Command palette** overlay (Ctrl+P or `/`) — model picker, thinking level, and more
+- **Command palette** overlay (Ctrl+O or `/`) — model picker, thinking level, and more
 - **File picker** — type `@` to browse and insert project files (respects .gitignore)
 - **Large paste placeholders** — pastes over 1000 chars display as `[Pasted Content N chars #1]`, expand on submit; press Space on placeholder to expand
 - **Bash commands** — type `$<command>` to execute bash commands directly (e.g., `$ls -la`, `$git status`)

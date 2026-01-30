@@ -11,14 +11,19 @@ pub struct Command {
     pub aliases: &'static [&'static str],
     /// Short description shown in palette.
     pub description: &'static str,
+    /// Category for grouping in the palette (e.g., "thread", "config", "auth").
+    pub category: &'static str,
+    /// Keyboard shortcut hint (e.g., "Ctrl s").
+    pub shortcut: Option<&'static str>,
 }
 
 impl Command {
     /// Returns true if this command matches the given filter (case-insensitive).
-    /// Matches against name and all aliases.
+    /// Matches against name, aliases, and category.
     pub fn matches(&self, filter: &str) -> bool {
         let filter_lower = filter.to_lowercase();
         self.name.to_lowercase().contains(&filter_lower)
+            || self.category.to_lowercase().contains(&filter_lower)
             || self
                 .aliases
                 .iter()
@@ -41,71 +46,99 @@ pub const COMMANDS: &[Command] = &[
         name: "config",
         aliases: &["settings"],
         description: "Open config file in default editor",
+        category: "config",
+        shortcut: None,
     },
     Command {
         name: "copy-id",
         aliases: &["copyid"],
         description: "Copy current thread ID to clipboard",
+        category: "thread",
+        shortcut: None,
     },
     Command {
         name: "debug",
         aliases: &["perf", "status"],
         description: "Toggle debug/performance status line",
+        category: "debug",
+        shortcut: None,
     },
     Command {
         name: "handoff",
         aliases: &[],
         description: "Start new thread with context from current",
+        category: "thread",
+        shortcut: None,
     },
     Command {
         name: "login",
         aliases: &[],
         description: "Authenticate with the active provider",
+        category: "auth",
+        shortcut: None,
     },
     Command {
         name: "logout",
         aliases: &[],
         description: "Clear auth for the active provider",
+        category: "auth",
+        shortcut: None,
     },
     Command {
         name: "rename",
         aliases: &[],
         description: "Rename the current thread",
+        category: "thread",
+        shortcut: None,
     },
     Command {
         name: "model",
         aliases: &[],
         description: "Switch model",
+        category: "model",
+        shortcut: None,
     },
     Command {
         name: "models",
         aliases: &["models-config"],
         description: "Open models config in default editor",
+        category: "config",
+        shortcut: None,
     },
     Command {
         name: "new",
         aliases: &["clear"],
         description: "Start a new thread",
+        category: "thread",
+        shortcut: None,
     },
     Command {
         name: "quit",
         aliases: &["q", "exit"],
         description: "Exit ZDX",
+        category: "app",
+        shortcut: None,
     },
     Command {
         name: "threads",
         aliases: &["history"],
         description: "Browse and switch threads",
+        category: "thread",
+        shortcut: None,
     },
     Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",
+        category: "model",
+        shortcut: Some("Ctrl+T"),
     },
     Command {
         name: "timeline",
         aliases: &[],
         description: "Jump to a thread turn",
+        category: "thread",
+        shortcut: None,
     },
 ];
 
@@ -139,6 +172,16 @@ mod tests {
         assert!(cmd.matches("clear"));
         assert!(cmd.matches("cle"));
         assert!(cmd.matches("CLEAR")); // case-insensitive
+    }
+
+    #[test]
+    fn test_command_matches_category() {
+        let cmd = find_command("new");
+        assert!(cmd.matches("thread")); // category
+        assert!(cmd.matches("THREAD")); // case-insensitive
+
+        let cmd = find_command("login");
+        assert!(cmd.matches("auth")); // category
     }
 
     #[test]

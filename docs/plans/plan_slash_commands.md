@@ -8,7 +8,7 @@
 ## Goals
 
 1. Users can type `/` anywhere in input to open a command popup
-2. Users can press `Ctrl+P` to open the command popup (command palette)
+2. Users can press `Ctrl+O` to open the command popup (command palette)
 3. Popup shows available commands with fuzzy filtering
 4. Commands execute immediately on selection
 5. `/new` starts a new thread (creates new session)
@@ -31,7 +31,7 @@
 
 ```
 1. User is in input area (empty)
-2. User presses `/` or `Ctrl+P` → popup appears above input
+2. User presses `/` or `Ctrl+O` → popup appears above input
    (If input has text, `/` just types "/" normally)
 3. Popup shows: /new (aliases: /clear), /quit
 4. User can:
@@ -232,7 +232,7 @@
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Trigger | `/` only when input empty OR `Ctrl+P` | Avoids interfering with normal typing |
+| Trigger | `/` only when input empty OR `Ctrl+O` | Avoids interfering with normal typing |
 | Popup vs inline | Popup overlay | Shows all commands, easier discovery |
 | Filter matching | Contains (case-insensitive) | Simple, good enough for 2 commands |
 | Escape behavior | Close (no insert since input was empty) | Clean cancel, nothing to preserve |
