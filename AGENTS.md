@@ -114,6 +114,7 @@
 - `cargo test --workspace --lib --tests --bins` (fast path; skips doc tests)
 - `cargo +nightly fmt` (uses nightly for full rustfmt features; stable works but ignores some options)
 - `cargo clippy`
+- Release automation: `.github/workflows/release-please.yml` (config in `release-please-config.json`)
 
 ## Conventions
 

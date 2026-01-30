@@ -1,0 +1,13 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "rust",
+      "package-name": "zdx",
+      "include-component-in-tag": false,
+      "include-v-in-tag": true,
+      "extra-files": ["Cargo.toml"]
+    }
+  },
+  "plugins": [{"type": "cargo-workspace"}]
+}
