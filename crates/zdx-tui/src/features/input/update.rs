@@ -740,7 +740,9 @@ pub fn build_send_effects(
     };
 
     let mutations = vec![
-        StateMutation::Transcript(TranscriptMutation::AppendCell(HistoryCell::user(text))),
+        StateMutation::Transcript(TranscriptMutation::AppendCell(Box::new(HistoryCell::user(
+            text,
+        )))),
         StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(text))),
     ];
 

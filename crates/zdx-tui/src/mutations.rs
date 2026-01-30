@@ -25,7 +25,7 @@ pub enum StateMutation {
 /// Transcript slice mutations requested by other slices.
 #[derive(Debug)]
 pub enum TranscriptMutation {
-    AppendCell(HistoryCell),
+    AppendCell(Box<HistoryCell>),
     AppendSystemMessage(String),
     Clear,
     ReplaceCells(Vec<HistoryCell>),
