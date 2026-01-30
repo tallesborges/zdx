@@ -128,7 +128,7 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
   - [ ] Create separate repo `homebrew-zdx`
   - [ ] Create `Casks/zdx.rb` with platform detection (Intel + ARM)
   - [ ] Download pre-built macOS binaries from GitHub Release
-  - [ ] Auto-update cask on new release (via workflow in main repo)
+  - [ ] Auto-update cask on new release (via workflow in main repo + token)
   - [ ] Calculate SHA256 checksums for each binary
 - **✅ Demo**: `brew install --cask yourname/zdx/zdx` works on both Intel and ARM Macs
 - **Risks / failure modes**:
