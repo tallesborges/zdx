@@ -574,7 +574,7 @@ impl TranscriptState {
     pub fn apply(&mut self, mutation: TranscriptMutation) {
         match mutation {
             TranscriptMutation::AppendCell(cell) => {
-                self.push_cell(cell);
+                self.push_cell(*cell);
             }
             TranscriptMutation::AppendSystemMessage(message) => {
                 self.push_cell(super::HistoryCell::system(message));
