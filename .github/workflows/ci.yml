@@ -60,10 +60,15 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Format
+        if: matrix.os == 'ubuntu-latest'
         run: cargo +nightly fmt --check
 
       - name: Clippy
+        if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      - name: Build
+        run: cargo build -p zdx --locked
 
       - name: Test
         run: cargo test --workspace --lib --tests --bins --locked

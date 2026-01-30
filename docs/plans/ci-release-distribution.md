@@ -79,7 +79,7 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 - **Goal**: Verify builds on macOS (Intel + ARM) and Linux
 - **Scope checklist**:
   - [x] Add matrix: `ubuntu-latest`, `macos-15`, `macos-15-intel`
-  - [x] Run lint/build/test on all platforms
+  - [x] Run build/test on all platforms; lint on Ubuntu
   - [x] Add `results` aggregator job for single required status check
 - **✅ Demo**: PR shows 3 platform jobs, all green
 - **Risks / failure modes**:
