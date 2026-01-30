@@ -41,6 +41,8 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-15, macos-15-intel]
+    env:
+      CARGO_TARGET_DIR: ${{ github.workspace }}/../.zdx/cargo-target
     steps:
       - name: Checkout
         uses: actions/checkout@v4
