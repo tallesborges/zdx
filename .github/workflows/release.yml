@@ -102,6 +102,31 @@ jobs:
           end
           EOF
 
+      - name: Checkout Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        uses: actions/checkout@v4
+        with:
+          repository: tallesborges/homebrew-zdx
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: homebrew-zdx
+
+      - name: Update Homebrew cask
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cp dist/assets/zdx.rb homebrew-zdx/Casks/zdx.rb
+          cd homebrew-zdx
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet; then
+            echo "Cask already up to date."
+            exit 0
+          fi
+          git add Casks/zdx.rb
+          git commit -m "chore: update zdx cask to v${version}"
+          git push
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
