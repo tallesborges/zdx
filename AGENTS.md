@@ -81,8 +81,9 @@
   - `crates/zdx-cli/src/cli/commands/worktree.rs`: worktree command handler
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
-- `crates/zdx-bot/`: Telegram bot binary (long-polling)
-  - `crates/zdx-bot/src/main.rs`: Telegram bot entrypoint + polling loop
+- `crates/zdx-bot/`: Telegram bot library + binary (long-polling)
+  - `crates/zdx-bot/src/lib.rs`: Telegram bot library entrypoint (shared by CLI subcommand)
+  - `crates/zdx-bot/src/main.rs`: Telegram bot binary entrypoint
   - `crates/zdx-bot/src/bot/mod.rs`: bot module exports
   - `crates/zdx-bot/src/bot/context.rs`: shared bot context
   - `crates/zdx-bot/src/bot/queue.rs`: per-chat queueing helpers
@@ -104,7 +105,7 @@
 
 - `cargo run -p zdx -- --help`
 - `cargo run -p zdx --` (interactive; needs provider key via env)
-- `cargo run -p zdx-bot --` (Telegram bot; requires config telegram.* keys)
+- `cargo run -p zdx -- bot` (Telegram bot; requires config telegram.* keys)
 - `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
 - `cargo xtask update-default-config` (maintainer: refresh default_config.toml)
 - `cargo xtask update-defaults` (maintainer: refresh both defaults)

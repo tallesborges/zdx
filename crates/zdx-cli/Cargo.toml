@@ -17,6 +17,7 @@ tui = ["dep:zdx-tui"]
 [dependencies]
 zdx-core = { path = "../zdx-core" }
 zdx-tui = { path = "../zdx-tui", optional = true }
+zdx-bot = { path = "../zdx-bot" }
 
 anyhow.workspace = true
 clap = { workspace = true, features = ["env"] }

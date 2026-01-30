@@ -56,6 +56,8 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 
 #[derive(clap::Subcommand)]
 enum Commands {
+    /// Run the Telegram bot (long-polling)
+    Bot,
     /// Executes a command with a prompt
     Exec {
         /// The prompt to send to the agent
@@ -240,6 +242,10 @@ async fn dispatch(cli: Cli) -> Result<()> {
     };
 
     match command {
+        Commands::Bot => {
+            let root_path = resolve_root(&root, worktree.as_deref())?;
+            zdx_bot::run_with_root(root_path).await
+        }
         Commands::Exec {
             prompt,
             model,
