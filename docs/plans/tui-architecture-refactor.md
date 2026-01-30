@@ -36,7 +36,7 @@
 - [x] Handle `SessionUiEvent::ListLoaded` in reducer: `session_ops.list_rx = None`
 - [x] Handle `SessionUiEvent::ListFailed` in reducer: `session_ops.list_rx = None`
 - [x] Remove `ops.list_rx = None` from `collect_session_results`
-- **✅ Smoke**: Ctrl+P → session picker loads and displays sessions
+- **✅ Smoke**: Ctrl+O → session picker loads and displays sessions
 
 ### Slice 2: `SessionLoadStarted`
 - [x] Add `SessionUiEvent::LoadStarted { rx }` variant
@@ -214,7 +214,7 @@
 # Testing
 
 ### Per-Slice Smoke Tests (Minimal) ✅ COMPLETE
-- [x] Open session picker (Ctrl+P) → sessions load and display
+- [x] Open session picker (Ctrl+O) → sessions load and display
 - [x] Switch to a session → transcript updates
 - [x] Create new session (/new) → new session created, path shown
 - [x] Rename session (/rename X) → confirmation shown

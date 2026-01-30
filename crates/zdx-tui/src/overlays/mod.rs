@@ -5,7 +5,7 @@
 //!
 //! ## Module Structure
 //!
-//! - `command_palette.rs`: Command palette (Ctrl+P or `/` when input empty)
+//! - `command_palette.rs`: Command palette (Ctrl+O or `/` when input empty)
 //! - `model_picker.rs`: Model selection picker
 //! - `thinking_picker.rs`: Thinking level selection picker
 //! - `thread_picker.rs`: Thread history picker

@@ -385,8 +385,8 @@ fn handle_overlays(
         KeyCode::Char('/') if mods.none() && input.get_text().is_empty() => {
             Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
         }
-        // Ctrl+P: open command palette
-        KeyCode::Char('p') if mods.only_ctrl() => {
+        // Ctrl+O: open command palette
+        KeyCode::Char('o') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
         }
         // Ctrl+T: open thinking picker (if model supports reasoning)

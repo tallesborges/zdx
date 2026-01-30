@@ -1,9 +1,9 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{List, ListItem, ListState};
+use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 
 use super::{OverlayRequest, OverlayUpdate};
 use crate::common::TaskKind;
@@ -342,7 +342,8 @@ pub fn render_command_palette(
 
     let max_width = area.width.saturating_sub(4);
     let palette_width = max_width.clamp(20, 80);
-    let palette_height = (commands.len() as u16 + 6).max(7);
+    // +1 for description line
+    let palette_height = (commands.len() as u16 + 7).max(8);
 
     let hints = [
         InputHint::new("↑↓", "navigate"),
@@ -355,7 +356,7 @@ pub fn render_command_palette(
         input_top_y,
         &OverlayConfig {
             title: "Command Palette",
-            border_color: Color::Yellow,
+            border_color: Color::Magenta,
             width: palette_width,
             height: palette_height,
             hints: &hints,
@@ -371,15 +372,16 @@ pub fn render_command_palette(
             placeholder: None,
             prompt: "> ",
             prompt_color: Color::DarkGray,
-            text_color: Color::Yellow,
+            text_color: Color::Magenta,
             placeholder_color: Color::DarkGray,
-            cursor_color: Color::Yellow,
+            cursor_color: Color::Magenta,
         },
     );
 
     render_separator(frame, layout.body, 1);
 
-    let list_height = layout.body.height.saturating_sub(3);
+    // -1 for description line
+    let list_height = layout.body.height.saturating_sub(4);
     let list_area = Rect::new(
         layout.body.x,
         layout.body.y + 2,
@@ -393,32 +395,63 @@ pub fn render_command_palette(
             Style::default().fg(Color::DarkGray),
         )))]
     } else {
+        // Calculate column widths
+        let max_category_len = commands.iter().map(|c| c.category.len()).max().unwrap_or(0);
+        let max_name_len = commands.iter().map(|c| c.name.len()).max().unwrap_or(0);
+
         commands
             .iter()
-            .map(|cmd| {
-                let name = cmd.display_name();
-                let desc = cmd.description.to_string();
+            .enumerate()
+            .map(|(idx, cmd)| {
+                let is_selected = idx == palette.selected;
+                let name_style = if is_selected {
+                    Style::default()
+                        .fg(Color::White)
+                        .add_modifier(Modifier::BOLD)
+                } else {
+                    Style::default().fg(Color::DarkGray)
+                };
 
-                let line = Line::from(vec![
+                let mut spans = vec![
+                    // Category column (dimmed, right-aligned)
                     Span::styled(
-                        format!("{:<16}", name),
+                        format!("{:>width$}  ", cmd.category, width = max_category_len),
                         Style::default()
-                            .fg(Color::Cyan)
-                            .add_modifier(Modifier::BOLD),
+                            .fg(if is_selected {
+                                Color::Black
+                            } else {
+                                Color::DarkGray
+                            })
+                            .add_modifier(Modifier::DIM),
                     ),
-                    Span::styled(desc, Style::default().fg(Color::White)),
-                ]);
-                ListItem::new(line)
+                    // Command name column
+                    Span::styled(
+                        format!("{:<width$}", cmd.name, width = max_name_len),
+                        name_style,
+                    ),
+                ];
+
+                // Shortcut column (dimmed, right side)
+                if let Some(shortcut) = cmd.shortcut {
+                    // Calculate remaining space for right-alignment
+                    let used = max_category_len + 2 + max_name_len;
+                    let available = list_area.width.saturating_sub(4) as usize;
+                    let shortcut_len = shortcut.len();
+                    let padding = available.saturating_sub(used + shortcut_len);
+
+                    spans.push(Span::styled(
+                        format!("{:>width$}", shortcut, width = padding + shortcut_len),
+                        Style::default().fg(Color::DarkGray),
+                    ));
+                }
+
+                ListItem::new(Line::from(spans))
             })
             .collect()
     };
 
     let list = List::new(items)
-        .highlight_style(
-            Style::default()
-                .bg(Color::DarkGray)
-                .add_modifier(Modifier::BOLD),
-        )
+        .highlight_style(Style::default().bg(Color::Magenta))
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
@@ -428,6 +461,24 @@ pub fn render_command_palette(
     frame.render_stateful_widget(list, list_area, &mut list_state);
 
     render_separator(frame, layout.body, 2 + list_height);
+
+    // Render selected command description (centered)
+    let description = commands
+        .get(palette.selected)
+        .map(|cmd| cmd.description)
+        .unwrap_or("");
+    let desc_area = Rect::new(
+        layout.body.x,
+        layout.body.y + 3 + list_height,
+        layout.body.width,
+        1,
+    );
+    let desc_paragraph = Paragraph::new(Line::from(Span::styled(
+        description,
+        Style::default().fg(Color::DarkGray),
+    )))
+    .alignment(Alignment::Center);
+    frame.render_widget(desc_paragraph, desc_area);
 }
 
 #[cfg(test)]

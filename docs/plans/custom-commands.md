@@ -45,7 +45,7 @@
 
 1. User creates `.zdx/commands/review.md` with content "Review this code for bugs..."
 2. User opens zdx in that project directory
-3. User opens command palette (`/` or `Ctrl+P`)
+3. User opens command palette (`/` or `Ctrl+O`)
 4. User sees `/review` in the list with description (if frontmatter present) or "(custom)" 
 5. User selects `/review`
 6. Content "Review this code for bugs..." appears in input field
