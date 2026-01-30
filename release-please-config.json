@@ -1,12 +1,11 @@
 {
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
-    ".": {
+    "crates/zdx-cli": {
       "release-type": "rust",
       "package-name": "zdx",
       "include-component-in-tag": false,
-      "include-v-in-tag": true,
-      "extra-files": ["Cargo.toml"]
+      "include-v-in-tag": true
     }
   },
   "plugins": [{"type": "cargo-workspace"}]
