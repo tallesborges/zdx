@@ -81,9 +81,8 @@
   - `crates/zdx-cli/src/cli/commands/worktree.rs`: worktree command handler
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
-- `crates/zdx-bot/`: Telegram bot library + binary (long-polling)
-  - `crates/zdx-bot/src/lib.rs`: Telegram bot library entrypoint (shared by CLI subcommand)
-  - `crates/zdx-bot/src/main.rs`: Telegram bot binary entrypoint
+- `crates/zdx-bot/`: Telegram bot library (long-polling)
+  - `crates/zdx-bot/src/lib.rs`: Telegram bot library entrypoint (used by CLI subcommand)
   - `crates/zdx-bot/src/bot/mod.rs`: bot module exports
   - `crates/zdx-bot/src/bot/context.rs`: shared bot context
   - `crates/zdx-bot/src/bot/queue.rs`: per-chat queueing helpers
