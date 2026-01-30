@@ -89,9 +89,9 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 4: Change detection (optional optimization)
 - **Goal**: Skip CI on docs-only changes
 - **Scope checklist**:
-  - [ ] Add `changed` job (like Codex CLI)
-  - [ ] Detect if only `.md` files changed
-  - [ ] Skip build/test jobs if no code changes
+  - [x] Add `changed` job (like Codex CLI)
+  - [x] Detect if only `.md` files changed
+  - [x] Skip build/test jobs if no code changes
 - **✅ Demo**: PR touching only README shows skipped jobs
 - **Risks / failure modes**:
   - Over-skipping → keep detection conservative
@@ -99,14 +99,14 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 5: Release workflow (tag-triggered)
 - **Goal**: Push tag → build binaries → create GitHub Release
 - **Scope checklist**:
-  - [ ] Create `.github/workflows/release.yml`
-  - [ ] Trigger on `push: tags: ['v*.*.*']`
-  - [ ] Build binary for Linux x86_64 (`x86_64-unknown-linux-gnu`)
-  - [ ] Build binary for macOS Intel (`x86_64-apple-darwin`)
-  - [ ] Build binary for macOS ARM (`aarch64-apple-darwin`)
-  - [ ] Create `.tar.gz` archives with binaries
-  - [ ] Upload binaries as GitHub Release assets
-  - [ ] Generate release notes from commits
+  - [x] Create `.github/workflows/release.yml`
+  - [x] Trigger on `push: tags: ['v*.*.*']`
+  - [x] Build binary for Linux x86_64 (`x86_64-unknown-linux-gnu`)
+  - [x] Build binary for macOS Intel (`x86_64-apple-darwin`)
+  - [x] Build binary for macOS ARM (`aarch64-apple-darwin`)
+  - [x] Create `.tar.gz` archives with binaries
+  - [x] Upload binaries as GitHub Release assets
+  - [x] Generate release notes from commits
 - **✅ Demo**: `git tag v0.1.0 && git push --tags` → Release appears with downloadable binaries
 - **Risks / failure modes**:
   - Build times (~15-20 min for all platforms)
@@ -115,9 +115,9 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 6: Release caching + optimization
 - **Goal**: Faster release builds
 - **Scope checklist**:
-  - [ ] Add rust-cache to release jobs
-  - [ ] Build in `--release` mode with optimizations
-  - [ ] Add sccache for compiled object caching
+  - [x] Add rust-cache to release jobs
+  - [x] Build in `--release` mode with optimizations
+  - [x] Add sccache for compiled object caching
 - **✅ Demo**: Release builds complete in <10 min
 - **Risks / failure modes**:
   - Cache invalidation on dependency changes
@@ -223,7 +223,7 @@ execFileSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 ---
 
 ## Contracts (guardrails)
-- CI must run on every PR to `main`
+- CI must run on every PR to `main`/`master`
 - `cargo +nightly fmt --check` must pass
 - `cargo clippy --workspace --all-targets --locked -- -D warnings` must pass
 - `cargo test --workspace --lib --tests --bins --locked` must pass
