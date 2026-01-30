@@ -81,8 +81,31 @@ jobs:
           find dist -name 'zdx-*.tar.gz' -exec mv {} dist/assets/ \;
           ls -la dist/assets
 
+      - name: Generate Homebrew cask
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          sha_arm=$(sha256sum dist/assets/zdx-aarch64-apple-darwin.tar.gz | awk '{print $1}')
+          sha_intel=$(sha256sum dist/assets/zdx-x86_64-apple-darwin.tar.gz | awk '{print $1}')
+          cat > dist/assets/zdx.rb <<EOF
+          cask "zdx" do
+            arch arm: "aarch64", intel: "x86_64"
+
+            version "${version}"
+            sha256 arm: "${sha_arm}", intel: "${sha_intel}"
+
+            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/zdx-#{arch}-apple-darwin.tar.gz"
+            name "zdx"
+            desc "Terminal AI assistant"
+            homepage "https://github.com/${GITHUB_REPOSITORY}"
+
+            binary "zdx"
+          end
+          EOF
+
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/assets/zdx-*.tar.gz
+          files: |
+            dist/assets/zdx-*.tar.gz
+            dist/assets/zdx.rb
           generate_release_notes: true
