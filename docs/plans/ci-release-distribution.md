@@ -78,9 +78,9 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 3: Multi-platform CI matrix
 - **Goal**: Verify builds on macOS (Intel + ARM) and Linux
 - **Scope checklist**:
-  - [ ] Add matrix: `ubuntu-latest`, `macos-14` (ARM), `macos-13` (Intel)
-  - [ ] Run lint/build/test on all platforms
-  - [ ] Add `results` aggregator job for single required status check
+  - [x] Add matrix: `ubuntu-latest`, `macos-14` (ARM), `macos-13` (Intel)
+  - [x] Run lint/build/test on all platforms
+  - [x] Add `results` aggregator job for single required status check
 - **✅ Demo**: PR shows 3 platform jobs, all green
 - **Risks / failure modes**:
   - Platform-specific test failures → investigate when they occur
