@@ -1,5 +1,5 @@
 # Goals
-- Provide a dedicated `zdx-bot` binary crate for Telegram DM-only usage
+- Provide a `zdx bot` subcommand for Telegram DM-only usage
 - Enforce a simple allowlist by Telegram user ID
 - Route each DM chat to a single zdx thread and reply to the incoming message
 
@@ -41,12 +41,12 @@ List capabilities that already exist and should not be rebuilt.
 Define Slice 1..N in user-journey order.
 
 ## Slice 1: New bot crate + config ✅
-- **Goal**: A standalone `zdx-bot` binary that loads config and validates Telegram settings
+- **Goal**: A standalone bot that loads config and validates Telegram settings
 - **Scope checklist**:
   - [x] Add `crates/zdx-bot` and workspace entry
   - [x] Minimal CLI entrypoint (start + exit on config errors)
   - [x] Config schema for `telegram.bot_token` and `telegram.allowlist_user_ids`
-- **✅ Demo**: `zdx-bot` starts with valid config, fails fast with clear errors when missing
+- **✅ Demo**: `zdx bot` starts with valid config, fails fast with clear errors when missing
 - **Risks / failure modes**:
   - Config path mismatch with existing zdx conventions
   - Token accidentally logged

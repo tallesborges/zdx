@@ -3064,6 +3064,7 @@ dependencies = [
  "url",
  "uuid",
  "wiremock",
+ "zdx-bot",
  "zdx-core",
  "zdx-tui",
 ]
