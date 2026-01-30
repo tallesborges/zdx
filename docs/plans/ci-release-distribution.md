@@ -78,7 +78,7 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 3: Multi-platform CI matrix
 - **Goal**: Verify builds on macOS (Intel + ARM) and Linux
 - **Scope checklist**:
-  - [x] Add matrix: `ubuntu-latest`, `macos-14` (ARM), `macos-13` (Intel)
+  - [x] Add matrix: `ubuntu-latest`, `macos-15`, `macos-15-intel`
   - [x] Run lint/build/test on all platforms
   - [x] Add `results` aggregator job for single required status check
 - **✅ Demo**: PR shows 3 platform jobs, all green
@@ -236,7 +236,7 @@ execFileSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 - Use nightly for fmt (matches AGENTS.md)
 - Single required status check (`results` job pattern from Codex CLI)
 - Codex-style bundled npm package (all binaries in vendor/)
-- Pin macOS versions explicitly (macos-14 for ARM, macos-13 for Intel)
+- Pin macOS versions explicitly (macos-15 for ARM, macos-15-intel for Intel)
 
 ## Testing
 - Manual smoke demos per slice
