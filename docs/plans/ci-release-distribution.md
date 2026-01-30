@@ -53,14 +53,14 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 1: Basic CI (format + lint + test)
 - **Goal**: Green/red CI signal on every PR
 - **Scope checklist**:
-  - [ ] Create `.github/workflows/ci.yml`
-  - [ ] Job: `cargo +nightly fmt --check` (matches AGENTS.md)
-  - [ ] Job: `cargo clippy --workspace --all-targets --locked -- -D warnings`
-  - [ ] Job: `cargo test --workspace --lib --tests --bins --locked`
-  - [ ] Run on `push` (main), `pull_request`, `workflow_dispatch`
-  - [ ] Add `concurrency` to cancel stale runs
-  - [ ] Add `timeout-minutes` for safety
-  - [ ] Use `dtolnay/rust-toolchain` for toolchain setup
+  - [x] Create `.github/workflows/ci.yml`
+  - [x] Job: `cargo +nightly fmt --check` (matches AGENTS.md)
+  - [x] Job: `cargo clippy --workspace --all-targets --locked -- -D warnings`
+  - [x] Job: `cargo test --workspace --lib --tests --bins --locked`
+  - [x] Run on `push` (main/master), `pull_request`, `workflow_dispatch`
+  - [x] Add `concurrency` to cancel stale runs
+  - [x] Add `timeout-minutes` for safety
+  - [x] Use `dtolnay/rust-toolchain` for toolchain setup
 - **✅ Demo**: Open PR, see checks run, status badge works
 - **Risks / failure modes**:
   - Current code may have clippy warnings → fix before merge
@@ -69,8 +69,8 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 ### Slice 2: Cargo cache
 - **Goal**: Faster CI runs (~50-70% time reduction)
 - **Scope checklist**:
-  - [ ] Add `Swatinem/rust-cache@v2` action
-  - [ ] Cache based on `Cargo.lock` hash
+  - [x] Add `Swatinem/rust-cache@v2` action
+  - [x] Cache based on `Cargo.lock` hash
 - **✅ Demo**: Second CI run is significantly faster
 - **Risks / failure modes**:
   - Cache key collisions (rare, action handles well)
