@@ -41,7 +41,7 @@ List capabilities that already exist and should not be rebuilt.
 Define Slice 1..N in user-journey order.
 
 ## Slice 1: New bot crate + config ✅
-- **Goal**: A standalone bot that loads config and validates Telegram settings
+- **Goal**: A bot subcommand that loads config and validates Telegram settings
 - **Scope checklist**:
   - [x] Add `crates/zdx-bot` and workspace entry
   - [x] Minimal CLI entrypoint (start + exit on config errors)
