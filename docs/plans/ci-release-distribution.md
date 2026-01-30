@@ -122,50 +122,33 @@ Ship-first plan for adding CI, automated releases, and distribution (Homebrew + 
 - **Risks / failure modes**:
   - Cache invalidation on dependency changes
 
-### Slice 7: Homebrew Tap
-- **Goal**: `brew tap yourname/zdx && brew install zdx`
+### Slice 7: Homebrew Cask
+- **Goal**: `brew tap yourname/zdx && brew install --cask zdx`
 - **Scope checklist**:
   - [ ] Create separate repo `homebrew-zdx`
-  - [ ] Create `Formula/zdx.rb` with platform detection (Intel + ARM)
-  - [ ] Download pre-built binaries from GitHub Release
-  - [ ] Auto-update formula on new release (via workflow in main repo)
+  - [ ] Create `Casks/zdx.rb` with platform detection (Intel + ARM)
+  - [ ] Download pre-built macOS binaries from GitHub Release
+  - [ ] Auto-update cask on new release (via workflow in main repo)
   - [ ] Calculate SHA256 checksums for each binary
-- **✅ Demo**: `brew install yourname/zdx/zdx` works on both Intel and ARM Macs
+- **✅ Demo**: `brew install --cask yourname/zdx/zdx` works on both Intel and ARM Macs
 - **Risks / failure modes**:
   - Need separate repo for tap
   - SHA256 checksums must be updated per release
 
-**Formula structure:**
+**Cask structure:**
 ```ruby
-class Zdx < Formula
+cask "zdx" do
+  arch arm: "aarch64", intel: "x86_64"
+
+  version "0.1.0"
+  sha256 arm: "...", intel: "..."
+
+  url "https://github.com/yourname/zdx/releases/download/v#{version}/zdx-#{arch}-apple-darwin.tar.gz"
+  name "zdx"
   desc "Terminal AI assistant"
   homepage "https://github.com/yourname/zdx"
-  version "0.1.0"
-  license "MIT"
-  
-  on_macos do
-    on_arm do
-      url "https://github.com/yourname/zdx/releases/download/v#{version}/zdx-aarch64-apple-darwin.tar.gz"
-      sha256 "..."
-    end
-    on_intel do
-      url "https://github.com/yourname/zdx/releases/download/v#{version}/zdx-x86_64-apple-darwin.tar.gz"
-      sha256 "..."
-    end
-  end
-  
-  on_linux do
-    url "https://github.com/yourname/zdx/releases/download/v#{version}/zdx-x86_64-unknown-linux-gnu.tar.gz"
-    sha256 "..."
-  end
-  
-  def install
-    bin.install "zdx"
-  end
-  
-  test do
-    assert_match version.to_s, shell_output("#{bin}/zdx --version")
-  end
+
+  binary "zdx"
 end
 ```
 
@@ -279,7 +262,7 @@ execFileSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 | 4 | Change detection | 1 hour | Slice 3 |
 | 5 | Release workflow | 1 day | Slice 3 |
 | 6 | Release caching | 30 min | Slice 5 |
-| 7 | Homebrew tap | 2-3 hours | Slice 5 |
+| 7 | Homebrew cask | 2-3 hours | Slice 5 |
 | 8 | npm package | 1 day | Slice 5 |
 
 ---
@@ -288,16 +271,16 @@ execFileSync(binary, process.argv.slice(2), { stdio: 'inherit' });
 - [Codex CLI rust-ci.yml](https://github.com/openai/codex/blob/main/.github/workflows/rust-ci.yml)
 - [Codex CLI rust-release.yml](https://github.com/openai/codex/blob/main/.github/workflows/rust-release.yml)
 - [Sentry: How to publish binaries on npm](https://sentry.engineering/blog/publishing-binaries-on-npm)
-- [Homebrew Formula Cookbook](https://docs.brew.sh/Formula-Cookbook)
+- [Homebrew Cask Cookbook](https://docs.brew.sh/Cask-Cookbook)
 
 ---
 
 ## Installation options (after completion)
 
 ```bash
-# Homebrew (macOS/Linux)
+# Homebrew (macOS)
 brew tap yourname/zdx
-brew install zdx
+brew install --cask zdx
 
 # npm (cross-platform)
 npm install -g zdx
