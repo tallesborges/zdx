@@ -32,6 +32,9 @@ jobs:
         with:
           components: rustfmt
 
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
       - name: Format
         run: cargo +nightly fmt --check
 
