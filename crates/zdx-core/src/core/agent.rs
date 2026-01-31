@@ -18,8 +18,9 @@ use tokio::time::{Duration, timeout};
 use crate::config::Config;
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
-use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
-use crate::providers::claude_cli::{ClaudeCliClient, ClaudeCliConfig};
+use crate::providers::anthropic::{
+    AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
+};
 use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
