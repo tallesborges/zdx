@@ -1,19 +1,74 @@
-//! Claude CLI client for Anthropic Messages API (OAuth).
+//! Claude CLI (Anthropic OAuth) provider.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 
-use crate::providers::anthropic::types::StreamingMessagesRequest;
-use crate::providers::anthropic::{
+use super::api::DEFAULT_BASE_URL;
+use super::shared::{
     build_api_messages_with_cache_control, build_system_blocks, build_thinking_config,
     build_tool_defs, send_streaming_request,
 };
-use crate::providers::claude_cli::auth::{ClaudeCliConfig, resolve_credentials};
+use super::types::StreamingMessagesRequest;
+use crate::providers::oauth::claude_cli as oauth_claude_cli;
 use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";
 const BETA_HEADER: &str = "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14";
 const CLAUDE_CODE_SYSTEM_PROMPT: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
+
+/// Runtime config for Claude CLI requests.
+#[derive(Debug, Clone)]
+pub struct ClaudeCliConfig {
+    pub model: String,
+    pub max_tokens: u32,
+    pub base_url: String,
+    /// Whether extended thinking is enabled
+    pub thinking_enabled: bool,
+    /// Token budget for thinking (only used when thinking_enabled = true)
+    pub thinking_budget_tokens: u32,
+}
+
+impl ClaudeCliConfig {
+    pub fn new(
+        model: String,
+        max_tokens: u32,
+        base_url: Option<&str>,
+        thinking_enabled: bool,
+        thinking_budget_tokens: u32,
+    ) -> Self {
+        let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).to_string();
+        Self {
+            model,
+            max_tokens,
+            base_url,
+            thinking_enabled,
+            thinking_budget_tokens,
+        }
+    }
+}
+
+/// Resolves OAuth credentials, refreshing if expired.
+pub async fn resolve_credentials() -> Result<oauth_claude_cli::ClaudeCliCredentials> {
+    let mut creds = oauth_claude_cli::load_credentials()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No Claude CLI OAuth credentials found. Run 'zdx login --claude-cli' to authenticate."
+        )
+    })?;
+
+    if creds.is_expired() {
+        let refreshed = oauth_claude_cli::refresh_token(&creds.refresh)
+            .await
+            .context("Failed to refresh Claude CLI OAuth token")?;
+        oauth_claude_cli::save_credentials(&refreshed)?;
+        creds = refreshed;
+    }
+
+    Ok(oauth_claude_cli::ClaudeCliCredentials {
+        access: creds.access,
+        refresh: creds.refresh,
+        expires: creds.expires,
+    })
+}
 
 /// Claude CLI API client.
 pub struct ClaudeCliClient {

@@ -38,6 +38,13 @@
       - `crates/zdx-core/src/providers/openai/responses_sse.rs`: Responses SSE parser
       - `crates/zdx-core/src/providers/openai/responses_types.rs`: Responses request/response types
       - `crates/zdx-core/src/providers/openai/chat_completions.rs`: OpenAI-compatible Chat Completions helpers
+    - `crates/zdx-core/src/providers/anthropic/`: Anthropic Claude providers (API key + CLI OAuth)
+      - `crates/zdx-core/src/providers/anthropic/mod.rs`: Anthropic provider module exports
+      - `crates/zdx-core/src/providers/anthropic/api.rs`: Anthropic API key provider (Messages API)
+      - `crates/zdx-core/src/providers/anthropic/cli.rs`: Claude CLI OAuth provider (Messages API)
+      - `crates/zdx-core/src/providers/anthropic/shared.rs`: shared helpers (message builders, request helpers)
+      - `crates/zdx-core/src/providers/anthropic/types.rs`: API request/response types
+      - `crates/zdx-core/src/providers/anthropic/sse.rs`: Anthropic SSE parser
     - `crates/zdx-core/src/providers/gemini/`: Gemini provider helpers (API key + CLI OAuth)
       - `crates/zdx-core/src/providers/gemini/mod.rs`: Gemini provider module exports
       - `crates/zdx-core/src/providers/gemini/api.rs`: Gemini API key provider (Generative Language API)
