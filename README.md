@@ -9,6 +9,12 @@ connect to Telegram so you can chat anywhere.
 
 ![zdx demo](docs/assets/demo.gif)
 
+> **Disclaimer**
+>
+> - **YOLO mode**: the agent can access your files and tools. It can make destructive changes. Use at your own risk.
+> - **Early-stage**: expect breaking changes and unstable behavior while the project evolves.
+> - **Unsigned binaries**: macOS builds are not code-signed or notarized yet, so Gatekeeper may block the app after install.
+
 ## Quickstart
 
 ### Install (macOS)
