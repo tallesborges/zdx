@@ -3,42 +3,52 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-A fast, beautiful agentic coding assistant.
+ZDX CLI is a lightweight, multi-provider coding agent that runs locally on your computer,
+works with your existing subscriptions (Claude, ChatGPT, Gemini), and can optionally
+connect to Telegram so you can chat anywhere.
 
 ![zdx demo](docs/assets/demo.gif)
 
-## What it is
+## Quickstart
 
-ZDX is a TUI coding agent that helps you as a developer be productive. The vision is to be a faster, lightweight coding agent.
+### Install (macOS)
 
-## Why it exists
+```bash
+brew tap tallesborges/zdx
+brew install --cask zdx
+```
 
-Built because I needed something:
-- **Productive** — shortcuts, command palette, everything at my fingertips
-- **Fast and lightweight** — can spawn multiple instances when needed
-- **Pleasant to use** — beautiful and elegant, for all-day use
+### Run
+
+```bash
+zdx --help
+zdx
+```
+
+### Exec mode
+
+```bash
+zdx exec -p "hello"
+```
+
+### Telegram bot
+
+```bash
+zdx bot
+```
+
+> First time? Run `zdx config init` and set your provider + telegram keys.
 
 ## Features
 
-- **Anthropic provider** with API key or OAuth authentication (Claude Pro/Max)
-- **OpenAI provider** with API key (OpenAI API) or OAuth (Codex Subscription)
-- **OpenRouter provider** with API key
-- **Moonshot provider** with API key (Kimi API)
-- **Gemini provider** with API key or subscription (Cloud Code Assist)
-- **Interactive TUI** with streaming markdown, syntax highlighting, and table support
-- **Exec mode** — non-interactive mode for scripts and automation
-- **Extended thinking** with configurable levels and block display
-- **Command palette** overlay (Ctrl+O or `/`) — model picker, thinking level, and more
-- **File picker** — type `@` to browse and insert project files (respects .gitignore)
-- **Large paste placeholders** — pastes over 1000 chars display as `[Pasted Content N chars #1]`, expand on submit; press Space on placeholder to expand
-- **Bash commands** — type `$<command>` to execute bash commands directly (e.g., `$ls -la`, `$git status`)
-- **Text selection** — click and drag to select, double-click selects a word, auto-copies to clipboard
-- **Token usage** display with pricing
-- **Session persistence** — resume or switch between previous threads (filtered by workspace, Ctrl+T to show all)
-- **Timeline overlay** — jump to turns and fork from any message
-- **Project context** via `AGENTS.md` files (recursively loaded from parent directories)
-- **Skills** via `SKILL.md` (discoverable skill instructions with metadata)
-- **Telegram bot** — interact with ZDX via Telegram DMs (`zdx bot`)
+- **Providers**: Anthropic, OpenAI, OpenRouter, Moonshot, Gemini
+- **Interactive TUI** with streaming markdown, syntax highlighting, and tables
+- **Exec mode** for scripts and automation
+- **Extended thinking** + token usage with pricing
+- **Command palette**, **file picker** (`@`), **bash commands** (`$cmd`)
+- **Session persistence** + timeline + thread switching
+- **Project context** via `AGENTS.md` + **skills** via `SKILL.md`
+- **Telegram bot** — interact via Telegram (`zdx bot`)
 
 ## Inspiration
 
