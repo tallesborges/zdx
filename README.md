@@ -4,7 +4,7 @@
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
 ZDX CLI is a lightweight, multi-provider coding agent that runs locally on your computer,
-works with your existing subscriptions (Claude, ChatGPT, Gemini), and can optionally
+works with your existing subscriptions (Claude, OpenAI/Codex, Gemini), and can optionally
 connect to Telegram so you can chat anywhere.
 
 ![zdx demo](docs/assets/demo.gif)
@@ -49,6 +49,14 @@ zdx bot
 - **Session persistence** + timeline + thread switching
 - **Project context** via `AGENTS.md` + **skills** via `SKILL.md`
 - **Telegram bot** — interact via Telegram (`zdx bot`)
+
+## Provider support
+
+- **Anthropic**: API key + subscription (Claude CLI OAuth)
+- **Gemini**: API key + subscription (Gemini CLI OAuth)
+- **OpenAI**: API key + subscription (Codex OAuth)
+- **Moonshot**: API key
+- **OpenRouter**: API key
 
 ## Inspiration
 
