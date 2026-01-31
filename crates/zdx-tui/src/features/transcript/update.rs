@@ -54,6 +54,9 @@ pub fn handle_agent_event(
             // partial content that was streamed before the error occurred.
             apply_pending_delta(transcript, agent_state);
 
+            // Mark all running/streaming cells as errored (stops spinner, shows error state)
+            transcript.mark_errored();
+
             transcript.push_cell(HistoryCell::system(format!("Error: {}", message)));
             // Reset agent state - the turn is over due to the error
             *agent_state = AgentState::Idle;

@@ -437,6 +437,25 @@ impl HistoryCell {
         }
     }
 
+    /// Marks a cell as errored due to stream/network error.
+    ///
+    /// For tools: sets state to Error (only affects Running state).
+    /// For assistant/thinking: stops streaming without marking as user-interrupted.
+    pub fn mark_errored(&mut self) {
+        match self {
+            HistoryCell::Tool { state, .. } if *state == ToolState::Running => {
+                *state = ToolState::Error;
+            }
+            HistoryCell::Assistant { is_streaming, .. } if *is_streaming => {
+                *is_streaming = false;
+            }
+            HistoryCell::Thinking { is_streaming, .. } if *is_streaming => {
+                *is_streaming = false;
+            }
+            _ => {}
+        }
+    }
+
     /// Marks a user cell as interrupted (request cancelled before any response).
     ///
     /// Only affects User cells.
@@ -1817,5 +1836,113 @@ mod tests {
 
         let cell = HistoryCell::timing(Duration::from_secs(5), 1);
         assert!(cell.is_cacheable());
+    }
+
+    #[test]
+    fn test_mark_errored_tool() {
+        let mut cell =
+            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+
+        // Should be Running initially
+        match &cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(*state, ToolState::Running),
+            _ => panic!("Expected tool cell"),
+        }
+
+        cell.mark_errored();
+
+        // Should be Error after mark_errored
+        match &cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(*state, ToolState::Error),
+            _ => panic!("Expected tool cell"),
+        }
+    }
+
+    #[test]
+    fn test_mark_errored_assistant_streaming() {
+        let mut cell = HistoryCell::assistant_streaming("Partial response...");
+
+        // Should be streaming initially
+        match &cell {
+            HistoryCell::Assistant { is_streaming, .. } => assert!(*is_streaming),
+            _ => panic!("Expected assistant cell"),
+        }
+
+        cell.mark_errored();
+
+        // Should not be streaming after mark_errored, and NOT marked as interrupted
+        match &cell {
+            HistoryCell::Assistant {
+                is_streaming,
+                is_interrupted,
+                ..
+            } => {
+                assert!(!*is_streaming);
+                assert!(!*is_interrupted); // Error != user interruption
+            }
+            _ => panic!("Expected assistant cell"),
+        }
+    }
+
+    #[test]
+    fn test_mark_errored_thinking_streaming() {
+        let mut cell = HistoryCell::thinking_streaming("Partial thinking...");
+
+        // Should be streaming initially
+        match &cell {
+            HistoryCell::Thinking { is_streaming, .. } => assert!(*is_streaming),
+            _ => panic!("Expected thinking cell"),
+        }
+
+        cell.mark_errored();
+
+        // Should not be streaming after mark_errored, and NOT marked as interrupted
+        match &cell {
+            HistoryCell::Thinking {
+                is_streaming,
+                is_interrupted,
+                ..
+            } => {
+                assert!(!*is_streaming);
+                assert!(!*is_interrupted); // Error != user interruption
+            }
+            _ => panic!("Expected thinking cell"),
+        }
+    }
+
+    #[test]
+    fn test_mark_errored_does_not_affect_completed() {
+        // Completed tool should not change
+        let mut tool_cell =
+            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+        tool_cell.set_tool_result(ToolOutput::success(serde_json::json!({"ok": true})));
+
+        match &tool_cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(*state, ToolState::Done),
+            _ => panic!("Expected tool cell"),
+        }
+
+        tool_cell.mark_errored();
+
+        // Should still be Done (not Error)
+        match &tool_cell {
+            HistoryCell::Tool { state, .. } => assert_eq!(*state, ToolState::Done),
+            _ => panic!("Expected tool cell"),
+        }
+
+        // Finalized assistant should not change
+        let mut assistant_cell = HistoryCell::assistant("Complete response");
+        match &assistant_cell {
+            HistoryCell::Assistant { is_streaming, .. } => assert!(!*is_streaming),
+            _ => panic!("Expected assistant cell"),
+        }
+
+        assistant_cell.mark_errored();
+
+        // Should still not be streaming (no change)
+        match &assistant_cell {
+            HistoryCell::Assistant { is_streaming, .. } => assert!(!*is_streaming),
+            _ => panic!("Expected assistant cell"),
+        }
     }
 }

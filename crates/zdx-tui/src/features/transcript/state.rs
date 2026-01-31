@@ -570,6 +570,18 @@ impl TranscriptState {
         self.invalidate_line_info();
     }
 
+    /// Marks all running/streaming cells as errored due to stream/network error.
+    ///
+    /// Unlike `mark_interrupted`, this doesn't mark user cells since the error
+    /// wasn't caused by user cancellation.
+    pub fn mark_errored(&mut self) {
+        for cell in &mut self.cells {
+            cell.mark_errored();
+        }
+        self.active_user_cell_id = None;
+        self.invalidate_line_info();
+    }
+
     /// Applies a cross-slice transcript mutation.
     pub fn apply(&mut self, mutation: TranscriptMutation) {
         match mutation {
