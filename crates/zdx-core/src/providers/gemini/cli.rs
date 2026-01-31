@@ -1,17 +1,17 @@
-//! Gemini CLI client for Cloud Code Assist API.
+//! Gemini CLI (Cloud Code Assist OAuth) provider.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::gemini_cli::auth::{GeminiCliConfig, resolve_credentials};
-use crate::providers::gemini_shared::sse::GeminiSseParser;
-use crate::providers::gemini_shared::{
-    CloudCodeRequestParams, build_cloud_code_assist_request, classify_reqwest_error,
-    merge_gemini_system_prompt,
+use super::shared::{
+    CloudCodeRequestParams, GeminiThinkingConfig, build_cloud_code_assist_request,
+    classify_reqwest_error, merge_gemini_system_prompt,
 };
+use super::sse::GeminiSseParser;
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
+use crate::providers::oauth::gemini_cli as oauth_gemini_cli;
 use crate::providers::{ChatMessage, ProviderError, ProviderStream};
 use crate::tools::ToolDefinition;
 
@@ -20,6 +20,61 @@ const API_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
 
 /// Stream generate content path
 const STREAM_PATH: &str = "/v1internal:streamGenerateContent";
+
+/// Runtime config for Gemini CLI requests.
+#[derive(Debug, Clone)]
+pub struct GeminiCliConfig {
+    pub model: String,
+    pub max_tokens: u32,
+    /// Session ID for rate limit grouping (persists across requests in a session).
+    pub session_id: String,
+    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
+    pub thinking_config: Option<GeminiThinkingConfig>,
+}
+
+impl GeminiCliConfig {
+    pub fn new(
+        model: String,
+        max_tokens: u32,
+        thinking_config: Option<GeminiThinkingConfig>,
+    ) -> Self {
+        Self {
+            model,
+            max_tokens,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            thinking_config,
+        }
+    }
+}
+
+/// Resolves OAuth credentials, refreshing if expired.
+pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredentials> {
+    let mut creds = oauth_gemini_cli::load_credentials()?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "No Gemini CLI OAuth credentials found. Run 'zdx login gemini-cli' to authenticate."
+        )
+    })?;
+
+    let project_id = creds
+        .account_id
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("Missing project ID in credentials"))?;
+
+    if creds.is_expired() {
+        let refreshed = oauth_gemini_cli::refresh_token(&creds.refresh, &project_id)
+            .await
+            .context("Failed to refresh Gemini CLI OAuth token")?;
+        oauth_gemini_cli::save_credentials(&refreshed)?;
+        creds = refreshed;
+    }
+
+    Ok(oauth_gemini_cli::GeminiCliCredentials {
+        access: creds.access,
+        refresh: creds.refresh,
+        expires: creds.expires,
+        project_id,
+    })
+}
 
 /// Gemini CLI client.
 pub struct GeminiCliClient {

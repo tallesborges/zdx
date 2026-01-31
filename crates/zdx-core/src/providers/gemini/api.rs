@@ -1,13 +1,13 @@
-//! Gemini provider (Google Generative Language API).
+//! Gemini API key provider (Generative Language API).
 
 use anyhow::{Context, Result};
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::gemini_shared::sse::GeminiSseParser;
-use crate::providers::gemini_shared::{
+use super::shared::{
     GeminiThinkingConfig, build_gemini_request, classify_reqwest_error, merge_gemini_system_prompt,
 };
+use super::sse::GeminiSseParser;
+use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{ChatMessage, ProviderError, ProviderStream};
 use crate::tools::ToolDefinition;
 

@@ -38,6 +38,12 @@
       - `crates/zdx-core/src/providers/openai/responses_sse.rs`: Responses SSE parser
       - `crates/zdx-core/src/providers/openai/responses_types.rs`: Responses request/response types
       - `crates/zdx-core/src/providers/openai/chat_completions.rs`: OpenAI-compatible Chat Completions helpers
+    - `crates/zdx-core/src/providers/gemini/`: Gemini provider helpers (API key + CLI OAuth)
+      - `crates/zdx-core/src/providers/gemini/mod.rs`: Gemini provider module exports
+      - `crates/zdx-core/src/providers/gemini/api.rs`: Gemini API key provider (Generative Language API)
+      - `crates/zdx-core/src/providers/gemini/cli.rs`: Gemini CLI OAuth provider (Cloud Code Assist API)
+      - `crates/zdx-core/src/providers/gemini/shared.rs`: shared helpers (request builders, thinking config)
+      - `crates/zdx-core/src/providers/gemini/sse.rs`: Gemini SSE parser
     - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
 - `crates/zdx-tui/`: full-screen interactive TUI library
   - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)

@@ -20,9 +20,9 @@ use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{AnthropicClient, AnthropicConfig};
 use crate::providers::claude_cli::{ClaudeCliClient, ClaudeCliConfig};
-use crate::providers::gemini::{GeminiClient, GeminiConfig};
-use crate::providers::gemini_cli::{GeminiCliClient, GeminiCliConfig};
-use crate::providers::gemini_shared::GeminiThinkingConfig;
+use crate::providers::gemini::{
+    GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
+};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
