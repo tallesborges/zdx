@@ -6,8 +6,6 @@
 //! - Error classification
 //! - Common utility functions
 
-pub mod sse;
-
 use std::collections::HashMap;
 
 use anyhow::Result;

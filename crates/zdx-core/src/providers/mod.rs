@@ -5,8 +5,6 @@ mod debug_metrics;
 pub mod anthropic;
 pub mod claude_cli;
 pub mod gemini;
-pub mod gemini_cli;
-pub mod gemini_shared;
 pub mod moonshot;
 pub mod oauth;
 pub mod openai;
