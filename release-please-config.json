@@ -6,6 +6,30 @@
       "package-name": "zdx",
       "include-component-in-tag": false,
       "include-v-in-tag": true
+    },
+    "crates/zdx-core": {
+      "release-type": "rust",
+      "package-name": "zdx-core",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true
+    },
+    "crates/zdx-tui": {
+      "release-type": "rust",
+      "package-name": "zdx-tui",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true
+    },
+    "crates/zdx-bot": {
+      "release-type": "rust",
+      "package-name": "zdx-bot",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true
+    },
+    "crates/xtask": {
+      "release-type": "rust",
+      "package-name": "xtask",
+      "include-component-in-tag": true,
+      "include-v-in-tag": true
     }
   },
   "plugins": [{"type": "cargo-workspace", "updateAllPackages": true}]
