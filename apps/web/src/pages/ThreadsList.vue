@@ -25,7 +25,7 @@ onMounted(() => {
   <input v-model="query" placeholder="Search" />
 
   <div v-if="error">
-    <p>Error loading the threads: { { error } } </p>
+    <p>Error loading the threads: {{ error }} </p>
   </div>
   <p v-else-if="loading"> Loading ...</p>
   <p v-else-if="filtered.length === 0"> Empty threads </p>

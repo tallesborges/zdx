@@ -10,6 +10,7 @@ export function useThreads() {
   async function loadThreads() {
     try {
       loading.value = true
+      error.value = null
       threads.value = await apiGet<ThreadSummary[]>('/api/threads')
     } catch (err) {
       error.value = (err as Error).message

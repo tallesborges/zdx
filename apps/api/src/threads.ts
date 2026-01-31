@@ -24,9 +24,9 @@ export async function listThreads(): Promise<ThreadSummary[]> {
       summaries.push({ id: id, title: data.title ?? id, updatedAt: data.ts ?? '' })
       break
     }
-
-    summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
   }
+
+  summaries.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
 
   return summaries;
 }

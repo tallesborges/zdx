@@ -22,6 +22,8 @@ app.get('/threads/:id', async (c) => {
 
   const detail = await getThreadDetail(id)
 
+  if (detail === null) return c.json({ message: "Thread not found" }, 404)
+
   return c.json(detail);
 })
 

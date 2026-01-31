@@ -2,7 +2,8 @@ export async function apiGet<T>(path: string): Promise<T> {
   const res = await fetch(path)
 
   if (!res.ok) {
-    throw new Error(`HTTP ${res.status}`)
+    let message = (await res.json()).message ?? res.statusText
+    throw new ApiError(res.status, message)
   }
 
   return (await res.json()) as T
@@ -14,4 +15,11 @@ export type ThreadDetail = {
   id: string
   title: string
   messages: { role: 'user' | 'assistant'; content: string }[]
+}
+
+export class ApiError extends Error {
+  constructor(public status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
 }
