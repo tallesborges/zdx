@@ -27,6 +27,8 @@ onMounted(() => {
 
 <template>
   <router-link to="/">Home</router-link>
+  <button @click="loadThreads()" :disabled="loading"> {{ loading ? "Reloading ..." : "Reload" }}</button>
+
   <h1>Thread List </h1>
 
   <input v-model="query" placeholder="Search" />
