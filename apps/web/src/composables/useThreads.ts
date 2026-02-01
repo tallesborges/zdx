@@ -11,7 +11,7 @@ export function useThreads() {
     try {
       loading.value = true
       error.value = null
-      threads.value = await apiGet<ThreadSummary[]>('/api/threads')
+      threads.value = sortThreads(await apiGet<ThreadSummary[]>('/api/threads'))
     } catch (err) {
       error.value = (err as Error).message
     } finally {
@@ -20,4 +20,18 @@ export function useThreads() {
   }
 
   return { threads, error, loading, loadThreads }
+}
+
+function sortThreads(threads: ThreadSummary[]) {
+  return [...threads].sort((a, b) => {
+    if (a.updatedAt && b.updatedAt) {
+      return b.updatedAt.localeCompare(a.updatedAt)
+    }
+
+    if (a.updatedAt) {
+      return -1
+    }
+
+    return 1
+  })
 }

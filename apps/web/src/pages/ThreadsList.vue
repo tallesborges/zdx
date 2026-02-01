@@ -13,6 +13,13 @@ const filtered = computed(() => {
   return list.filter((t) => t.title.toLowerCase().includes(q))
 })
 
+const displayThreads = computed(() => {
+  return filtered.value.map((t) => ({
+    ...t,
+    displayUpdatedAt: t.updatedAt ? new Date(t.updatedAt).toLocaleString() : "—"
+  }))
+})
+
 onMounted(() => {
   loadThreads()
 })
@@ -28,11 +35,11 @@ onMounted(() => {
     <p>Error loading the threads: {{ error }} </p>
   </div>
   <p v-else-if="loading"> Loading ...</p>
-  <p v-else-if="filtered.length === 0"> Empty threads </p>
+  <p v-else-if="displayThreads.length === 0"> Empty threads </p>
   <ul v-else>
-    <li v-for="thread in filtered" :key="thread.id">
+    <li v-for="thread in displayThreads" :key="thread.id">
       <router-link :to="`/threads/${thread.id}`">
-        {{ thread.title }} - {{ thread.updatedAt }}
+        {{ thread.title }} - {{ thread.displayUpdatedAt }}
       </router-link>
     </li>
   </ul>
