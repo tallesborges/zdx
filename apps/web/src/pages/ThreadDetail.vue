@@ -1,50 +1,26 @@
 <script setup lang="ts">
-import { ApiError, apiGet, type ThreadDetail } from '@/lib/api'
-import { onMounted, ref } from 'vue'
+import { useThread } from '@/composables/useThread'
+import { computed, watch } from 'vue'
 import { useRoute } from 'vue-router'
 
 const route = useRoute()
-const id = getParamId(route.params.id)
-const thread = ref<ThreadDetail | null>(null)
-const error = ref<string | null>(null)
-const notFound = ref<boolean>(false)
+const { thread, error, notFound, loading, getParamId, loadThread } = useThread()
 
-onMounted(async () => {
-  try {
-    error.value = null
-    notFound.value = false
+const displayId = computed(() => getParamId(route.params.id) ?? 'unknown')
 
-    if (id === null) {
-      error.value = "Invalid thread id"
-      return
-    }
-
-    thread.value = await apiGet<ThreadDetail>(`/api/threads/${id}`)
-  } catch (err) {
-    if (err instanceof ApiError && err.status === 404) {
-      notFound.value = true
-    } else {
-      error.value = (err as Error).message
-    }
-  }
-})
-
-function getParamId(val: unknown): string | null {
-  if (typeof val === 'string') return val
-
-  if (Array.isArray(val) && val.length > 0 && typeof val[0] === 'string') {
-    return val[0]
-  }
-
-  return null
-}
+watch(
+  () => route.params.id,
+  (newId) => { loadThread(newId) },
+  { immediate: true }
+)
 
 </script>
 
 <template>
   <router-link to="/threads">Threads</router-link>
-  <p v-if="notFound">Thread {{ id }} not found</p>
+  <p v-if="notFound">Thread {{ displayId }} not found</p>
   <p v-else-if="error">Error: {{ error }}</p>
+  <p v-else-if="loading">Loading ...</p>
   <div v-else-if="thread">
     <h1>Thread {{ thread.title }}</h1>
     <ul>
@@ -53,5 +29,5 @@ function getParamId(val: unknown): string | null {
       </li>
     </ul>
   </div>
-  <p v-else>Loading ...</p>
+  <p v-else>Unknown error</p>
 </template>
