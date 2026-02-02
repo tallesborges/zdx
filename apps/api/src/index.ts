@@ -1,6 +1,6 @@
-import { Hono } from 'hono'
+import { Hono } from 'hono';
 
-import { getThreadDetail, listThreads } from './threads';
+import { getThreadDetail, getThreadMessage, listThreads } from './threads';
 
 const app = new Hono()
 
@@ -29,19 +29,19 @@ app.get('/threads/:id', async (c) => {
 
 app.get('/threads/:id/messages/:index', async (c) => {
   const id = c.req.param('id')
-  const detail = await getThreadDetail(id)
-
-  if (detail === null) return c.json({ message: "Thread not found" }, 404)
-
   const index = Number(c.req.param('index'))
 
   if (!Number.isInteger(index)) {
     return c.json({ message: "Invalid index" }, 400)
-  } else if (index < 0 || index >= detail.messages.length) {
+  }
+
+  const message = await getThreadMessage(id, index)
+
+  if (message === null) {
     return c.json({ message: "Message not found" }, 404)
   }
 
-  return c.json(detail.messages[index])
+  return c.json(message)
 })
 
 export default app

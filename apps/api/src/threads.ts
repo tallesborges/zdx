@@ -58,3 +58,15 @@ export async function getThreadDetail(id: string): Promise<ThreadDetail | null> 
     messages
   }
 }
+
+export async function getThreadMessage(id: string, index: number): Promise<ThreadMessage | null> {
+  const detail = await getThreadDetail(id)
+
+  if (detail === null) return null
+
+  if (index < 0 || index >= detail.messages.length) {
+    return null
+  }
+
+  return detail.messages[index]
+}
