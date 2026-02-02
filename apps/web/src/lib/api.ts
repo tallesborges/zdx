@@ -5,7 +5,13 @@ export async function apiGet<T>(path: string): Promise<T> {
     throw new ApiError(res.status, (await readErrorMessage(res)))
   }
 
-  return (await res.json()) as T
+  let response = await res.json()
+
+  if (path === '/api/threads' && !isThreadSummaryArray(response)) {
+    throw new ApiError(500, 'Invalid response body')
+  }
+
+  return response as T
 }
 
 async function readErrorMessage(res: Response) {
@@ -20,6 +26,30 @@ async function readErrorMessage(res: Response) {
   } catch { }
 
   return message
+}
+
+function isThreadSummaryArray(data: unknown): data is ThreadSummary[] {
+  const isArray = Array.isArray(data)
+
+  if (!isArray) return false
+
+  for (const item of data) {
+    if (typeof item !== 'object' || item === null) {
+      return false
+    }
+
+    const obj = item as any
+
+    const validId = 'id' in item && typeof obj.id === 'string'
+    const validTitle = 'title' in item && typeof obj.title === 'string'
+    const validaUpdateAt = 'updatedAt' in item && typeof obj.updatedAt === 'string'
+
+    if (!validId || !validTitle || !validaUpdateAt) {
+      return false
+    }
+  }
+
+  return true
 }
 
 export type Health = { ok: boolean }
