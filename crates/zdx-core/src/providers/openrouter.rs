@@ -19,6 +19,7 @@ pub struct OpenRouterConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
+    pub prompt_cache_key: Option<String>,
     pub include_openrouter_headers: bool,
 }
 
@@ -40,6 +41,7 @@ impl OpenRouterConfig {
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         reasoning_effort: Option<String>,
+        prompt_cache_key: Option<String>,
     ) -> Result<Self> {
         let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
@@ -50,6 +52,7 @@ impl OpenRouterConfig {
             model,
             max_tokens,
             reasoning_effort,
+            prompt_cache_key,
             include_openrouter_headers: true,
         })
     }
@@ -69,6 +72,7 @@ impl OpenRouterClient {
             model: config.model,
             max_tokens: config.max_tokens,
             reasoning_effort: config.reasoning_effort,
+            prompt_cache_key: config.prompt_cache_key,
             extra_headers,
             include_usage: true,
             include_reasoning_content: false,

@@ -18,6 +18,7 @@ pub struct MoonshotConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: Option<u32>,
+    pub prompt_cache_key: Option<String>,
 }
 
 impl MoonshotConfig {
@@ -35,6 +36,7 @@ impl MoonshotConfig {
         max_tokens: Option<u32>,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
+        prompt_cache_key: Option<String>,
     ) -> Result<Self> {
         let api_key = resolve_api_key(config_api_key)?;
         let base_url = resolve_base_url(config_base_url)?;
@@ -44,6 +46,7 @@ impl MoonshotConfig {
             base_url,
             model,
             max_tokens,
+            prompt_cache_key,
         })
     }
 }
@@ -62,6 +65,7 @@ impl MoonshotClient {
                 model: config.model,
                 max_tokens: config.max_tokens,
                 reasoning_effort: None,
+                prompt_cache_key: config.prompt_cache_key,
                 extra_headers: HeaderMap::new(),
                 include_usage: true,
                 include_reasoning_content: true,

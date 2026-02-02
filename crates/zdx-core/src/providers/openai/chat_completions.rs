@@ -27,6 +27,7 @@ pub struct OpenAIChatCompletionsConfig {
     pub model: String,
     pub max_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
+    pub prompt_cache_key: Option<String>,
     pub extra_headers: HeaderMap,
     pub include_usage: bool,
     pub include_reasoning_content: bool,
@@ -126,6 +127,8 @@ struct ChatCompletionRequest {
     stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    prompt_cache_key: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -426,6 +429,7 @@ impl ChatCompletionRequest {
                 .reasoning_effort
                 .clone()
                 .map(|effort| ReasoningConfig { effort }),
+            prompt_cache_key: config.prompt_cache_key.clone(),
         })
     }
 }
