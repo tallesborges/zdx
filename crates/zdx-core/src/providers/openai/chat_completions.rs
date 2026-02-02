@@ -856,8 +856,9 @@ fn parse_usage(usage: &Value) -> Usage {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_usage;
     use serde_json::json;
+
+    use super::parse_usage;
 
     #[test]
     fn test_parse_usage_subtracts_cached_tokens() {
