@@ -838,10 +838,33 @@ fn parse_usage(usage: &Value) -> Usage {
         })
         .unwrap_or(0);
 
+    // prompt_tokens includes cached tokens for OpenAI-compatible APIs.
+    // Convert to non-cached input tokens to avoid double-counting in cost.
+    let non_cached_input = prompt_tokens.saturating_sub(cached_tokens);
+
     Usage {
-        input_tokens: prompt_tokens,
+        input_tokens: non_cached_input,
         output_tokens: completion_tokens,
         cache_read_input_tokens: cached_tokens,
         cache_creation_input_tokens: 0,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_usage;
+    use serde_json::json;
+
+    #[test]
+    fn test_parse_usage_subtracts_cached_tokens() {
+        let usage = json!({
+            "prompt_tokens": 100,
+            "completion_tokens": 25,
+            "cached_tokens": 40
+        });
+        let parsed = parse_usage(&usage);
+        assert_eq!(parsed.input_tokens, 60);
+        assert_eq!(parsed.cache_read_input_tokens, 40);
+        assert_eq!(parsed.output_tokens, 25);
     }
 }
