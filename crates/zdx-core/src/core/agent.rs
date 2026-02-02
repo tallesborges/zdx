@@ -548,21 +548,25 @@ pub async fn run_turn(
         }
         ProviderKind::OpenRouter => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
+            let cache_key = thread_id.map(|s| s.to_string());
             let openrouter_config = OpenRouterConfig::from_env(
                 selection.model.clone(),
                 config.max_tokens,
                 config.providers.openrouter.effective_base_url(),
                 config.providers.openrouter.effective_api_key(),
                 reasoning_effort,
+                cache_key,
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
         }
         ProviderKind::Moonshot => {
+            let cache_key = thread_id.map(|s| s.to_string());
             let moonshot_config = MoonshotConfig::from_env(
                 selection.model.clone(),
                 config.max_tokens,
                 config.providers.moonshot.effective_base_url(),
                 config.providers.moonshot.effective_api_key(),
+                cache_key,
             )?;
             ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
         }
