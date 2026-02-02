@@ -39,10 +39,25 @@ onMounted(() => {
   <p v-else-if="loading"> Loading ...</p>
   <p v-else-if="displayThreads.length === 0"> Empty threads </p>
   <ul v-else>
-    <li v-for="thread in displayThreads" :key="thread.id">
-      <router-link :to="`/threads/${thread.id}`">
-        {{ thread.title }} - {{ thread.displayUpdatedAt }}
+    <li v-for="thread in displayThreads" :key="thread.id" class="threads-container">
+      <router-link :to="`/threads/${thread.id}`" class="thread-row">
+        <span> {{ thread.title }} </span>
+        <span> {{ thread.displayUpdatedAt }}</span>
       </router-link>
     </li>
   </ul>
 </template>
+
+<style scoped>
+.threads-container {
+  max-width: 800px;
+}
+
+.thread-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+}
+</style>
