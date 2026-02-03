@@ -4,6 +4,7 @@ mod debug_metrics;
 
 pub mod anthropic;
 pub mod gemini;
+pub mod mimo;
 pub mod moonshot;
 pub mod oauth;
 pub mod openai;
@@ -24,6 +25,7 @@ pub enum ProviderKind {
     OpenAICodex,
     OpenAI,
     OpenRouter,
+    Mimo,
     Moonshot,
     Gemini,
     GeminiCli,
@@ -51,6 +53,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex,
             ProviderKind::OpenAI,
             ProviderKind::OpenRouter,
+            ProviderKind::Mimo,
             ProviderKind::Moonshot,
             ProviderKind::Gemini,
             ProviderKind::GeminiCli,
@@ -65,6 +68,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "openai-codex",
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::Mimo => "mimo",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiCli => "gemini-cli",
@@ -79,6 +83,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "OpenAI Codex",
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::Mimo => "MiMo",
             ProviderKind::Moonshot => "Moonshot",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GeminiCli => "Gemini CLI",
@@ -104,6 +109,7 @@ impl ProviderKind {
             ProviderKind::ClaudeCli => None,
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
+            ProviderKind::Mimo => Some("MIMO_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
             ProviderKind::OpenAICodex => None,
@@ -119,6 +125,7 @@ impl ProviderKind {
             ProviderKind::GeminiCli => ProviderAuthMode::OAuth,
             ProviderKind::OpenAI => ProviderAuthMode::ApiKey,
             ProviderKind::OpenRouter => ProviderAuthMode::ApiKey,
+            ProviderKind::Mimo => ProviderAuthMode::ApiKey,
             ProviderKind::Moonshot => ProviderAuthMode::ApiKey,
             ProviderKind::Gemini => ProviderAuthMode::ApiKey,
         }
@@ -149,6 +156,8 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
         ProviderKind::OpenAI
     } else if lower.starts_with("kimi-") || lower.starts_with("moonshot-") {
         ProviderKind::Moonshot
+    } else if lower.starts_with("mimo-") {
+        ProviderKind::Mimo
     } else if lower.starts_with("gemini") {
         ProviderKind::Gemini
     } else if lower.starts_with("claude-cli") {
@@ -179,6 +188,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "claude-cli" => ProviderKind::ClaudeCli,
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
+                "mimo" => ProviderKind::Mimo,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "gemini" | "google" => ProviderKind::Gemini,
                 "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
