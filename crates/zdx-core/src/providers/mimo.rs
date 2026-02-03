@@ -1,4 +1,4 @@
-//! Moonshot provider (Kimi API, OpenAI-compatible Chat Completions).
+//! MiMo provider (Xiaomi MiMo OpenAI-compatible Chat Completions).
 
 use anyhow::{Context, Result};
 use reqwest::header::HeaderMap;
@@ -9,11 +9,11 @@ use crate::providers::openai::chat_completions::{
 };
 use crate::tools::ToolDefinition;
 
-const DEFAULT_BASE_URL: &str = "https://api.moonshot.ai/v1";
+const DEFAULT_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 
-/// Moonshot API configuration.
+/// MiMo API configuration.
 #[derive(Debug, Clone)]
-pub struct MoonshotConfig {
+pub struct MimoConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
@@ -22,16 +22,16 @@ pub struct MoonshotConfig {
     pub thinking_enabled: bool,
 }
 
-impl MoonshotConfig {
+impl MimoConfig {
     /// Creates a new config from environment.
     ///
     /// Authentication resolution order:
     /// 1. `config_api_key` parameter (from config file)
-    /// 2. `MOONSHOT_API_KEY` environment variable
+    /// 2. `MIMO_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `MOONSHOT_API_KEY` (fallback if not in config)
-    /// - `MOONSHOT_BASE_URL` (optional)
+    /// - `MIMO_API_KEY` (fallback if not in config)
+    /// - `MIMO_BASE_URL` (optional)
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -54,20 +54,20 @@ impl MoonshotConfig {
     }
 }
 
-/// Moonshot client.
-pub struct MoonshotClient {
+/// MiMo client.
+pub struct MimoClient {
     inner: OpenAIChatCompletionsClient,
 }
 
-impl MoonshotClient {
-    pub fn new(config: MoonshotConfig) -> Self {
+impl MimoClient {
+    pub fn new(config: MimoConfig) -> Self {
         Self {
             inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
                 api_key: config.api_key,
                 base_url: config.base_url,
                 model: config.model,
-                max_tokens: config.max_tokens,
-                max_completion_tokens: None,
+                max_tokens: None,
+                max_completion_tokens: config.max_tokens,
                 reasoning_effort: None,
                 prompt_cache_key: config.prompt_cache_key,
                 extra_headers: HeaderMap::new(),
@@ -91,7 +91,7 @@ impl MoonshotClient {
 }
 
 fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
-    if let Ok(env_url) = std::env::var("MOONSHOT_BASE_URL") {
+    if let Ok(env_url) = std::env::var("MIMO_BASE_URL") {
         let trimmed = env_url.trim();
         if !trimmed.is_empty() {
             validate_url(trimmed)?;
@@ -111,7 +111,7 @@ fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
 }
 
 fn validate_url(url: &str) -> Result<()> {
-    url::Url::parse(url).with_context(|| format!("Invalid Moonshot base URL: {}", url))?;
+    url::Url::parse(url).with_context(|| format!("Invalid MiMo base URL: {}", url))?;
     Ok(())
 }
 
@@ -126,6 +126,6 @@ fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
     }
 
     // Fall back to env var
-    std::env::var("MOONSHOT_API_KEY")
-        .context("No API key available. Set MOONSHOT_API_KEY or api_key in [providers.moonshot].")
+    std::env::var("MIMO_API_KEY")
+        .context("No API key available. Set MIMO_API_KEY or api_key in [providers.mimo].")
 }
