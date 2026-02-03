@@ -24,6 +24,7 @@ use crate::providers::anthropic::{
 use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
+use crate::providers::mimo::{MimoClient, MimoConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
@@ -148,6 +149,7 @@ enum ProviderClient {
     OpenAICodex(OpenAICodexClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
+    Mimo(MimoClient),
     Moonshot(MoonshotClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
@@ -174,6 +176,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::OpenRouter(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Mimo(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Moonshot(client) => {
@@ -559,14 +564,28 @@ pub async fn run_turn(
             )?;
             ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
         }
+        ProviderKind::Mimo => {
+            let thinking_enabled = thinking_level.is_enabled();
+            let mimo_config = MimoConfig::from_env(
+                selection.model.clone(),
+                config.max_tokens,
+                config.providers.mimo.effective_base_url(),
+                config.providers.mimo.effective_api_key(),
+                None,
+                thinking_enabled,
+            )?;
+            ProviderClient::Mimo(MimoClient::new(mimo_config))
+        }
         ProviderKind::Moonshot => {
             let cache_key = thread_id.map(|s| s.to_string());
+            let thinking_enabled = thinking_level.is_enabled();
             let moonshot_config = MoonshotConfig::from_env(
                 selection.model.clone(),
                 config.max_tokens,
                 config.providers.moonshot.effective_base_url(),
                 config.providers.moonshot.effective_api_key(),
                 cache_key,
+                thinking_enabled,
             )?;
             ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
         }

@@ -26,11 +26,13 @@ pub struct OpenAIChatCompletionsConfig {
     pub base_url: String,
     pub model: String,
     pub max_tokens: Option<u32>,
+    pub max_completion_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
     pub prompt_cache_key: Option<String>,
     pub extra_headers: HeaderMap,
     pub include_usage: bool,
     pub include_reasoning_content: bool,
+    pub thinking: Option<ThinkingConfig>,
 }
 
 /// OpenAI-compatible chat completions client.
@@ -124,9 +126,13 @@ struct ChatCompletionRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     max_tokens: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    max_completion_tokens: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning: Option<ReasoningConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
 }
@@ -134,6 +140,26 @@ struct ChatCompletionRequest {
 #[derive(Debug, Serialize)]
 struct ReasoningConfig {
     effort: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct ThinkingConfig {
+    #[serde(rename = "type")]
+    pub kind: String,
+}
+
+impl From<bool> for ThinkingConfig {
+    fn from(enabled: bool) -> Self {
+        if enabled {
+            Self {
+                kind: "enabled".to_string(),
+            }
+        } else {
+            Self {
+                kind: "disabled".to_string(),
+            }
+        }
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -424,11 +450,13 @@ impl ChatCompletionRequest {
             messages: out_messages,
             tools: tool_defs,
             max_tokens: config.max_tokens,
+            max_completion_tokens: config.max_completion_tokens,
             stream_options,
             reasoning: config
                 .reasoning_effort
                 .clone()
                 .map(|effort| ReasoningConfig { effort }),
+            thinking: config.thinking.clone(),
             prompt_cache_key: config.prompt_cache_key.clone(),
         })
     }
@@ -599,7 +627,11 @@ impl<S> ChatCompletionsSseParser<S> {
 
     fn handle_event_data(&mut self, data: &str) -> ProviderResult<()> {
         let trimmed = data.trim();
-        if trimmed.is_empty() || trimmed == "[DONE]" {
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        if trimmed == "[DONE]" {
+            self.emit_completion_if_pending(true);
             return Ok(());
         }
 
@@ -657,13 +689,16 @@ impl<S> ChatCompletionsSseParser<S> {
         let usage_value = value.get("usage").or_else(|| first_choice?.get("usage"));
         if let Some(usage) = usage_value {
             self.final_usage = Some(parse_usage(usage));
-        }
 
-        // Emit completion when we have BOTH finish_reason AND usage
-        // (OpenAI-compatible providers may send usage in a separate chunk after finish_reason when
-        // stream_options.include_usage is true)
-        if self.final_finish_reason.is_some() && self.final_usage.is_some() && !self.emitted_done {
-            self.emit_completion_if_pending(false);
+            // Some providers (e.g., MiMo/OpenAI) send a usage-only chunk with empty choices.
+            // Treat this as end-of-stream and emit completion using the latest usage.
+            let choices_empty = value
+                .get("choices")
+                .and_then(|v| v.as_array())
+                .is_some_and(|arr| arr.is_empty());
+            if choices_empty && !self.emitted_done {
+                self.emit_completion_if_pending(true);
+            }
         }
 
         Ok(())
@@ -871,5 +906,18 @@ mod tests {
         assert_eq!(parsed.input_tokens, 60);
         assert_eq!(parsed.cache_read_input_tokens, 40);
         assert_eq!(parsed.output_tokens, 25);
+    }
+
+    #[test]
+    fn test_parse_usage_prompt_tokens_details_cached_tokens() {
+        let usage = json!({
+            "prompt_tokens": 5199,
+            "completion_tokens": 11,
+            "prompt_tokens_details": { "cached_tokens": 3 }
+        });
+        let parsed = parse_usage(&usage);
+        assert_eq!(parsed.input_tokens, 5196);
+        assert_eq!(parsed.cache_read_input_tokens, 3);
+        assert_eq!(parsed.output_tokens, 11);
     }
 }

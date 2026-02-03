@@ -71,11 +71,13 @@ impl OpenRouterClient {
             base_url: config.base_url,
             model: config.model,
             max_tokens: config.max_tokens,
+            max_completion_tokens: None,
             reasoning_effort: config.reasoning_effort,
             prompt_cache_key: config.prompt_cache_key,
             extra_headers,
             include_usage: true,
             include_reasoning_content: false,
+            thinking: None,
         });
 
         Self { inner }

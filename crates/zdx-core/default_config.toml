@@ -100,6 +100,12 @@ enabled = true
 # base_url = "https://api.moonshot.ai/v1"
 models = ["kimi-k2.5"]
 
+[providers.mimo]
+enabled = true
+# api_key = "sk-..."  # Overrides MIMO_API_KEY env var
+# base_url = "https://api.xiaomimimo.com/v1"
+models = ["mimo-v2-flash"]
+
 [providers.gemini]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
