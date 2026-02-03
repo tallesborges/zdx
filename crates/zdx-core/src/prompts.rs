@@ -29,3 +29,9 @@ pub const GEMINI_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/gemini_agentic.md"
 ));
+
+/// Prompt template for StepFun agentic coding.
+pub const STEPFUN_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/stepfun_agentic.md"
+));

@@ -136,6 +136,12 @@ pub async fn update(config: &config::Config) -> Result<()> {
             Some("moonshot"),
             &config.providers.moonshot,
         ),
+        (
+            "stepfun",
+            "stepfun",
+            Some("stepfun"),
+            &config.providers.stepfun,
+        ),
         ("mimo", "xiaomi", Some("mimo"), &config.providers.mimo),
         ("gemini", "google", Some("gemini"), &config.providers.gemini),
         (
@@ -376,7 +382,27 @@ fn is_pure_wildcard(pattern: &str) -> bool {
     pattern == "*"
 }
 
+/// Looks up a model in the embedded default_models.toml by ID.
+/// Uses provider resolution to match models with different prefixes.
+fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
+    use zdx_core::providers::resolve_provider;
+
+    let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml()).ok()?;
+    let target = resolve_provider(full_id);
+
+    defaults.models.into_iter().find(|record| {
+        // Try exact match first
+        if record.id == full_id {
+            return true;
+        }
+        // Fall back to provider-resolved match
+        let candidate = resolve_provider(&record.id);
+        candidate.kind == target.kind && candidate.model == target.model
+    })
+}
+
 /// Creates a default ModelCandidate for a model ID not found in the API.
+/// Looks up pricing and capabilities from embedded default_models.toml if available.
 fn create_default_candidate(
     provider_id: &str,
     prefix: Option<&str>,
@@ -385,8 +411,22 @@ fn create_default_candidate(
     // Use the pattern as-is for the model ID - don't try to parse it
     // OpenRouter models have IDs like "xiaomi/mimo-v2-flash:free" which should stay intact
     let full_id = format_model_id(prefix, model_id);
-    let display_name = format!("{} (custom)", model_id);
     let match_targets = build_match_targets(provider_id, model_id, &full_id);
+
+    // Try to find this model in the embedded default_models.toml
+    if let Some(default_model) = lookup_default_model(&full_id) {
+        return ModelCandidate {
+            full_id,
+            display_name: default_model.display_name,
+            pricing: default_model.pricing,
+            context_limit: default_model.context_limit,
+            capabilities: default_model.capabilities,
+            match_targets,
+        };
+    }
+
+    // Fall back to generic defaults
+    let display_name = format!("{} (custom)", model_id);
 
     ModelCandidate {
         full_id,

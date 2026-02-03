@@ -291,6 +291,23 @@ input_images = true
 output_limit = 32768
 
 [[model]]
+id = "step-3.5-flash"
+provider = "stepfun"
+display_name = "Step 3.5 Flash"
+context_limit = 256000
+
+[model.pricing]
+input = 0.1
+output = 0.3
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
+
+[[model]]
 id = "mimo-v2-flash"
 provider = "mimo"
 display_name = "MiMo V2 Flash"

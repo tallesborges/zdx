@@ -29,6 +29,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             zdx_core::providers::ProviderKind::OpenRouter => "OpenRouter Login",
             zdx_core::providers::ProviderKind::Mimo => "MiMo API Key",
             zdx_core::providers::ProviderKind::Moonshot => "Moonshot API Key",
+            zdx_core::providers::ProviderKind::Stepfun => "StepFun API Key",
             zdx_core::providers::ProviderKind::Gemini => "Gemini Login",
             zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
         },
