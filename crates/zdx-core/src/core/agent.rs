@@ -28,6 +28,7 @@ use crate::providers::mimo::{MimoClient, MimoConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
+use crate::providers::stepfun::{StepfunClient, StepfunConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
     ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
@@ -151,6 +152,7 @@ enum ProviderClient {
     OpenRouter(OpenRouterClient),
     Mimo(MimoClient),
     Moonshot(MoonshotClient),
+    Stepfun(StepfunClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
 }
@@ -182,6 +184,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Moonshot(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Stepfun(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Gemini(client) => {
@@ -588,6 +593,19 @@ pub async fn run_turn(
                 thinking_enabled,
             )?;
             ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
+        }
+        ProviderKind::Stepfun => {
+            let cache_key = thread_id.map(|s| s.to_string());
+            let thinking_enabled = thinking_level.is_enabled();
+            let stepfun_config = StepfunConfig::from_env(
+                selection.model.clone(),
+                config.max_tokens,
+                config.providers.stepfun.effective_base_url(),
+                config.providers.stepfun.effective_api_key(),
+                cache_key,
+                thinking_enabled,
+            )?;
+            ProviderClient::Stepfun(StepfunClient::new(stepfun_config))
         }
         ProviderKind::Gemini => {
             // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)

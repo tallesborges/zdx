@@ -100,6 +100,12 @@ enabled = true
 # base_url = "https://api.moonshot.ai/v1"
 models = ["kimi-k2.5"]
 
+[providers.stepfun]
+enabled = true
+# api_key = "sk-..."  # Overrides STEPFUN_API_KEY env var
+# base_url = "https://api.stepfun.ai/v1"
+models = ["step-3.5-flash"]
+
 [providers.mimo]
 enabled = true
 # api_key = "sk-..."  # Overrides MIMO_API_KEY env var

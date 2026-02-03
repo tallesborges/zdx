@@ -14,6 +14,7 @@
   - `crates/zdx-core/default_models.toml`: default model registry fallback
   - `crates/zdx-core/prompts/`: prompt templates
     - `crates/zdx-core/prompts/openai_codex.md`: Codex system prompt template
+    - `crates/zdx-core/prompts/stepfun_agentic.md`: StepFun system prompt template (XML tool format)
   - `crates/zdx-core/src/core/`: UI-agnostic domain + runtime
     - `crates/zdx-core/src/core/mod.rs`: core module exports
     - `crates/zdx-core/src/core/events.rs`: agent event types for streaming
@@ -30,6 +31,8 @@
     - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
     - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
+    - `crates/zdx-core/src/providers/thinking_parser.rs`: parser for `<think>`/`</think>` reasoning blocks (handles content bleeding)
+    - `crates/zdx-core/src/providers/text_tool_parser.rs`: parser for XML-like text tool calls (`<tool_call>`, `<function=>`)
     - `crates/zdx-core/src/providers/openai/`: OpenAI-compatible provider helpers (Responses + Chat Completions)
       - `crates/zdx-core/src/providers/openai/mod.rs`: OpenAI provider module exports
       - `crates/zdx-core/src/providers/openai/api.rs`: OpenAI API key provider (Responses API)
@@ -52,6 +55,7 @@
       - `crates/zdx-core/src/providers/gemini/shared.rs`: shared helpers (request builders, thinking config)
       - `crates/zdx-core/src/providers/gemini/sse.rs`: Gemini SSE parser
     - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
+    - `crates/zdx-core/src/providers/stepfun.rs`: StepFun (Step-3.5-Flash) OpenAI-compatible chat completions provider
     - `crates/zdx-core/src/providers/mimo.rs`: MiMo (Xiaomi MiMo) OpenAI-compatible chat completions provider
 - `crates/zdx-tui/`: full-screen interactive TUI library
   - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)

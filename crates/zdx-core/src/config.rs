@@ -582,6 +582,8 @@ pub struct ProvidersConfig {
     pub openrouter: ProviderConfig,
     #[serde(default = "default_moonshot_provider")]
     pub moonshot: ProviderConfig,
+    #[serde(default = "default_stepfun_provider")]
+    pub stepfun: ProviderConfig,
     #[serde(default = "default_mimo_provider")]
     pub mimo: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
@@ -605,6 +607,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::OpenAICodex.id() => &self.openai_codex,
             id if id == ProviderKind::OpenRouter.id() => &self.openrouter,
             id if id == ProviderKind::Moonshot.id() => &self.moonshot,
+            id if id == ProviderKind::Stepfun.id() => &self.stepfun,
             id if id == ProviderKind::Mimo.id() => &self.mimo,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
@@ -624,6 +627,7 @@ impl ProvidersConfig {
             ProviderKind::OpenAICodex => &self.openai_codex,
             ProviderKind::OpenRouter => &self.openrouter,
             ProviderKind::Moonshot => &self.moonshot,
+            ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Mimo => &self.mimo,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
@@ -642,6 +646,7 @@ impl Default for ProvidersConfig {
             gemini_cli: default_gemini_cli_provider(),
             openrouter: default_openrouter_provider(),
             moonshot: default_moonshot_provider(),
+            stepfun: default_stepfun_provider(),
             mimo: default_mimo_provider(),
         }
     }
@@ -713,6 +718,14 @@ fn default_moonshot_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["kimi-k2.5".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_stepfun_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["step-3.5-flash".to_string()],
         ..Default::default()
     }
 }

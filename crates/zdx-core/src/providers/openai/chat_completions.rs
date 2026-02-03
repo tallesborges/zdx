@@ -726,29 +726,30 @@ impl<S> ChatCompletionsSseParser<S> {
             }
         }
 
-        // Handle reasoning content (Moonshot/Kimi and other OpenAI-compatible providers)
-        if let Some(reasoning) = delta
+        // Handle reasoning content (Moonshot/Kimi, StepFun and other OpenAI-compatible providers)
+        match delta
             .get("reasoning_content")
             .or_else(|| delta.get("reasoning"))
             .and_then(|v| v.as_str())
         {
-            if self.reasoning_index.is_none() {
-                let index = self.next_index;
-                self.next_index += 1;
-                self.reasoning_index = Some(index);
-                self.pending.push_back(StreamEvent::ContentBlockStart {
-                    index,
-                    block_type: ContentBlockType::Reasoning,
-                    id: None,
-                    name: None,
-                });
-            }
-            if !reasoning.is_empty() {
+            Some(reasoning) if !reasoning.is_empty() => {
+                if self.reasoning_index.is_none() {
+                    let index = self.next_index;
+                    self.next_index += 1;
+                    self.reasoning_index = Some(index);
+                    self.pending.push_back(StreamEvent::ContentBlockStart {
+                        index,
+                        block_type: ContentBlockType::Reasoning,
+                        id: None,
+                        name: None,
+                    });
+                }
                 self.pending.push_back(StreamEvent::ReasoningDelta {
                     index: self.reasoning_index.unwrap_or(0),
                     reasoning: reasoning.to_string(),
                 });
             }
+            _ => (),
         }
 
         // Handle tool calls
