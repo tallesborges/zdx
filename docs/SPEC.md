@@ -148,13 +148,14 @@ Error:
 
 ## 10) Providers
 
-**Shipped:** Anthropic Claude (API key; streaming + tool loop), Claude CLI (Anthropic Messages API + OAuth), OpenAI Codex (Responses API + OAuth), OpenAI API (Responses + API key), OpenRouter (OpenAI-compatible chat completions + API key), Moonshot (Kimi API; OpenAI-compatible chat completions + API key), Gemini (Generative Language API + API key), Gemini CLI (Cloud Code Assist + OAuth).
+**Shipped:** Anthropic Claude (API key; streaming + tool loop), Claude CLI (Anthropic Messages API + OAuth), OpenAI Codex (Responses API + OAuth), OpenAI API (Responses + API key), OpenRouter (OpenAI-compatible chat completions + API key), Moonshot (Kimi API; OpenAI-compatible chat completions + API key), MiMo (Xiaomi MiMo; OpenAI-compatible chat completions + API key), Gemini (Generative Language API + API key), Gemini CLI (Cloud Code Assist + OAuth).
 
 - API keys are env-only (never stored in config):
   - `ANTHROPIC_API_KEY`
   - `OPENAI_API_KEY`
   - `OPENROUTER_API_KEY`
   - `MOONSHOT_API_KEY`
+  - `MIMO_API_KEY`
   - `GEMINI_API_KEY`
 - Anthropic uses API key auth only.
 - OAuth tokens may be cached in `<base>/oauth.json` (Claude CLI, OpenAI Codex, Gemini CLI).
@@ -162,8 +163,8 @@ Error:
 - OpenAI Codex uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --openai-codex`).
 - Gemini CLI uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --gemini-cli`).
 - Provider selection:
-  - Explicit prefixes: `openai:`, `openrouter:`, `moonshot:`, `kimi:`, `gemini:`, `gemini-cli:`, `google-gemini-cli:`, `anthropic:`, `claude-cli:`, `codex:` (also `openrouter/`).
-  - Heuristics: models containing `codex` → OpenAI Codex; `gpt-*`/`o*` → OpenAI; `kimi-*`/`moonshot-*` → Moonshot; `gemini-*` → Gemini; `claude-*` → Anthropic.
+  - Explicit prefixes: `openai:`, `openrouter:`, `moonshot:`, `kimi:`, `mimo:`, `gemini:`, `gemini-cli:`, `google-gemini-cli:`, `anthropic:`, `claude-cli:`, `codex:` (also `openrouter/`).
+  - Heuristics: models containing `codex` → OpenAI Codex; `gpt-*`/`o*` → OpenAI; `kimi-*`/`moonshot-*` → Moonshot; `mimo-*` → MiMo; `gemini-*` → Gemini; `claude-*` → Anthropic.
 
 ---
 
@@ -180,6 +181,7 @@ Error:
   - `[providers.openai_codex].base_url` (unused; reserved)
   - `[providers.openrouter].base_url`
   - `[providers.moonshot].base_url`
+  - `[providers.mimo].base_url`
   - `[providers.gemini].base_url`
   - `[providers.gemini_cli].base_url` (unused; reserved)
 - Provider tool configuration:

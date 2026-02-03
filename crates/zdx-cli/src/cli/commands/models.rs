@@ -136,6 +136,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
             Some("moonshot"),
             &config.providers.moonshot,
         ),
+        ("mimo", "xiaomi", Some("mimo"), &config.providers.mimo),
         ("gemini", "google", Some("gemini"), &config.providers.gemini),
         (
             "gemini-cli",

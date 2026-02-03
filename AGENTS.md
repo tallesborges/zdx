@@ -52,6 +52,7 @@
       - `crates/zdx-core/src/providers/gemini/shared.rs`: shared helpers (request builders, thinking config)
       - `crates/zdx-core/src/providers/gemini/sse.rs`: Gemini SSE parser
     - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
+    - `crates/zdx-core/src/providers/mimo.rs`: MiMo (Xiaomi MiMo) OpenAI-compatible chat completions provider
 - `crates/zdx-tui/`: full-screen interactive TUI library
   - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)
   - `crates/zdx-tui/src/terminal.rs`: terminal setup, restore, panic hooks
