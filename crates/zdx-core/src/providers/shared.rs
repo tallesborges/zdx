@@ -3,11 +3,83 @@
 use std::fmt;
 use std::str::FromStr;
 
+use anyhow::{Context, Result};
 use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::tools::ToolResult;
+
+// ============================================================================
+// Config resolution helpers
+// ============================================================================
+
+/// Resolves an API key with precedence: config > env.
+///
+/// # Arguments
+/// * `config_api_key` - Value from config file (if present)
+/// * `env_var` - Environment variable name (e.g., "OPENAI_API_KEY")
+/// * `config_section` - Config section name (e.g., "openai")
+pub fn resolve_api_key(
+    config_api_key: Option<&str>,
+    env_var: &str,
+    config_section: &str,
+) -> Result<String> {
+    // Try config value first
+    if let Some(key) = config_api_key {
+        let trimmed = key.trim();
+        if !trimmed.is_empty() {
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Fall back to env var
+    std::env::var(env_var).context(format!(
+        "No API key available. Set {} or api_key in [providers.{}].",
+        env_var, config_section
+    ))
+}
+
+/// Resolves a base URL with precedence: env > config > default.
+///
+/// # Arguments
+/// * `config_base_url` - Value from config file (if present)
+/// * `env_var` - Environment variable name (e.g., "OPENAI_BASE_URL")
+/// * `default_url` - Default URL if neither env nor config is set
+/// * `provider_name` - Human-readable provider name for error messages
+pub fn resolve_base_url(
+    config_base_url: Option<&str>,
+    env_var: &str,
+    default_url: &str,
+    provider_name: &str,
+) -> Result<String> {
+    // Try env var first
+    if let Ok(env_url) = std::env::var(env_var) {
+        let trimmed = env_url.trim();
+        if !trimmed.is_empty() {
+            validate_url(trimmed, provider_name)?;
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Try config value
+    if let Some(config_url) = config_base_url {
+        let trimmed = config_url.trim();
+        if !trimmed.is_empty() {
+            validate_url(trimmed, provider_name)?;
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Default
+    Ok(default_url.to_string())
+}
+
+/// Validates that a URL is well-formed.
+fn validate_url(url: &str, provider_name: &str) -> Result<()> {
+    url::Url::parse(url).with_context(|| format!("Invalid {} base URL: {}", provider_name, url))?;
+    Ok(())
+}
 
 /// Provider-specific replay token for reasoning/thinking blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

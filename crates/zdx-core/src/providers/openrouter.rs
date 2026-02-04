@@ -1,12 +1,13 @@
 //! OpenRouter provider (OpenAI-compatible Chat Completions).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::ProviderStream;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
+use crate::providers::shared::{resolve_api_key, resolve_base_url};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
@@ -41,8 +42,13 @@ impl OpenRouterConfig {
         reasoning_effort: Option<String>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key)?;
-        let base_url = resolve_base_url(config_base_url)?;
+        let api_key = resolve_api_key(config_api_key, "OPENROUTER_API_KEY", "openrouter")?;
+        let base_url = resolve_base_url(
+            config_base_url,
+            "OPENROUTER_BASE_URL",
+            DEFAULT_BASE_URL,
+            "OpenRouter",
+        )?;
 
         Ok(Self {
             api_key,
@@ -93,52 +99,14 @@ impl OpenRouterClient {
     }
 }
 
-fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
-    if let Ok(env_url) = std::env::var("OPENROUTER_BASE_URL") {
-        let trimmed = env_url.trim();
-        if !trimmed.is_empty() {
-            validate_url(trimmed)?;
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    if let Some(config_url) = config_base_url {
-        let trimmed = config_url.trim();
-        if !trimmed.is_empty() {
-            validate_url(trimmed)?;
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    Ok(DEFAULT_BASE_URL.to_string())
-}
-
-fn validate_url(url: &str) -> Result<()> {
-    url::Url::parse(url).with_context(|| format!("Invalid OpenRouter base URL: {}", url))?;
-    Ok(())
-}
-
-/// Resolves API key with precedence: config > env.
-fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
-    // Try config value first
-    if let Some(key) = config_api_key {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    // Fall back to env var
-    std::env::var("OPENROUTER_API_KEY").context(
-        "No API key available. Set OPENROUTER_API_KEY or api_key in [providers.openrouter].",
-    )
-}
-
 fn build_openrouter_headers(include_openrouter_headers: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
 
     if include_openrouter_headers {
-        headers.insert("HTTP-Referer", HeaderValue::from_static("https://github.com/tallesborges/zdx"));
+        headers.insert(
+            "HTTP-Referer",
+            HeaderValue::from_static("https://github.com/tallesborges/zdx"),
+        );
         headers.insert("X-Title", HeaderValue::from_static("Zdx"));
     }
 

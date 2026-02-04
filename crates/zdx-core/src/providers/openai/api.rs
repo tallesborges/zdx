@@ -1,10 +1,11 @@
 //! OpenAI API key provider (Responses API).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
 use crate::providers::ProviderStream;
 use crate::providers::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
+use crate::providers::shared::{resolve_api_key, resolve_base_url};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
@@ -38,9 +39,13 @@ impl OpenAIConfig {
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key)?;
-
-        let base_url = resolve_base_url(config_base_url)?;
+        let api_key = resolve_api_key(config_api_key, "OPENAI_API_KEY", "openai")?;
+        let base_url = resolve_base_url(
+            config_base_url,
+            "OPENAI_BASE_URL",
+            DEFAULT_BASE_URL,
+            "OpenAI",
+        )?;
 
         Ok(Self {
             api_key,
@@ -94,46 +99,6 @@ impl OpenAIClient {
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
     }
-}
-
-fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
-    if let Ok(env_url) = std::env::var("OPENAI_BASE_URL") {
-        let trimmed = env_url.trim();
-        if !trimmed.is_empty() {
-            validate_url(trimmed)?;
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    if let Some(config_url) = config_base_url {
-        let trimmed = config_url.trim();
-        if !trimmed.is_empty() {
-            validate_url(trimmed)?;
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    Ok(DEFAULT_BASE_URL.to_string())
-}
-
-fn validate_url(url: &str) -> Result<()> {
-    url::Url::parse(url).with_context(|| format!("Invalid OpenAI base URL: {}", url))?;
-    Ok(())
-}
-
-/// Resolves API key with precedence: config > env.
-fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
-    // Try config value first
-    if let Some(key) = config_api_key {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    // Fall back to env var
-    std::env::var("OPENAI_API_KEY")
-        .context("No API key available. Set OPENAI_API_KEY or api_key in [providers.openai].")
 }
 
 fn build_headers(api_key: &str) -> HeaderMap {
