@@ -780,6 +780,13 @@ impl<S> ChatCompletionsSseParser<S> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("");
 
+                // Skip tool calls with empty name only if we haven't seen this index before.
+                // In normal streaming, name appears only in the first delta; later deltas
+                // carry only arguments with empty name. We must process those for existing entries.
+                if name.is_empty() && !self.tool_calls.contains_key(&idx) {
+                    continue;
+                }
+
                 let entry = self.tool_calls.entry(idx).or_insert_with(|| {
                     let stream_index = self.next_index;
                     self.next_index += 1;
@@ -788,17 +795,12 @@ impl<S> ChatCompletionsSseParser<S> {
                     } else {
                         id.to_string()
                     };
-                    let name = if name.is_empty() {
-                        "".to_string()
-                    } else {
-                        name.to_string()
-                    };
                     self.saw_tool = true;
                     self.pending.push_back(StreamEvent::ContentBlockStart {
                         index: stream_index,
                         block_type: ContentBlockType::ToolUse,
                         id: Some(tool_id.clone()),
-                        name: Some(name.clone()),
+                        name: Some(name.to_string()),
                     });
                     ToolCallState { stream_index }
                 });
@@ -910,7 +912,7 @@ fn parse_usage(usage: &Value) -> Usage {
 mod tests {
     use serde_json::json;
 
-    use super::parse_usage;
+    use super::{ContentBlockType, StreamEvent, parse_usage};
 
     #[test]
     fn test_parse_usage_subtracts_cached_tokens() {
@@ -936,5 +938,107 @@ mod tests {
         assert_eq!(parsed.input_tokens, 5196);
         assert_eq!(parsed.cache_read_input_tokens, 3);
         assert_eq!(parsed.output_tokens, 11);
+    }
+
+    /// Helper to parse SSE data and collect all events
+    async fn parse_sse(sse_data: &str, model: &str) -> Vec<StreamEvent> {
+        use futures_util::StreamExt;
+
+        use super::ChatCompletionsSseParser;
+
+        let stream = futures_util::stream::iter(vec![Ok::<_, std::io::Error>(bytes::Bytes::from(
+            sse_data.to_string(),
+        ))]);
+        let parser = ChatCompletionsSseParser::new(stream, model.to_string());
+        parser.filter_map(|r| async { r.ok() }).collect().await
+    }
+
+    /// Helper to extract tool names from ContentBlockStart events
+    fn extract_tool_names(events: &[StreamEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::ToolUse,
+                    name,
+                    ..
+                } => name.clone(),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_malformed_tool_call_ignored() {
+        // Tool calls with empty 'name' fields should be ignored.
+        // This prevents malformed/incomplete tool calls from providers like StepFun.
+        let sse = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"","arguments":"{"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"t2","function":{"name":"","arguments":""}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}
+
+data: [DONE]
+"#;
+        let events = parse_sse(sse, "test-model").await;
+
+        assert!(
+            extract_tool_names(&events).is_empty(),
+            "Expected no tools for empty-name tool calls"
+        );
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageCompleted)),
+            "Expected MessageCompleted"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_valid_tool_call_alongside_malformed() {
+        // Valid tool calls should work even when malformed ones (empty name) are present.
+        let sse = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"valid","function":{"name":"bash","arguments":"{\"command\":\"echo hi\"}"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":1,"id":"bad","function":{"name":"","arguments":""}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}
+
+data: [DONE]
+"#;
+        let events = parse_sse(sse, "test-model").await;
+        let tools = extract_tool_names(&events);
+
+        assert_eq!(tools, vec!["bash"], "Expected only the valid 'bash' tool");
+    }
+
+    #[tokio::test]
+    async fn test_multi_delta_tool_call_accumulates_arguments() {
+        // In OpenAI streaming, name appears only in first delta; later deltas have empty name.
+        // Arguments should accumulate correctly across all deltas.
+        let sse = r#"data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"t1","function":{"name":"bash","arguments":""}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"","arguments":"{\"com"}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"","arguments":"mand\":\""}}]}}]}
+
+data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"","arguments":"echo hi\"}"}}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":100,"completion_tokens":10}}
+
+data: [DONE]
+"#;
+        let events = parse_sse(sse, "test-model").await;
+
+        assert_eq!(extract_tool_names(&events), vec!["bash"]);
+
+        let json: String = events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::InputJsonDelta { partial_json, .. } => Some(partial_json.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(json, r#"{"command":"echo hi"}"#);
     }
 }

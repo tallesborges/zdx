@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -440,6 +440,15 @@ async fn emit_error_async(err: anyhow::Error, sender: &EventSender) -> anyhow::E
     };
     sender.send_important(event).await;
     err
+}
+
+/// Truncates a string for error reporting to avoid bloating logs and model context.
+fn truncate_for_error(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}... (truncated, {} total bytes)", &s[..max_len], s.len())
+    }
 }
 
 fn merge_tool_defs(
@@ -938,20 +947,48 @@ pub async fn run_turn(
         // Check if we have tool use to process
         if stop_reason.as_deref() == Some("tool_use") && !turn.tool_uses.is_empty() {
             // Finalize all tool uses (parse JSON once)
+            // Malformed tools get error results instead of bailing the entire turn
             let mut finalized = Vec::with_capacity(turn.tool_uses.len());
+            let mut all_tool_uses = Vec::with_capacity(turn.tool_uses.len()); // For assistant_blocks
+            let mut malformed_results = Vec::new();
+            let mut malformed_tools = Vec::new(); // Track for later event emission
+
             for tu in turn.tool_uses.drain(..) {
                 match tu.clone().finalize() {
-                    Ok(tool_use) => finalized.push(tool_use),
+                    Ok(tool_use) => {
+                        all_tool_uses.push(tool_use.clone());
+                        finalized.push(tool_use);
+                    }
                     Err(e) => {
-                        // Emit structured error for invalid JSON
+                        // Emit error event for observability
                         sender
                             .send_important(AgentEvent::Error {
                                 kind: ErrorKind::Parse,
                                 message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
-                                details: Some(tu.input_json),
+                                details: Some(truncate_for_error(&tu.input_json, 500)),
                             })
                             .await;
-                        bail!("Invalid tool input JSON for {}: {}", tu.name, e);
+
+                        // Create synthetic ToolUse with raw input as string value
+                        // This ensures assistant_blocks includes the tool_call for API compatibility
+                        let synthetic_tool = ToolUse {
+                            id: tu.id.clone(),
+                            name: tu.name.clone(),
+                            input: serde_json::json!({ "_raw_malformed": tu.input_json }),
+                        };
+                        all_tool_uses.push(synthetic_tool);
+
+                        // Create a failed tool result
+                        let error_output = ToolOutput::failure(
+                            "invalid_json",
+                            format!("Failed to parse tool arguments: {}", e),
+                            Some(truncate_for_error(&tu.input_json, 500)),
+                        );
+                        malformed_results
+                            .push(ToolResult::from_output(tu.id.clone(), &error_output));
+
+                        // Track for event emission after AssistantCompleted
+                        malformed_tools.push((tu.id, tu.name, error_output));
                     }
                 }
             }
@@ -966,16 +1003,34 @@ pub async fn run_turn(
                     .await;
             }
 
+            // Emit tool lifecycle events for malformed tools AFTER AssistantCompleted
+            // to maintain consistent event ordering with normal tool execution
+            for (id, name, error_output) in malformed_tools {
+                sender
+                    .send_important(AgentEvent::ToolStarted {
+                        id: id.clone(),
+                        name,
+                    })
+                    .await;
+                sender
+                    .send_important(AgentEvent::ToolCompleted {
+                        id,
+                        result: error_output,
+                    })
+                    .await;
+            }
+
             // Note: ToolRequested events are already emitted during streaming
             // (at ContentBlockStart for each tool_use block) for immediate UI feedback.
 
             // Build the assistant response with thinking + reasoning + tool_use blocks
+            // Use all_tool_uses to include malformed tools for API compatibility
             let turn_text = turn.text.clone();
-            let assistant_blocks = turn.into_blocks(finalized.clone());
+            let assistant_blocks = turn.into_blocks(all_tool_uses);
             messages.push(ChatMessage::assistant_blocks(assistant_blocks));
 
-            // Execute tools and get results (may be partial on interrupt)
-            let tool_results = execute_tools_async(
+            // Execute only valid tools and get results (may be partial on interrupt)
+            let mut tool_results = execute_tools_async(
                 &finalized,
                 &tool_ctx,
                 &enabled_tools,
@@ -983,6 +1038,11 @@ pub async fn run_turn(
                 &tool_registry,
             )
             .await;
+
+            // Append malformed tool results (preserving original order would require
+            // more complex tracking; for now malformed results come after executed ones)
+            tool_results.extend(malformed_results);
+
             messages.push(ChatMessage::tool_results(tool_results));
 
             // Check if interrupted during tool execution
