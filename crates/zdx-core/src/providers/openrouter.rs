@@ -33,8 +33,6 @@ impl OpenRouterConfig {
     /// Environment variables:
     /// - `OPENROUTER_API_KEY` (fallback if not in config)
     /// - `OPENROUTER_BASE_URL` (optional)
-    /// - `OPENROUTER_SITE_URL` (optional)
-    /// - `OPENROUTER_APP_NAME` (optional)
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -140,24 +138,8 @@ fn build_openrouter_headers(include_openrouter_headers: bool) -> HeaderMap {
     let mut headers = HeaderMap::new();
 
     if include_openrouter_headers {
-        if let Ok(site_url) = std::env::var("OPENROUTER_SITE_URL")
-            && !site_url.trim().is_empty()
-        {
-            let _ = headers.insert(
-                "HTTP-Referer",
-                HeaderValue::from_str(site_url.trim())
-                    .unwrap_or_else(|_| HeaderValue::from_static("")),
-            );
-        }
-        if let Ok(app_name) = std::env::var("OPENROUTER_APP_NAME")
-            && !app_name.trim().is_empty()
-        {
-            let _ = headers.insert(
-                "X-Title",
-                HeaderValue::from_str(app_name.trim())
-                    .unwrap_or_else(|_| HeaderValue::from_static("")),
-            );
-        }
+        headers.insert("HTTP-Referer", HeaderValue::from_static("https://github.com/tallesborges/zdx"));
+        headers.insert("X-Title", HeaderValue::from_static("Zdx"));
     }
 
     headers

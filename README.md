@@ -1,13 +1,11 @@
-# ZDX
+# Zdx
 
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-ZDX CLI is a lightweight, multi-provider coding agent that runs locally on your computer,
-works with your existing subscriptions (Claude, OpenAI/Codex, Gemini), and can optionally
-connect to Telegram so you can chat anywhere.
+Zdx is coding agent built in rust.
 
-![zdx demo](docs/assets/demo.gif)
+![Zdx demo](docs/assets/demo.gif)
 
 > **Disclaimer**
 >
