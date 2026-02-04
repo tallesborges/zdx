@@ -78,7 +78,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if matches!(
                 &agent_event,
                 zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-                    | zdx_core::core::events::AgentEvent::Interrupted
+                    | zdx_core::core::events::AgentEvent::Interrupted { .. }
             ) && has_thread
                 && app.tui.thread.usage.has_unsaved_usage()
             {
@@ -92,7 +92,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             let should_dequeue = matches!(
                 &agent_event,
                 zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-                    | zdx_core::core::events::AgentEvent::Interrupted
+                    | zdx_core::core::events::AgentEvent::Interrupted { .. }
                     | zdx_core::core::events::AgentEvent::Error { .. }
             );
 
