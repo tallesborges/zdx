@@ -12,6 +12,7 @@ use super::types::{
 };
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, ProviderStream};
+use crate::providers::{DebugTrace, wrap_stream};
 use crate::tools::ToolDefinition;
 
 pub(crate) fn build_api_messages_with_cache_control(messages: &[ChatMessage]) -> Vec<ApiMessage> {
@@ -69,16 +70,25 @@ pub(crate) async fn send_streaming_request(
     request: &StreamingMessagesRequest<'_>,
     header_fn: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<ProviderStream> {
+    let trace = DebugTrace::from_env(request.model, None);
     let builder = client
         .post(url)
         .header("content-type", "application/json")
         .header("accept", "application/json");
 
-    let response = header_fn(builder)
-        .json(request)
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let response = if let Some(trace) = &trace {
+        let body = serde_json::to_vec(request)?;
+        trace.write_request(&body);
+        header_fn(builder.body(body))
+            .send()
+            .await
+            .map_err(classify_reqwest_error)?
+    } else {
+        header_fn(builder.json(request))
+            .send()
+            .await
+            .map_err(classify_reqwest_error)?
+    };
 
     let status = response.status();
     if !status.is_success() {
@@ -86,7 +96,7 @@ pub(crate) async fn send_streaming_request(
         return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
     }
 
-    let byte_stream = response.bytes_stream();
+    let byte_stream = wrap_stream(trace, response.bytes_stream());
     let event_stream = SseParser::new(byte_stream);
     Ok(maybe_wrap_with_metrics(event_stream))
 }

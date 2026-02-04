@@ -29,6 +29,15 @@ struct Cli {
     #[arg(long)]
     system_prompt: Option<String>,
 
+    /// Capture raw request/response traces (optional path)
+    #[arg(
+        long,
+        value_name = "DIR",
+        num_args = 0..=1,
+        default_missing_value = "1"
+    )]
+    debug_trace: Option<String>,
+
     #[command(flatten)]
     thread_args: ThreadArgs,
 }
@@ -193,6 +202,13 @@ enum WorktreeCommands {
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
+    if let Some(value) = cli.debug_trace.as_deref() {
+        // set_var is unsafe in Rust 2024 (process-global mutation)
+        unsafe {
+            std::env::set_var("ZDX_DEBUG_TRACE", value);
+        }
+    }
+
     interrupt::init();
 
     // one tokio runtime for everything
@@ -231,6 +247,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         system_prompt: _,
         thread_args,
         worktree,
+        ..
     } = cli;
 
     // default to chat mode

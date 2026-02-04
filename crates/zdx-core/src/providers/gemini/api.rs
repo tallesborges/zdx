@@ -8,7 +8,7 @@ use super::shared::{
 };
 use super::sse::GeminiSseParser;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::{ChatMessage, ProviderError, ProviderStream};
+use crate::providers::{ChatMessage, DebugTrace, ProviderError, ProviderStream, wrap_stream};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
@@ -82,20 +82,32 @@ impl GeminiClient {
             self.config.max_output_tokens,
             self.config.thinking_config.as_ref(),
         )?;
+        let trace = DebugTrace::from_env(&self.config.model, None);
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse",
             self.config.base_url, self.config.model
         );
         let headers = build_headers(&self.config.api_key);
 
-        let response = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(classify_reqwest_error)?;
+        let response = if let Some(trace) = &trace {
+            let body = serde_json::to_vec(&request)?;
+            trace.write_request(&body);
+            self.http
+                .post(&url)
+                .headers(headers)
+                .body(body)
+                .send()
+                .await
+                .map_err(classify_reqwest_error)?
+        } else {
+            self.http
+                .post(&url)
+                .headers(headers)
+                .json(&request)
+                .send()
+                .await
+                .map_err(classify_reqwest_error)?
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -103,7 +115,7 @@ impl GeminiClient {
             return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
         }
 
-        let byte_stream = response.bytes_stream();
+        let byte_stream = wrap_stream(trace, response.bytes_stream());
         let event_stream = GeminiSseParser::new(byte_stream, self.config.model.clone(), "gemini");
         Ok(maybe_wrap_with_metrics(event_stream))
     }
