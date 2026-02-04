@@ -8,6 +8,7 @@ pub mod thinking_parser;
 pub mod anthropic;
 pub mod gemini;
 pub mod mimo;
+pub mod mistral;
 pub mod moonshot;
 pub mod oauth;
 pub mod openai;
@@ -31,6 +32,7 @@ pub enum ProviderKind {
     OpenAI,
     OpenRouter,
     Mimo,
+    Mistral,
     Moonshot,
     Stepfun,
     Gemini,
@@ -60,6 +62,7 @@ impl ProviderKind {
             ProviderKind::OpenAI,
             ProviderKind::OpenRouter,
             ProviderKind::Mimo,
+            ProviderKind::Mistral,
             ProviderKind::Moonshot,
             ProviderKind::Stepfun,
             ProviderKind::Gemini,
@@ -76,6 +79,7 @@ impl ProviderKind {
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
             ProviderKind::Mimo => "mimo",
+            ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Stepfun => "stepfun",
             ProviderKind::Gemini => "gemini",
@@ -92,6 +96,7 @@ impl ProviderKind {
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
             ProviderKind::Mimo => "MiMo",
+            ProviderKind::Mistral => "Mistral",
             ProviderKind::Moonshot => "Moonshot",
             ProviderKind::Stepfun => "StepFun",
             ProviderKind::Gemini => "Gemini",
@@ -119,6 +124,7 @@ impl ProviderKind {
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
             ProviderKind::Mimo => Some("MIMO_API_KEY"),
+            ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
@@ -136,6 +142,7 @@ impl ProviderKind {
             ProviderKind::OpenAI => ProviderAuthMode::ApiKey,
             ProviderKind::OpenRouter => ProviderAuthMode::ApiKey,
             ProviderKind::Mimo => ProviderAuthMode::ApiKey,
+            ProviderKind::Mistral => ProviderAuthMode::ApiKey,
             ProviderKind::Moonshot => ProviderAuthMode::ApiKey,
             ProviderKind::Stepfun => ProviderAuthMode::ApiKey,
             ProviderKind::Gemini => ProviderAuthMode::ApiKey,
@@ -143,11 +150,14 @@ impl ProviderKind {
     }
 }
 
-/// Infers the provider and normalized model from a model identifier.
+/// Resolves provider and model from a model identifier.
+///
+/// Supports explicit prefix format: `provider:model` or `provider/model`
+/// Without prefix, defaults to Anthropic.
 pub fn resolve_provider(model: &str) -> ProviderSelection {
     let trimmed = model.trim();
-    let lower = trimmed.to_lowercase();
 
+    // Check for explicit provider prefix (e.g., "mistral:devstral-2512")
     if let Some((kind, rest)) = parse_provider_prefix(trimmed)
         && !rest.is_empty()
     {
@@ -157,30 +167,9 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
         };
     }
 
-    let kind = if lower.contains("codex") {
-        ProviderKind::OpenAICodex
-    } else if lower.starts_with("gpt-")
-        || lower.starts_with("o1")
-        || lower.starts_with("o3")
-        || lower.starts_with("o4")
-    {
-        ProviderKind::OpenAI
-    } else if lower.starts_with("kimi-") || lower.starts_with("moonshot-") {
-        ProviderKind::Moonshot
-    } else if lower.starts_with("step-") {
-        ProviderKind::Stepfun
-    } else if lower.starts_with("mimo-") {
-        ProviderKind::Mimo
-    } else if lower.starts_with("gemini") {
-        ProviderKind::Gemini
-    } else if lower.starts_with("claude-cli") {
-        ProviderKind::ClaudeCli
-    } else {
-        ProviderKind::Anthropic
-    };
-
+    // No prefix - default to Anthropic
     ProviderSelection {
-        kind,
+        kind: ProviderKind::Anthropic,
         model: trimmed.to_string(),
     }
 }
@@ -202,6 +191,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
                 "mimo" => ProviderKind::Mimo,
+                "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "stepfun" => ProviderKind::Stepfun,
                 "gemini" | "google" => ProviderKind::Gemini,

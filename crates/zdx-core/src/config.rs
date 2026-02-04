@@ -649,6 +649,7 @@ impl ProvidersConfig {
             ProviderKind::OpenAI => &self.openai,
             ProviderKind::OpenAICodex => &self.openai_codex,
             ProviderKind::OpenRouter => &self.openrouter,
+            ProviderKind::Mistral => &self.mistral,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Stepfun => &self.stepfun,
             ProviderKind::Mimo => &self.mimo,

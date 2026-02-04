@@ -86,7 +86,8 @@ impl ModelPickerState {
                     return OverlayUpdate::close();
                 };
 
-                let model_id = model.id.to_string();
+                // Include provider prefix so we don't rely on auto-detection
+                let model_id = format!("{}:{}", model.provider, model.id);
                 let display_name = model_label(model);
 
                 OverlayUpdate::close()

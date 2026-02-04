@@ -25,6 +25,7 @@ use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
 use crate::providers::mimo::{MimoClient, MimoConfig};
+use crate::providers::mistral::{MistralClient, MistralConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
@@ -151,6 +152,7 @@ enum ProviderClient {
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
     Mimo(MimoClient),
+    Mistral(MistralClient),
     Moonshot(MoonshotClient),
     Stepfun(StepfunClient),
     Gemini(GeminiClient),
@@ -181,6 +183,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Mimo(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Mistral(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Moonshot(client) => {
@@ -589,6 +594,19 @@ pub async fn run_turn(
                 thinking_enabled,
             )?;
             ProviderClient::Mimo(MimoClient::new(mimo_config))
+        }
+        ProviderKind::Mistral => {
+            let cache_key = thread_id.map(|s| s.to_string());
+            let thinking_enabled = thinking_level.is_enabled();
+            let mistral_config = MistralConfig::from_env(
+                selection.model.clone(),
+                config.max_tokens,
+                config.providers.mistral.effective_base_url(),
+                config.providers.mistral.effective_api_key(),
+                cache_key,
+                thinking_enabled,
+            )?;
+            ProviderClient::Mistral(MistralClient::new(mistral_config))
         }
         ProviderKind::Moonshot => {
             let cache_key = thread_id.map(|s| s.to_string());

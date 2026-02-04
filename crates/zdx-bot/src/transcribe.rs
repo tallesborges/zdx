@@ -1,80 +1,147 @@
+//! Audio transcription support for Telegram voice messages.
+
 use anyhow::{Result, anyhow};
 use zdx_core::config::Config;
+use zdx_core::providers::{ProviderKind, resolve_api_key, resolve_base_url};
 
-const DEFAULT_AUDIO_MODEL: &str = "whisper-1";
+const DEFAULT_OPENAI_MODEL: &str = "whisper-1";
 const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TranscriptionProvider {
-    OpenAI,
-    Mistral,
-}
+/// Supported transcription providers.
+const TRANSCRIPTION_PROVIDERS: &[ProviderKind] = &[ProviderKind::OpenAI, ProviderKind::Mistral];
 
-impl TranscriptionProvider {
-    fn from_str(s: &str) -> Option<Self> {
-        match s.to_lowercase().as_str() {
-            "openai" => Some(Self::OpenAI),
-            "mistral" => Some(Self::Mistral),
-            _ => None,
-        }
-    }
-}
-
+/// Transcribes audio if a supported provider is configured.
+///
+/// Returns `Ok(None)` if no transcription provider is available.
 pub async fn transcribe_audio_if_configured(
     config: &Config,
     bytes: Vec<u8>,
     filename: &str,
     mime_type: Option<&str>,
 ) -> Result<Option<String>> {
-    // Determine provider (config > env var auto-detect)
-    let provider = if let Some(provider_str) = std::env::var("ZDX_TRANSCRIPTION_PROVIDER")
-        .ok()
-        .and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        })
-        .and_then(|s| TranscriptionProvider::from_str(&s))
-    {
-        // Explicit env var override
-        provider_str
-    } else if let Some(provider_str) = config
+    let provider = match detect_provider(config) {
+        Some(p) => p,
+        None => return Ok(None),
+    };
+
+    let provider_config = config.providers.get(provider);
+    let api_key = resolve_api_key(
+        provider_config.api_key.as_deref(),
+        provider.api_key_env_var().unwrap_or_default(),
+        provider.id(),
+    )?;
+    let base_url = resolve_base_url(
+        provider_config.base_url.as_deref(),
+        &format!("{}_BASE_URL", provider.id().to_uppercase()),
+        default_base_url(provider),
+        provider.label(),
+    )?;
+
+    let model = resolve_model(config, provider);
+    let language = config
+        .transcription
+        .language
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
+    let transcript = transcribe_audio(
+        provider.label(),
+        &base_url,
+        &api_key,
+        &model,
+        bytes,
+        filename,
+        mime_type,
+        language,
+    )
+    .await?;
+
+    let trimmed = transcript.trim();
+    if trimmed.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(trimmed.to_string()))
+    }
+}
+
+/// Detects which transcription provider to use.
+///
+/// Priority: env var > config > auto-detect (first available).
+fn detect_provider(config: &Config) -> Option<ProviderKind> {
+    // Check env var override
+    if let Some(provider) = parse_provider_from_env("ZDX_TRANSCRIPTION_PROVIDER") {
+        return Some(provider);
+    }
+
+    // Check config setting
+    if let Some(provider) = config
         .transcription
         .provider
         .as_deref()
-        .and_then(|s| {
-            let s = s.trim();
-            if s.is_empty() {
-                None
-            } else {
-                Some(s.to_string())
-            }
-        })
-        .and_then(|s| TranscriptionProvider::from_str(&s))
+        .and_then(parse_provider_str)
     {
-        // Explicit config setting
-        provider_str
-    } else {
-        // Auto-detect: prefer OpenAI (backward compatible), fall back to Mistral
-        if openai_api_key(config).is_some() {
-            TranscriptionProvider::OpenAI
-        } else if mistral_api_key(config).is_some() {
-            TranscriptionProvider::Mistral
-        } else {
-            return Ok(None);
-        }
-    };
+        return Some(provider);
+    }
 
-    // Determine model (env var > config > default per provider)
-    let model = std::env::var("ZDX_TELEGRAM_AUDIO_MODEL")
+    // Auto-detect: first provider with available API key
+    for &provider in TRANSCRIPTION_PROVIDERS {
+        let provider_config = config.providers.get(provider);
+        if resolve_api_key(
+            provider_config.api_key.as_deref(),
+            provider.api_key_env_var().unwrap_or_default(),
+            provider.id(),
+        )
+        .is_ok()
+        {
+            return Some(provider);
+        }
+    }
+
+    None
+}
+
+fn parse_provider_from_env(var: &str) -> Option<ProviderKind> {
+    std::env::var(var)
         .ok()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .and_then(parse_provider_str)
+}
+
+fn parse_provider_str(s: &str) -> Option<ProviderKind> {
+    match s.to_lowercase().as_str() {
+        "openai" => Some(ProviderKind::OpenAI),
+        "mistral" => Some(ProviderKind::Mistral),
+        _ => None,
+    }
+}
+
+fn default_base_url(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::OpenAI => DEFAULT_OPENAI_BASE_URL,
+        ProviderKind::Mistral => DEFAULT_MISTRAL_BASE_URL,
+        _ => DEFAULT_OPENAI_BASE_URL,
+    }
+}
+
+fn default_model(provider: ProviderKind) -> &'static str {
+    match provider {
+        ProviderKind::OpenAI => DEFAULT_OPENAI_MODEL,
+        ProviderKind::Mistral => DEFAULT_MISTRAL_MODEL,
+        _ => DEFAULT_OPENAI_MODEL,
+    }
+}
+
+fn resolve_model(config: &Config, provider: ProviderKind) -> String {
+    // env var > config > default per provider
+    std::env::var("ZDX_TELEGRAM_AUDIO_MODEL")
+        .ok()
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty())
         .or_else(|| {
             config
                 .transcription
@@ -84,120 +151,10 @@ pub async fn transcribe_audio_if_configured(
                 .filter(|s| !s.is_empty())
                 .map(String::from)
         })
-        .unwrap_or_else(|| match provider {
-            TranscriptionProvider::OpenAI => DEFAULT_AUDIO_MODEL.to_string(),
-            TranscriptionProvider::Mistral => DEFAULT_MISTRAL_MODEL.to_string(),
-        });
-
-    // Get language hint if configured
-    let language = config
-        .transcription
-        .language
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from);
-
-    match provider {
-        TranscriptionProvider::OpenAI => {
-            let api_key =
-                openai_api_key(config).ok_or_else(|| anyhow!("OpenAI API key not configured"))?;
-            let base_url = openai_base_url(config);
-            let transcript = transcribe_audio(
-                "OpenAI",
-                &base_url,
-                &api_key,
-                &model,
-                bytes,
-                filename,
-                mime_type,
-                language.as_deref(),
-            )
-            .await?;
-            let trimmed = transcript.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
-        }
-        TranscriptionProvider::Mistral => {
-            let api_key =
-                mistral_api_key(config).ok_or_else(|| anyhow!("Mistral API key not configured"))?;
-            let base_url = mistral_base_url(config);
-            let transcript = transcribe_audio(
-                "Mistral",
-                &base_url,
-                &api_key,
-                &model,
-                bytes,
-                filename,
-                mime_type,
-                language.as_deref(),
-            )
-            .await?;
-            let trimmed = transcript.trim();
-            if trimmed.is_empty() {
-                Ok(None)
-            } else {
-                Ok(Some(trimmed.to_string()))
-            }
-        }
-    }
+        .unwrap_or_else(|| default_model(provider).to_string())
 }
 
-fn openai_api_key(config: &Config) -> Option<String> {
-    config
-        .providers
-        .openai
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::var("OPENAI_API_KEY")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-}
-
-fn openai_base_url(config: &Config) -> String {
-    config
-        .providers
-        .openai
-        .base_url
-        .clone()
-        .unwrap_or_else(|| DEFAULT_OPENAI_BASE_URL.to_string())
-}
-
-fn mistral_api_key(config: &Config) -> Option<String> {
-    config
-        .providers
-        .mistral
-        .api_key
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(str::to_string)
-        .or_else(|| {
-            std::env::var("MISTRAL_API_KEY")
-                .ok()
-                .map(|value| value.trim().to_string())
-                .filter(|value| !value.is_empty())
-        })
-}
-
-fn mistral_base_url(config: &Config) -> String {
-    config
-        .providers
-        .mistral
-        .base_url
-        .clone()
-        .unwrap_or_else(|| DEFAULT_MISTRAL_BASE_URL.to_string())
-}
-
+#[allow(clippy::too_many_arguments)]
 async fn transcribe_audio(
     provider_name: &str,
     base_url: &str,
