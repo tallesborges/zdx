@@ -3017,7 +3017,7 @@ checksum = "ea6fc2961e4ef194dcbfe56bb845534d0dc8098940c7e5c012a258bfec6701bd"
 
 [[package]]
 name = "xtask"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -3049,7 +3049,7 @@ dependencies = [
 
 [[package]]
 name = "zdx"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -3072,7 +3072,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-bot"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -3088,7 +3088,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "base64",
@@ -3116,7 +3116,7 @@ dependencies = [
 
 [[package]]
 name = "zdx-tui"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "arboard",
