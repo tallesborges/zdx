@@ -220,6 +220,12 @@ fn build_skill_sources(
     let mut sources = Vec::new();
 
     if options.enable_zdx_user {
+        if let Some(home) = home_dir {
+            sources.push(SkillSourceSpec::recursive(
+                SkillSource::ZdxUser,
+                home.join(".zdx").join("skills"),
+            ));
+        }
         sources.push(SkillSourceSpec::recursive(
             SkillSource::ZdxUser,
             zdx_home.join("skills"),

@@ -72,7 +72,8 @@ pub fn available_models() -> &'static [ModelOption] {
             let mut combined = Vec::new();
 
             for model in models.drain(..) {
-                if seen.insert(model.id) {
+                // Deduplicate by (provider, id) since id no longer has provider prefix
+                if seen.insert((model.provider, model.id)) {
                     combined.push(model);
                 }
             }
@@ -84,14 +85,17 @@ pub fn available_models() -> &'static [ModelOption] {
 impl ModelOption {
     /// Finds a model by its ID.
     pub fn find_by_id(id: &str) -> Option<&'static ModelOption> {
+        // Try exact match on id first
         if let Some(model) = available_models().iter().find(|m| m.id == id) {
             return Some(model);
         }
 
+        // Fall back to resolving provider prefix and comparing
         let target = crate::providers::resolve_provider(id);
         available_models().iter().find(|m| {
-            let candidate = crate::providers::resolve_provider(m.id);
-            candidate.kind == target.kind && candidate.model == target.model
+            // Use stored provider instead of resolving from id
+            let provider_kind = crate::providers::provider_kind_from_id(m.provider);
+            provider_kind == Some(target.kind) && m.id == target.model
         })
     }
 }
@@ -170,19 +174,18 @@ fn load_models_from_str(contents: &str) -> Option<Vec<ModelOption>> {
 }
 
 fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
-    let id = record.id.trim().to_string();
-    if id.is_empty() {
+    let raw_id = record.id.trim();
+    if raw_id.is_empty() {
         return None;
     }
 
+    // Strip provider prefix from id if present (e.g., "claude-cli:claude-opus-4-5" -> "claude-opus-4-5")
+    let resolved = crate::providers::resolve_provider(raw_id);
+    let id = resolved.model;
+
     let provider = record
         .provider
-        .unwrap_or_else(|| {
-            crate::providers::resolve_provider(&id)
-                .kind
-                .id()
-                .to_string()
-        })
+        .unwrap_or_else(|| resolved.kind.id().to_string())
         .trim()
         .to_lowercase();
 

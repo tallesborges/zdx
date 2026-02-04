@@ -115,6 +115,36 @@ pub enum ThreadUiEvent {
     },
 }
 
+/// Skill list/install events.
+#[derive(Debug, Clone)]
+pub struct SkillListing {
+    pub name: String,
+    pub path: String,
+    pub description: Option<String>,
+}
+
+#[derive(Debug)]
+pub enum SkillUiEvent {
+    /// Skills list loaded for a repository.
+    ListLoaded {
+        repo: String,
+        skills: Vec<SkillListing>,
+    },
+
+    /// Skills list failed to load.
+    ListFailed { repo: String, error: String },
+
+    /// Skill installed successfully.
+    Installed { repo: String, skill: String },
+
+    /// Skill installation failed.
+    InstallFailed {
+        repo: String,
+        skill: String,
+        error: String,
+    },
+}
+
 /// Unified event enum for the TUI.
 ///
 /// All inputs to the TUI are converted to this type before processing.
@@ -194,4 +224,7 @@ pub enum UiEvent {
 
     /// Thread async I/O results.
     Thread(ThreadUiEvent),
+
+    /// Skill async I/O results.
+    Skill(SkillUiEvent),
 }

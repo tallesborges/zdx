@@ -87,6 +87,24 @@ impl ProviderKind {
         }
     }
 
+    /// Returns the ProviderKind for a given id string.
+    pub fn from_id(id: &str) -> Option<ProviderKind> {
+        match id.to_lowercase().as_str() {
+            "anthropic" => Some(ProviderKind::Anthropic),
+            "claude-cli" => Some(ProviderKind::ClaudeCli),
+            "openai-codex" | "codex" => Some(ProviderKind::OpenAICodex),
+            "openai" => Some(ProviderKind::OpenAI),
+            "openrouter" => Some(ProviderKind::OpenRouter),
+            "mimo" => Some(ProviderKind::Mimo),
+            "mistral" => Some(ProviderKind::Mistral),
+            "moonshot" => Some(ProviderKind::Moonshot),
+            "stepfun" => Some(ProviderKind::Stepfun),
+            "gemini" => Some(ProviderKind::Gemini),
+            "gemini-cli" => Some(ProviderKind::GeminiCli),
+            _ => None,
+        }
+    }
+
     /// Returns the human-readable label for display.
     pub fn label(&self) -> &'static str {
         match self {
@@ -177,6 +195,11 @@ pub fn resolve_provider(model: &str) -> ProviderSelection {
 /// Infers the provider from a model identifier.
 pub fn provider_for_model(model: &str) -> ProviderKind {
     resolve_provider(model).kind
+}
+
+/// Returns the ProviderKind for a provider id string (e.g., "anthropic", "openai").
+pub fn provider_kind_from_id(id: &str) -> Option<ProviderKind> {
+    ProviderKind::from_id(id)
 }
 
 fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {

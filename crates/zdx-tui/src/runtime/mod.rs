@@ -560,6 +560,19 @@ impl TuiRuntime {
                     move |cancel| handlers::file_discovery(root, cancel),
                 );
             }
+            UiEffect::FetchSkillsList { repo } => {
+                self.spawn_task(TaskKind::SkillsFetch, TaskMeta::None, true, move |cancel| {
+                    handlers::fetch_skills_list(repo, cancel)
+                });
+            }
+            UiEffect::InstallSkill { repo, skill_path } => {
+                self.spawn_task(
+                    TaskKind::SkillInstall,
+                    TaskMeta::None,
+                    true,
+                    move |cancel| handlers::install_skill(repo, skill_path, cancel),
+                );
+            }
 
             // Clipboard effects
             UiEffect::CopyToClipboard { text } => {

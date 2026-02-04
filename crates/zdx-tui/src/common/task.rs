@@ -27,6 +27,8 @@ pub enum TaskKind {
     ThreadCreate,
     ThreadFork,
     FileDiscovery,
+    SkillsFetch,
+    SkillInstall,
     Bash,
     Handoff,
     LoginExchange,

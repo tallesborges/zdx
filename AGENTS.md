@@ -72,6 +72,7 @@
       - `crates/zdx-tui/src/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop
       - `crates/zdx-tui/src/runtime/inbox.rs`: inbox channel types
       - `crates/zdx-tui/src/runtime/handlers/`: effect handlers (thread ops, agent spawn, auth)
+      - `crates/zdx-tui/src/runtime/handlers/skills.rs`: skill fetch/install handlers (GitHub API)
       - `crates/zdx-tui/src/runtime/handoff.rs`: handoff generation handlers
       - `crates/zdx-tui/src/runtime/thread_title.rs`: auto-title handlers
     - `crates/zdx-tui/src/common/`: shared leaf types (no feature deps)
@@ -93,6 +94,7 @@
         - `crates/zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
     - `crates/zdx-tui/src/overlays/`: overlay feature slice
       - `crates/zdx-tui/src/overlays/command_palette.rs`: command palette overlay (Ctrl+O or `/` when input empty)
+      - `crates/zdx-tui/src/overlays/skill_picker.rs`: skill installer overlay
       - `crates/zdx-tui/src/overlays/rename.rs`: thread rename overlay
 - `crates/zdx-cli/`: zdx binary (CLI/router)
   - `crates/zdx-cli/src/main.rs`: binary entrypoint (delegates to `crates/zdx-cli/src/cli/`)

@@ -7,6 +7,7 @@
 //!
 //! - `command_palette.rs`: Command palette (Ctrl+O or `/` when input empty)
 //! - `model_picker.rs`: Model selection picker
+//! - `skill_picker.rs`: Skill installer picker
 //! - `thinking_picker.rs`: Thinking level selection picker
 //! - `thread_picker.rs`: Thread history picker
 //! - `login.rs`: OAuth login flow overlay
@@ -26,6 +27,7 @@ pub mod login;
 pub mod model_picker;
 pub mod rename;
 pub mod render_utils;
+pub mod skill_picker;
 pub mod thinking_picker;
 pub mod thread_picker;
 pub mod timeline;
@@ -39,6 +41,7 @@ pub use model_picker::ModelPickerState;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 pub use rename::RenameState;
+pub use skill_picker::SkillPickerState;
 pub use thinking_picker::ThinkingPickerState;
 pub use thread_picker::{ThreadPickerMode, ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
@@ -58,6 +61,7 @@ use crate::state::TuiState;
 pub enum OverlayRequest {
     CommandPalette,
     ModelPicker,
+    SkillPicker,
     ThinkingPicker,
     Login,
     FilePicker { trigger_pos: usize },
@@ -121,6 +125,7 @@ impl OverlayUpdate {
 pub enum Overlay {
     CommandPalette(CommandPaletteState),
     ModelPicker(ModelPickerState),
+    SkillPicker(SkillPickerState),
     ThinkingPicker(ThinkingPickerState),
     ThreadPicker(ThreadPickerState),
     Login(LoginState),
@@ -146,6 +151,7 @@ impl Overlay {
         match self {
             Overlay::CommandPalette(p) => p.render(frame, area, input_y),
             Overlay::ModelPicker(p) => p.render(frame, area, input_y),
+            Overlay::SkillPicker(p) => p.render(frame, area, input_y),
             Overlay::ThinkingPicker(p) => p.render(frame, area, input_y),
             Overlay::ThreadPicker(p) => p.render(frame, area, input_y),
             Overlay::FilePicker(p) => p.render(frame, area, input_y),
@@ -159,6 +165,7 @@ impl Overlay {
         match self {
             Overlay::CommandPalette(p) => p.handle_key(tui, key),
             Overlay::ModelPicker(p) => p.handle_key(tui, key),
+            Overlay::SkillPicker(p) => p.handle_key(tui, key),
             Overlay::ThinkingPicker(p) => p.handle_key(tui, key),
             Overlay::ThreadPicker(p) => p.handle_key(tui, key),
             Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
@@ -217,6 +224,10 @@ mod tests {
         let providers = zdx_core::config::ProvidersConfig::default();
         let (picker, _) = ModelPickerState::open("test", &providers);
         let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
+        assert!(overlay.is_some());
+
+        let (skill_picker, _) = SkillPickerState::open(vec!["test/repo".to_string()], None);
+        let overlay: Option<Overlay> = Some(Overlay::SkillPicker(skill_picker));
         assert!(overlay.is_some());
 
         let (thinking, _) = ThinkingPickerState::open(ThinkingLevel::Off);

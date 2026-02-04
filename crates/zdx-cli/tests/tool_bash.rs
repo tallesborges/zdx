@@ -18,8 +18,16 @@ fn temp_zdx_home() -> TempDir {
     TempDir::new().expect("create temp zdx home")
 }
 
+fn can_bind_localhost() -> bool {
+    std::net::TcpListener::bind("127.0.0.1:0").is_ok()
+}
+
 #[tokio::test]
 async fn test_bash_executes_command() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let mock_server = MockServer::start().await;
@@ -89,6 +97,10 @@ async fn test_bash_executes_command() {
 
 #[tokio::test]
 async fn test_bash_runs_in_root_directory() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     std::fs::write(temp_dir.path().join("marker.txt"), "marker content").unwrap();
@@ -144,6 +156,10 @@ async fn test_bash_runs_in_root_directory() {
 
 #[tokio::test]
 async fn test_bash_times_out_when_configured() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let temp_dir = TempDir::new().unwrap();
     let zdx_home = TempDir::new().unwrap();
     std::fs::write(
