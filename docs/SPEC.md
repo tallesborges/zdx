@@ -195,7 +195,7 @@ Error:
   - `models` entries support `*` wildcards for `zdx models update`.
   - Registry path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
 - Skills:
-  - `[skills]` enable flags for sources (`enable_zdx_user`, `enable_zdx_project`, `enable_codex_user`, `enable_claude_user`, `enable_claude_project`).
+  - `[skills]` enable flags for sources (`enable_zdx_user`, `enable_zdx_project`, `enable_codex_user`, `enable_claude_user`, `enable_claude_project`, `enable_agents_user`, `enable_agents_project`).
   - Optional glob filters: `ignored_skills`, `include_skills`.
 
 ---
@@ -212,9 +212,9 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ### Discovery & sources
 
-- **Recursive sources:** `~/.config/zdx/skills/`, project `.zdx/skills/`, and `~/.codex/skills/` are scanned recursively for `SKILL.md`.
+- **Recursive sources:** `~/.config/zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
 - **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
-- **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project (first wins on name collision).
+- **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project (first wins on name collision).
 
 ### Validation & warnings
 

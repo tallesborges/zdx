@@ -40,6 +40,8 @@ pub struct SkillsConfig {
     pub enable_codex_user: bool,
     pub enable_claude_user: bool,
     pub enable_claude_project: bool,
+    pub enable_agents_user: bool,
+    pub enable_agents_project: bool,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -54,6 +56,8 @@ impl Default for SkillsConfig {
             enable_codex_user: true,
             enable_claude_user: true,
             enable_claude_project: true,
+            enable_agents_user: true,
+            enable_agents_project: true,
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         }
