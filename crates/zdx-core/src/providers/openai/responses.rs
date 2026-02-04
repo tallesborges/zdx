@@ -10,8 +10,8 @@ pub use super::responses_types::{
 };
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ProviderError, ProviderErrorKind, ProviderStream,
-    ReasoningBlock, ReplayToken,
+    ChatContentBlock, ChatMessage, DebugTrace, ProviderError, ProviderErrorKind, ProviderStream,
+    ReasoningBlock, ReplayToken, wrap_stream,
 };
 use crate::tools::{ToolDefinition, ToolResultContent};
 
@@ -85,13 +85,25 @@ pub async fn send_responses_stream(
 
     let url = format!("{}{}", config.base_url, config.path);
 
-    let response = http
-        .post(&url)
-        .headers(headers)
-        .json(&request)
-        .send()
-        .await
-        .map_err(classify_reqwest_error)?;
+    let trace = DebugTrace::from_env(&config.model, config.prompt_cache_key.as_deref());
+
+    let response = if let Some(trace) = &trace {
+        let body = serde_json::to_vec(&request)?;
+        trace.write_request(&body);
+        http.post(&url)
+            .headers(headers)
+            .body(body)
+            .send()
+            .await
+            .map_err(classify_reqwest_error)?
+    } else {
+        http.post(&url)
+            .headers(headers)
+            .json(&request)
+            .send()
+            .await
+            .map_err(classify_reqwest_error)?
+    };
 
     let status = response.status();
     if !status.is_success() {
@@ -99,7 +111,7 @@ pub async fn send_responses_stream(
         return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
     }
 
-    let byte_stream = response.bytes_stream();
+    let byte_stream = wrap_stream(trace, response.bytes_stream());
     let event_stream = ResponsesSseParser::new(byte_stream, config.model.clone());
 
     Ok(maybe_wrap_with_metrics(event_stream))

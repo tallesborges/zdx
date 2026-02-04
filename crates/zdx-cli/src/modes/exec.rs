@@ -91,12 +91,19 @@ pub async fn run_exec(
         let _ = writeln!(std::io::stderr(), "Loaded skills: {}", names.join(", "));
     }
 
+    // Load thread history if continuing an existing thread
+    let messages = if let Some(ref existing_thread) = thread {
+        let mut history = thread_log::load_thread_as_messages(&existing_thread.id)?;
+        history.push(ChatMessage::user(prompt));
+        history
+    } else {
+        vec![ChatMessage::user(prompt)]
+    };
+
     // Log user message to thread (ensures meta is written for new threads)
     if let Some(ref mut s) = thread {
         s.append(&ThreadEvent::user_message(prompt))?;
     }
-
-    let messages = vec![ChatMessage::user(prompt)];
     let agent_opts = AgentOptions::from(options);
 
     // Create channels for broadcast

@@ -12,8 +12,8 @@ use serde_json::Value;
 
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
-    ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
-    ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
+    ChatContentBlock, ChatMessage, ContentBlockType, DebugTrace, MessageContent, ProviderError,
+    ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage, wrap_stream,
 };
 use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
 
@@ -56,18 +56,31 @@ impl OpenAIChatCompletionsClient {
         system: Option<&str>,
     ) -> Result<ProviderStream> {
         let request = ChatCompletionRequest::new(&self.config, messages, tools, system)?;
+        let trace =
+            DebugTrace::from_env(&self.config.model, self.config.prompt_cache_key.as_deref());
 
         let url = format!("{}{}", self.config.base_url, CHAT_COMPLETIONS_PATH);
         let headers = build_headers(&self.config.api_key, &self.config.extra_headers);
 
-        let response = self
-            .http
-            .post(&url)
-            .headers(headers)
-            .json(&request)
-            .send()
-            .await
-            .map_err(classify_reqwest_error)?;
+        let response = if let Some(trace) = &trace {
+            let body = serde_json::to_vec(&request)?;
+            trace.write_request(&body);
+            self.http
+                .post(&url)
+                .headers(headers)
+                .body(body)
+                .send()
+                .await
+                .map_err(classify_reqwest_error)?
+        } else {
+            self.http
+                .post(&url)
+                .headers(headers)
+                .json(&request)
+                .send()
+                .await
+                .map_err(classify_reqwest_error)?
+        };
 
         let status = response.status();
         if !status.is_success() {
@@ -75,7 +88,7 @@ impl OpenAIChatCompletionsClient {
             return Err(ProviderError::http_status(status.as_u16(), &error_body).into());
         }
 
-        let byte_stream = response.bytes_stream();
+        let byte_stream = wrap_stream(trace, response.bytes_stream());
         let event_stream = ChatCompletionsSseParser::new(byte_stream, self.config.model.clone());
         Ok(maybe_wrap_with_metrics(event_stream))
     }
@@ -170,7 +183,9 @@ struct StreamOptions {
 #[derive(Debug, Serialize)]
 struct ChatCompletionMessage {
     role: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
+    // NOTE: We intentionally do NOT use skip_serializing_if here.
+    // Prefix caching requires byte-for-byte alignment of the full context.
+    // If content is None, we must serialize it as "content":null, not omit it.
     content: Option<ChatMessageContent>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reasoning_content: Option<String>,
@@ -444,7 +459,7 @@ impl ChatCompletionRequest {
             include_usage: true,
         });
 
-        Ok(Self {
+        let request = Self {
             model: config.model.clone(),
             stream: true,
             messages: out_messages,
@@ -458,7 +473,8 @@ impl ChatCompletionRequest {
                 .map(|effort| ReasoningConfig { effort }),
             thinking: config.thinking.clone(),
             prompt_cache_key: config.prompt_cache_key.clone(),
-        })
+        };
+        Ok(request)
     }
 }
 

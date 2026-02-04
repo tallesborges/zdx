@@ -1,6 +1,7 @@
 //! LLM provider implementations.
 
 mod debug_metrics;
+mod debug_trace;
 pub mod text_tool_parser;
 pub mod thinking_parser;
 
@@ -14,6 +15,7 @@ pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
 
+pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken, StreamEvent,
