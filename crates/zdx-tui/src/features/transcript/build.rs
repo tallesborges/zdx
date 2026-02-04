@@ -73,8 +73,21 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 }
                 // If no matching tool cell found, skip (incomplete pair)
             }
-            ThreadEvent::Interrupted { .. } => {
-                // Skip interrupted events when loading
+            ThreadEvent::Interrupted {
+                partial_content, ..
+            } => {
+                // Show partial content if present (with interrupted styling)
+                if let Some(content) = partial_content
+                    && !content.is_empty()
+                {
+                    cells.push(super::HistoryCell::Assistant {
+                        id: super::CellId::new(),
+                        created_at: chrono::Utc::now(),
+                        content: content.clone(),
+                        is_streaming: false,
+                        is_interrupted: true,
+                    });
+                }
             }
             ThreadEvent::Usage { .. } => {
                 // Skip usage events when building transcript (they're for tracking only)
@@ -254,6 +267,7 @@ mod tests {
             ThreadEvent::Interrupted {
                 role: "system".to_string(),
                 text: "Interrupted".to_string(),
+                partial_content: None,
                 ts: "2024-01-01T00:00:06Z".to_string(),
             },
         ];

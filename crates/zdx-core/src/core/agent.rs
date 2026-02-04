@@ -688,7 +688,11 @@ pub async fn run_turn(
     // Tool loop - keep going until we get a final response
     loop {
         if interrupt::is_interrupted() {
-            sender.send_important(AgentEvent::Interrupted).await;
+            sender
+                .send_important(AgentEvent::Interrupted {
+                    partial_content: None,
+                })
+                .await;
             return Err(InterruptedError.into());
         }
 
@@ -697,7 +701,7 @@ pub async fn run_turn(
         let stream_result = tokio::select! {
             biased;
             _ = interrupt::wait_for_interrupt() => {
-                sender.send_important(AgentEvent::Interrupted).await;
+                sender.send_important(AgentEvent::Interrupted { partial_content: None }).await;
                 return Err(InterruptedError.into());
             }
             result = client.send_messages_stream(&messages, &tools, system_prompt) => result,
@@ -717,7 +721,15 @@ pub async fn run_turn(
         // Process stream events with periodic interrupt checking
         loop {
             if interrupt::is_interrupted() {
-                sender.send_important(AgentEvent::Interrupted).await;
+                sender
+                    .send_important(AgentEvent::Interrupted {
+                        partial_content: if turn.text.is_empty() {
+                            None
+                        } else {
+                            Some(turn.text.clone())
+                        },
+                    })
+                    .await;
                 return Err(InterruptedError.into());
             }
 
@@ -995,7 +1007,17 @@ pub async fn run_turn(
                         messages: messages.clone(),
                     })
                     .await;
-                sender.send_important(AgentEvent::Interrupted).await;
+                // Include turn_text in Interrupted for non-TUI flows (exec/bot) that
+                // rely on ThreadEvent::from_agent for persistence
+                sender
+                    .send_important(AgentEvent::Interrupted {
+                        partial_content: if turn_text.is_empty() {
+                            None
+                        } else {
+                            Some(turn_text.clone())
+                        },
+                    })
+                    .await;
                 return Err(InterruptedError.into());
             }
 
