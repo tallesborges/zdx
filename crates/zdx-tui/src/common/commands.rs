@@ -106,6 +106,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "skills",
+        aliases: &["skill"],
+        description: "Browse and install skills",
+        category: "skills",
+        shortcut: None,
+    },
+    Command {
         name: "new",
         aliases: &["clear"],
         description: "Start a new thread",
@@ -198,6 +205,7 @@ mod tests {
             find_command("models").display_name(),
             "models (models-config)"
         );
+        assert_eq!(find_command("skills").display_name(), "skills (skill)");
         assert_eq!(find_command("new").display_name(), "new (clear)");
         assert_eq!(find_command("quit").display_name(), "quit (q, exit)");
         assert_eq!(find_command("threads").display_name(), "threads (history)");

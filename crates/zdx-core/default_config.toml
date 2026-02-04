@@ -46,6 +46,12 @@ enable_claude_user = true
 enable_claude_project = true
 enable_agents_user = true
 enable_agents_project = true
+# GitHub repositories containing skills (owner/repo/path)
+skill_repositories = [
+  "openai/skills/skills/.curated",
+  "openai/skills/skills/.system",
+  "anthropics/skills/skills",
+]
 # ignored_skills = ["test-*", "wip-*"]
 # include_skills = ["deploy-*", "release-*"]
 

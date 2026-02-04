@@ -31,6 +31,14 @@ pub enum ThinkingLevel {
     XHigh,
 }
 
+fn default_skill_repositories() -> Vec<String> {
+    vec![
+        "openai/skills/skills/.curated".to_string(),
+        "openai/skills/skills/.system".to_string(),
+        "anthropics/skills/skills".to_string(),
+    ]
+}
+
 /// Skill discovery configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -42,6 +50,11 @@ pub struct SkillsConfig {
     pub enable_claude_project: bool,
     pub enable_agents_user: bool,
     pub enable_agents_project: bool,
+    #[serde(
+        default = "default_skill_repositories",
+        skip_serializing_if = "Vec::is_empty"
+    )]
+    pub skill_repositories: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ignored_skills: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -58,6 +71,7 @@ impl Default for SkillsConfig {
             enable_claude_project: true,
             enable_agents_user: true,
             enable_agents_project: true,
+            skill_repositories: default_skill_repositories(),
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         }
@@ -233,20 +247,20 @@ pub mod paths {
     //!
     //! ZDX_HOME resolution order:
     //! 1. ZDX_HOME environment variable (if set)
-    //! 2. ~/.config/zdx (default)
+    //! 2. ~/.zdx (default)
 
     use std::path::PathBuf;
 
     /// Returns the ZDX home directory.
     ///
-    /// Checks ZDX_HOME env var first, falls back to ~/.config/zdx
+    /// Checks ZDX_HOME env var first, falls back to ~/.zdx
     pub fn zdx_home() -> PathBuf {
         if let Ok(home) = std::env::var("ZDX_HOME") {
             return PathBuf::from(home);
         }
 
         dirs::home_dir()
-            .map(|h| h.join(".config").join("zdx"))
+            .map(|h| h.join(".zdx"))
             .expect("Could not determine home directory")
     }
 

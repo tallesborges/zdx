@@ -105,7 +105,7 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 ### Storage
 
-- Base dir: `$ZDX_HOME` (preferred) else `$XDG_CONFIG_HOME/zdx` else `~/.config/zdx`
+- Base dir: `$ZDX_HOME` (if set) else `~/.zdx`
 - Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 
@@ -196,6 +196,7 @@ Error:
   - Registry path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
 - Skills:
   - `[skills]` enable flags for sources (`enable_zdx_user`, `enable_zdx_project`, `enable_codex_user`, `enable_claude_user`, `enable_claude_project`, `enable_agents_user`, `enable_agents_project`).
+  - `skill_repositories`: list of GitHub repo paths (`owner/repo/path`) used by the skill installer overlay.
   - Optional glob filters: `ignored_skills`, `include_skills`.
 
 ---
@@ -212,7 +213,7 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ### Discovery & sources
 
-- **Recursive sources:** `~/.config/zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
+- **Recursive sources:** `~/.zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
 - **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
 - **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project (first wins on name collision).
 

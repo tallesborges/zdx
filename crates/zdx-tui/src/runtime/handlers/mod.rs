@@ -21,12 +21,14 @@ pub mod agent;
 pub mod auth;
 pub mod bash;
 pub mod file_picker;
+pub mod skills;
 pub mod thread;
 
 pub use agent::*;
 pub use auth::*;
 pub use bash::*;
 pub use file_picker::*;
+pub use skills::*;
 pub use thread::*;
 
 #[cfg(test)]

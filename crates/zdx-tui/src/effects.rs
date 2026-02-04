@@ -113,6 +113,12 @@ pub enum UiEffect {
     /// Discover project files for the file picker.
     DiscoverFiles,
 
+    /// Fetch available skills from a GitHub repository.
+    FetchSkillsList { repo: String },
+
+    /// Install a skill from a GitHub repository.
+    InstallSkill { repo: String, skill_path: String },
+
     /// Copy text to clipboard.
     CopyToClipboard {
         /// Text to copy.

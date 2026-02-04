@@ -9,9 +9,9 @@ use crossterm::event::Event;
 
 use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
-use crate::events::{ThreadUiEvent, UiEvent};
+use crate::events::{SkillUiEvent, ThreadUiEvent, UiEvent};
 use crate::input::HandoffState;
-use crate::mutations::{ConfigMutation, StateMutation};
+use crate::mutations::{ConfigMutation, StateMutation, TranscriptMutation};
 use crate::overlays::{self, FilePickerState, Overlay};
 use crate::state::{AgentState, AppState, TuiState};
 use crate::transcript::HistoryCell;
@@ -232,6 +232,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     }
                 }
                 TaskKind::FileDiscovery
+                | TaskKind::SkillsFetch
+                | TaskKind::SkillInstall
                 | TaskKind::ThreadList
                 | TaskKind::ThreadLoad
                 | TaskKind::ThreadRename
@@ -286,6 +288,62 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
         }
+
+        UiEvent::Skill(skill_event) => match skill_event {
+            SkillUiEvent::ListLoaded { repo, skills } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    let items = skills
+                        .into_iter()
+                        .map(|skill| overlays::skill_picker::SkillItem {
+                            name: skill.name,
+                            path: skill.path,
+                            description: skill.description,
+                        })
+                        .collect();
+                    picker.set_skills(&repo, items);
+                }
+                vec![]
+            }
+            SkillUiEvent::ListFailed { repo, error } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    picker.set_error(&repo, format!("Failed to load skills: {}", error));
+                }
+                vec![]
+            }
+            SkillUiEvent::Installed { repo: _, skill } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    picker.set_installing(None);
+                    picker.mark_installed(&skill);
+                }
+                app.overlay = None;
+                apply_mutations(
+                    &mut app.tui,
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!(
+                            "Installed skill \"{}\". Restart ZDX to pick up new skills.",
+                            skill
+                        )),
+                    )],
+                );
+                vec![]
+            }
+            SkillUiEvent::InstallFailed { repo, skill, error } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    picker.set_installing(None);
+                    picker.set_error(&repo, format!("Install failed: {}", error));
+                }
+                apply_mutations(
+                    &mut app.tui,
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!(
+                            "Failed to install {}: {}",
+                            skill, error
+                        )),
+                    )],
+                );
+                vec![]
+            }
+        },
 
         // Clipboard copy succeeded - show brief feedback in thread picker
         UiEvent::ClipboardCopied => {
@@ -631,6 +689,9 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
+            StateMutation::SetLastSkillRepo(repo) => {
+                tui.last_skill_repo = Some(repo);
+            }
             StateMutation::ToggleDebugStatus => {
                 tui.show_debug_status = !tui.show_debug_status;
             }
@@ -676,12 +737,38 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
                     token: None,
                 });
             }
+            if matches!(
+                app.overlay.as_ref(),
+                Some(overlays::Overlay::SkillPicker(_))
+            ) {
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::SkillsFetch,
+                    token: None,
+                });
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::SkillInstall,
+                    token: None,
+                });
+            }
             app.overlay = None;
         }
         overlays::OverlayTransition::Open(request) => {
             if matches!(app.overlay.as_ref(), Some(overlays::Overlay::FilePicker(_))) {
                 effects.push(UiEffect::CancelTask {
                     kind: TaskKind::FileDiscovery,
+                    token: None,
+                });
+            }
+            if matches!(
+                app.overlay.as_ref(),
+                Some(overlays::Overlay::SkillPicker(_))
+            ) {
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::SkillsFetch,
+                    token: None,
+                });
+                effects.push(UiEffect::CancelTask {
+                    kind: TaskKind::SkillInstall,
                     token: None,
                 });
             }
@@ -704,6 +791,16 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             let (state, effects) =
                 overlays::ModelPickerState::open(&app.tui.config.model, &app.tui.config.providers);
             app.overlay = Some(overlays::Overlay::ModelPicker(state));
+            effects
+        }
+        overlays::OverlayRequest::SkillPicker => {
+            let repos = app.tui.config.skills.skill_repositories.clone();
+            let last_repo = app.tui.last_skill_repo.as_deref();
+            let (state, effects) = overlays::SkillPickerState::open(repos, last_repo);
+            if let Some(repo) = state.current_repo() {
+                app.tui.last_skill_repo = Some(repo.to_string());
+            }
+            app.overlay = Some(overlays::Overlay::SkillPicker(state));
             effects
         }
         overlays::OverlayRequest::ThinkingPicker => {

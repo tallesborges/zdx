@@ -149,6 +149,8 @@ pub struct TuiState {
     pub auth: AuthState,
     /// Agent configuration.
     pub config: Config,
+    /// Last selected skill repository in this session.
+    pub last_skill_repo: Option<String>,
     /// Agent options (root path, etc).
     pub agent_opts: AgentOptions,
     /// System prompt for the agent.
@@ -224,6 +226,7 @@ impl TuiState {
             tasks: Tasks::default(),
             auth,
             config,
+            last_skill_repo: None,
             agent_opts,
             system_prompt,
             agent_state: AgentState::Idle,

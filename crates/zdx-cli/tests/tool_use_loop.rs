@@ -24,8 +24,16 @@ fn temp_zdx_home() -> TempDir {
     TempDir::new().expect("create temp zdx home")
 }
 
+fn can_bind_localhost() -> bool {
+    std::net::TcpListener::bind("127.0.0.1:0").is_ok()
+}
+
 #[tokio::test]
 async fn test_tool_use_loop_reads_file() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("test.txt");
@@ -81,6 +89,10 @@ async fn test_tool_use_loop_reads_file() {
 
 #[tokio::test]
 async fn test_tool_use_loop_second_request_has_tool_result() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("data.txt");
@@ -146,6 +158,10 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
 
 #[tokio::test]
 async fn test_tool_read_outside_root_allowed() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let root_dir = TempDir::new().unwrap();
     let outside_dir = TempDir::new().unwrap();
@@ -210,6 +226,10 @@ async fn test_tool_read_outside_root_allowed() {
 
 #[tokio::test]
 async fn test_tool_shows_activity_indicator() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
     let first_response = tool_use_sse("toolu_indicator", "read", r#"{"path": "nonexistent.txt"}"#);
@@ -244,6 +264,10 @@ async fn test_tool_shows_activity_indicator() {
 
 #[tokio::test]
 async fn test_tool_use_loop_writes_file() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
 
@@ -322,6 +346,10 @@ async fn test_tool_use_loop_writes_file() {
 
 #[tokio::test]
 async fn test_tool_use_loop_edits_file() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let temp_dir = TempDir::new().unwrap();
     let test_file = temp_dir.path().join("target.txt");
@@ -405,6 +433,10 @@ async fn test_tool_use_loop_edits_file() {
 
 #[tokio::test]
 async fn test_bash_tool_shows_debug_lines() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
     let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
     let first_response = tool_use_sse("toolu_bash", "bash", r#"{"command": "echo hello"}"#);

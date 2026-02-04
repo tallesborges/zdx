@@ -18,6 +18,7 @@ pub enum StateMutation {
     Thread(ThreadMutation),
     Auth(AuthMutation),
     Config(ConfigMutation),
+    SetLastSkillRepo(String),
     /// Toggle the debug status line visibility.
     ToggleDebugStatus,
 }
