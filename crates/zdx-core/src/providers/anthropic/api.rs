@@ -1,13 +1,13 @@
 //! Anthropic API key provider (Messages API).
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 
 use super::shared::{
     build_api_messages_with_cache_control, build_system_blocks, build_thinking_config,
     build_tool_defs, send_streaming_request,
 };
 use super::types::StreamingMessagesRequest;
-use crate::providers::shared::{ChatMessage, ProviderStream};
+use crate::providers::shared::{ChatMessage, ProviderStream, resolve_api_key, resolve_base_url};
 use crate::tools::ToolDefinition;
 
 /// Default base URL for the Anthropic API.
@@ -54,10 +54,13 @@ impl AnthropicConfig {
         thinking_enabled: bool,
         thinking_budget_tokens: u32,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key)?;
-
-        // Resolution order: env > config > default
-        let base_url = Self::resolve_base_url(config_base_url)?;
+        let api_key = resolve_api_key(config_api_key, "ANTHROPIC_API_KEY", "anthropic")?;
+        let base_url = resolve_base_url(
+            config_base_url,
+            "ANTHROPIC_BASE_URL",
+            DEFAULT_BASE_URL,
+            "Anthropic",
+        )?;
 
         Ok(Self {
             api_key,
@@ -68,52 +71,6 @@ impl AnthropicConfig {
             thinking_budget_tokens,
         })
     }
-
-    /// Resolves the base URL with precedence: env > config > default.
-    /// Validates that the URL is well-formed.
-    fn resolve_base_url(config_base_url: Option<&str>) -> Result<String> {
-        // Try env var first
-        if let Ok(env_url) = std::env::var("ANTHROPIC_BASE_URL") {
-            let trimmed = env_url.trim();
-            if !trimmed.is_empty() {
-                Self::validate_url(trimmed)?;
-                return Ok(trimmed.to_string());
-            }
-        }
-
-        // Try config value
-        if let Some(config_url) = config_base_url {
-            let trimmed = config_url.trim();
-            if !trimmed.is_empty() {
-                Self::validate_url(trimmed)?;
-                return Ok(trimmed.to_string());
-            }
-        }
-
-        // Default
-        Ok(DEFAULT_BASE_URL.to_string())
-    }
-
-    /// Validates that a URL is well-formed.
-    fn validate_url(url: &str) -> Result<()> {
-        url::Url::parse(url).with_context(|| format!("Invalid Anthropic base URL: {}", url))?;
-        Ok(())
-    }
-}
-
-/// Resolves API key with precedence: config > env.
-fn resolve_api_key(config_api_key: Option<&str>) -> Result<String> {
-    // Try config value first
-    if let Some(key) = config_api_key {
-        let trimmed = key.trim();
-        if !trimmed.is_empty() {
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    // Fall back to env var
-    std::env::var("ANTHROPIC_API_KEY")
-        .context("No API key available. Set ANTHROPIC_API_KEY or api_key in [providers.anthropic].")
 }
 
 /// Anthropic API client.
