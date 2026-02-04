@@ -62,7 +62,7 @@ pub fn handle_agent_event(
             *agent_state = AgentState::Idle;
             vec![]
         }
-        AgentEvent::Interrupted => {
+        AgentEvent::Interrupted { .. } => {
             handle_interrupted(transcript, agent_state);
             vec![]
         }

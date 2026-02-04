@@ -74,7 +74,11 @@ pub enum AgentEvent {
     },
 
     /// Execution was interrupted (e.g., by user signal).
-    Interrupted,
+    Interrupted {
+        /// Partial assistant text received before interruption (streaming only).
+        #[serde(skip_serializing_if = "Option::is_none")]
+        partial_content: Option<String>,
+    },
 
     /// Turn completed successfully with final result.
     TurnCompleted {

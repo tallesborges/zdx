@@ -157,6 +157,9 @@ pub enum ThreadEvent {
         role: String,
         #[serde(default = "default_interrupted_text")]
         text: String,
+        /// Partial assistant content received before interruption.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        partial_content: Option<String>,
         ts: String,
     },
 
@@ -244,10 +247,11 @@ impl ThreadEvent {
     }
 
     /// Creates a new interrupted event.
-    pub fn interrupted() -> Self {
+    pub fn interrupted(partial_content: Option<String>) -> Self {
         Self::Interrupted {
             role: default_interrupted_role(),
             text: default_interrupted_text(),
+            partial_content,
             ts: chrono_timestamp(),
         }
     }
@@ -291,7 +295,9 @@ impl ThreadEvent {
                 let output = serde_json::to_value(result).unwrap_or_default();
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
-            AgentEvent::Interrupted => Some(Self::interrupted()),
+            AgentEvent::Interrupted { partial_content } => {
+                Some(Self::interrupted(partial_content.clone()))
+            }
             AgentEvent::ReasoningCompleted { block } => {
                 Some(Self::reasoning(block.text.clone(), block.replay.clone()))
             }
@@ -1035,8 +1041,67 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                     is_error: !ok,
                 });
             }
-            ThreadEvent::Interrupted { .. } => {
-                // Skip interrupted events when loading for API
+            ThreadEvent::Interrupted {
+                partial_content, ..
+            } => {
+                // 1. Flush pending tool results FIRST (from completed tools)
+                // This ensures correct ordering: tool_results → assistant(partial) → abort marker
+                if !pending_tool_results.is_empty() {
+                    messages.push(ChatMessage::tool_results(std::mem::take(
+                        &mut pending_tool_results,
+                    )));
+                }
+
+                // 2. Build single assistant message with pending reasoning + tool_use + partial text
+                let mut blocks: Vec<ChatContentBlock> = Vec::new();
+
+                // Add reasoning blocks
+                for reasoning in std::mem::take(&mut pending_reasoning) {
+                    blocks.push(ChatContentBlock::Reasoning(reasoning));
+                }
+
+                // Add tool_use blocks
+                for (id, name, input) in std::mem::take(&mut pending_tool_uses) {
+                    blocks.push(ChatContentBlock::ToolUse { id, name, input });
+                }
+
+                // Add partial text if present
+                if let Some(ref content) = partial_content
+                    && !content.is_empty()
+                {
+                    blocks.push(ChatContentBlock::Text(content.clone()));
+                }
+
+                // Emit merged assistant message if non-empty
+                if !blocks.is_empty() {
+                    messages.push(ChatMessage {
+                        role: "assistant".to_string(),
+                        content: MessageContent::Blocks(blocks),
+                    });
+                }
+
+                // 3. Synthesize error results for open tool uses
+                for tool_use_id in std::mem::take(&mut open_tool_uses) {
+                    let output = serde_json::json!({
+                        "ok": false,
+                        "error": {
+                            "code": "cancelled",
+                            "message": "Tool call was cancelled by user."
+                        }
+                    });
+                    pending_tool_results.push(crate::tools::ToolResult {
+                        tool_use_id,
+                        content: crate::tools::ToolResultContent::Text(
+                            serde_json::to_string(&output).unwrap_or_default(),
+                        ),
+                        is_error: true,
+                    });
+                }
+                if !pending_tool_results.is_empty() {
+                    messages.push(ChatMessage::tool_results(std::mem::take(
+                        &mut pending_tool_results,
+                    )));
+                }
             }
             ThreadEvent::Usage { .. } => {
                 // Skip usage events when loading for API (they're for thread tracking only)
@@ -1058,8 +1123,8 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
             let output = serde_json::json!({
                 "ok": false,
                 "error": {
-                    "code": "interrupted",
-                    "message": "Tool call was interrupted; no result recorded."
+                    "code": "cancelled",
+                    "message": "Tool call was cancelled by user."
                 }
             });
             pending_tool_results.push(crate::tools::ToolResult {
@@ -1359,7 +1424,7 @@ mod tests {
         assert!(json.contains("\"type\":\"tool_result\""));
         assert!(json.contains("\"ok\":true"));
 
-        let interrupted = ThreadEvent::interrupted();
+        let interrupted = ThreadEvent::interrupted(None);
         let json = serde_json::to_string(&interrupted).unwrap();
         assert!(json.contains("\"type\":\"interrupted\""));
         assert!(json.contains("\"role\":\"system\""));

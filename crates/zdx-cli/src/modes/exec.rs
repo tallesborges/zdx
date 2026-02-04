@@ -263,7 +263,7 @@ impl ExecRenderer {
                     let _ = writeln!(self.stderr, "  Details: {}", detail_text);
                 }
             }
-            AgentEvent::Interrupted => {
+            AgentEvent::Interrupted { .. } => {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
