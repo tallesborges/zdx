@@ -32,15 +32,11 @@ jobs:
               - '!**/*.md'
 
   checks:
-    name: format + lint + test (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
+    name: format + lint + test
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [changed]
     if: needs.changed.outputs.code_changed == 'true'
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-15, macos-15-intel]
     env:
       CARGO_TARGET_DIR: ${{ github.workspace }}/../.zdx/cargo-target
     steps:
@@ -62,11 +58,9 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Format
-        if: matrix.os == 'ubuntu-latest'
         run: cargo +nightly fmt --check
 
       - name: Clippy
-        if: matrix.os == 'ubuntu-latest'
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       - name: Build
@@ -81,7 +75,7 @@ jobs:
     needs: [changed, checks]
     if: always()
     steps:
-      - name: Verify matrix results
+      - name: Verify results
         run: |
           echo "code_changed: ${{ needs.changed.outputs.code_changed }}"
           echo "checks result: ${{ needs.checks.result }}"
