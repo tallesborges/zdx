@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.3.0](https://github.com/tallesborges/zdx/compare/v0.2.0...v0.3.0) (2026-02-04)
+
+
+### Features
+
+* **core:** persist partial content on interrupted responses ([#17](https://github.com/tallesborges/zdx/issues/17)) ([e58aa4f](https://github.com/tallesborges/zdx/commit/e58aa4fce3f449b47b0424c7979df9d41afe43b4))
+* **debug-trace:** capture raw provider traffic ([d16d49f](https://github.com/tallesborges/zdx/commit/d16d49f1316e16718cee9502139a4e8724608ee9))
+* **providers:** register mimo provider ([30ea4e8](https://github.com/tallesborges/zdx/commit/30ea4e80e2bd6d8f8a48d86ec0d00ae2d1e771af))
+
 ## [0.2.0](https://github.com/tallesborges/zdx/compare/v0.1.0...v0.2.0) (2026-01-31)
 
 
