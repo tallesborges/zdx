@@ -247,6 +247,8 @@ pub fn build_effective_system_prompt_with_paths(
     skill_options.enable_codex_user = config.skills.enable_codex_user;
     skill_options.enable_claude_user = config.skills.enable_claude_user;
     skill_options.enable_claude_project = config.skills.enable_claude_project;
+    skill_options.enable_agents_user = config.skills.enable_agents_user;
+    skill_options.enable_agents_project = config.skills.enable_agents_project;
     skill_options.ignored_skills = config.skills.ignored_skills.clone();
     skill_options.include_skills = config.skills.include_skills.clone();
 

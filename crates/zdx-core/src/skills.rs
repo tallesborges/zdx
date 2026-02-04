@@ -17,6 +17,8 @@ pub enum SkillSource {
     CodexUser,
     ClaudeUser,
     ClaudeProject,
+    AgentsUser,
+    AgentsProject,
 }
 
 impl fmt::Display for SkillSource {
@@ -33,6 +35,8 @@ impl SkillSource {
             SkillSource::CodexUser => "codex-user",
             SkillSource::ClaudeUser => "claude-user",
             SkillSource::ClaudeProject => "claude-project",
+            SkillSource::AgentsUser => "agents-user",
+            SkillSource::AgentsProject => "agents-project",
         }
     }
 }
@@ -79,6 +83,8 @@ pub struct LoadSkillsOptions {
     pub enable_codex_user: bool,
     pub enable_claude_user: bool,
     pub enable_claude_project: bool,
+    pub enable_agents_user: bool,
+    pub enable_agents_project: bool,
     pub ignored_skills: Vec<String>,
     pub include_skills: Vec<String>,
 }
@@ -92,6 +98,8 @@ impl LoadSkillsOptions {
             enable_codex_user: true,
             enable_claude_user: true,
             enable_claude_project: true,
+            enable_agents_user: true,
+            enable_agents_project: true,
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         }
@@ -247,6 +255,22 @@ fn build_skill_sources(
         sources.push(SkillSourceSpec::claude(
             SkillSource::ClaudeProject,
             options.cwd.join(".claude").join("skills"),
+        ));
+    }
+
+    if options.enable_agents_user
+        && let Some(home) = home_dir
+    {
+        sources.push(SkillSourceSpec::recursive(
+            SkillSource::AgentsUser,
+            home.join(".agents").join("skills"),
+        ));
+    }
+
+    if options.enable_agents_project {
+        sources.push(SkillSourceSpec::recursive(
+            SkillSource::AgentsProject,
+            options.cwd.join(".agents").join("skills"),
         ));
     }
 
@@ -895,6 +919,16 @@ mod tests {
             "claude-project",
             "ClaudeProj",
         );
+        write_skill(
+            &home.path().join(".agents").join("skills"),
+            "agents-user",
+            "AgentsUser",
+        );
+        write_skill(
+            &root.path().join(".agents").join("skills"),
+            "agents-project",
+            "AgentsProj",
+        );
 
         let options = LoadSkillsOptions {
             cwd: root.path().to_path_buf(),
@@ -903,6 +937,8 @@ mod tests {
             enable_codex_user: false,
             enable_claude_user: false,
             enable_claude_project: true,
+            enable_agents_user: false,
+            enable_agents_project: true,
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         };
@@ -914,8 +950,10 @@ mod tests {
         assert!(names.contains(&"zdx-user"));
         assert!(names.contains(&"zdx-project"));
         assert!(names.contains(&"claude-project"));
+        assert!(names.contains(&"agents-project"));
         assert!(!names.contains(&"codex"));
         assert!(!names.contains(&"claude-user"));
+        assert!(!names.contains(&"agents-user"));
     }
 
     #[test]
