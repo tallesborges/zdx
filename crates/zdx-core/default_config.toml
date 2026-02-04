@@ -122,3 +122,19 @@ models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", 
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
 models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+
+[providers.mistral]
+enabled = true
+# api_key = "..."  # Overrides MISTRAL_API_KEY env var
+# base_url = "https://api.mistral.ai/v1"
+models = ["voxtral-mini-latest"]
+
+# Transcription configuration
+# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
+# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
+# language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
+
+[transcription]
+# provider = "openai"
+# model = "whisper-1"
+# language = "en"

@@ -267,6 +267,18 @@ fn default_title_model() -> String {
     Config::DEFAULT_TITLE_MODEL.to_string()
 }
 
+/// Transcription configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct TranscriptionConfig {
+    /// Transcription provider: "openai" (default) or "mistral"
+    pub provider: Option<String>,
+    /// Model to use for transcription (provider-specific)
+    pub model: Option<String>,
+    /// Language hint (ISO 639-1 code like "en", "pt", etc.)
+    pub language: Option<String>,
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -289,6 +301,10 @@ pub struct Config {
     /// Provider configuration (base URLs, etc.).
     #[serde(default)]
     pub providers: ProvidersConfig,
+
+    /// Transcription configuration.
+    #[serde(default)]
+    pub transcription: TranscriptionConfig,
 
     /// Model to use for handoff generation subagent.
     #[serde(default = "default_handoff_model")]
@@ -556,9 +572,10 @@ impl Default for Config {
             system_prompt: None,
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
+            providers: ProvidersConfig::default(),
+            transcription: TranscriptionConfig::default(),
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
-            providers: ProvidersConfig::default(),
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
             telegram: TelegramConfig::default(),
@@ -590,6 +607,8 @@ pub struct ProvidersConfig {
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
     pub gemini_cli: ProviderConfig,
+    #[serde(default = "default_mistral_provider")]
+    pub mistral: ProviderConfig,
 }
 
 impl ProvidersConfig {
@@ -648,6 +667,7 @@ impl Default for ProvidersConfig {
             moonshot: default_moonshot_provider(),
             stepfun: default_stepfun_provider(),
             mimo: default_mimo_provider(),
+            mistral: default_mistral_provider(),
         }
     }
 }
@@ -760,6 +780,14 @@ fn default_gemini_cli_provider() -> ProviderConfig {
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
         ],
+        ..Default::default()
+    }
+}
+
+fn default_mistral_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["voxtral-mini-latest".to_string()],
         ..Default::default()
     }
 }
@@ -1441,5 +1469,14 @@ max_tokens = 4096
 
         let codex = providers.get(ProviderKind::OpenAICodex);
         assert!(codex.tools.is_none());
+    }
+
+    /// TranscriptionConfig: defaults are all None (auto-detect, no model override, no language).
+    #[test]
+    fn test_transcription_config_defaults() {
+        let config = TranscriptionConfig::default();
+        assert!(config.provider.is_none());
+        assert!(config.model.is_none());
+        assert!(config.language.is_none());
     }
 }
