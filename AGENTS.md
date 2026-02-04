@@ -54,6 +54,7 @@
       - `crates/zdx-core/src/providers/gemini/cli.rs`: Gemini CLI OAuth provider (Cloud Code Assist API)
       - `crates/zdx-core/src/providers/gemini/shared.rs`: shared helpers (request builders, thinking config)
       - `crates/zdx-core/src/providers/gemini/sse.rs`: Gemini SSE parser
+    - `crates/zdx-core/src/providers/mistral.rs`: Mistral OpenAI-compatible chat completions provider
     - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
     - `crates/zdx-core/src/providers/stepfun.rs`: StepFun (Step-3.5-Flash) OpenAI-compatible chat completions provider
     - `crates/zdx-core/src/providers/mimo.rs`: MiMo (Xiaomi MiMo) OpenAI-compatible chat completions provider
