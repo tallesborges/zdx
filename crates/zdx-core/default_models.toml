@@ -2,10 +2,10 @@
 # Edit this file to customize the model picker.
 
 [[model]]
-id = "claude-opus-4-5"
+id = "claude-opus-4-6"
 provider = "anthropic"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
+display_name = "Claude Opus 4.6"
+context_limit = 1000000
 
 [model.pricing]
 input = 5.0
@@ -16,7 +16,7 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 64000
+output_limit = 128000
 
 [[model]]
 id = "claude-sonnet-4-5"
@@ -53,10 +53,10 @@ input_images = true
 output_limit = 64000
 
 [[model]]
-id = "claude-cli:claude-opus-4-5"
+id = "claude-cli:claude-opus-4-6"
 provider = "claude-cli"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
+display_name = "Claude Opus 4.6"
+context_limit = 1000000
 
 [model.pricing]
 input = 5.0
@@ -67,7 +67,7 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 64000
+output_limit = 128000
 
 [[model]]
 id = "claude-cli:claude-sonnet-4-5"
@@ -274,57 +274,6 @@ input_images = false
 output_limit = 16384
 
 [[model]]
-id = "moonshot:kimi-k2.5"
-provider = "moonshot"
-display_name = "Kimi K2.5"
-context_limit = 262144
-
-[model.pricing]
-input = 0.6
-output = 3.0
-cache_read = 0.1
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 32768
-
-[[model]]
-id = "step-3.5-flash"
-provider = "stepfun"
-display_name = "Step 3.5 Flash"
-context_limit = 256000
-
-[model.pricing]
-input = 0.1
-output = 0.3
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 32768
-
-[[model]]
-id = "mimo-v2-flash"
-provider = "mimo"
-display_name = "MiMo V2 Flash"
-context_limit = 0
-
-[model.pricing]
-input = 0.1
-output = 0.3
-cache_read = 0.01
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = false
-output_limit = 131072
-
-[[model]]
 id = "openrouter:openai/gpt-oss-120b:exacto"
 provider = "openrouter"
 display_name = "GPT OSS 120B (exacto)"
@@ -374,6 +323,57 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 128000
+
+[[model]]
+id = "moonshot:kimi-k2.5"
+provider = "moonshot"
+display_name = "Kimi K2.5"
+context_limit = 262144
+
+[model.pricing]
+input = 0.6
+output = 3.0
+cache_read = 0.1
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 262144
+
+[[model]]
+id = "stepfun:step-3.5-flash"
+provider = "stepfun"
+display_name = "Step 3.5 Flash"
+context_limit = 256000
+
+[model.pricing]
+input = 0.1
+output = 0.3
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
+
+[[model]]
+id = "mimo:mimo-v2-flash"
+provider = "mimo"
+display_name = "MiMo-V2-Flash"
+context_limit = 256000
+
+[model.pricing]
+input = 0.07
+output = 0.21
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 32000
 
 [[model]]
 id = "gemini:gemini-3-flash-preview"

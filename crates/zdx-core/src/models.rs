@@ -179,7 +179,7 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
         return None;
     }
 
-    // Strip provider prefix from id if present (e.g., "claude-cli:claude-opus-4-5" -> "claude-opus-4-5")
+    // Strip provider prefix from id if present (e.g., "claude-cli:claude-opus-4-6" -> "claude-opus-4-6")
     let resolved = crate::providers::resolve_provider(raw_id);
     let id = resolved.model;
 

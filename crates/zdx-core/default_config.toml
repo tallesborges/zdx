@@ -47,11 +47,7 @@ enable_claude_project = true
 enable_agents_user = true
 enable_agents_project = true
 # GitHub repositories containing skills (owner/repo/path)
-skill_repositories = [
-  "openai/skills/skills/.curated",
-  "openai/skills/skills/.system",
-  "anthropics/skills/skills",
-]
+skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]
 # ignored_skills = ["test-*", "wip-*"]
 # include_skills = ["deploy-*", "release-*"]
 
@@ -78,12 +74,12 @@ skill_repositories = [
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
-models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
+models = ["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = ["claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
+models = ["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.openai]
 enabled = true
