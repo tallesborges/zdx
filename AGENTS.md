@@ -28,7 +28,9 @@
       - `crates/zdx-core/src/tools/apply_patch/mod.rs`: tool definition, execution wrapper, patch application engine
       - `crates/zdx-core/src/tools/apply_patch/parser.rs`: patch parser for file hunks
       - `crates/zdx-core/src/tools/apply_patch/types.rs`: Hunk enum, UpdateFileChunk, ParseError
+    - `crates/zdx-core/src/tools/fetch_webpage.rs`: fetch webpage tool (Parallel Extract API)
     - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
+    - `crates/zdx-core/src/tools/web_search.rs`: web search tool (Parallel Search API)
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
     - `crates/zdx-core/src/providers/shared.rs`: provider-agnostic types + helpers (merge_system_prompt, config resolution)
     - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
