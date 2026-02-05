@@ -3,11 +3,10 @@
 use anyhow::Result;
 use reqwest::header::HeaderMap;
 
-use crate::prompts::STEPFUN_AGENTIC_PROMPT_TEMPLATE;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{resolve_api_key, resolve_base_url};
+use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
 use crate::providers::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
@@ -91,23 +90,9 @@ impl StepfunClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let system = merge_stepfun_system_prompt(system);
+        let system = merge_system_prompt(system);
         self.inner
             .send_messages_stream(messages, tools, system.as_deref())
             .await
     }
-}
-
-/// Merges the StepFun base prompt with the provided system prompt.
-///
-/// Always includes the StepFun template first, appending any caller-provided system prompt.
-fn merge_stepfun_system_prompt(system: Option<&str>) -> Option<String> {
-    let base = STEPFUN_AGENTIC_PROMPT_TEMPLATE.trim();
-    let merged = match system {
-        Some(prompt) if !prompt.trim().is_empty() => {
-            format!("{}\n\n{}", base, prompt.trim())
-        }
-        _ => base.to_string(),
-    };
-    Some(merged)
 }

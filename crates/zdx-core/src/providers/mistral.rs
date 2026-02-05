@@ -7,7 +7,7 @@ use crate::providers::ProviderStream;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{resolve_api_key, resolve_base_url};
+use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
 use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.mistral.ai/v1";
@@ -90,8 +90,9 @@ impl MistralClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
+        let system = merge_system_prompt(system);
         self.inner
-            .send_messages_stream(messages, tools, system)
+            .send_messages_stream(messages, tools, system.as_deref())
             .await
     }
 }

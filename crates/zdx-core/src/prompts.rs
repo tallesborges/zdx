@@ -24,14 +24,8 @@ pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/read_thread_prompt.md"
 ));
 
-/// Prompt template for Gemini agentic coding.
-pub const GEMINI_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
+/// Prompt template for zdx agentic coding (Gemini, StepFun, Moonshot, etc.).
+pub const ZDX_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/gemini_agentic.md"
-));
-
-/// Prompt template for StepFun agentic coding.
-pub const STEPFUN_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/stepfun_agentic.md"
+    "/prompts/zdx_agentic.md"
 ));
