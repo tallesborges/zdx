@@ -284,7 +284,7 @@
 - Created `ModelPickerState` for picker overlay state
 - Created `AVAILABLE_MODELS` constant with supported models:
   - `claude-sonnet-4-5` - Claude Sonnet 4.5
-  - `claude-opus-4-5` - Claude Opus 4.5
+  - `claude-opus-4-6` - Claude Opus 4.6
   - `claude-haiku-4-5` - Claude Haiku 4.5
 - Model picker opens centered overlay with magenta theme
 - Arrow keys navigate, Enter selects, Escape cancels
