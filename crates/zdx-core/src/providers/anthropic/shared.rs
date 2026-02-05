@@ -70,11 +70,14 @@ pub(crate) async fn send_streaming_request(
     request: &StreamingMessagesRequest<'_>,
     header_fn: impl FnOnce(reqwest::RequestBuilder) -> reqwest::RequestBuilder,
 ) -> Result<ProviderStream> {
+    use crate::providers::shared::USER_AGENT;
+
     let trace = DebugTrace::from_env(request.model, None);
     let builder = client
         .post(url)
         .header("content-type", "application/json")
-        .header("accept", "application/json");
+        .header("accept", "application/json")
+        .header("user-agent", USER_AGENT);
 
     let response = if let Some(trace) = &trace {
         let body = serde_json::to_vec(request)?;

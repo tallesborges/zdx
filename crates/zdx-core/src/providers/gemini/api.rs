@@ -133,5 +133,9 @@ fn build_headers(api_key: &str) -> HeaderMap {
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert(
+        "user-agent",
+        HeaderValue::from_static(crate::providers::shared::USER_AGENT),
+    );
     headers
 }
