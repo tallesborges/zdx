@@ -696,6 +696,7 @@ fn default_anthropic_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "claude-opus-4-6".to_string(),
+            "claude-opus-4-5".to_string(),
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
@@ -708,6 +709,7 @@ fn default_claude_cli_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "claude-opus-4-6".to_string(),
+            "claude-opus-4-5".to_string(),
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
@@ -736,6 +738,7 @@ fn default_openai_codex_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.3-codex".to_string(),
             "gpt-5.2-codex".to_string(),
             "gpt-5.1-codex-max".to_string(),
             "gpt-5.1-codex-mini".to_string(),

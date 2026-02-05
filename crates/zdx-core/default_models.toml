@@ -2,10 +2,10 @@
 # Edit this file to customize the model picker.
 
 [[model]]
-id = "claude-opus-4-6"
+id = "claude-opus-4-5"
 provider = "anthropic"
-display_name = "Claude Opus 4.6"
-context_limit = 1000000
+display_name = "Claude Opus 4.5"
+context_limit = 200000
 
 [model.pricing]
 input = 5.0
@@ -16,7 +16,24 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 128000
+output_limit = 64000
+
+[[model]]
+id = "claude-opus-4-6"
+provider = "anthropic"
+display_name = "Claude Opus 4.6"
+context_limit = 200000
+
+[model.pricing]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write = 6.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
 
 [[model]]
 id = "claude-sonnet-4-5"
@@ -53,10 +70,10 @@ input_images = true
 output_limit = 64000
 
 [[model]]
-id = "claude-cli:claude-opus-4-6"
+id = "claude-cli:claude-opus-4-5"
 provider = "claude-cli"
-display_name = "Claude Opus 4.6"
-context_limit = 1000000
+display_name = "Claude Opus 4.5"
+context_limit = 200000
 
 [model.pricing]
 input = 5.0
@@ -67,7 +84,24 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 128000
+output_limit = 64000
+
+[[model]]
+id = "claude-cli:claude-opus-4-6"
+provider = "claude-cli"
+display_name = "Claude Opus 4.6"
+context_limit = 200000
+
+[model.pricing]
+input = 5.0
+output = 25.0
+cache_read = 0.5
+cache_write = 6.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
 
 [[model]]
 id = "claude-cli:claude-sonnet-4-5"
@@ -512,6 +546,23 @@ input_images = true
 output_limit = 65536
 
 [[model]]
+id = "gpt-5.3-codex"
+provider = "openai-codex"
+display_name = "GPT-5.3 Codex"
+context_limit = 400000
+
+[model.pricing]
+input = 1.5
+output = 12.0
+cache_read = 0.15
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
 id = "gpt-5.2-codex"
 provider = "openai-codex"
 display_name = "GPT-5.2 Codex"
@@ -555,23 +606,6 @@ context_limit = 400000
 input = 0.25
 output = 2.0
 cache_read = 0.025
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.2"
-provider = "openai-codex"
-display_name = "GPT-5.2"
-context_limit = 400000
-
-[model.pricing]
-input = 1.75
-output = 14.0
-cache_read = 0.175
 cache_write = 0.0
 
 [model.capabilities]

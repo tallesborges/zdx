@@ -74,12 +74,12 @@ skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.sy
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
-models = ["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
+models = ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = ["claude-opus-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
+models = ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.openai]
 enabled = true
@@ -89,7 +89,7 @@ models = ["gpt-5.2", "gpt-5.1", "gpt-5-mini", "gpt-5-nano", "gpt-5.2-codex", "gp
 
 [providers.openai_codex]
 enabled = true
-models = ["gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.2"]
+models = ["gpt-5.3-codex", "gpt-5.2-codex", "gpt-5.1-codex-max", "gpt-5.1-codex-mini", "gpt-5.2"]
 # Codex models have built-in apply_patch instructions
 
 [providers.openrouter]
