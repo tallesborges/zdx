@@ -1,6 +1,6 @@
 //! Models command handlers.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 
@@ -258,8 +258,6 @@ pub async fn update(config: &config::Config) -> Result<()> {
             records.push(record);
         }
     }
-
-    append_codex_records(config, &mut records, &mut seen_keys)?;
 
     if records.is_empty() {
         bail!("No models matched configured providers/models.");
@@ -528,112 +526,6 @@ fn format_model_id(prefix: Option<&str>, raw_id: &str) -> String {
         Some(prefix) => format!("{}:{}", prefix, raw_id),
         None => raw_id.to_string(),
     }
-}
-
-fn append_codex_records(
-    config: &config::Config,
-    records: &mut Vec<ModelRecord>,
-    seen_keys: &mut HashSet<String>,
-) -> Result<()> {
-    let cfg = &config.providers.openai_codex;
-    // Include Codex models in registry regardless of enabled status.
-    if cfg.models.is_empty() {
-        eprintln!("Warning: providers.openai_codex.models is empty; skipping.");
-        return Ok(());
-    }
-
-    let catalog = load_codex_catalog(&config.models_path())?;
-    let selected = select_manual_records("openai-codex", &cfg.models, &catalog);
-
-    if selected.is_empty() {
-        eprintln!("Warning: no models matched providers.openai_codex.models");
-        return Ok(());
-    }
-
-    for record in selected {
-        let key = record_key(&record);
-        if !seen_keys.insert(key) {
-            continue;
-        }
-        records.push(record);
-    }
-
-    Ok(())
-}
-
-fn load_codex_catalog(path: &Path) -> Result<Vec<ModelRecord>> {
-    let mut by_id = HashMap::new();
-
-    let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml())
-        .context("Failed to parse default models registry")?;
-    for record in defaults.models {
-        if record.provider == "openai-codex" {
-            by_id.insert(record.id.clone(), record);
-        }
-    }
-
-    if let Ok(contents) = fs::read_to_string(path) {
-        let existing: ModelsFile = toml::from_str(&contents)
-            .with_context(|| format!("Failed to parse models file at {}", path.display()))?;
-        for record in existing.models {
-            if record.provider == "openai-codex" {
-                by_id.insert(record.id.clone(), record);
-            }
-        }
-    }
-
-    Ok(by_id.into_values().collect())
-}
-
-fn select_manual_records(
-    provider_id: &str,
-    patterns: &[String],
-    catalog: &[ModelRecord],
-) -> Vec<ModelRecord> {
-    let mut selected = Vec::new();
-
-    for pattern in patterns {
-        let pattern = pattern.trim();
-        if pattern.is_empty() {
-            continue;
-        }
-
-        let matches: Vec<&ModelRecord> = catalog
-            .iter()
-            .filter(|record| matches_manual_pattern(provider_id, pattern, record))
-            .collect();
-
-        if matches.is_empty() {
-            eprintln!(
-                "Warning: pattern '{}' for provider '{}' matched no models",
-                pattern, provider_id
-            );
-            continue;
-        }
-
-        selected.extend(matches.into_iter().cloned());
-    }
-
-    selected
-}
-
-fn matches_manual_pattern(provider_id: &str, pattern: &str, record: &ModelRecord) -> bool {
-    build_manual_targets(provider_id, record)
-        .iter()
-        .any(|target| wildcard_match(pattern, target))
-}
-
-fn build_manual_targets(provider_id: &str, record: &ModelRecord) -> Vec<String> {
-    let mut targets = vec![record.id.clone()];
-    targets.push(format!("{}:{}", provider_id, record.id));
-    targets.push(format!("{}/{}", provider_id, record.id));
-
-    if provider_id == "openai-codex" {
-        targets.push(format!("codex:{}", record.id));
-        targets.push(format!("codex/{}", record.id));
-    }
-
-    targets
 }
 
 fn record_key(record: &ModelRecord) -> String {
