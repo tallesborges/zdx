@@ -3,7 +3,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
-use zdx_core::config::{Config, ThinkingLevel};
+use zdx_core::config::Config;
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::tools::{ToolRegistry, ToolSet};
 
@@ -30,8 +30,9 @@ pub async fn run() -> Result<()> {
 
 pub async fn run_with_root(root: PathBuf) -> Result<()> {
     let mut config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
-    config.model = "claude-cli:claude-opus-4-6".to_string();
-    config.thinking_level = ThinkingLevel::Minimal;
+    // Apply telegram-specific model + thinking_level
+    config.model = config.telegram.model.clone();
+    config.thinking_level = config.telegram.thinking_level;
     let settings = TelegramSettings::from_config(&config)?;
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
