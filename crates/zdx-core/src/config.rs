@@ -79,7 +79,7 @@ impl Default for SkillsConfig {
 }
 
 /// Telegram bot configuration.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct TelegramConfig {
     /// Bot token for Telegram API.
@@ -90,6 +90,22 @@ pub struct TelegramConfig {
     /// Allowlist of numeric Telegram chat IDs (for groups/supergroups).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub allowlist_chat_ids: Vec<i64>,
+    /// Model for the Telegram bot.
+    pub model: String,
+    /// Thinking level for the Telegram bot.
+    pub thinking_level: ThinkingLevel,
+}
+
+impl Default for TelegramConfig {
+    fn default() -> Self {
+        Self {
+            bot_token: None,
+            allowlist_user_ids: Vec::new(),
+            allowlist_chat_ids: Vec::new(),
+            model: "claude-cli:claude-opus-4-6".to_string(),
+            thinking_level: ThinkingLevel::Minimal,
+        }
+    }
 }
 
 impl ThinkingLevel {

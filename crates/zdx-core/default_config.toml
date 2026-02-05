@@ -56,6 +56,10 @@ skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.sy
 # bot_token = "123456789:abcDEF..."
 # allowlist_user_ids = [123456789]
 # bot_token can also be set via ZDX_TELEGRAM_BOT_TOKEN
+# Model used by the Telegram bot
+model = "claude-cli:claude-opus-4-6"
+# Thinking level used by the Telegram bot
+thinking_level = "minimal"
 
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
