@@ -662,8 +662,15 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> Option<String> {
     let mut output = String::new();
     output.push_str("The following skills provide specialized instructions for specific tasks.\n");
     output.push_str(
-        "Use the read tool to load a skill's file when the task matches its description.\n\n",
+        "When a task matches a skill description, you MUST read the skill file from <path> and follow its instructions.\n\n",
     );
+
+    output.push_str("<example>\n");
+    output.push_str("User: [task matching a skill description]\n");
+    output.push_str("Assistant: [read the skill <path>]\n");
+    output.push_str("[reads and follows the skill instructions]\n");
+    output.push_str("</example>\n\n");
+
     output.push_str("<available_skills>\n");
 
     for skill in skills {
@@ -676,10 +683,6 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> Option<String> {
         output.push_str(&format!(
             "    <path>{}</path>\n",
             escape_xml(&skill.file_path.display().to_string())
-        ));
-        output.push_str(&format!(
-            "    <source>{}</source>\n",
-            escape_xml(skill.source.as_str())
         ));
         output.push_str("  </skill>\n");
     }

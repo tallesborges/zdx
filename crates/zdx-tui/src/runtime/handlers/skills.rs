@@ -304,11 +304,8 @@ fn join_repo_path(base: &str, child: &str) -> String {
 }
 
 fn skill_install_root() -> PathBuf {
-    // Install to project's .zdx/skills/ directory
-    std::env::current_dir()
-        .unwrap_or_else(|_| PathBuf::from("."))
-        .join(".zdx")
-        .join("skills")
+    // Install to user's ZDX home skills directory (~/.zdx/skills/)
+    zdx_core::config::paths::zdx_home().join("skills")
 }
 
 fn skill_name_from_path(path: &str) -> String {

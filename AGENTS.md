@@ -125,7 +125,7 @@
 
 - `cargo run -p zdx -- --help`
 - `cargo run -p zdx --` (interactive; needs provider key via env)
-- `cargo run -p zdx -- bot` (Telegram bot; requires config telegram.* keys)
+- `cargo run -p zdx -- bot` (Telegram bot; requires config telegram.\* keys)
 - `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
 - `cargo xtask update-default-config` (maintainer: refresh default_config.toml)
 - `cargo xtask update-defaults` (maintainer: refresh both defaults)
@@ -155,23 +155,6 @@
 - `docs/SPEC.md`: contracts (what/behavior)
 - `docs/ARCHITECTURE.md`: system architecture and design (Elm/MVU patterns, key patterns)
 - `docs/plans/`: optional commit-sized plans (how)
-
-## Delegating tasks (subagent pattern)
-
-When a task is complex or would pollute the current context, delegate to a fresh zdx instance:
-
-```bash
-# If zdx is in PATH:
-zdx --no-thread exec -p "your task description"
-```
-
-This runs in an isolated process with its own context window. Use for:
-- Reading large files and summarizing
-- Complex multi-step analysis
-- Research tasks that generate lots of intermediate output
-- Any task where you only need the final result
-
-The `--no-thread` flag prevents thread file creation. Output is returned directly.
 
 ## ⚠️ IMPORTANT: Keep this file up to date
 
