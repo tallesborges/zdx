@@ -125,6 +125,12 @@ pub async fn update(config: &config::Config) -> Result<()> {
         ),
         ("openai", "openai", Some("openai"), &config.providers.openai),
         (
+            "openai-codex",
+            "openai",
+            None,
+            &config.providers.openai_codex,
+        ),
+        (
             "openrouter",
             "openrouter",
             Some("openrouter"),

@@ -2,10 +2,10 @@
 # Edit this file to customize the model picker.
 
 [[model]]
-id = "claude-opus-4-5"
+id = "claude-opus-4-6"
 provider = "anthropic"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
+display_name = "Claude Opus 4.6"
+context_limit = 1000000
 
 [model.pricing]
 input = 5.0
@@ -16,12 +16,12 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 64000
+output_limit = 128000
 
 [[model]]
-id = "claude-opus-4-6"
+id = "claude-opus-4-5"
 provider = "anthropic"
-display_name = "Claude Opus 4.6"
+display_name = "Claude Opus 4.5"
 context_limit = 200000
 
 [model.pricing]
@@ -70,10 +70,10 @@ input_images = true
 output_limit = 64000
 
 [[model]]
-id = "claude-cli:claude-opus-4-5"
+id = "claude-cli:claude-opus-4-6"
 provider = "claude-cli"
-display_name = "Claude Opus 4.5"
-context_limit = 200000
+display_name = "Claude Opus 4.6"
+context_limit = 1000000
 
 [model.pricing]
 input = 5.0
@@ -84,12 +84,12 @@ cache_write = 6.25
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 64000
+output_limit = 128000
 
 [[model]]
-id = "claude-cli:claude-opus-4-6"
+id = "claude-cli:claude-opus-4-5"
 provider = "claude-cli"
-display_name = "Claude Opus 4.6"
+display_name = "Claude Opus 4.5"
 context_limit = 200000
 
 [model.pricing]
@@ -272,6 +272,91 @@ cache_write = 0.0
 reasoning = false
 input_images = true
 output_limit = 32768
+
+[[model]]
+id = "gpt-5.3-codex"
+provider = "openai-codex"
+display_name = "GPT-5.3 Codex"
+context_limit = 400000
+
+[model.pricing]
+input = 1.75
+output = 14.0
+cache_read = 0.175
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "gpt-5.2-codex"
+provider = "openai-codex"
+display_name = "GPT-5.2 Codex"
+context_limit = 400000
+
+[model.pricing]
+input = 1.75
+output = 14.0
+cache_read = 0.175
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "gpt-5.1-codex-max"
+provider = "openai-codex"
+display_name = "GPT-5.1 Codex Max"
+context_limit = 400000
+
+[model.pricing]
+input = 1.25
+output = 10.0
+cache_read = 0.125
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "gpt-5.1-codex-mini"
+provider = "openai-codex"
+display_name = "GPT-5.1 Codex mini"
+context_limit = 400000
+
+[model.pricing]
+input = 0.25
+output = 2.0
+cache_read = 0.025
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
+
+[[model]]
+id = "gpt-5.2"
+provider = "openai-codex"
+display_name = "GPT-5.2"
+context_limit = 400000
+
+[model.pricing]
+input = 1.75
+output = 14.0
+cache_read = 0.175
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "openrouter:deepseek/deepseek-v3.1-terminus:exacto"
@@ -544,71 +629,3 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 65536
-
-[[model]]
-id = "gpt-5.3-codex"
-provider = "openai-codex"
-display_name = "GPT-5.3 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 1.5
-output = 12.0
-cache_read = 0.15
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.2-codex"
-provider = "openai-codex"
-display_name = "GPT-5.2 Codex"
-context_limit = 400000
-
-[model.pricing]
-input = 0.0
-output = 0.0
-cache_read = 0.0
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.1-codex-max"
-provider = "openai-codex"
-display_name = "GPT-5.1 Codex Max"
-context_limit = 400000
-
-[model.pricing]
-input = 1.25
-output = 10.0
-cache_read = 0.125
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
-
-[[model]]
-id = "gpt-5.1-codex-mini"
-provider = "openai-codex"
-display_name = "GPT-5.1 Codex Mini"
-context_limit = 400000
-
-[model.pricing]
-input = 0.25
-output = 2.0
-cache_read = 0.025
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 128000
