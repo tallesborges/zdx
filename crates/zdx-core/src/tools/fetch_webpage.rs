@@ -52,7 +52,7 @@ pub fn definition() -> ToolDefinition {
 struct FetchInput {
     urls: Vec<String>,
     objective: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
     #[serde(default)]
     full_content: bool,
@@ -231,6 +231,49 @@ mod tests {
         });
         let parsed: FetchInput = serde_json::from_value(input).unwrap();
         assert!(!parsed.full_content);
+        assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_accepts_string() {
+        // LLM sometimes sends a single string instead of an array
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "search_queries": "gpt-5.3-codex CLI model"
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec!["gpt-5.3-codex CLI model".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_search_queries_accepts_array() {
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "search_queries": ["gpt-5.3-codex", "february 2026"]
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec![
+                "gpt-5.3-codex".to_string(),
+                "february 2026".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_search_queries_empty_string_becomes_none() {
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "search_queries": ""
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
         assert!(parsed.search_queries.is_none());
     }
 }

@@ -25,6 +25,58 @@ use serde_json::Value;
 use crate::core::events::ToolOutput;
 
 // ============================================================================
+// Serde helpers for LLM-resilient deserialization
+// ============================================================================
+
+/// Serde helper that accepts either a JSON array of strings or a single string.
+///
+/// LLMs sometimes send `"search_queries": "single query"` instead of
+/// `"search_queries": ["single query"]`. This module gracefully coerces
+/// a bare string into a one-element `Vec<String>`.
+pub(crate) mod string_or_vec {
+    use serde::{Deserialize, Deserializer, de};
+
+    /// Deserializes a `Vec<String>` that also accepts a single string.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum StringOrVec {
+            String(String),
+            Vec(Vec<String>),
+        }
+
+        // Option wrapper: if the field is missing (None via serde(default)),
+        // this function won't be called – serde returns None directly.
+        // When called, the value is present so we parse it.
+        let value: Option<StringOrVec> = Option::deserialize(deserializer)?;
+        match value {
+            None => Ok(None),
+            Some(StringOrVec::String(s)) => {
+                if s.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(vec![s]))
+                }
+            }
+            Some(StringOrVec::Vec(v)) => {
+                // Validate every element is a non-empty string
+                for item in &v {
+                    if item.is_empty() {
+                        return Err(de::Error::custom(
+                            "search_queries array contains empty string",
+                        ));
+                    }
+                }
+                if v.is_empty() { Ok(None) } else { Ok(Some(v)) }
+            }
+        }
+    }
+}
+
+// ============================================================================
 // Path Resolution Helpers
 // ============================================================================
 

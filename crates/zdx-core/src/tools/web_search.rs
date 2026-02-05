@@ -46,7 +46,7 @@ pub fn definition() -> ToolDefinition {
 #[derive(Debug, Deserialize)]
 struct WebSearchInput {
     objective: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
     #[serde(default = "default_max_results")]
     max_results: u32,
@@ -225,6 +225,46 @@ mod tests {
         let input = json!({"objective": "test query"});
         let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
         assert_eq!(parsed.max_results, 10);
+        assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_accepts_string() {
+        // LLM sometimes sends a single string instead of an array
+        let input = json!({
+            "objective": "test query",
+            "search_queries": "gpt-5.3-codex CLI model"
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec!["gpt-5.3-codex CLI model".to_string()])
+        );
+    }
+
+    #[test]
+    fn test_search_queries_accepts_array() {
+        let input = json!({
+            "objective": "test query",
+            "search_queries": ["gpt-5.3-codex", "february 2026"]
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec![
+                "gpt-5.3-codex".to_string(),
+                "february 2026".to_string()
+            ])
+        );
+    }
+
+    #[test]
+    fn test_search_queries_empty_string_becomes_none() {
+        let input = json!({
+            "objective": "test query",
+            "search_queries": ""
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
         assert!(parsed.search_queries.is_none());
     }
 }
