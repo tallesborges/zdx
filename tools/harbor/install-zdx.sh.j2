@@ -7,17 +7,48 @@ apt-get update
 apt-get install -y --no-install-recommends \
   ca-certificates \
   curl \
-  git \
-  build-essential \
-  pkg-config \
-  libssl-dev
+  libssl-dev \
+  tar
 
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
-  | sh -s -- -y --profile minimal
+mkdir -p /root/.cargo/bin
 
-export PATH="/root/.cargo/bin:$PATH"
+ZDX_INSTALL_MODE="${ZDX_INSTALL_MODE:-release}"
 
-git clone --depth 1 {{ zdx_repo }} /opt/zdx
-cd /opt/zdx
-cargo build -p zdx --release
-cp target/release/zdx /root/.cargo/bin/zdx
+if [ "${ZDX_INSTALL_MODE}" = "release" ]; then
+  arch="$(uname -m)"
+  case "${arch}" in
+    x86_64|amd64)
+      ZDX_RELEASE_ASSET="${ZDX_RELEASE_ASSET:-zdx-x86_64-unknown-linux-gnu.tar.gz}"
+      ;;
+    *)
+      echo "Unsupported arch for release binary (${arch}); falling back to source build." >&2
+      ZDX_INSTALL_MODE="source"
+      ;;
+  esac
+fi
+
+if [ "${ZDX_INSTALL_MODE}" = "release" ]; then
+  ZDX_RELEASE_TAG="${ZDX_RELEASE_TAG:-v0.2.0}"
+  ZDX_RELEASE_URL="${ZDX_RELEASE_URL:-https://github.com/tallesborges/zdx/releases/download/${ZDX_RELEASE_TAG}/${ZDX_RELEASE_ASSET}}"
+
+  tmp_dir="$(mktemp -d)"
+  curl -fsSL "${ZDX_RELEASE_URL}" -o "${tmp_dir}/zdx.tar.gz"
+  tar -xzf "${tmp_dir}/zdx.tar.gz" -C "${tmp_dir}"
+  install -m 0755 "${tmp_dir}/zdx" /root/.cargo/bin/zdx
+  rm -rf "${tmp_dir}"
+else
+  apt-get install -y --no-install-recommends \
+    git \
+    build-essential \
+    pkg-config
+
+  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | sh -s -- -y --profile minimal
+
+  export PATH="/root/.cargo/bin:$PATH"
+
+  git clone --depth 1 {{ zdx_repo }} /opt/zdx
+  cd /opt/zdx
+  cargo build -p zdx --release
+  cp target/release/zdx /root/.cargo/bin/zdx
+fi
