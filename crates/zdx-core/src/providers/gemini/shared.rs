@@ -12,7 +12,6 @@ use anyhow::Result;
 use serde_json::{Value, json};
 
 use crate::config::ThinkingLevel;
-use crate::prompts::GEMINI_AGENTIC_PROMPT_TEMPLATE;
 use crate::providers::{
     ChatContentBlock, ChatMessage, MessageContent, ProviderError, ProviderErrorKind, ReplayToken,
 };
@@ -315,20 +314,6 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
     }
 
     (contents, tool_name_map)
-}
-
-/// Merges the Gemini agentic prompt with the provided system prompt.
-///
-/// Always includes the Gemini agentic template, appending any caller-provided system prompt.
-pub fn merge_gemini_system_prompt(system: Option<&str>) -> Option<String> {
-    let base = GEMINI_AGENTIC_PROMPT_TEMPLATE.trim();
-    let merged = match system {
-        Some(prompt) if !prompt.trim().is_empty() => {
-            format!("{}\n\n{}", base, prompt.trim())
-        }
-        _ => base.to_string(),
-    };
-    Some(merged)
 }
 
 /// Builds the tools array for Gemini API.

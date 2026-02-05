@@ -8,6 +8,7 @@ use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use crate::prompts::ZDX_AGENTIC_PROMPT_TEMPLATE;
 use crate::tools::ToolResult;
 
 // ============================================================================
@@ -79,6 +80,20 @@ pub fn resolve_base_url(
 fn validate_url(url: &str, provider_name: &str) -> Result<()> {
     url::Url::parse(url).with_context(|| format!("Invalid {} base URL: {}", provider_name, url))?;
     Ok(())
+}
+
+/// Merges the zdx agentic prompt with the provided system prompt.
+///
+/// Always includes the zdx agentic template, appending any caller-provided system prompt.
+pub fn merge_system_prompt(system: Option<&str>) -> Option<String> {
+    let base = ZDX_AGENTIC_PROMPT_TEMPLATE.trim();
+    let merged = match system {
+        Some(prompt) if !prompt.trim().is_empty() => {
+            format!("{}\n\n{}", base, prompt.trim())
+        }
+        _ => base.to_string(),
+    };
+    Some(merged)
 }
 
 /// Provider-specific replay token for reasoning/thinking blocks.

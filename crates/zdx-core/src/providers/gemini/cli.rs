@@ -7,11 +7,12 @@ use reqwest::header::{HeaderMap, HeaderValue};
 
 use super::shared::{
     CloudCodeRequestParams, GeminiThinkingConfig, build_cloud_code_assist_request,
-    classify_reqwest_error, merge_gemini_system_prompt,
+    classify_reqwest_error,
 };
 use super::sse::GeminiSseParser;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::oauth::gemini_cli as oauth_gemini_cli;
+use crate::providers::shared::merge_system_prompt;
 use crate::providers::{ChatMessage, ProviderError, ProviderStream};
 use crate::tools::ToolDefinition;
 
@@ -101,7 +102,7 @@ impl GeminiCliClient {
     ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
         let seq = self.prompt_seq.fetch_add(1, Ordering::Relaxed);
-        let system_prompt = merge_gemini_system_prompt(system);
+        let system_prompt = merge_system_prompt(system);
 
         let request = build_cloud_code_assist_request(
             messages,

@@ -3,12 +3,10 @@
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use super::shared::{
-    GeminiThinkingConfig, build_gemini_request, classify_reqwest_error, merge_gemini_system_prompt,
-};
+use super::shared::{GeminiThinkingConfig, build_gemini_request, classify_reqwest_error};
 use super::sse::GeminiSseParser;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::shared::{resolve_api_key, resolve_base_url};
+use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
 use crate::providers::{ChatMessage, DebugTrace, ProviderError, ProviderStream, wrap_stream};
 use crate::tools::ToolDefinition;
 
@@ -80,7 +78,7 @@ impl GeminiClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let system_prompt = merge_gemini_system_prompt(system);
+        let system_prompt = merge_system_prompt(system);
         let request = build_gemini_request(
             messages,
             tools,
