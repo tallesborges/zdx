@@ -1,3 +1,4 @@
 /target
 codebase.txt
 node_modules/
+__pycache__/
