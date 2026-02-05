@@ -11,6 +11,12 @@ use serde_json::Value;
 use crate::prompts::ZDX_AGENTIC_PROMPT_TEMPLATE;
 use crate::tools::ToolResult;
 
+/// Standard User-Agent header for zdx API requests.
+///
+/// Used by all API-key providers for identification. OAuth providers
+/// (Claude CLI, Gemini CLI) use mimicked User-Agents for compatibility.
+pub const USER_AGENT: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
+
 // ============================================================================
 // Config resolution helpers
 // ============================================================================
