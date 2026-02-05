@@ -385,7 +385,7 @@ fn is_pure_wildcard(pattern: &str) -> bool {
 /// Looks up a model in the embedded default_models.toml by ID.
 /// Uses provider resolution to match models with different prefixes.
 fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
-    use zdx_core::providers::resolve_provider;
+    use zdx_core::providers::{provider_kind_from_id, resolve_provider};
 
     let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml()).ok()?;
     let target = resolve_provider(full_id);
@@ -395,9 +395,13 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
         if record.id == full_id {
             return true;
         }
-        // Fall back to provider-resolved match
-        let candidate = resolve_provider(&record.id);
-        candidate.kind == target.kind && candidate.model == target.model
+        // Fall back to provider-based match using record.provider field
+        // This handles cases where record.id has no prefix (e.g., "step-3.5-flash")
+        // but record.provider specifies the correct provider (e.g., "stepfun")
+        if let Some(candidate_kind) = provider_kind_from_id(&record.provider) {
+            return candidate_kind == target.kind && record.id == target.model;
+        }
+        false
     })
 }
 
@@ -702,5 +706,36 @@ mod tests {
 
         assert_eq!(result.matched.len(), 2); // gpt-4 matched twice (pattern + wildcard)
         assert_eq!(result.unmatched_patterns, vec!["xiaomi/mimo-v2-flash"]);
+    }
+
+    #[test]
+    fn test_lookup_default_model_uses_provider_field() {
+        // This tests that lookup_default_model correctly matches models where
+        // the record.id has no prefix but record.provider specifies the provider.
+        // e.g., default_models.toml has: id = "step-3.5-flash", provider = "stepfun"
+        // and we look up "stepfun:step-3.5-flash"
+
+        let result = lookup_default_model("stepfun:step-3.5-flash");
+        assert!(result.is_some(), "Should find stepfun model in defaults");
+
+        let model = result.unwrap();
+        assert_eq!(model.provider, "stepfun");
+        assert_eq!(model.display_name, "Step 3.5 Flash");
+        // Should NOT be "(custom)" since it's in default_models.toml
+        assert!(
+            !model.display_name.contains("custom"),
+            "Should use display_name from defaults, not '(custom)'"
+        );
+    }
+
+    #[test]
+    fn test_lookup_default_model_mimo() {
+        // Also test mimo which has similar structure
+        let result = lookup_default_model("mimo:mimo-v2-flash");
+        assert!(result.is_some(), "Should find mimo model in defaults");
+
+        let model = result.unwrap();
+        assert_eq!(model.provider, "mimo");
+        assert!(!model.display_name.contains("custom"));
     }
 }
