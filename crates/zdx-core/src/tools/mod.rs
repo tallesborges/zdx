@@ -6,8 +6,10 @@
 pub mod apply_patch;
 pub mod bash;
 pub mod edit;
+pub mod fetch_webpage;
 pub mod read;
 pub mod read_thread;
+pub mod web_search;
 pub mod write;
 
 use std::collections::HashMap;
@@ -199,8 +201,23 @@ pub enum ToolSet {
 impl ToolSet {
     pub fn tool_names(self) -> &'static [&'static str] {
         match self {
-            ToolSet::Default => &["bash", "edit", "read", "read_thread", "write"],
-            ToolSet::OpenAICodex => &["bash", "apply_patch", "read", "read_thread"],
+            ToolSet::Default => &[
+                "bash",
+                "edit",
+                "fetch_webpage",
+                "read",
+                "read_thread",
+                "web_search",
+                "write",
+            ],
+            ToolSet::OpenAICodex => &[
+                "bash",
+                "apply_patch",
+                "fetch_webpage",
+                "read",
+                "read_thread",
+                "web_search",
+            ],
         }
     }
 }
@@ -385,6 +402,24 @@ impl ToolRegistry {
                 let input = input.clone();
                 let ctx = ctx.clone();
                 Box::pin(async move { execute_write(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            web_search::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { web_search::execute(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            fetch_webpage::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { fetch_webpage::execute(&input, &ctx).await })
             }),
         );
     }
@@ -610,8 +645,10 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
+        assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
     }
 
@@ -624,8 +661,10 @@ mod tests {
         assert!(names.contains(&"bash".to_string()));
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
+        assert!(names.contains(&"fetch_webpage".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
     }
 
