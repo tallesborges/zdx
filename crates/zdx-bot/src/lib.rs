@@ -38,6 +38,13 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
     if config_path.exists() {
         eprintln!("Config file: {}", config_path.display());
     }
+    eprintln!(
+        "Model: {} | Thinking: {} | Users: {:?} | Chats: {:?}",
+        config.model,
+        config.thinking_level.display_name(),
+        config.telegram.allowlist_user_ids,
+        config.telegram.allowlist_chat_ids,
+    );
     run_bot(config, settings, root).await
 }
 
