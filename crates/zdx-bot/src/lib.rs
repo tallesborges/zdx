@@ -7,7 +7,7 @@ use zdx_core::config::Config;
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::tools::{ToolRegistry, ToolSet};
 
-use crate::bot::{BotContext, enqueue_message, new_chat_queues};
+use crate::bot::{BotContext, dispatch_message, new_chat_queues};
 use crate::telegram::{TelegramClient, TelegramSettings};
 
 mod agent;
@@ -109,7 +109,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 for update in updates {
                     offset = Some(update.update_id + 1);
                     if let Some(message) = update.message {
-                        enqueue_message(&chat_queues, &context, message).await;
+                        dispatch_message(&chat_queues, &context, message).await;
                     }
                 }
             }
