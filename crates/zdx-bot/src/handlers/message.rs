@@ -5,7 +5,6 @@ use zdx_core::core::worktree;
 use crate::bot::context::BotContext;
 use crate::ingest::AllowlistConfig;
 use crate::telegram::Message;
-use crate::types::IncomingMessage;
 use crate::{agent, ingest};
 
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
@@ -24,6 +23,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     // context in the topic, which is useful for reference
     let reply_to_message_id = Some(incoming.message_id);
 
+    // Handle commands that are blocked in General (topic wasn't created for these)
     if incoming.is_forum
         && incoming.message_thread_id.is_none()
         && incoming.images.is_empty()
@@ -43,34 +43,8 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
-    // For forum-enabled group messages without a topic, create a new topic
-    // Only create topics in forums (is_forum=true), not regular groups
-    let topic_id = if incoming.is_forum && incoming.message_thread_id.is_none() {
-        let topic_name = generate_topic_name(&incoming);
-        match context
-            .client()
-            .create_forum_topic(incoming.chat_id, &topic_name)
-            .await
-        {
-            Ok(id) => {
-                eprintln!(
-                    "Created topic '{}' (id: {}) for chat {}",
-                    topic_name, id, incoming.chat_id
-                );
-                Some(id)
-            }
-            Err(err) => {
-                eprintln!(
-                    "Failed to create topic for chat {}: {}",
-                    incoming.chat_id, err
-                );
-                // Fall back to no topic (will reply in General)
-                None
-            }
-        }
-    } else {
-        incoming.message_thread_id
-    };
+    // Use the topic_id from the message (set by dispatch_message for General messages)
+    let topic_id = incoming.message_thread_id;
 
     eprintln!(
         "Accepted message from user {} in chat {}{}",
@@ -180,41 +154,6 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     }
 
     Ok(())
-}
-
-/// Generate a topic name from the incoming message.
-/// Uses the first few words of the text, or a timestamp if no text.
-fn generate_topic_name(incoming: &IncomingMessage) -> String {
-    const MAX_TOPIC_NAME_LEN: usize = 64; // Telegram limit is 128, but keep it short
-
-    if let Some(text) = incoming.text.as_deref() {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            // Take first line
-            let first_line = trimmed.lines().next().unwrap_or(trimmed);
-
-            // Count characters (not bytes) for safe Unicode handling
-            let char_count = first_line.chars().count();
-            if char_count <= MAX_TOPIC_NAME_LEN {
-                return first_line.to_string();
-            }
-
-            // Truncate at character boundary (safe for Unicode)
-            let truncated: String = first_line.chars().take(MAX_TOPIC_NAME_LEN).collect();
-
-            // Try to truncate at word boundary if possible
-            if let Some(last_space) = truncated.rfind(' ')
-                && last_space > MAX_TOPIC_NAME_LEN / 2
-            {
-                return format!("{}…", &truncated[..last_space]);
-            }
-            return format!("{}…", truncated.trim_end());
-        }
-    }
-
-    // Fallback: use timestamp
-    let now = chrono::Utc::now();
-    now.format("Chat %Y-%m-%d %H:%M").to_string()
 }
 
 fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
