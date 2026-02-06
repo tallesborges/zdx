@@ -94,6 +94,9 @@ pub struct TelegramConfig {
     pub model: String,
     /// Thinking level for the Telegram bot.
     pub thinking_level: ThinkingLevel,
+    /// Audio transcription configuration for Telegram voice/audio messages.
+    #[serde(default)]
+    pub transcription: TranscriptionConfig,
 }
 
 impl Default for TelegramConfig {
@@ -104,6 +107,7 @@ impl Default for TelegramConfig {
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
+            transcription: TranscriptionConfig::default(),
         }
     }
 }
@@ -335,10 +339,6 @@ pub struct Config {
     /// Provider configuration (base URLs, etc.).
     #[serde(default)]
     pub providers: ProvidersConfig,
-
-    /// Transcription configuration.
-    #[serde(default)]
-    pub transcription: TranscriptionConfig,
 
     /// Model to use for handoff generation subagent.
     #[serde(default = "default_handoff_model")]
@@ -607,7 +607,6 @@ impl Default for Config {
             system_prompt_file: None,
             tool_timeout_secs: Self::DEFAULT_TOOL_TIMEOUT_SECS,
             providers: ProvidersConfig::default(),
-            transcription: TranscriptionConfig::default(),
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),

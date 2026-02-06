@@ -61,6 +61,15 @@ model = "claude-cli:claude-opus-4-6"
 # Thinking level used by the Telegram bot
 thinking_level = "minimal"
 
+# Telegram audio transcription configuration
+# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
+# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
+# language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
+[telegram.transcription]
+# provider = "openai"
+# model = "whisper-1"
+# language = "en"
+
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 
@@ -136,13 +145,3 @@ enabled = true
 # api_key = "..."  # Overrides MISTRAL_API_KEY env var
 # base_url = "https://api.mistral.ai/v1"
 models = ["voxtral-mini-latest"]
-
-# Transcription configuration
-# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
-# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
-# language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
-
-[transcription]
-# provider = "openai"
-# model = "whisper-1"
-# language = "en"
