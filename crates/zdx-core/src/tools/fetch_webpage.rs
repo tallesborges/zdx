@@ -54,7 +54,7 @@ struct FetchInput {
     objective: String,
     #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "super::bool_or_string::deserialize")]
     full_content: bool,
 }
 
@@ -275,5 +275,38 @@ mod tests {
         });
         let parsed: FetchInput = serde_json::from_value(input).unwrap();
         assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_full_content_accepts_string_true() {
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "full_content": "true"
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.full_content);
+    }
+
+    #[test]
+    fn test_full_content_accepts_string_false() {
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "full_content": "false"
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert!(!parsed.full_content);
+    }
+
+    #[test]
+    fn test_full_content_rejects_invalid_string() {
+        let input = json!({
+            "urls": ["https://example.com"],
+            "objective": "test",
+            "full_content": "maybe"
+        });
+        let result: Result<FetchInput, _> = serde_json::from_value(input);
+        assert!(result.is_err());
     }
 }

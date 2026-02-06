@@ -76,6 +76,44 @@ pub(crate) mod string_or_vec {
     }
 }
 
+/// Serde helper that accepts either a JSON boolean or a boolean-like string.
+///
+/// LLMs sometimes send `"full_content": "true"` instead of
+/// `"full_content": true`. This module gracefully coerces common string
+/// representations into `bool`.
+pub(crate) mod bool_or_string {
+    use serde::{Deserialize, Deserializer, de};
+
+    /// Deserializes a `bool` that also accepts string values like
+    /// `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum BoolOrString {
+            Bool(bool),
+            String(String),
+        }
+
+        match BoolOrString::deserialize(deserializer)? {
+            BoolOrString::Bool(v) => Ok(v),
+            BoolOrString::String(raw) => {
+                let normalized = raw.trim().to_ascii_lowercase();
+                match normalized.as_str() {
+                    "true" | "1" | "yes" | "y" | "on" => Ok(true),
+                    "false" | "0" | "no" | "n" | "off" | "" => Ok(false),
+                    _ => Err(de::Error::custom(format!(
+                        "expected boolean or boolean-like string, got '{}'",
+                        raw
+                    ))),
+                }
+            }
+        }
+    }
+}
+
 // ============================================================================
 // Path Resolution Helpers
 // ============================================================================
