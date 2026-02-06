@@ -41,6 +41,7 @@ pub async fn transcribe_audio_if_configured(
 
     let model = resolve_model(config, provider);
     let language = config
+        .telegram
         .transcription
         .language
         .as_deref()
@@ -78,6 +79,7 @@ fn detect_provider(config: &Config) -> Option<ProviderKind> {
 
     // Check config setting
     if let Some(provider) = config
+        .telegram
         .transcription
         .provider
         .as_deref()
@@ -144,6 +146,7 @@ fn resolve_model(config: &Config, provider: ProviderKind) -> String {
         .filter(|v| !v.is_empty())
         .or_else(|| {
             config
+                .telegram
                 .transcription
                 .model
                 .as_deref()
