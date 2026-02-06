@@ -15,7 +15,6 @@ const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH: &str = "/codex/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
-const HEADER_VERSION: &str = "version";
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
 const HEADER_ORIGINATOR: &str = "originator";
 const HEADER_USER_AGENT: &str = "user-agent";
@@ -23,7 +22,6 @@ const HEADER_SESSION_ID: &str = "session_id";
 
 const ORIGINATOR_VALUE: &str = "zdx";
 const USER_AGENT_VALUE: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
-const VERSION_VALUE: &str = env!("CARGO_PKG_VERSION");
 
 /// Runtime config for OpenAI Codex requests.
 #[derive(Debug, Clone)]
@@ -164,7 +162,6 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
         HEADER_USER_AGENT,
         HeaderValue::from_static(USER_AGENT_VALUE),
     );
-    headers.insert(HEADER_VERSION, HeaderValue::from_static(VERSION_VALUE));
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     if let Some(value) = session_id
