@@ -3,7 +3,9 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-Zdx is coding agent built in rust.
+Zdx is a coding agent built in Rust. I made it mainly to avoid using multiple CLIs and to have customization freedom, so I try to add the best features from them into a single CLI.
+
+I added the Telegram bot so I can control it when outside the computer. I don’t have plans to add providers other than Telegram.
 
 ![Zdx demo](docs/assets/demo.gif)
 
@@ -45,7 +47,7 @@ zdx bot
 
 ## Features
 
-- **Providers**: Anthropic, OpenAI, OpenRouter, Moonshot, Gemini
+- **Providers**: Anthropic, Gemini, OpenAI, OpenRouter, Mistral, Moonshot, MiMo, StepFun
 - **Interactive TUI** with streaming markdown, syntax highlighting, and tables
 - **Exec mode** for scripts and automation
 - **Extended thinking** + token usage with pricing
@@ -56,11 +58,14 @@ zdx bot
 
 ## Provider support
 
-- **Anthropic**: API key + subscription (Claude CLI OAuth)
-- **Gemini**: API key + subscription (Gemini CLI OAuth)
-- **OpenAI**: API key + subscription (Codex OAuth)
-- **Moonshot**: API key
+- **Anthropic**: API key + OAuth (Claude CLI, subscription)
+- **Gemini**: API key + OAuth (Gemini CLI, subscription)
+- **OpenAI**: API key + OAuth (Codex, subscription)
 - **OpenRouter**: API key
+- **Mistral**: API key
+- **Moonshot (Kimi)**: API key
+- **MiMo (Xiaomi)**: API key
+- **StepFun**: API key
 
 ## Inspiration
 
