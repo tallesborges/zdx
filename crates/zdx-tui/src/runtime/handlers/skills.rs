@@ -52,6 +52,26 @@ pub async fn install_skill(
     }
 }
 
+pub async fn fetch_skill_instructions(
+    repo: String,
+    skill_path: String,
+    cancel: Option<CancellationToken>,
+) -> UiEvent {
+    let cancel = cancel.unwrap_or_default();
+    match fetch_skill_instructions_inner(&repo, &skill_path, &cancel).await {
+        Ok(content) => UiEvent::Skill(SkillUiEvent::InstructionsLoaded {
+            repo,
+            skill_path,
+            content,
+        }),
+        Err(error) => UiEvent::Skill(SkillUiEvent::InstructionsFailed {
+            repo,
+            skill_path,
+            error,
+        }),
+    }
+}
+
 async fn fetch_skills_list_inner(
     repo: &str,
     cancel: &CancellationToken,
@@ -103,6 +123,52 @@ async fn install_skill_inner(
     }
 
     result
+}
+
+async fn fetch_skill_instructions_inner(
+    repo: &str,
+    skill_path: &str,
+    cancel: &CancellationToken,
+) -> Result<String, String> {
+    if cancel.is_cancelled() {
+        return Err("Operation cancelled.".to_string());
+    }
+
+    let spec = parse_repo_spec(repo)?;
+    let client = github_client()?;
+    let skill_repo_path = join_repo_path(&spec.path, skill_path);
+    let file_path = format!("{}/SKILL.md", skill_repo_path);
+    let url = contents_url(&spec, &file_path)?;
+
+    let response = client
+        .get(url)
+        .send()
+        .await
+        .map_err(|err| format!("Request failed: {}", err))?;
+
+    if !response.status().is_success() {
+        return Err("No SKILL.md found.".to_string());
+    }
+
+    let item: GitHubContentItem = response
+        .json()
+        .await
+        .map_err(|err| format!("Failed to parse response: {}", err))?;
+
+    let download_url = item
+        .download_url
+        .ok_or_else(|| "Missing download URL.".to_string())?;
+
+    let content_response = client
+        .get(&download_url)
+        .send()
+        .await
+        .map_err(|err| format!("Failed to download: {}", err))?;
+
+    content_response
+        .text()
+        .await
+        .map_err(|err| format!("Failed to read content: {}", err))
 }
 
 async fn download_repo_dir(
