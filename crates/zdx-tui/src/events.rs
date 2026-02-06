@@ -143,6 +143,20 @@ pub enum SkillUiEvent {
         skill: String,
         error: String,
     },
+
+    /// Skill instructions (SKILL.md) loaded successfully.
+    InstructionsLoaded {
+        repo: String,
+        skill_path: String,
+        content: String,
+    },
+
+    /// Skill instructions fetch failed.
+    InstructionsFailed {
+        repo: String,
+        skill_path: String,
+        error: String,
+    },
 }
 
 /// Unified event enum for the TUI.

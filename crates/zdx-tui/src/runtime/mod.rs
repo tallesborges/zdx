@@ -573,6 +573,11 @@ impl TuiRuntime {
                     move |cancel| handlers::install_skill(repo, skill_path, cancel),
                 );
             }
+            UiEffect::FetchSkillInstructions { repo, skill_path } => {
+                self.spawn_task(TaskKind::SkillsFetch, TaskMeta::None, true, move |cancel| {
+                    handlers::fetch_skill_instructions(repo, skill_path, cancel)
+                });
+            }
 
             // Clipboard effects
             UiEffect::CopyToClipboard { text } => {

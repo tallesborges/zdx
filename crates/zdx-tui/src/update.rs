@@ -343,6 +343,26 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 );
                 vec![]
             }
+            SkillUiEvent::InstructionsLoaded {
+                repo: _,
+                skill_path,
+                content,
+            } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    picker.set_instructions(&skill_path, content);
+                }
+                vec![]
+            }
+            SkillUiEvent::InstructionsFailed {
+                repo: _,
+                skill_path,
+                error,
+            } => {
+                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                    picker.set_instructions_error(&skill_path, error);
+                }
+                vec![]
+            }
         },
 
         // Clipboard copy succeeded - show brief feedback in thread picker

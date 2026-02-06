@@ -119,6 +119,9 @@ pub enum UiEffect {
     /// Install a skill from a GitHub repository.
     InstallSkill { repo: String, skill_path: String },
 
+    /// Fetch the SKILL.md content for a skill from a GitHub repository.
+    FetchSkillInstructions { repo: String, skill_path: String },
+
     /// Copy text to clipboard.
     CopyToClipboard {
         /// Text to copy.
