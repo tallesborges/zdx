@@ -43,6 +43,25 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
+    // Handle /restart command (allowed from any context)
+    if incoming.images.is_empty()
+        && incoming.audios.is_empty()
+        && let Some(text) = incoming.text.as_deref()
+        && is_restart_command(text)
+    {
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "♻️ Restarting bot… rebuilding and coming back shortly.",
+                reply_to_message_id,
+                incoming.message_thread_id,
+            )
+            .await?;
+        context.request_restart();
+        return Ok(());
+    }
+
     // Use the topic_id from the message (set by dispatch_message for General messages)
     let topic_id = incoming.message_thread_id;
 
@@ -176,6 +195,10 @@ fn command_matches(text: &str, command: &str) -> bool {
 
 fn is_new_command(text: &str) -> bool {
     command_matches(text, "/new")
+}
+
+fn is_restart_command(text: &str) -> bool {
+    command_matches(text, "/restart") || command_matches(text, "/rebuild")
 }
 
 fn is_worktree_create_command(text: &str) -> bool {
