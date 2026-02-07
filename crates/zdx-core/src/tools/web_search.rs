@@ -143,7 +143,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         objective: input.objective,
         search_queries: input.search_queries,
         max_results: input.max_results,
-        mode: "one-shot",
+        mode: "agentic",
     };
 
     // Make HTTP request
