@@ -138,7 +138,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
 
 /// Handle a callback query from an inline keyboard button.
 /// Supports:
-/// - `cancel:{chat_id}:{status_message_id}` — cancel an active agent turn
+/// - `cancel:{chat_id}:{user_message_id}` — cancel an active agent turn
 /// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
 async fn handle_callback_query(
     context: &BotContext,
@@ -217,7 +217,7 @@ async fn handle_callback_query(
     }
 }
 
-/// Parse `cancel:{chat_id}:{status_message_id}` callback data into a CancelKey.
+/// Parse `cancel:{chat_id}:{user_message_id}` callback data into a CancelKey.
 fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
     let rest = data.strip_prefix("cancel:")?;
     // Guard against matching cancel_q: prefix
@@ -226,8 +226,8 @@ fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
     }
     let (chat_str, msg_str) = rest.split_once(':')?;
     let chat_id: i64 = chat_str.parse().ok()?;
-    let status_message_id: i64 = msg_str.parse().ok()?;
-    Some((chat_id, status_message_id))
+    let user_message_id: i64 = msg_str.parse().ok()?;
+    Some((chat_id, user_message_id))
 }
 
 /// Parse `cancel_q:{chat_id}:{message_id}` callback data into a QueueCancelKey.

@@ -137,8 +137,26 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let _typing = context.client().start_typing(incoming.chat_id, topic_id);
 
     // Send "Thinking..." status message with Cancel button.
-    // The cancel callback data includes the status message ID so that stale
-    // buttons from previous turns cannot cancel a new turn in the same topic.
+    // The cancel callback data uses the user message ID (per-chat unique), so
+    // stale buttons from older turns can't cancel a new turn.
+    let cancel_key = (incoming.chat_id, incoming.message_id);
+    let cancel_data = format!("cancel:{}:{}", cancel_key.0, cancel_key.1);
+    let cancel_markup = InlineKeyboardMarkup {
+        inline_keyboard: vec![vec![InlineKeyboardButton {
+            text: "⏹ Cancel".to_string(),
+            callback_data: Some(cancel_data),
+            url: None,
+        }]],
+    };
+
+    // Register cancellation token before sending status, so immediate button
+    // taps can always find the token.
+    let cancel_token = CancellationToken::new();
+    {
+        let mut map = context.cancel_map().lock().await;
+        map.insert(cancel_key, cancel_token.clone());
+    }
+
     let status_msg = context
         .client()
         .send_message_with_markup(
@@ -146,51 +164,11 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             "🧠 Thinking...",
             reply_to_message_id,
             topic_id,
-            // Placeholder markup — real one set after we know the message ID
-            &InlineKeyboardMarkup {
-                inline_keyboard: vec![],
-            },
+            &cancel_markup,
         )
         .await;
 
     let status_message_id = status_msg.as_ref().ok().map(|m| m.message_id);
-
-    // Now that we have the status message ID, set the real cancel button
-    if let Some(msg_id) = status_message_id {
-        let cancel_data = format!("cancel:{}:{}", incoming.chat_id, msg_id);
-        let cancel_markup = InlineKeyboardMarkup {
-            inline_keyboard: vec![vec![InlineKeyboardButton {
-                text: "⏹ Cancel".to_string(),
-                callback_data: Some(cancel_data),
-                url: None,
-            }]],
-        };
-        if let Err(err) = context
-            .client()
-            .edit_message_text(
-                incoming.chat_id,
-                msg_id,
-                "🧠 Thinking...",
-                Some(&cancel_markup),
-            )
-            .await
-        {
-            eprintln!("Failed to add cancel button to status message: {}", err);
-        }
-    }
-
-    // Register cancellation token keyed by (chat_id, status_message_id) so
-    // the polling loop can trigger it. Using status_message_id prevents stale
-    // buttons from cancelling a different turn.
-    let cancel_key = (
-        incoming.chat_id,
-        status_message_id.unwrap_or(incoming.message_id),
-    );
-    let cancel_token = CancellationToken::new();
-    {
-        let mut map = context.cancel_map().lock().await;
-        map.insert(cancel_key, cancel_token.clone());
-    }
 
     // Race the agent turn against the cancellation token
     let agent_result = tokio::select! {

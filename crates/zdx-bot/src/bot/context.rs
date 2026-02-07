@@ -9,9 +9,9 @@ use zdx_core::core::agent::ToolConfig;
 
 use crate::telegram::TelegramClient;
 
-/// Key for the per-turn cancellation map: (chat_id, status_message_id).
-/// Using the status message ID (instead of topic_id) ensures stale cancel
-/// buttons from previous turns cannot cancel a new turn in the same topic.
+/// Key for the per-turn cancellation map: (chat_id, user_message_id).
+/// User message IDs are per-chat unique, so stale buttons from previous turns
+/// cannot cancel a new turn.
 pub(crate) type CancelKey = (i64, i64);
 
 /// Key for queued-item cancellation: (chat_id, user_message_id).
