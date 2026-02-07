@@ -294,76 +294,12 @@ impl TelegramClient {
         Ok(())
     }
 
-    /// Pin a message in a chat.
-    #[allow(dead_code)]
-    pub async fn pin_chat_message(
-        &self,
-        chat_id: i64,
-        message_id: i64,
-        disable_notification: bool,
-    ) -> Result<()> {
-        let request = PinChatMessageRequest {
-            chat_id,
-            message_id,
-            disable_notification: Some(disable_notification),
-        };
-        let _: bool = self.post("pinChatMessage", &request).await?;
-        Ok(())
-    }
-
-    /// Hide the 'General' topic in a forum supergroup (auto-closes it).
-    /// Requires `can_manage_topics` admin right.
-    #[allow(dead_code)]
-    pub async fn hide_general_forum_topic(&self, chat_id: i64) -> Result<()> {
-        let request = ChatIdRequest { chat_id };
-        let _: bool = self.post("hideGeneralForumTopic", &request).await?;
-        Ok(())
-    }
-
-    #[allow(dead_code)]
-    pub async fn send_chat_action(
-        &self,
-        chat_id: i64,
-        action: &str,
-        message_thread_id: Option<i64>,
-    ) -> Result<()> {
-        let request = SendChatActionRequest {
-            chat_id,
-            action,
-            message_thread_id,
-        };
-        let _: bool = self.post("sendChatAction", &request).await?;
-        Ok(())
-    }
-
     /// Create a forum topic in a supergroup.
     /// Returns the message_thread_id of the created topic.
     pub async fn create_forum_topic(&self, chat_id: i64, name: &str) -> Result<i64> {
         let request = CreateForumTopicRequest { chat_id, name };
         let topic: ForumTopic = self.post("createForumTopic", &request).await?;
         Ok(topic.message_thread_id)
-    }
-
-    #[allow(dead_code)]
-    pub fn start_typing(&self, chat_id: i64, message_thread_id: Option<i64>) -> TypingIndicator {
-        let client = self.clone();
-        let cancel = tokio_util::sync::CancellationToken::new();
-        let cancel_clone = cancel.clone();
-
-        tokio::spawn(async move {
-            loop {
-                let _ = client
-                    .send_chat_action(chat_id, "typing", message_thread_id)
-                    .await;
-
-                tokio::select! {
-                    _ = cancel_clone.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_secs(4)) => {}
-                }
-            }
-        });
-
-        TypingIndicator { cancel }
     }
 
     async fn post<T: DeserializeOwned, B: Serialize>(&self, method: &str, body: &B) -> Result<T> {
@@ -559,15 +495,6 @@ struct GetFileRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
-#[allow(dead_code)]
-struct SendChatActionRequest<'a> {
-    chat_id: i64,
-    action: &'a str,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    message_thread_id: Option<i64>,
-}
-
-#[derive(Debug, Serialize)]
 struct CreateForumTopicRequest<'a> {
     chat_id: i64,
     name: &'a str,
@@ -600,31 +527,4 @@ struct AnswerCallbackQueryRequest<'a> {
     callback_query_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<&'a str>,
-}
-
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-struct PinChatMessageRequest {
-    chat_id: i64,
-    message_id: i64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    disable_notification: Option<bool>,
-}
-
-/// Generic request with only `chat_id` (used by hideGeneralForumTopic etc.)
-#[derive(Debug, Serialize)]
-#[allow(dead_code)]
-struct ChatIdRequest {
-    chat_id: i64,
-}
-
-#[allow(dead_code)]
-pub struct TypingIndicator {
-    cancel: tokio_util::sync::CancellationToken,
-}
-
-impl Drop for TypingIndicator {
-    fn drop(&mut self) {
-        self.cancel.cancel();
-    }
 }
