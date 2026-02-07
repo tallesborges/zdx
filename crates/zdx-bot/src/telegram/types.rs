@@ -1,9 +1,39 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct Update {
     pub update_id: i64,
     pub message: Option<Message>,
+    pub callback_query: Option<CallbackQuery>,
+}
+
+/// Incoming callback query from an inline keyboard button.
+#[derive(Debug, Deserialize)]
+pub struct CallbackQuery {
+    pub id: String,
+    pub from: User,
+    /// The message that contained the inline keyboard (present when the button
+    /// was attached to a message sent by the bot).
+    #[serde(rename = "message")]
+    pub _message: Option<Message>,
+    /// Data associated with the callback button (max 64 bytes).
+    pub data: Option<String>,
+}
+
+/// Inline keyboard attached to a message.
+#[derive(Debug, Clone, Serialize)]
+pub struct InlineKeyboardMarkup {
+    pub inline_keyboard: Vec<Vec<InlineKeyboardButton>>,
+}
+
+/// A single button in an inline keyboard.
+#[derive(Debug, Clone, Serialize)]
+pub struct InlineKeyboardButton {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub callback_data: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
