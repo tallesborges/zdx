@@ -22,6 +22,13 @@ pub(crate) struct QueueItem {
     queued_status: Option<QueuedStatus>,
 }
 
+pub(crate) struct QueueState {
+    sender: mpsc::UnboundedSender<QueueItem>,
+    /// Number of items currently pending for this key (including the item
+    /// actively being processed by the worker).
+    pending: usize,
+}
+
 struct QueuedStatus {
     chat_id: i64,
     /// message_id of the "⏳ Queued" bot message.
@@ -30,7 +37,7 @@ struct QueuedStatus {
     user_message_id: i64,
 }
 
-pub(crate) type ChatQueueMap = Arc<Mutex<HashMap<QueueKey, mpsc::UnboundedSender<QueueItem>>>>;
+pub(crate) type ChatQueueMap = Arc<Mutex<HashMap<QueueKey, QueueState>>>;
 
 pub(crate) fn new_chat_queues() -> ChatQueueMap {
     Arc::new(Mutex::new(HashMap::new()))
@@ -184,18 +191,24 @@ fn spawn_standalone(context: Arc<BotContext>, message: Message) {
 
 async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, message: Message) {
     let key = (message.chat.id, message.message_thread_id.unwrap_or(0));
-    let is_existing_queue;
-    let sender = {
-        let mut queues = queues.lock().await;
-        if let Some(sender) = queues.get(&key) {
-            is_existing_queue = true;
-            sender.clone()
+    let queues_map = Arc::clone(queues);
+    let (sender, should_show_queued) = {
+        let mut map = queues.lock().await;
+        if let Some(state) = map.get_mut(&key) {
+            let should_show = state.pending > 0;
+            state.pending += 1;
+            (state.sender.clone(), should_show)
         } else {
-            is_existing_queue = false;
             let (sender, receiver) = mpsc::unbounded_channel();
-            spawn_queue_worker(key, receiver, Arc::clone(context));
-            queues.insert(key, sender.clone());
-            sender
+            spawn_queue_worker(key, receiver, Arc::clone(context), Arc::clone(&queues_map));
+            map.insert(
+                key,
+                QueueState {
+                    sender: sender.clone(),
+                    pending: 1,
+                },
+            );
+            (sender, false)
         }
     };
 
@@ -203,7 +216,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
     let mut queued_status = None;
 
     // If there's already a queue worker (potentially busy), show "Queued" status
-    if is_existing_queue {
+    if should_show_queued {
         let chat_id = message.chat.id;
         let topic_id = message.message_thread_id;
         let user_message_id = message.message_id;
@@ -256,11 +269,23 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
 
     if let Err(err) = sender.send(item) {
         let item = err.0;
-        let (sender, receiver) = mpsc::unbounded_channel();
-        spawn_queue_worker(key, receiver, Arc::clone(context));
         {
             let mut queues = queues.lock().await;
-            queues.insert(key, sender.clone());
+            if let Some(state) = queues.get_mut(&key) {
+                state.pending = state.pending.saturating_sub(1);
+            }
+        }
+        let (sender, receiver) = mpsc::unbounded_channel();
+        spawn_queue_worker(key, receiver, Arc::clone(context), Arc::clone(queues));
+        {
+            let mut queues = queues.lock().await;
+            queues.insert(
+                key,
+                QueueState {
+                    sender: sender.clone(),
+                    pending: 1,
+                },
+            );
         }
         let _ = sender.send(item);
     }
@@ -270,6 +295,7 @@ fn spawn_queue_worker(
     key: QueueKey,
     mut receiver: mpsc::UnboundedReceiver<QueueItem>,
     context: Arc<BotContext>,
+    queues: ChatQueueMap,
 ) {
     tokio::spawn(async move {
         while let Some(item) = receiver.recv().await {
@@ -336,6 +362,11 @@ fn spawn_queue_worker(
 
             if let Err(err) = handle_message(context.as_ref(), message).await {
                 eprintln!("Message handling error for {:?}: {}", key, err);
+            }
+
+            let mut queues = queues.lock().await;
+            if let Some(state) = queues.get_mut(&key) {
+                state.pending = state.pending.saturating_sub(1);
             }
         }
     });
