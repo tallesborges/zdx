@@ -133,6 +133,9 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
+    // Keep Telegram native typing indicator alongside the Thinking status.
+    let _typing = context.client().start_typing(incoming.chat_id, topic_id);
+
     // Send "Thinking..." status message with Cancel button.
     // The cancel callback data includes the status message ID so that stale
     // buttons from previous turns cannot cancel a new turn in the same topic.

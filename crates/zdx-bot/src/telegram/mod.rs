@@ -302,6 +302,42 @@ impl TelegramClient {
         Ok(topic.message_thread_id)
     }
 
+    pub async fn send_chat_action(
+        &self,
+        chat_id: i64,
+        action: &str,
+        message_thread_id: Option<i64>,
+    ) -> Result<()> {
+        let request = SendChatActionRequest {
+            chat_id,
+            action,
+            message_thread_id,
+        };
+        let _: bool = self.post("sendChatAction", &request).await?;
+        Ok(())
+    }
+
+    pub fn start_typing(&self, chat_id: i64, message_thread_id: Option<i64>) -> TypingIndicator {
+        let client = self.clone();
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let cancel_clone = cancel.clone();
+
+        tokio::spawn(async move {
+            loop {
+                let _ = client
+                    .send_chat_action(chat_id, "typing", message_thread_id)
+                    .await;
+
+                tokio::select! {
+                    _ = cancel_clone.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_secs(4)) => {}
+                }
+            }
+        });
+
+        TypingIndicator { cancel }
+    }
+
     async fn post<T: DeserializeOwned, B: Serialize>(&self, method: &str, body: &B) -> Result<T> {
         let url = format!("{}/bot{}/{}", self.base_url, self.token, method);
         let response = self
@@ -495,6 +531,14 @@ struct GetFileRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+struct SendChatActionRequest<'a> {
+    chat_id: i64,
+    action: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    message_thread_id: Option<i64>,
+}
+
+#[derive(Debug, Serialize)]
 struct CreateForumTopicRequest<'a> {
     chat_id: i64,
     name: &'a str,
@@ -527,4 +571,14 @@ struct AnswerCallbackQueryRequest<'a> {
     callback_query_id: &'a str,
     #[serde(skip_serializing_if = "Option::is_none")]
     text: Option<&'a str>,
+}
+
+pub struct TypingIndicator {
+    cancel: tokio_util::sync::CancellationToken,
+}
+
+impl Drop for TypingIndicator {
+    fn drop(&mut self) {
+        self.cancel.cancel();
+    }
 }
