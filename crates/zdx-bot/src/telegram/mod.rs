@@ -295,6 +295,7 @@ impl TelegramClient {
     }
 
     /// Pin a message in a chat.
+    #[allow(dead_code)]
     pub async fn pin_chat_message(
         &self,
         chat_id: i64,
@@ -312,12 +313,14 @@ impl TelegramClient {
 
     /// Hide the 'General' topic in a forum supergroup (auto-closes it).
     /// Requires `can_manage_topics` admin right.
+    #[allow(dead_code)]
     pub async fn hide_general_forum_topic(&self, chat_id: i64) -> Result<()> {
         let request = ChatIdRequest { chat_id };
         let _: bool = self.post("hideGeneralForumTopic", &request).await?;
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn send_chat_action(
         &self,
         chat_id: i64,
@@ -341,6 +344,7 @@ impl TelegramClient {
         Ok(topic.message_thread_id)
     }
 
+    #[allow(dead_code)]
     pub fn start_typing(&self, chat_id: i64, message_thread_id: Option<i64>) -> TypingIndicator {
         let client = self.clone();
         let cancel = tokio_util::sync::CancellationToken::new();
@@ -555,6 +559,7 @@ struct GetFileRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct SendChatActionRequest<'a> {
     chat_id: i64,
     action: &'a str,
@@ -598,6 +603,7 @@ struct AnswerCallbackQueryRequest<'a> {
 }
 
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct PinChatMessageRequest {
     chat_id: i64,
     message_id: i64,
@@ -607,10 +613,12 @@ struct PinChatMessageRequest {
 
 /// Generic request with only `chat_id` (used by hideGeneralForumTopic etc.)
 #[derive(Debug, Serialize)]
+#[allow(dead_code)]
 struct ChatIdRequest {
     chat_id: i64,
 }
 
+#[allow(dead_code)]
 pub struct TypingIndicator {
     cancel: tokio_util::sync::CancellationToken,
 }
