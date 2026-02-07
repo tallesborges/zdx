@@ -2,16 +2,35 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{Mutex, mpsc};
+use tokio_util::sync::CancellationToken;
 
-use crate::bot::context::BotContext;
+use crate::bot::context::{BotContext, QueueCancelKey};
 use crate::handlers::message::handle_message;
-use crate::telegram::Message;
+use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
 /// Queue key: (chat_id, topic_id). Different topics run concurrently.
 /// DMs use (chat_id, 0) since they have no topic.
 type QueueKey = (i64, i64);
 
-pub(crate) type ChatQueueMap = Arc<Mutex<HashMap<QueueKey, mpsc::UnboundedSender<Message>>>>;
+/// Item sent through the per-topic queue channel.
+pub(crate) struct QueueItem {
+    message: Message,
+    /// Cancellation token for this queued item. Checked before processing.
+    cancel_token: CancellationToken,
+    /// If this item was queued (not first), holds the status message info
+    /// so the worker can clean it up.
+    queued_status: Option<QueuedStatus>,
+}
+
+struct QueuedStatus {
+    chat_id: i64,
+    /// message_id of the "⏳ Queued" bot message.
+    status_message_id: i64,
+    /// message_id of the user's original message (for deletion on cancel).
+    user_message_id: i64,
+}
+
+pub(crate) type ChatQueueMap = Arc<Mutex<HashMap<QueueKey, mpsc::UnboundedSender<QueueItem>>>>;
 
 pub(crate) fn new_chat_queues() -> ChatQueueMap {
     Arc::new(Mutex::new(HashMap::new()))
@@ -165,11 +184,14 @@ fn spawn_standalone(context: Arc<BotContext>, message: Message) {
 
 async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, message: Message) {
     let key = (message.chat.id, message.message_thread_id.unwrap_or(0));
+    let is_existing_queue;
     let sender = {
         let mut queues = queues.lock().await;
         if let Some(sender) = queues.get(&key) {
+            is_existing_queue = true;
             sender.clone()
         } else {
+            is_existing_queue = false;
             let (sender, receiver) = mpsc::unbounded_channel();
             spawn_queue_worker(key, receiver, Arc::clone(context));
             queues.insert(key, sender.clone());
@@ -177,25 +199,124 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
         }
     };
 
-    if let Err(err) = sender.send(message) {
-        let message = err.0;
+    let cancel_token = CancellationToken::new();
+    let mut queued_status = None;
+
+    // If there's already a queue worker (potentially busy), show "Queued" status
+    if is_existing_queue {
+        let chat_id = message.chat.id;
+        let topic_id = message.message_thread_id;
+        let user_message_id = message.message_id;
+        let cancel_data = format!("cancel_q:{}:{}", chat_id, user_message_id);
+        let cancel_markup = InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: "✖ Cancel".to_string(),
+                callback_data: Some(cancel_data),
+                url: None,
+            }]],
+        };
+
+        match context
+            .client()
+            .send_message_with_markup(
+                chat_id,
+                "⏳ Queued",
+                Some(user_message_id),
+                topic_id,
+                &cancel_markup,
+            )
+            .await
+        {
+            Ok(status_msg) => {
+                queued_status = Some(QueuedStatus {
+                    chat_id,
+                    status_message_id: status_msg.message_id,
+                    user_message_id,
+                });
+            }
+            Err(err) => {
+                eprintln!("Failed to send queued status: {}", err);
+            }
+        }
+
+        // Register in queue cancel map so callback handler can find it
+        let queue_cancel_key: QueueCancelKey = (chat_id, user_message_id);
+        {
+            let mut map = context.queue_cancel_map().lock().await;
+            map.insert(queue_cancel_key, cancel_token.clone());
+        }
+    }
+
+    let item = QueueItem {
+        message,
+        cancel_token,
+        queued_status,
+    };
+
+    if let Err(err) = sender.send(item) {
+        let item = err.0;
         let (sender, receiver) = mpsc::unbounded_channel();
         spawn_queue_worker(key, receiver, Arc::clone(context));
         {
             let mut queues = queues.lock().await;
             queues.insert(key, sender.clone());
         }
-        let _ = sender.send(message);
+        let _ = sender.send(item);
     }
 }
 
 fn spawn_queue_worker(
     key: QueueKey,
-    mut receiver: mpsc::UnboundedReceiver<Message>,
+    mut receiver: mpsc::UnboundedReceiver<QueueItem>,
     context: Arc<BotContext>,
 ) {
     tokio::spawn(async move {
-        while let Some(message) = receiver.recv().await {
+        while let Some(item) = receiver.recv().await {
+            let QueueItem {
+                message,
+                cancel_token,
+                queued_status,
+            } = item;
+
+            // Clean up queue cancel map entry
+            if let Some(ref status) = queued_status {
+                let queue_cancel_key: QueueCancelKey =
+                    (status.chat_id, status.user_message_id);
+                let mut map = context.queue_cancel_map().lock().await;
+                map.remove(&queue_cancel_key);
+            }
+
+            if cancel_token.is_cancelled() {
+                // Item was cancelled while queued — update status and skip
+                eprintln!("Skipping cancelled queued message for {:?}", key);
+                if let Some(status) = queued_status {
+                    let _ = context
+                        .client()
+                        .edit_message_text(
+                            status.chat_id,
+                            status.status_message_id,
+                            "Cancelled ✓",
+                            None,
+                        )
+                        .await;
+                    // Best-effort: delete user's original message
+                    let _ = context
+                        .client()
+                        .delete_message(status.chat_id, status.user_message_id)
+                        .await;
+                }
+                continue;
+            }
+
+            // Not cancelled — about to process. Delete the "Queued" status
+            // message (handle_message will send its own "Thinking..." status).
+            if let Some(status) = queued_status {
+                let _ = context
+                    .client()
+                    .delete_message(status.chat_id, status.status_message_id)
+                    .await;
+            }
+
             if let Err(err) = handle_message(context.as_ref(), message).await {
                 eprintln!("Message handling error for {:?}: {}", key, err);
             }
