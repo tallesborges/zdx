@@ -43,6 +43,25 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
+    // Handle /rebuild command (allowed from any context)
+    if incoming.images.is_empty()
+        && incoming.audios.is_empty()
+        && let Some(text) = incoming.text.as_deref()
+        && is_rebuild_command(text)
+    {
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "♻️ Rebuilding bot… coming back shortly.",
+                reply_to_message_id,
+                incoming.message_thread_id,
+            )
+            .await?;
+        context.request_rebuild();
+        return Ok(());
+    }
+
     // Use the topic_id from the message (set by dispatch_message for General messages)
     let topic_id = incoming.message_thread_id;
 
@@ -176,6 +195,10 @@ fn command_matches(text: &str, command: &str) -> bool {
 
 fn is_new_command(text: &str) -> bool {
     command_matches(text, "/new")
+}
+
+fn is_rebuild_command(text: &str) -> bool {
+    command_matches(text, "/rebuild")
 }
 
 fn is_worktree_create_command(text: &str) -> bool {

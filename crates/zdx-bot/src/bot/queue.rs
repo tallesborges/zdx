@@ -114,7 +114,7 @@ fn should_process_message(context: &BotContext, message: &Message) -> bool {
 /// Check if a command should be blocked in General (not create a topic).
 fn is_command_blocked_in_general(text: &str) -> bool {
     let trimmed = text.trim();
-    // /new and /worktree commands shouldn't create topics
+    // /new, /worktree, and /rebuild commands shouldn't create topics
     trimmed == "/new"
         || trimmed.starts_with("/new@")
         || trimmed == "/worktree"
@@ -123,6 +123,8 @@ fn is_command_blocked_in_general(text: &str) -> bool {
         || trimmed.starts_with("/worktree create@")
         || trimmed == "/wt"
         || trimmed.starts_with("/wt@")
+        || trimmed == "/rebuild"
+        || trimmed.starts_with("/rebuild@")
 }
 
 /// Generate a topic name from message text.

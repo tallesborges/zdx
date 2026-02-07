@@ -1,6 +1,7 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use tokio::sync::Notify;
 use zdx_core::config::Config;
 use zdx_core::core::agent::ToolConfig;
 
@@ -14,6 +15,7 @@ pub(crate) struct BotContext {
     root: PathBuf,
     bot_system_prompt: Option<String>,
     tool_config: ToolConfig,
+    rebuild_signal: Notify,
 }
 
 impl BotContext {
@@ -34,6 +36,7 @@ impl BotContext {
             root,
             bot_system_prompt,
             tool_config,
+            rebuild_signal: Notify::new(),
         }
     }
 
@@ -63,5 +66,15 @@ impl BotContext {
 
     pub(crate) fn tool_config(&self) -> &ToolConfig {
         &self.tool_config
+    }
+
+    /// Signal the bot to rebuild (exit with code 42).
+    pub(crate) fn request_rebuild(&self) {
+        self.rebuild_signal.notify_one();
+    }
+
+    /// Wait for a rebuild signal.
+    pub(crate) async fn rebuild_notified(&self) {
+        self.rebuild_signal.notified().await;
     }
 }
