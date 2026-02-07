@@ -14,7 +14,7 @@ run *ARGS:
 bot:
     cargo run -p zdx -- bot
 
-# Run the bot with auto-restart (exit 42 = rebuild)
+# Run the bot with auto-rebuild (exit 42 = rebuild)
 bot-loop:
     #!/usr/bin/env bash
     set -euo pipefail

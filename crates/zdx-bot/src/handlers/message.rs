@@ -47,7 +47,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     if incoming.images.is_empty()
         && incoming.audios.is_empty()
         && let Some(text) = incoming.text.as_deref()
-        && is_restart_command(text)
+        && is_rebuild_command(text)
     {
         context
             .client()
@@ -58,7 +58,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                 incoming.message_thread_id,
             )
             .await?;
-        context.request_restart();
+        context.request_rebuild();
         return Ok(());
     }
 
@@ -197,7 +197,7 @@ fn is_new_command(text: &str) -> bool {
     command_matches(text, "/new")
 }
 
-fn is_restart_command(text: &str) -> bool {
+fn is_rebuild_command(text: &str) -> bool {
     command_matches(text, "/rebuild")
 }
 

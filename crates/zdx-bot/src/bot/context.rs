@@ -15,7 +15,7 @@ pub(crate) struct BotContext {
     root: PathBuf,
     bot_system_prompt: Option<String>,
     tool_config: ToolConfig,
-    restart_signal: Notify,
+    rebuild_signal: Notify,
 }
 
 impl BotContext {
@@ -36,7 +36,7 @@ impl BotContext {
             root,
             bot_system_prompt,
             tool_config,
-            restart_signal: Notify::new(),
+            rebuild_signal: Notify::new(),
         }
     }
 
@@ -68,13 +68,13 @@ impl BotContext {
         &self.tool_config
     }
 
-    /// Signal the bot to restart (exit with code 42).
-    pub(crate) fn request_restart(&self) {
-        self.restart_signal.notify_one();
+    /// Signal the bot to rebuild (exit with code 42).
+    pub(crate) fn request_rebuild(&self) {
+        self.rebuild_signal.notify_one();
     }
 
-    /// Wait for a restart signal.
-    pub(crate) async fn restart_notified(&self) {
-        self.restart_signal.notified().await;
+    /// Wait for a rebuild signal.
+    pub(crate) async fn rebuild_notified(&self) {
+        self.rebuild_signal.notified().await;
     }
 }

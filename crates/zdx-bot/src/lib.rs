@@ -23,8 +23,8 @@ const BOT_SYSTEM_PROMPT: &str = include_str!(concat!(
     "/prompts/bot_system_prompt.md"
 ));
 
-/// Exit code used to signal the wrapper script to rebuild and restart.
-pub const EXIT_RESTART: i32 = 42;
+/// Exit code used to signal the wrapper script to rebuild.
+pub const EXIT_REBUILD: i32 = 42;
 
 pub async fn run() -> Result<()> {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
@@ -96,9 +96,9 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 eprintln!("Shutting down Telegram bot.");
                 break;
             }
-            _ = context.restart_notified() => {
-                eprintln!("Restart requested via /restart command.");
-                std::process::exit(EXIT_RESTART);
+            _ = context.rebuild_notified() => {
+                eprintln!("Rebuild requested via /rebuild command.");
+                std::process::exit(EXIT_REBUILD);
             }
             updates = client.get_updates(current_offset, poll_timeout) => {
                 let updates = match updates {
