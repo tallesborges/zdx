@@ -7,8 +7,11 @@ use zdx_core::config::Config;
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::tools::{ToolRegistry, ToolSet};
 
-use crate::bot::{BotContext, dispatch_message, new_chat_queues};
-use crate::telegram::{TelegramClient, TelegramSettings};
+use crate::bot::{
+    BotContext, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map, new_chat_queues,
+    new_queue_cancel_map,
+};
+use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
 mod bot;
@@ -64,6 +67,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
         },
     );
 
+    let cancel_map = new_cancel_map();
+    let queue_cancel_map = new_queue_cancel_map();
     let allowlist_user_len = settings.allowlist_user_ids.len();
     let allowlist_chat_len = settings.allowlist_chat_ids.len();
     let trimmed_prompt = BOT_SYSTEM_PROMPT.trim();
@@ -76,6 +81,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
         root,
         bot_system_prompt,
         tool_config,
+        cancel_map,
+        queue_cancel_map,
     ));
     let chat_queues = new_chat_queues();
 
@@ -118,10 +125,88 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                     if let Some(message) = update.message {
                         dispatch_message(&chat_queues, &context, message).await;
                     }
+                    if let Some(callback) = update.callback_query {
+                        handle_callback_query(&context, &client, callback).await;
+                    }
                 }
             }
         }
     }
 
     Ok(())
+}
+
+/// Handle a callback query from an inline keyboard button.
+/// Supports:
+/// - `cancel:{chat_id}:{topic_id}` — cancel an active agent turn
+/// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
+async fn handle_callback_query(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: CallbackQuery,
+) {
+    let data = callback.data.as_deref().unwrap_or("");
+
+    if let Some(key) = parse_cancel_callback(data) {
+        // Cancel an active agent turn
+        let token = {
+            let map = context.cancel_map().lock().await;
+            map.get(&key).cloned()
+        };
+
+        if let Some(token) = token {
+            token.cancel();
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Cancelling..."))
+                .await;
+            eprintln!("Cancelled agent turn for {:?}", key);
+        } else {
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Nothing to cancel"))
+                .await;
+        }
+    } else if let Some(key) = parse_queue_cancel_callback(data) {
+        // Cancel a queued (not-yet-processing) item
+        let token = {
+            let map = context.queue_cancel_map().lock().await;
+            map.get(&key).cloned()
+        };
+
+        if let Some(token) = token {
+            token.cancel();
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Removed from queue"))
+                .await;
+            eprintln!("Cancelled queued item for {:?}", key);
+        } else {
+            // Token gone — item may have already started processing
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Already processing"))
+                .await;
+        }
+    } else {
+        let _ = client.answer_callback_query(&callback.id, None).await;
+        eprintln!(
+            "Unknown callback from user {}: {:?}",
+            callback.from.id, data
+        );
+    }
+}
+
+/// Parse `cancel:{chat_id}:{topic_id}` callback data into a CancelKey.
+fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
+    let rest = data.strip_prefix("cancel:")?;
+    let (chat_str, topic_str) = rest.split_once(':')?;
+    let chat_id: i64 = chat_str.parse().ok()?;
+    let topic_id: i64 = topic_str.parse().ok()?;
+    Some((chat_id, topic_id))
+}
+
+/// Parse `cancel_q:{chat_id}:{message_id}` callback data into a QueueCancelKey.
+fn parse_queue_cancel_callback(data: &str) -> Option<QueueCancelKey> {
+    let rest = data.strip_prefix("cancel_q:")?;
+    let (chat_str, msg_str) = rest.split_once(':')?;
+    let chat_id: i64 = chat_str.parse().ok()?;
+    let message_id: i64 = msg_str.parse().ok()?;
+    Some((chat_id, message_id))
 }
