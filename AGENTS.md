@@ -123,21 +123,26 @@
 - `.cargo/config.toml`: cargo alias for `cargo xtask`, shared target dir config
 - `crates/xtask/`: maintainer utilities (update default models/config, codebase snapshot)
 - `crates/zdx-cli/tests/`: integration tests (`assert_cmd`, fixtures)
+- `justfile`: task runner recipes (run `just` to list all)
 
 ## Build / run
 
-- `cargo run -p zdx -- --help`
-- `cargo run -p zdx --` (interactive; needs provider key via env)
-- `cargo run -p zdx -- bot` (Telegram bot; requires config telegram.\* keys)
-- `cargo xtask update-default-models` (maintainer: refresh default_models.toml)
-- `cargo xtask update-default-config` (maintainer: refresh default_config.toml)
-- `cargo xtask update-defaults` (maintainer: refresh both defaults)
-- `cargo xtask codebase` (generate codebase.txt for entire workspace)
-- `cargo xtask codebase crates/zdx-tui` (generate codebase.txt for specific crate)
-- `cargo xtask codebase crates/zdx-tui crates/zdx-core` (generate codebase.txt for multiple crates)
-- `cargo test --workspace --lib --tests --bins` (fast path; skips doc tests)
-- `cargo +nightly fmt` (uses nightly for full rustfmt features; stable works but ignores some options)
-- `cargo clippy`
+All common tasks are available via `just` (see `justfile`). Run `just` to list all recipes.
+
+- `just run` (interactive TUI; pass extra args: `just run --help`)
+- `just bot` (Telegram bot; requires config telegram.\* keys)
+- `just bot-loop` (Telegram bot with auto-restart on exit code 42)
+- `just ci` (full local CI: lint + test)
+- `just lint` (format + clippy)
+- `just fmt` (nightly rustfmt)
+- `just clippy` (lint only)
+- `just test` (fast path; skips doc tests)
+- `just update-defaults` (maintainer: refresh both default_models.toml + default_config.toml)
+- `just update-models` (maintainer: refresh default_models.toml)
+- `just update-config` (maintainer: refresh default_config.toml)
+- `just codebase` (generate codebase.txt for entire workspace)
+- `just codebase crates/zdx-tui` (generate codebase.txt for specific crate)
+- `just build-release` (build release binary)
 - Release automation: `.github/workflows/release-please.yml` (config in `release-please-config.json`)
 
 ## Conventions
