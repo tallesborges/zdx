@@ -13,7 +13,10 @@ use zdx_core::tools::{ToolContext, ToolDefinition, ToolHandler};
 mod types;
 
 #[allow(unused_imports)]
-pub use types::{Audio, Chat, Document, Message, PhotoSize, TelegramFile, Update, User, Voice};
+pub use types::{
+    Audio, CallbackQuery, Chat, Document, InlineKeyboardButton, InlineKeyboardMarkup, Message,
+    PhotoSize, TelegramFile, Update, User, Voice,
+};
 
 pub struct TelegramSettings {
     pub bot_token: String,
@@ -87,7 +90,7 @@ impl TelegramClient {
         let request = GetUpdatesRequest {
             offset,
             timeout: timeout.as_secs(),
-            allowed_updates: Some(vec!["message"]),
+            allowed_updates: Some(vec!["message", "callback_query"]),
         };
         self.post("getUpdates", &request).await
     }
@@ -127,6 +130,40 @@ impl TelegramClient {
         reply_to_message_id: Option<i64>,
         message_thread_id: Option<i64>,
     ) -> Result<()> {
+        self.send_message_inner(chat_id, text, reply_to_message_id, message_thread_id, None)
+            .await
+            .map(|_| ())
+    }
+
+    /// Send a message with an inline keyboard. Returns the sent [`Message`] so
+    /// the caller can later edit or delete it by `message_id`.
+    pub async fn send_message_with_markup(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        reply_markup: &InlineKeyboardMarkup,
+    ) -> Result<Message> {
+        self.send_message_inner(
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            Some(reply_markup),
+        )
+        .await
+    }
+
+    /// Inner send with Markdown-fallback-to-plain logic.
+    async fn send_message_inner(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        reply_markup: Option<&InlineKeyboardMarkup>,
+    ) -> Result<Message> {
         // First try with Markdown parse mode
         let result = self
             .send_message_raw(
@@ -135,6 +172,7 @@ impl TelegramClient {
                 reply_to_message_id,
                 message_thread_id,
                 Some(TELEGRAM_PARSE_MODE),
+                reply_markup,
             )
             .await;
 
@@ -143,7 +181,14 @@ impl TelegramClient {
             let err_msg = e.to_string();
             if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
                 return self
-                    .send_message_raw(chat_id, text, reply_to_message_id, message_thread_id, None)
+                    .send_message_raw(
+                        chat_id,
+                        text,
+                        reply_to_message_id,
+                        message_thread_id,
+                        None,
+                        reply_markup,
+                    )
                     .await;
             }
         }
@@ -158,7 +203,8 @@ impl TelegramClient {
         reply_to_message_id: Option<i64>,
         message_thread_id: Option<i64>,
         parse_mode: Option<&str>,
-    ) -> Result<()> {
+        reply_markup: Option<&InlineKeyboardMarkup>,
+    ) -> Result<Message> {
         let request = SendMessageRequest {
             chat_id,
             text,
@@ -166,8 +212,109 @@ impl TelegramClient {
             reply_to_message_id,
             allow_sending_without_reply: Some(true),
             parse_mode,
+            reply_markup,
         };
-        let _: Message = self.post("sendMessage", &request).await?;
+        self.post("sendMessage", &request).await
+    }
+
+    /// Edit the text (and optionally the inline keyboard) of a bot message.
+    pub async fn edit_message_text(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+        reply_markup: Option<&InlineKeyboardMarkup>,
+    ) -> Result<()> {
+        // Try Markdown first
+        let result = self
+            .edit_message_text_raw(
+                chat_id,
+                message_id,
+                text,
+                Some(TELEGRAM_PARSE_MODE),
+                reply_markup,
+            )
+            .await;
+
+        // Fallback to plain text on parse errors
+        if let Err(ref e) = result {
+            let err_msg = e.to_string();
+            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
+                return self
+                    .edit_message_text_raw(chat_id, message_id, text, None, reply_markup)
+                    .await;
+            }
+        }
+
+        result
+    }
+
+    async fn edit_message_text_raw(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        text: &str,
+        parse_mode: Option<&str>,
+        reply_markup: Option<&InlineKeyboardMarkup>,
+    ) -> Result<()> {
+        let request = EditMessageTextRequest {
+            chat_id,
+            message_id,
+            text,
+            parse_mode,
+            reply_markup,
+        };
+        let _: Value = self.post("editMessageText", &request).await?;
+        Ok(())
+    }
+
+    /// Delete a message. Bot can delete its own messages anytime, and other
+    /// users' messages if it has `can_delete_messages` admin right.
+    pub async fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<()> {
+        let request = DeleteMessageRequest {
+            chat_id,
+            message_id,
+        };
+        let _: bool = self.post("deleteMessage", &request).await?;
+        Ok(())
+    }
+
+    /// Acknowledge a callback query (dismisses the loading spinner on the
+    /// button). Optionally show a notification to the user.
+    pub async fn answer_callback_query(
+        &self,
+        callback_query_id: &str,
+        text: Option<&str>,
+    ) -> Result<()> {
+        let request = AnswerCallbackQueryRequest {
+            callback_query_id,
+            text,
+        };
+        let _: bool = self.post("answerCallbackQuery", &request).await?;
+        Ok(())
+    }
+
+    /// Pin a message in a chat.
+    pub async fn pin_chat_message(
+        &self,
+        chat_id: i64,
+        message_id: i64,
+        disable_notification: bool,
+    ) -> Result<()> {
+        let request = PinChatMessageRequest {
+            chat_id,
+            message_id,
+            disable_notification: Some(disable_notification),
+        };
+        let _: bool = self.post("pinChatMessage", &request).await?;
+        Ok(())
+    }
+
+    /// Hide the 'General' topic in a forum supergroup (auto-closes it).
+    /// Requires `can_manage_topics` admin right.
+    pub async fn hide_general_forum_topic(&self, chat_id: i64) -> Result<()> {
+        let request = ChatIdRequest { chat_id };
+        let _: bool = self.post("hideGeneralForumTopic", &request).await?;
         Ok(())
     }
 
@@ -398,6 +545,8 @@ struct SendMessageRequest<'a> {
     allow_sending_without_reply: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     parse_mode: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<&'a InlineKeyboardMarkup>,
 }
 
 #[derive(Debug, Serialize)]
@@ -422,6 +571,44 @@ struct CreateForumTopicRequest<'a> {
 #[derive(Debug, Deserialize)]
 struct ForumTopic {
     message_thread_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct EditMessageTextRequest<'a> {
+    chat_id: i64,
+    message_id: i64,
+    text: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    parse_mode: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_markup: Option<&'a InlineKeyboardMarkup>,
+}
+
+#[derive(Debug, Serialize)]
+struct DeleteMessageRequest {
+    chat_id: i64,
+    message_id: i64,
+}
+
+#[derive(Debug, Serialize)]
+struct AnswerCallbackQueryRequest<'a> {
+    callback_query_id: &'a str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<&'a str>,
+}
+
+#[derive(Debug, Serialize)]
+struct PinChatMessageRequest {
+    chat_id: i64,
+    message_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    disable_notification: Option<bool>,
+}
+
+/// Generic request with only `chat_id` (used by hideGeneralForumTopic etc.)
+#[derive(Debug, Serialize)]
+struct ChatIdRequest {
+    chat_id: i64,
 }
 
 pub struct TypingIndicator {
