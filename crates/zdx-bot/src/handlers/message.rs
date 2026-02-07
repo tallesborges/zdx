@@ -206,6 +206,10 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         _ = cancel_token.cancelled() => None,
     };
 
+    // Stop Telegram typing indicator as soon as processing finishes/cancels,
+    // before we edit/send final status text.
+    drop(_typing);
+
     // Clean up cancellation token
     {
         let mut map = context.cancel_map().lock().await;
