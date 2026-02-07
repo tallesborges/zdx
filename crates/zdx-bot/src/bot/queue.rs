@@ -233,17 +233,18 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
                     status_message_id: status_msg.message_id,
                     user_message_id,
                 });
+
+                // Only register in queue cancel map when status message succeeded,
+                // so there's no orphan token if the status send fails.
+                let queue_cancel_key: QueueCancelKey = (chat_id, user_message_id);
+                {
+                    let mut map = context.queue_cancel_map().lock().await;
+                    map.insert(queue_cancel_key, cancel_token.clone());
+                }
             }
             Err(err) => {
                 eprintln!("Failed to send queued status: {}", err);
             }
-        }
-
-        // Register in queue cancel map so callback handler can find it
-        let queue_cancel_key: QueueCancelKey = (chat_id, user_message_id);
-        {
-            let mut map = context.queue_cancel_map().lock().await;
-            map.insert(queue_cancel_key, cancel_token.clone());
         }
     }
 
@@ -280,8 +281,7 @@ fn spawn_queue_worker(
 
             // Clean up queue cancel map entry
             if let Some(ref status) = queued_status {
-                let queue_cancel_key: QueueCancelKey =
-                    (status.chat_id, status.user_message_id);
+                let queue_cancel_key: QueueCancelKey = (status.chat_id, status.user_message_id);
                 let mut map = context.queue_cancel_map().lock().await;
                 map.remove(&queue_cancel_key);
             }
@@ -290,7 +290,7 @@ fn spawn_queue_worker(
                 // Item was cancelled while queued — update status and skip
                 eprintln!("Skipping cancelled queued message for {:?}", key);
                 if let Some(status) = queued_status {
-                    let _ = context
+                    if let Err(err) = context
                         .client()
                         .edit_message_text(
                             status.chat_id,
@@ -298,23 +298,40 @@ fn spawn_queue_worker(
                             "Cancelled ✓",
                             None,
                         )
-                        .await;
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to edit cancelled queue status {}: {}",
+                            status.status_message_id, err
+                        );
+                    }
                     // Best-effort: delete user's original message
-                    let _ = context
+                    if let Err(err) = context
                         .client()
                         .delete_message(status.chat_id, status.user_message_id)
-                        .await;
+                        .await
+                    {
+                        eprintln!(
+                            "Failed to delete user message {} on queue cancel: {}",
+                            status.user_message_id, err
+                        );
+                    }
                 }
                 continue;
             }
 
             // Not cancelled — about to process. Delete the "Queued" status
             // message (handle_message will send its own "Thinking..." status).
-            if let Some(status) = queued_status {
-                let _ = context
+            if let Some(status) = queued_status
+                && let Err(err) = context
                     .client()
                     .delete_message(status.chat_id, status.status_message_id)
-                    .await;
+                    .await
+            {
+                eprintln!(
+                    "Failed to delete queued status message {}: {}",
+                    status.status_message_id, err
+                );
             }
 
             if let Err(err) = handle_message(context.as_ref(), message).await {

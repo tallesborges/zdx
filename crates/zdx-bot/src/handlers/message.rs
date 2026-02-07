@@ -133,17 +133,9 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
-    // Send "Thinking..." status message with Cancel button
-    let cancel_key = (incoming.chat_id, topic_id.unwrap_or(0));
-    let cancel_data = format!("cancel:{}:{}", cancel_key.0, cancel_key.1);
-    let cancel_markup = InlineKeyboardMarkup {
-        inline_keyboard: vec![vec![InlineKeyboardButton {
-            text: "⏹ Cancel".to_string(),
-            callback_data: Some(cancel_data),
-            url: None,
-        }]],
-    };
-
+    // Send "Thinking..." status message with Cancel button.
+    // The cancel callback data includes the status message ID so that stale
+    // buttons from previous turns cannot cancel a new turn in the same topic.
     let status_msg = context
         .client()
         .send_message_with_markup(
@@ -151,13 +143,46 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             "🧠 Thinking...",
             reply_to_message_id,
             topic_id,
-            &cancel_markup,
+            // Placeholder markup — real one set after we know the message ID
+            &InlineKeyboardMarkup {
+                inline_keyboard: vec![],
+            },
         )
         .await;
 
     let status_message_id = status_msg.as_ref().ok().map(|m| m.message_id);
 
-    // Register cancellation token so the polling loop can trigger it
+    // Now that we have the status message ID, set the real cancel button
+    if let Some(msg_id) = status_message_id {
+        let cancel_data = format!("cancel:{}:{}", incoming.chat_id, msg_id);
+        let cancel_markup = InlineKeyboardMarkup {
+            inline_keyboard: vec![vec![InlineKeyboardButton {
+                text: "⏹ Cancel".to_string(),
+                callback_data: Some(cancel_data),
+                url: None,
+            }]],
+        };
+        if let Err(err) = context
+            .client()
+            .edit_message_text(
+                incoming.chat_id,
+                msg_id,
+                "🧠 Thinking...",
+                Some(&cancel_markup),
+            )
+            .await
+        {
+            eprintln!("Failed to add cancel button to status message: {}", err);
+        }
+    }
+
+    // Register cancellation token keyed by (chat_id, status_message_id) so
+    // the polling loop can trigger it. Using status_message_id prevents stale
+    // buttons from cancelling a different turn.
+    let cancel_key = (
+        incoming.chat_id,
+        status_message_id.unwrap_or(incoming.message_id),
+    );
     let cancel_token = CancellationToken::new();
     {
         let mut map = context.cancel_map().lock().await;
@@ -197,8 +222,23 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                         .client()
                         .edit_message_text(incoming.chat_id, msg_id, &final_text, None)
                         .await;
-                    if edit_result.is_err() {
-                        // Fallback: send as a new message if edit fails (e.g. text too long)
+                    if let Err(ref err) = edit_result {
+                        eprintln!(
+                            "Failed to edit status message {} in chat {}: {}",
+                            msg_id, incoming.chat_id, err
+                        );
+                        // Delete the old status message to remove stale cancel button
+                        if let Err(del_err) = context
+                            .client()
+                            .delete_message(incoming.chat_id, msg_id)
+                            .await
+                        {
+                            eprintln!(
+                                "Failed to delete stale status message {}: {}",
+                                msg_id, del_err
+                            );
+                        }
+                        // Fallback: send as a new message
                         context
                             .client()
                             .send_message(
@@ -213,26 +253,24 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     // No status message was sent (send_message_with_markup failed)
                     context
                         .client()
-                        .send_message(
-                            incoming.chat_id,
-                            &final_text,
-                            reply_to_message_id,
-                            topic_id,
-                        )
+                        .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
                         .await?;
                 }
             } else if let Some(msg_id) = status_message_id {
                 // Empty response — remove the thinking message
-                let _ = context
+                if let Err(err) = context
                     .client()
                     .delete_message(incoming.chat_id, msg_id)
-                    .await;
+                    .await
+                {
+                    eprintln!("Failed to delete empty status message {}: {}", msg_id, err);
+                }
             }
         }
         Some(Err(err)) => {
             eprintln!("Agent error: {}", err);
             if let Some(msg_id) = status_message_id {
-                let _ = context
+                if let Err(edit_err) = context
                     .client()
                     .edit_message_text(
                         incoming.chat_id,
@@ -240,17 +278,27 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                         "Sorry, something went wrong.",
                         None,
                     )
-                    .await;
-            } else {
-                let _ = context
-                    .client()
-                    .send_message(
-                        incoming.chat_id,
-                        "Sorry, something went wrong.",
-                        reply_to_message_id,
-                        topic_id,
-                    )
-                    .await;
+                    .await
+                {
+                    eprintln!(
+                        "Failed to edit error status message {}: {}",
+                        msg_id, edit_err
+                    );
+                }
+            } else if let Err(send_err) = context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    "Sorry, something went wrong.",
+                    reply_to_message_id,
+                    topic_id,
+                )
+                .await
+            {
+                eprintln!(
+                    "Failed to send error message to chat {}: {}",
+                    incoming.chat_id, send_err
+                );
             }
         }
         None => {
@@ -262,11 +310,16 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     .map(|id| format!(" topic {}", id))
                     .unwrap_or_default()
             );
-            if let Some(msg_id) = status_message_id {
-                let _ = context
+            if let Some(msg_id) = status_message_id
+                && let Err(err) = context
                     .client()
                     .edit_message_text(incoming.chat_id, msg_id, "Cancelled ✓", None)
-                    .await;
+                    .await
+            {
+                eprintln!(
+                    "Failed to edit cancelled status message {}: {}",
+                    msg_id, err
+                );
             }
         }
     }

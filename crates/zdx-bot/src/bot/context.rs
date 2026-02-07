@@ -1,5 +1,4 @@
-use std::collections::HashMap;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -11,6 +10,8 @@ use zdx_core::core::agent::ToolConfig;
 use crate::telegram::TelegramClient;
 
 /// Key for the per-turn cancellation map: (chat_id, status_message_id).
+/// Using the status message ID (instead of topic_id) ensures stale cancel
+/// buttons from previous turns cannot cancel a new turn in the same topic.
 pub(crate) type CancelKey = (i64, i64);
 
 /// Key for queued-item cancellation: (chat_id, user_message_id).

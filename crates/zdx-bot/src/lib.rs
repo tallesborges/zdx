@@ -138,13 +138,25 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
 
 /// Handle a callback query from an inline keyboard button.
 /// Supports:
-/// - `cancel:{chat_id}:{topic_id}` — cancel an active agent turn
+/// - `cancel:{chat_id}:{status_message_id}` — cancel an active agent turn
 /// - `cancel_q:{chat_id}:{message_id}` — cancel a queued (not-yet-processing) item
 async fn handle_callback_query(
     context: &BotContext,
     client: &TelegramClient,
     callback: CallbackQuery,
 ) {
+    // Enforce allowlist: only authorized users can trigger cancel actions
+    if !context.allowlist_user_ids().contains(&callback.from.id) {
+        eprintln!(
+            "Denied callback from non-allowlisted user {}",
+            callback.from.id
+        );
+        let _ = client
+            .answer_callback_query(&callback.id, Some("Access denied"))
+            .await;
+        return;
+    }
+
     let data = callback.data.as_deref().unwrap_or("");
 
     if let Some(key) = parse_cancel_callback(data) {
@@ -156,14 +168,18 @@ async fn handle_callback_query(
 
         if let Some(token) = token {
             token.cancel();
-            let _ = client
+            if let Err(err) = client
                 .answer_callback_query(&callback.id, Some("Cancelling..."))
-                .await;
+                .await
+            {
+                eprintln!("Failed to answer cancel callback: {}", err);
+            }
             eprintln!("Cancelled agent turn for {:?}", key);
-        } else {
-            let _ = client
-                .answer_callback_query(&callback.id, Some("Nothing to cancel"))
-                .await;
+        } else if let Err(err) = client
+            .answer_callback_query(&callback.id, Some("Nothing to cancel"))
+            .await
+        {
+            eprintln!("Failed to answer callback: {}", err);
         }
     } else if let Some(key) = parse_queue_cancel_callback(data) {
         // Cancel a queued (not-yet-processing) item
@@ -174,18 +190,26 @@ async fn handle_callback_query(
 
         if let Some(token) = token {
             token.cancel();
-            let _ = client
+            if let Err(err) = client
                 .answer_callback_query(&callback.id, Some("Removed from queue"))
-                .await;
+                .await
+            {
+                eprintln!("Failed to answer queue cancel callback: {}", err);
+            }
             eprintln!("Cancelled queued item for {:?}", key);
         } else {
             // Token gone — item may have already started processing
-            let _ = client
+            if let Err(err) = client
                 .answer_callback_query(&callback.id, Some("Already processing"))
-                .await;
+                .await
+            {
+                eprintln!("Failed to answer callback: {}", err);
+            }
         }
     } else {
-        let _ = client.answer_callback_query(&callback.id, None).await;
+        if let Err(err) = client.answer_callback_query(&callback.id, None).await {
+            eprintln!("Failed to answer unknown callback: {}", err);
+        }
         eprintln!(
             "Unknown callback from user {}: {:?}",
             callback.from.id, data
@@ -193,13 +217,17 @@ async fn handle_callback_query(
     }
 }
 
-/// Parse `cancel:{chat_id}:{topic_id}` callback data into a CancelKey.
+/// Parse `cancel:{chat_id}:{status_message_id}` callback data into a CancelKey.
 fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
     let rest = data.strip_prefix("cancel:")?;
-    let (chat_str, topic_str) = rest.split_once(':')?;
+    // Guard against matching cancel_q: prefix
+    if rest.starts_with('q') {
+        return None;
+    }
+    let (chat_str, msg_str) = rest.split_once(':')?;
     let chat_id: i64 = chat_str.parse().ok()?;
-    let topic_id: i64 = topic_str.parse().ok()?;
-    Some((chat_id, topic_id))
+    let status_message_id: i64 = msg_str.parse().ok()?;
+    Some((chat_id, status_message_id))
 }
 
 /// Parse `cancel_q:{chat_id}:{message_id}` callback data into a QueueCancelKey.
