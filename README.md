@@ -5,7 +5,7 @@
 
 Zdx is a coding agent built in Rust. I made it mainly to avoid using multiple CLIs and to have customization freedom, so I try to add the best features from them into a single CLI.
 
-I added the Telegram bot so I can control it when outside the computer. I don’t have plans to add providers other than Telegram.
+I added the Telegram bot so I can control it while away from the computer. I don't have plans to add providers other than Telegram.
 
 ![Zdx demo](docs/assets/demo.gif)
 
