@@ -182,6 +182,10 @@ fn execute_command(
                 (None, vec![UiEffect::EnsureWorktree], vec![])
             }
         }
+        "root-new" => {
+            let (effects, mutations) = execute_root_new(tui);
+            (None, effects, mutations)
+        }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {
@@ -305,28 +309,11 @@ fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 }
 
 fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    if tui.agent_state.is_running() {
-        return (
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(
-                    "Cannot clear while streaming.".to_string(),
-                ),
-            )],
-        );
+    if let Some(result) = prepare_new_thread_transition(tui) {
+        return result;
     }
 
-    if tui.tasks.state(TaskKind::ThreadCreate).is_running() {
-        return (vec![], vec![]);
-    }
-
-    let mut mutations = vec![
-        StateMutation::Transcript(TranscriptMutation::Clear),
-        StateMutation::Thread(ThreadMutation::ClearMessages),
-        StateMutation::Thread(ThreadMutation::ResetUsage),
-        StateMutation::Input(InputMutation::ClearHistory),
-        StateMutation::Input(InputMutation::ClearQueue),
-    ];
+    let mut mutations = new_thread_reset_mutations();
 
     if tui.thread.thread_log.is_some() {
         (vec![UiEffect::CreateNewThread], mutations)
@@ -336,6 +323,45 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         ));
         (vec![], mutations)
     }
+}
+
+fn execute_root_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    if let Some(result) = prepare_new_thread_transition(tui) {
+        return result;
+    }
+
+    let mutations = new_thread_reset_mutations();
+
+    (vec![UiEffect::CreateNewThreadFromProjectRoot], mutations)
+}
+
+fn prepare_new_thread_transition(tui: &TuiState) -> Option<(Vec<UiEffect>, Vec<StateMutation>)> {
+    if tui.agent_state.is_running() {
+        return Some((
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Cannot clear while streaming.".to_string(),
+                ),
+            )],
+        ));
+    }
+
+    if tui.tasks.state(TaskKind::ThreadCreate).is_running() {
+        return Some((vec![], vec![]));
+    }
+
+    None
+}
+
+fn new_thread_reset_mutations() -> Vec<StateMutation> {
+    vec![
+        StateMutation::Transcript(TranscriptMutation::Clear),
+        StateMutation::Thread(ThreadMutation::ClearMessages),
+        StateMutation::Thread(ThreadMutation::ResetUsage),
+        StateMutation::Input(InputMutation::ClearHistory),
+        StateMutation::Input(InputMutation::ClearQueue),
+    ]
 }
 
 fn execute_quit(tui: &TuiState) -> Vec<UiEffect> {
@@ -523,9 +549,10 @@ mod tests {
         );
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), 2);
+        assert_eq!(filtered.len(), 3);
         let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
         assert!(names.contains(&"new"));
+        assert!(names.contains(&"root-new"));
         assert!(names.contains(&"timeline"));
     }
 

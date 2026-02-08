@@ -522,6 +522,21 @@ impl TuiRuntime {
                     ));
                 }
             }
+            UiEffect::CreateNewThreadFromProjectRoot => {
+                let current_root = self.state.tui.agent_opts.root.clone();
+                let root = handlers::resolve_project_root(&current_root).unwrap_or(current_root);
+
+                let root_display_event = handlers::resolve_root_display(root.clone());
+                self.dispatch_event(root_display_event);
+
+                let config = self.state.tui.config.clone();
+                let prompt_event = handlers::refresh_system_prompt(config.clone(), root.clone());
+                self.dispatch_event(prompt_event);
+
+                self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
+                    handlers::thread_create(config, root)
+                });
+            }
             UiEffect::ResolveRootDisplay { path } => {
                 let event = handlers::resolve_root_display(path);
                 self.dispatch_event(event);
