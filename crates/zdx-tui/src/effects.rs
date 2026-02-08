@@ -111,6 +111,9 @@ pub enum UiEffect {
     /// Ensure a git worktree for the active thread and switch root to it.
     EnsureWorktree,
 
+    /// Create a new thread using the original project root.
+    CreateNewThreadFromProjectRoot,
+
     /// Resolve root-derived display state (branch/path) and apply it.
     ResolveRootDisplay { path: PathBuf },
 

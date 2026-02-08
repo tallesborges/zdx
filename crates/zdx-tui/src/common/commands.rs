@@ -141,6 +141,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "root-new",
+        aliases: &["root"],
+        description: "Start a new thread from the original project root",
+        category: "thread",
+        shortcut: None,
+    },
+    Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",
@@ -217,6 +224,7 @@ mod tests {
         assert_eq!(find_command("quit").display_name(), "quit (q, exit)");
         assert_eq!(find_command("threads").display_name(), "threads (history)");
         assert_eq!(find_command("worktree").display_name(), "worktree (wt)");
+        assert_eq!(find_command("root-new").display_name(), "root-new (root)");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
     }

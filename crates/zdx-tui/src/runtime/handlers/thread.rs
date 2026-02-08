@@ -1,5 +1,7 @@
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
+use anyhow::{Context, anyhow, bail};
 use zdx_core::core::thread_log::ThreadEvent;
 use zdx_core::core::{thread_log, worktree};
 
@@ -207,6 +209,38 @@ fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
         .skip(char_count.saturating_sub(keep_chars_each_side))
         .collect();
     format!("{}...{}", start, end)
+}
+
+pub fn resolve_project_root(root: &Path) -> anyhow::Result<PathBuf> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .context("git rev-parse --git-common-dir")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git rev-parse failed: {}", stderr.trim());
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        bail!("git rev-parse returned empty git common dir");
+    }
+
+    let git_common_dir = PathBuf::from(trimmed);
+    let project_root = git_common_dir.parent().ok_or_else(|| {
+        anyhow!(
+            "cannot derive project root from git common dir: {}",
+            git_common_dir.display()
+        )
+    })?;
+
+    Ok(project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.to_path_buf()))
 }
 
 /// Loads a thread preview.
