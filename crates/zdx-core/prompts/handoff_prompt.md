@@ -1,27 +1,34 @@
-Extract relevant context from the conversation below for continuing this work. Write from my perspective (first person: "I did...", "I told you...").
+Generate a handoff message from the transcript below so I can paste it as the first user message in a brand-new chat and continue work without losing context.
 
-Consider what would be useful based on my request below. Questions that might be relevant:
-- What did I just do or implement?
-- What instructions did I already give you which are still relevant (e.g. follow patterns in the codebase)?
-- What files did I already tell you are important or that I am working on (use workspace-relative paths)?
-- Did I provide a plan or spec that should be included?
-- What important technical details did I discover (APIs, methods, patterns)?
-- What caveats or limitations did I find?
+Write in first person ("I did...", "I need...", "Please...") and make it feel like I wrote it.
 
-Extract what matters for the specific request. Don't answer questions that aren't relevant. Pick an appropriate length based on the complexity of the request.
+Include the most useful context for execution:
+- What I am trying to achieve now (current goal)
+- What I already did / tried and current status
+- Key technical context that affects next steps (important files, APIs, patterns, commands, errors, constraints)
+- Any relevant decisions, caveats, or limitations discovered
+- What should happen next
 
-Focus on capabilities and behavior, not file-by-file changes. Avoid excessive implementation details unless critical.
+Prioritize completeness over extreme brevity. Do not drop critical context just to keep it short.
 
-This handoff will be used as the very first message in a fresh chat. It must stand alone and be actionable. Do not reference "above", "previous conversation", or "earlier". Assume the user is handing off to continue execution, so include only the minimum context needed to act on the latest request.
+This must stand alone. Do not reference "above", "earlier", "previous conversation", or "as discussed".
 
-If relevant files exist, start the message with a line that begins "Relevant files:" followed by up to 5 workspace-relative paths separated by commas (no bullets). Add a blank line after that line before the paragraphs.
+If relevant files exist, start with a line exactly in this format:
+Relevant files: path/one, path/two, path/three
 
-Write a short first-person handoff that feels like I wrote it. Use 1–2 short paragraphs only (no labels, no section headers). Keep it concise and actionable. Summarize what this work is about, what I already did, and any important findings or limitations.
+Use workspace-relative paths. Include up to 10 files if they are truly relevant. Add a blank line after this line.
 
-End with a final sentence that makes the user's latest request actionable (rewrite for clarity if needed). Do not prefix it with "My request" or similar. If the request is unclear, say so and note what I would ask.
+Length guidance:
+- Simple requests: 1 short paragraph
+- Medium/complex requests: 2–4 short paragraphs
 
-Format: plain text. No markdown headers, no bold/italic, no code fences.
-Output ONLY the handoff prompt text, nothing else.
+No section headers. No markdown formatting. Plain text only.
+
+End with a clear, direct final sentence that states exactly what I want the new assistant to do next. If the request is ambiguous, explicitly say what I need to clarify.
+
+Use the goal provided after the transcript as the primary objective for the handoff.
+
+Output ONLY the handoff message text.
 
 <thread>
 {{THREAD_CONTENT}}
