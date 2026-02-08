@@ -134,6 +134,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "worktree",
+        aliases: &["wt"],
+        description: "Create/switch to a per-thread git worktree",
+        category: "git",
+        shortcut: None,
+    },
+    Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",
@@ -209,6 +216,7 @@ mod tests {
         assert_eq!(find_command("new").display_name(), "new (clear)");
         assert_eq!(find_command("quit").display_name(), "quit (q, exit)");
         assert_eq!(find_command("threads").display_name(), "threads (history)");
+        assert_eq!(find_command("worktree").display_name(), "worktree (wt)");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
     }

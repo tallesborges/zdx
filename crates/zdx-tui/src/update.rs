@@ -241,6 +241,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 | TaskKind::ThreadPreview
                 | TaskKind::ThreadCreate
                 | TaskKind::ThreadFork
+                | TaskKind::ThreadWorktree
                 | TaskKind::LoginExchange
                 | TaskKind::LoginCallback => {}
             }
@@ -407,6 +408,32 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
             effects
         }
+        UiEvent::RootDisplayResolved {
+            path,
+            git_branch,
+            display_path,
+        } => {
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::SetRootDisplay {
+                    path,
+                    git_branch,
+                    display_path,
+                }],
+            );
+            vec![]
+        }
+        UiEvent::SystemPromptRefreshed { result } => {
+            let mut mutations = Vec::new();
+            match result {
+                Ok(prompt) => mutations.push(StateMutation::SetSystemPrompt(prompt)),
+                Err(error) => mutations.push(StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(error),
+                )),
+            }
+            apply_mutations(&mut app.tui, mutations);
+            vec![]
+        }
 
         // Thread async result events - delegate to thread feature
         UiEvent::Thread(thread_event) => match thread_event {
@@ -456,6 +483,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 cells,
                 messages,
                 history,
+                stored_root,
                 thread_log,
                 title,
                 usage,
@@ -466,6 +494,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         cells,
                         messages,
                         history,
+                        stored_root,
                         thread_log,
                         title,
                         usage,
@@ -693,6 +722,18 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 apply_mutations(&mut app.tui, mutations);
                 effects
             }
+            ThreadUiEvent::WorktreeReady { path } => {
+                let (effects, mutations, _) =
+                    thread::handle_thread_event(ThreadUiEvent::WorktreeReady { path });
+                apply_mutations(&mut app.tui, mutations);
+                effects
+            }
+            ThreadUiEvent::WorktreeFailed { error } => {
+                let (effects, mutations, _) =
+                    thread::handle_thread_event(ThreadUiEvent::WorktreeFailed { error });
+                apply_mutations(&mut app.tui, mutations);
+                effects
+            }
         },
     }
 }
@@ -709,6 +750,18 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
             StateMutation::Auth(mutation) => tui.auth.apply(mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
+            StateMutation::SetRootDisplay {
+                path,
+                git_branch,
+                display_path,
+            } => {
+                tui.agent_opts.root = path;
+                tui.git_branch = git_branch;
+                tui.display_path = display_path;
+            }
+            StateMutation::SetSystemPrompt(system_prompt) => {
+                tui.system_prompt = system_prompt;
+            }
             StateMutation::SetLastSkillRepo(repo) => {
                 tui.last_skill_repo = Some(repo);
             }

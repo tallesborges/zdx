@@ -336,7 +336,51 @@ fn shorten_path(path: &std::path::Path) -> String {
     if let Some(home) = dirs::home_dir()
         && let Ok(relative) = path.strip_prefix(&home)
     {
-        return format!("~/{}", relative.display());
+        let display = format!("~/{}", relative.display());
+        return compact_path_segments(display, 5);
     }
-    path.display().to_string()
+    compact_path_segments(path.display().to_string(), 5)
+}
+
+fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String {
+    let has_leading_slash = path.starts_with('/');
+    let segments: Vec<String> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|segment| compact_segment(segment, 5))
+        .collect();
+
+    if segments.len() <= keep_segments_each_side * 2 {
+        let joined = segments.join("/");
+        if has_leading_slash {
+            return format!("/{}", joined);
+        }
+        return joined;
+    }
+
+    let mut compact: Vec<String> = Vec::with_capacity(keep_segments_each_side * 2 + 1);
+    compact.extend_from_slice(&segments[..keep_segments_each_side]);
+    compact.push("...".to_string());
+    compact.extend_from_slice(&segments[segments.len() - keep_segments_each_side..]);
+
+    let joined = compact.join("/");
+    if has_leading_slash {
+        format!("/{}", joined)
+    } else {
+        joined
+    }
+}
+
+fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
+    let char_count = segment.chars().count();
+    if char_count <= keep_chars_each_side * 2 + 3 {
+        return segment.to_string();
+    }
+
+    let start: String = segment.chars().take(keep_chars_each_side).collect();
+    let end: String = segment
+        .chars()
+        .skip(char_count.saturating_sub(keep_chars_each_side))
+        .collect();
+    format!("{}...{}", start, end)
 }

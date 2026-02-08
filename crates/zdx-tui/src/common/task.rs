@@ -26,6 +26,7 @@ pub enum TaskKind {
     ThreadPreview,
     ThreadCreate,
     ThreadFork,
+    ThreadWorktree,
     FileDiscovery,
     SkillsFetch,
     SkillInstall,
