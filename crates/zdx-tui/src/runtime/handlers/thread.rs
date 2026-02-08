@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
-use zdx_core::core::thread_log;
 use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::{thread_log, worktree};
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
@@ -87,19 +87,10 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     // Create or get the thread handle for future appends
     let thread_log_handle = thread_log::ThreadLog::with_id(thread_id.to_string()).ok();
 
-    // Auto-relink root path if it differs (best effort).
-    if let Some(stored_root) = stored_root {
-        let current_root = root
-            .canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf())
-            .display()
-            .to_string();
-        if stored_root != current_root
-            && let Some(mut handle) = thread_log_handle.clone()
-        {
-            let _ = handle.set_root_path(root);
-        }
-    } else if let Some(mut handle) = thread_log_handle.clone() {
+    // Backfill thread root for older threads that don't have one yet.
+    if stored_root.is_none()
+        && let Some(mut handle) = thread_log_handle.clone()
+    {
         let _ = handle.set_root_path(root);
     }
 
@@ -108,10 +99,114 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         cells,
         messages,
         history,
+        stored_root: stored_root.map(PathBuf::from),
         thread_log: thread_log_handle,
         title,
         usage,
     })
+}
+
+/// Ensures a worktree for the active thread and persists it as thread root.
+pub async fn thread_ensure_worktree(thread_id: String, root: PathBuf) -> UiEvent {
+    tokio::task::spawn_blocking(move || match worktree::ensure_worktree(&root, &thread_id) {
+        Ok(path) => {
+            if let Ok(mut thread_log) = thread_log::ThreadLog::with_id(thread_id) {
+                let _ = thread_log.set_root_path(&path);
+            }
+            UiEvent::Thread(ThreadUiEvent::WorktreeReady { path })
+        }
+        Err(error) => UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
+            error: format!("Failed to enable worktree: {}", error),
+        }),
+    })
+    .await
+    .unwrap_or_else(|e| {
+        UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
+            error: format!("Task failed: {}", e),
+        })
+    })
+}
+
+/// Resolves root-derived display fields for a new root.
+pub fn resolve_root_display(path: PathBuf) -> UiEvent {
+    UiEvent::RootDisplayResolved {
+        git_branch: get_git_branch(&path),
+        display_path: shorten_path(&path),
+        path,
+    }
+}
+
+/// Refreshes the effective system prompt for a new root.
+pub fn refresh_system_prompt(config: zdx_core::config::Config, path: PathBuf) -> UiEvent {
+    let result = zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &path)
+        .map(|context| context.prompt)
+        .map_err(|error| format!("Failed to refresh system prompt: {}", error));
+
+    UiEvent::SystemPromptRefreshed { result }
+}
+
+fn get_git_branch(root: &Path) -> Option<String> {
+    let head_path = root.join(".git/HEAD");
+    if let Ok(content) = std::fs::read_to_string(head_path)
+        && let Some(branch) = content.strip_prefix("ref: refs/heads/")
+    {
+        return Some(branch.trim().to_string());
+    }
+    None
+}
+
+fn shorten_path(path: &Path) -> String {
+    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    if let Some(home) = dirs::home_dir()
+        && let Ok(relative) = path.strip_prefix(&home)
+    {
+        let display = format!("~/{}", relative.display());
+        return compact_path_segments(display, 5);
+    }
+    compact_path_segments(path.display().to_string(), 5)
+}
+
+fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String {
+    let has_leading_slash = path.starts_with('/');
+    let segments: Vec<String> = path
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .map(|segment| compact_segment(segment, 5))
+        .collect();
+
+    if segments.len() <= keep_segments_each_side * 2 {
+        let joined = segments.join("/");
+        if has_leading_slash {
+            return format!("/{}", joined);
+        }
+        return joined;
+    }
+
+    let mut compact: Vec<String> = Vec::with_capacity(keep_segments_each_side * 2 + 1);
+    compact.extend_from_slice(&segments[..keep_segments_each_side]);
+    compact.push("...".to_string());
+    compact.extend_from_slice(&segments[segments.len() - keep_segments_each_side..]);
+
+    let joined = compact.join("/");
+    if has_leading_slash {
+        format!("/{}", joined)
+    } else {
+        joined
+    }
+}
+
+fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
+    let char_count = segment.chars().count();
+    if char_count <= keep_chars_each_side * 2 + 3 {
+        return segment.to_string();
+    }
+
+    let start: String = segment.chars().take(keep_chars_each_side).collect();
+    let end: String = segment
+        .chars()
+        .skip(char_count.saturating_sub(keep_chars_each_side))
+        .collect();
+    format!("{}...{}", start, end)
 }
 
 /// Loads a thread preview.

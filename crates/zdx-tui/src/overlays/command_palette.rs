@@ -165,6 +165,23 @@ fn execute_command(
                 vec![],
             )
         }
+        "worktree" => {
+            if tui.tasks.state(TaskKind::ThreadWorktree).is_running() {
+                (None, vec![], vec![])
+            } else if tui.thread.thread_log.is_none() {
+                (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Worktree requires an active thread.".to_string(),
+                        ),
+                    )],
+                )
+            } else {
+                (None, vec![UiEffect::EnsureWorktree], vec![])
+            }
+        }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
         "handoff" => {

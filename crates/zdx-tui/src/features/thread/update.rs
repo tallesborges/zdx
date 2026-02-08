@@ -55,10 +55,16 @@ pub fn handle_thread_event(
             cells,
             messages,
             history,
+            stored_root,
             thread_log,
             title,
             usage,
         } => {
+            let mut effects = Vec::new();
+            if let Some(path) = stored_root.clone() {
+                effects.push(UiEffect::ResolveRootDisplay { path: path.clone() });
+                effects.push(UiEffect::RefreshSystemPrompt { path });
+            }
             handle_thread_loaded(
                 thread_log,
                 &thread_id,
@@ -69,7 +75,7 @@ pub fn handle_thread_event(
                 usage,
                 &mut mutations,
             );
-            vec![]
+            effects
         }
         ThreadUiEvent::LoadFailed { error } => {
             mutations.push(StateMutation::Transcript(
@@ -144,6 +150,25 @@ pub fn handle_thread_event(
             vec![]
         }
         ThreadUiEvent::RenameFailed { error } => {
+            mutations.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(error),
+            ));
+            vec![]
+        }
+        ThreadUiEvent::WorktreeReady { path } => {
+            let effects = vec![
+                UiEffect::ResolveRootDisplay { path: path.clone() },
+                UiEffect::RefreshSystemPrompt { path: path.clone() },
+            ];
+            mutations.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(format!(
+                    "Worktree enabled: {}",
+                    path.display()
+                )),
+            ));
+            effects
+        }
+        ThreadUiEvent::WorktreeFailed { error } => {
             mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(error),
             ));

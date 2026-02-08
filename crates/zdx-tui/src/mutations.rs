@@ -3,6 +3,8 @@
 //! Feature reducers and overlays return these mutations to request changes
 //! outside their own slice. The main reducer applies them in order.
 
+use std::path::PathBuf;
+
 use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_log::{ThreadLog, Usage};
 use zdx_core::providers::ChatMessage;
@@ -18,6 +20,12 @@ pub enum StateMutation {
     Thread(ThreadMutation),
     Auth(AuthMutation),
     Config(ConfigMutation),
+    SetRootDisplay {
+        path: PathBuf,
+        git_branch: Option<String>,
+        display_path: String,
+    },
+    SetSystemPrompt(Option<String>),
     SetLastSkillRepo(String),
     /// Toggle the debug status line visibility.
     ToggleDebugStatus,

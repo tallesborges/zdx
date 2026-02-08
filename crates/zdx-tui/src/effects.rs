@@ -18,6 +18,8 @@
 //! The runtime executes these by calling `token.cancel()` on the provided token.
 //! This preserves the architecture: reducer decides when to cancel, runtime executes.
 
+use std::path::PathBuf;
+
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_log::ThreadEvent;
@@ -105,6 +107,15 @@ pub enum UiEffect {
 
     /// Load a thread by ID (switch to that thread).
     LoadThread { thread_id: String },
+
+    /// Ensure a git worktree for the active thread and switch root to it.
+    EnsureWorktree,
+
+    /// Resolve root-derived display state (branch/path) and apply it.
+    ResolveRootDisplay { path: PathBuf },
+
+    /// Rebuild effective system prompt for a new root.
+    RefreshSystemPrompt { path: PathBuf },
 
     /// Preview a thread (show transcript without full switch).
     /// Used during thread picker navigation.

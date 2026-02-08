@@ -58,6 +58,7 @@ pub enum ThreadUiEvent {
         cells: Vec<HistoryCell>,
         messages: Vec<ChatMessage>,
         history: Vec<String>,
+        stored_root: Option<PathBuf>,
         thread_log: Option<ThreadLog>,
         title: Option<String>,
         /// Restored token usage: (cumulative, latest)
@@ -107,6 +108,12 @@ pub enum ThreadUiEvent {
 
     /// Thread rename failed.
     RenameFailed { error: String },
+
+    /// Worktree setup succeeded.
+    WorktreeReady { path: PathBuf },
+
+    /// Worktree setup failed.
+    WorktreeFailed { error: String },
 
     /// Auto thread title suggestion completed (None if skipped/failed).
     TitleSuggested {
@@ -222,6 +229,18 @@ pub enum UiEvent {
         id: String,
         command: String,
         result: ToolOutput,
+    },
+
+    /// Root path display details resolved by runtime.
+    RootDisplayResolved {
+        path: PathBuf,
+        git_branch: Option<String>,
+        display_path: String,
+    },
+
+    /// Effective system prompt refresh result for the current root.
+    SystemPromptRefreshed {
+        result: Result<Option<String>, String>,
     },
 
     /// Task lifecycle: runtime started a task (cancel token optional).

@@ -507,6 +507,30 @@ impl TuiRuntime {
                     handlers::thread_load(thread_id, root)
                 });
             }
+            UiEffect::EnsureWorktree => {
+                if let Some(thread_log) = self.state.tui.thread.thread_log.as_ref() {
+                    let thread_id = thread_log.id.clone();
+                    let root = self.state.tui.agent_opts.root.clone();
+                    self.spawn_task(TaskKind::ThreadWorktree, TaskMeta::None, false, move |_| {
+                        handlers::thread_ensure_worktree(thread_id, root)
+                    });
+                } else {
+                    self.dispatch_event(UiEvent::Thread(
+                        crate::events::ThreadUiEvent::WorktreeFailed {
+                            error: "Worktree requires an active thread.".to_string(),
+                        },
+                    ));
+                }
+            }
+            UiEffect::ResolveRootDisplay { path } => {
+                let event = handlers::resolve_root_display(path);
+                self.dispatch_event(event);
+            }
+            UiEffect::RefreshSystemPrompt { path } => {
+                let config = self.state.tui.config.clone();
+                let event = handlers::refresh_system_prompt(config, path);
+                self.dispatch_event(event);
+            }
             UiEffect::PreviewThread { thread_id } => {
                 self.spawn_task(TaskKind::ThreadPreview, TaskMeta::None, false, move |_| {
                     handlers::thread_preview(thread_id)
