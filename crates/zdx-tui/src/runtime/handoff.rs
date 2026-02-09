@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
-use zdx_core::core::thread_persistence::{self, ThreadLog};
+use zdx_core::core::thread_persistence::{self, Thread};
 use zdx_core::prompts::HANDOFF_PROMPT_TEMPLATE;
 
 use crate::events::UiEvent;
@@ -116,10 +116,9 @@ pub fn execute_handoff_submit(
     config: &Config,
     root: &Path,
     handoff_from: Option<String>,
-) -> Result<(ThreadLog, Vec<PathBuf>), String> {
-    let thread_log_handle =
-        thread_persistence::ThreadLog::new_with_root_and_source(root, handoff_from)
-            .map_err(|e| e.to_string())?;
+) -> Result<(Thread, Vec<PathBuf>), String> {
+    let thread_handle = thread_persistence::Thread::new_with_root_and_source(root, handoff_from)
+        .map_err(|e| e.to_string())?;
 
     let context_paths =
         match zdx_core::core::context::build_effective_system_prompt_with_paths(config, root) {
@@ -127,7 +126,7 @@ pub fn execute_handoff_submit(
             Err(_) => Vec::new(),
         };
 
-    Ok((thread_log_handle, context_paths))
+    Ok((thread_handle, context_paths))
 }
 
 /// Runs handoff generation with cancellation support.

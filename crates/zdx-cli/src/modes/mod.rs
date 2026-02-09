@@ -11,7 +11,7 @@ pub use zdx_tui::{run_interactive_chat, run_interactive_chat_with_history};
 #[cfg(not(feature = "tui"))]
 pub async fn run_interactive_chat(
     _config: &zdx_core::config::Config,
-    _thread_log: Option<zdx_core::core::thread_persistence::ThreadLog>,
+    _thread_log: Option<zdx_core::core::thread_persistence::Thread>,
     _root: std::path::PathBuf,
 ) -> anyhow::Result<()> {
     anyhow::bail!("TUI support is disabled in this build (feature \"tui\").");
@@ -20,7 +20,7 @@ pub async fn run_interactive_chat(
 #[cfg(not(feature = "tui"))]
 pub async fn run_interactive_chat_with_history(
     _config: &zdx_core::config::Config,
-    _thread_log: Option<zdx_core::core::thread_persistence::ThreadLog>,
+    _thread_log: Option<zdx_core::core::thread_persistence::Thread>,
     _history: Vec<zdx_core::providers::ChatMessage>,
     _root: std::path::PathBuf,
 ) -> anyhow::Result<()> {

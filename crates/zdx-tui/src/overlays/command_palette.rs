@@ -137,7 +137,7 @@ fn execute_command(
             (None, effects, mutations)
         }
         "rename" => {
-            if tui.thread.thread_log.is_none() {
+            if tui.thread.thread_handle.is_none() {
                 (
                     None,
                     vec![],
@@ -168,7 +168,7 @@ fn execute_command(
         "worktree" => {
             if tui.tasks.state(TaskKind::ThreadWorktree).is_running() {
                 (None, vec![], vec![])
-            } else if tui.thread.thread_log.is_none() {
+            } else if tui.thread.thread_handle.is_none() {
                 (
                     None,
                     vec![],
@@ -254,9 +254,9 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 }
 
 fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    match &tui.thread.thread_log {
-        Some(thread_log) => {
-            let id = thread_log.id.clone();
+    match &tui.thread.thread_handle {
+        Some(thread_handle) => {
+            let id = thread_handle.id.clone();
             match Clipboard::copy(&id) {
                 Ok(()) => (
                     vec![],
@@ -288,7 +288,7 @@ fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 }
 
 fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    if tui.thread.thread_log.is_none() {
+    if tui.thread.thread_handle.is_none() {
         return (
             vec![],
             vec![StateMutation::Transcript(
@@ -315,7 +315,7 @@ fn execute_new(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
 
     let mut mutations = new_thread_reset_mutations();
 
-    if tui.thread.thread_log.is_some() {
+    if tui.thread.thread_handle.is_some() {
         (vec![UiEffect::CreateNewThread], mutations)
     } else {
         mutations.push(StateMutation::Transcript(

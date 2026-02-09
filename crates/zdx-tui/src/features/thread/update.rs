@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use zdx_core::core::thread_persistence::{ThreadLog, ThreadSummary, Usage, short_thread_id};
+use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage, short_thread_id};
 use zdx_core::providers::ChatMessage;
 
 use crate::effects::UiEffect;
@@ -56,7 +56,7 @@ pub fn handle_thread_event(
             messages,
             history,
             stored_root,
-            thread_log,
+            thread_handle,
             title,
             usage,
         } => {
@@ -66,7 +66,7 @@ pub fn handle_thread_event(
                 effects.push(UiEffect::RefreshSystemPrompt { path });
             }
             handle_thread_loaded(
-                thread_log,
+                thread_handle,
                 &thread_id,
                 cells,
                 messages,
@@ -92,11 +92,11 @@ pub fn handle_thread_event(
             vec![]
         }
         ThreadUiEvent::Created {
-            thread_log,
+            thread_handle,
             context_paths,
             skills,
         } => {
-            handle_thread_created(thread_log, context_paths, skills, &mut mutations);
+            handle_thread_created(thread_handle, context_paths, skills, &mut mutations);
             vec![]
         }
         ThreadUiEvent::ForkedLoaded {
@@ -104,13 +104,13 @@ pub fn handle_thread_event(
             cells,
             messages,
             history,
-            thread_log,
+            thread_handle,
             usage,
             user_input,
             turn_number,
         } => {
             handle_thread_forked(
-                thread_log,
+                thread_handle,
                 cells,
                 messages,
                 history,
@@ -183,7 +183,7 @@ pub fn handle_thread_event(
 /// Handles thread loaded - switches to the thread.
 #[allow(clippy::too_many_arguments)]
 fn handle_thread_loaded(
-    thread_log: Option<ThreadLog>,
+    thread_handle: Option<Thread>,
     thread_id: &str,
     cells: Vec<HistoryCell>,
     messages: Vec<ChatMessage>,
@@ -202,7 +202,9 @@ fn handle_thread_loaded(
     ));
     mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(title)));
-    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(thread_log)));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetThread(
+        thread_handle,
+    )));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
         latest,
@@ -234,15 +236,15 @@ fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, mutations: &mut Vec<Sta
 
 /// Handles thread created - sets up the new thread.
 fn handle_thread_created(
-    thread_log: ThreadLog,
+    thread_handle: Thread,
     context_paths: Vec<PathBuf>,
     skills: Vec<zdx_core::skills::Skill>,
     mutations: &mut Vec<StateMutation>,
 ) {
     let startup_messages =
-        crate::thread_startup_messages(Some(thread_log.path()), &context_paths, &skills);
+        crate::thread_startup_messages(Some(thread_handle.path()), &context_paths, &skills);
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
-        thread_log,
+        thread_handle,
     ))));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
@@ -257,7 +259,7 @@ fn handle_thread_created(
 
 #[allow(clippy::too_many_arguments)]
 fn handle_thread_forked(
-    thread_log: ThreadLog,
+    thread_handle: Thread,
     cells: Vec<HistoryCell>,
     messages: Vec<ChatMessage>,
     history: Vec<String>,
@@ -276,7 +278,7 @@ fn handle_thread_forked(
     ));
     mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(messages)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
-        thread_log,
+        thread_handle,
     ))));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {

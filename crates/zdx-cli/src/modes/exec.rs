@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::{AgentEvent, ToolOutput};
-use zdx_core::core::thread_persistence::{self, ThreadEvent, ThreadLog};
+use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::ChatMessage;
 
 /// Options for exec execution.
@@ -46,7 +46,7 @@ impl From<&ExecOptions> for AgentOptions {
 pub async fn run_exec(
     prompt: &str,
     config: &Config,
-    mut thread: Option<ThreadLog>,
+    mut thread: Option<Thread>,
     options: &ExecOptions,
 ) -> Result<String> {
     let effective =
@@ -115,11 +115,11 @@ pub async fn run_exec(
 
     // Spawn persist task if thread exists
     let thread_id = thread.as_ref().map(|t| t.id.clone());
-    let persist_handle = if let Some(thread_log_handle) = thread.clone() {
+    let persist_handle = if let Some(thread_handle) = thread.clone() {
         let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
         let broadcaster =
             zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
-        let persist = thread_persistence::spawn_thread_persist_task(thread_log_handle, persist_rx);
+        let persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
         // No thread - just broadcast to renderer

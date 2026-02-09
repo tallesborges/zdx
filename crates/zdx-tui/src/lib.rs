@@ -20,7 +20,7 @@ pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
 use zdx_core::config::Config;
-use zdx_core::core::thread_persistence::ThreadLog;
+use zdx_core::core::thread_persistence::Thread;
 use zdx_core::providers::ChatMessage;
 use zdx_core::skills::Skill;
 
@@ -29,16 +29,16 @@ use crate::transcript::HistoryCell;
 /// Runs the interactive chat loop.
 pub async fn run_interactive_chat(
     config: &Config,
-    thread_log: Option<ThreadLog>,
+    thread_handle: Option<Thread>,
     root: PathBuf,
 ) -> Result<()> {
-    run_interactive_chat_with_history(config, thread_log, Vec::new(), root).await
+    run_interactive_chat_with_history(config, thread_handle, Vec::new(), root).await
 }
 
 /// Runs the interactive chat loop with pre-loaded history.
 pub async fn run_interactive_chat_with_history(
     config: &Config,
-    thread_log: Option<ThreadLog>,
+    thread_handle: Option<Thread>,
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
@@ -57,7 +57,7 @@ pub async fn run_interactive_chat_with_history(
     let mut err = stderr();
     writeln!(err, "ZDX Chat")?;
     writeln!(err, "Model: {}", config.model)?;
-    if let Some(ref s) = thread_log {
+    if let Some(ref s) = thread_handle {
         writeln!(err, "Thread: {}", s.id)?;
     }
     if !history.is_empty() {
@@ -74,9 +74,15 @@ pub async fn run_interactive_chat_with_history(
 
     // Create and run the TUI
     let mut runtime = if history.is_empty() {
-        TuiRuntime::new(config.clone(), root, effective.prompt, thread_log)?
+        TuiRuntime::new(config.clone(), root, effective.prompt, thread_handle)?
     } else {
-        TuiRuntime::with_history(config.clone(), root, effective.prompt, thread_log, history)?
+        TuiRuntime::with_history(
+            config.clone(),
+            root,
+            effective.prompt,
+            thread_handle,
+            history,
+        )?
     };
 
     // Add system message for config path (only if config exists on disk).
@@ -94,7 +100,7 @@ pub async fn run_interactive_chat_with_history(
         .state
         .tui
         .thread
-        .thread_log
+        .thread_handle
         .as_ref()
         .map(|log| log.path().as_path());
     for message in thread_startup_messages(

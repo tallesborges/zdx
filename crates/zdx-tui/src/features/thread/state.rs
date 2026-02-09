@@ -2,7 +2,7 @@
 //!
 //! Manages the active thread, message history, and token usage tracking.
 
-use zdx_core::core::thread_persistence::{ThreadLog, Usage};
+use zdx_core::core::thread_persistence::{Thread, Usage};
 use zdx_core::models::ModelPricing;
 use zdx_core::providers::ChatMessage;
 
@@ -13,7 +13,7 @@ use crate::mutations::ThreadMutation;
 /// Encapsulates the active thread, message history, and usage tracking.
 pub struct ThreadState {
     /// Active thread for persistence (if enabled).
-    pub thread_log: Option<ThreadLog>,
+    pub thread_handle: Option<Thread>,
 
     /// Cached thread title (if known).
     pub title: Option<String>,
@@ -35,7 +35,7 @@ impl ThreadState {
     /// Creates a new ThreadState with no active thread.
     pub fn new() -> Self {
         Self {
-            thread_log: None,
+            thread_handle: None,
             title: None,
             messages: Vec::new(),
             usage: ThreadUsage::new(),
@@ -43,13 +43,13 @@ impl ThreadState {
     }
 
     /// Creates a ThreadState with an active thread and message history.
-    pub fn with_thread(thread_log: Option<ThreadLog>, messages: Vec<ChatMessage>) -> Self {
-        let title = thread_log
+    pub fn with_thread(thread_handle: Option<Thread>, messages: Vec<ChatMessage>) -> Self {
+        let title = thread_handle
             .as_ref()
             .and_then(|log| zdx_core::core::thread_persistence::read_thread_title(&log.id).ok())
             .flatten();
         Self {
-            thread_log,
+            thread_handle,
             title,
             messages,
             usage: ThreadUsage::new(),
@@ -62,9 +62,9 @@ impl ThreadState {
             ThreadMutation::ClearMessages => self.messages.clear(),
             ThreadMutation::SetMessages(messages) => self.messages = messages,
             ThreadMutation::AppendMessage(message) => self.messages.push(message),
-            ThreadMutation::SetThread(thread_log) => {
-                self.thread_log = thread_log;
-                if self.thread_log.is_none() {
+            ThreadMutation::SetThread(thread_handle) => {
+                self.thread_handle = thread_handle;
+                if self.thread_handle.is_none() {
                     self.title = None;
                 }
             }

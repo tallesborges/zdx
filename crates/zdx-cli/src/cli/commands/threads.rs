@@ -55,7 +55,7 @@ pub async fn resume(id: Option<String>, config: &config::Config) -> Result<()> {
     let history = thread_persistence::load_thread_as_messages(&thread_id)
         .with_context(|| format!("load history for '{thread_id}'"))?;
 
-    let thread = thread_persistence::ThreadLog::with_id(thread_id.clone())
+    let thread = thread_persistence::Thread::with_id(thread_id.clone())
         .with_context(|| format!("open thread '{thread_id}'"))?;
 
     let root_path = PathBuf::from(".");

@@ -113,9 +113,8 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         if is_worktree_create_command(text) {
             let worktree_root = worktree::ensure_worktree(context.root(), &thread_id)
                 .map_err(|err| anyhow!("Failed to ensure worktree for {}: {}", thread_id, err))?;
-            let mut thread =
-                zdx_core::core::thread_persistence::ThreadLog::with_id(thread_id.clone())
-                    .map_err(|_| anyhow!("Failed to open thread log"))?;
+            let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.clone())
+                .map_err(|_| anyhow!("Failed to open thread log"))?;
             thread
                 .set_root_path(&worktree_root)
                 .map_err(|err| anyhow!("Failed to set thread root: {}", err))?;

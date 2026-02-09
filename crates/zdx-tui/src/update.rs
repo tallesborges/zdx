@@ -38,7 +38,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => {
-            let has_thread = app.tui.thread.thread_log.is_some();
+            let has_thread = app.tui.thread.thread_handle.is_some();
             let (mut effects, mutations) = transcript::handle_agent_event(
                 &mut app.tui.transcript,
                 &mut app.tui.agent_state,
@@ -112,7 +112,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 && !app.tui.transcript.has_pending_user_cell()
                 && let Some(text) = app.tui.input.pop_queued_prompt()
             {
-                let thread_id = app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                let thread_id = app
+                    .tui
+                    .thread
+                    .thread_handle
+                    .as_ref()
+                    .map(|log| log.id.clone());
                 let should_suggest_title = thread_id.is_some()
                     && app.tui.thread.title.is_none()
                     && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
@@ -264,13 +269,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::HandoffThreadCreated {
-            thread_log,
+            thread_handle,
             context_paths,
             prompt,
         } => {
             let (effects, mutations, _action) =
                 thread::handle_thread_event(ThreadUiEvent::Created {
-                    thread_log,
+                    thread_handle,
                     context_paths,
                     skills: Vec::new(), // Handoff creation doesn't currently track skills here
                 });
@@ -385,7 +390,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
             // Persist to thread and add to messages for LLM context
             let mut effects = vec![];
-            if app.tui.thread.thread_log.is_some() {
+            if app.tui.thread.thread_handle.is_some() {
                 // Format as a user message describing what the user did
                 // This makes it clear to the LLM that the USER ran the command
                 let user_message = format!(
@@ -459,8 +464,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let current_thread_id =
-                        app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                    let current_thread_id = app
+                        .tui
+                        .thread
+                        .thread_handle
+                        .as_ref()
+                        .map(|log| log.id.clone());
                     let (state, overlay_effects) = overlays::ThreadPickerState::open(
                         threads,
                         original_cells,
@@ -486,7 +495,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 messages,
                 history,
                 stored_root,
-                thread_log,
+                thread_handle,
                 title,
                 usage,
             } => {
@@ -497,7 +506,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         messages,
                         history,
                         stored_root,
-                        thread_log,
+                        thread_handle,
                         title,
                         usage,
                     });
@@ -510,8 +519,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let current_thread_id =
-                        app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                    let current_thread_id = app
+                        .tui
+                        .thread
+                        .thread_handle
+                        .as_ref()
+                        .map(|log| log.id.clone());
                     let (state, overlay_effects) = overlays::ThreadPickerState::open(
                         threads,
                         original_cells,
@@ -550,8 +563,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     } = overlay_action
                         && app.overlay.is_none()
                     {
-                        let current_thread_id =
-                            app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                        let current_thread_id = app
+                            .tui
+                            .thread
+                            .thread_handle
+                            .as_ref()
+                            .map(|log| log.id.clone());
                         let (state, overlay_effects) = overlays::ThreadPickerState::open(
                             threads,
                             original_cells,
@@ -581,13 +598,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 }
             }
             ThreadUiEvent::Created {
-                thread_log,
+                thread_handle,
                 context_paths,
                 skills,
             } => {
                 let (mut effects, mutations, overlay_action) =
                     thread::handle_thread_event(ThreadUiEvent::Created {
-                        thread_log,
+                        thread_handle,
                         context_paths,
                         skills,
                     });
@@ -600,8 +617,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let current_thread_id =
-                        app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                    let current_thread_id = app
+                        .tui
+                        .thread
+                        .thread_handle
+                        .as_ref()
+                        .map(|log| log.id.clone());
                     let (state, overlay_effects) = overlays::ThreadPickerState::open(
                         threads,
                         original_cells,
@@ -620,7 +641,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 cells,
                 messages,
                 history,
-                thread_log,
+                thread_handle,
                 usage,
                 user_input,
                 turn_number,
@@ -631,7 +652,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         cells,
                         messages,
                         history,
-                        thread_log,
+                        thread_handle,
                         usage,
                         user_input,
                         turn_number,
@@ -645,8 +666,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let current_thread_id =
-                        app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                    let current_thread_id = app
+                        .tui
+                        .thread
+                        .thread_handle
+                        .as_ref()
+                        .map(|log| log.id.clone());
                     let (state, overlay_effects) = overlays::ThreadPickerState::open(
                         threads,
                         original_cells,
@@ -684,8 +709,12 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 } = overlay_action
                     && app.overlay.is_none()
                 {
-                    let current_thread_id =
-                        app.tui.thread.thread_log.as_ref().map(|log| log.id.clone());
+                    let current_thread_id = app
+                        .tui
+                        .thread
+                        .thread_handle
+                        .as_ref()
+                        .map(|log| log.id.clone());
                     let (state, overlay_effects) = overlays::ThreadPickerState::open(
                         threads,
                         original_cells,
@@ -703,7 +732,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 let is_current = app
                     .tui
                     .thread
-                    .thread_log
+                    .thread_handle
                     .as_ref()
                     .is_some_and(|log| log.id == thread_id);
                 if !is_current {
@@ -908,10 +937,10 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::Rename => {
-            if let Some(thread_log) = &app.tui.thread.thread_log {
+            if let Some(thread_handle) = &app.tui.thread.thread_handle {
                 let (state, effects) = overlays::RenameState::open(
-                    thread_log.id.clone(),
-                    None, // Current title not readily available in ThreadLog
+                    thread_handle.id.clone(),
+                    None, // Current title not readily available in Thread
                 );
                 app.overlay = Some(overlays::Overlay::Rename(state));
                 effects
@@ -1024,9 +1053,9 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     let thread_id = app
         .tui
         .thread
-        .thread_log
+        .thread_handle
         .as_ref()
-        .map(|thread_log| thread_log.id.clone());
+        .map(|thread_handle| thread_handle.id.clone());
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,

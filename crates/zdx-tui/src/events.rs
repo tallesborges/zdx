@@ -30,7 +30,7 @@ use std::sync::Arc;
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::mpsc;
 use zdx_core::core::events::{AgentEvent, ToolOutput};
-use zdx_core::core::thread_persistence::{ThreadLog, ThreadSummary, Usage};
+use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage};
 use zdx_core::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskStarted};
@@ -59,7 +59,7 @@ pub enum ThreadUiEvent {
         messages: Vec<ChatMessage>,
         history: Vec<String>,
         stored_root: Option<PathBuf>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
         title: Option<String>,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
@@ -76,7 +76,7 @@ pub enum ThreadUiEvent {
 
     /// New thread created successfully.
     Created {
-        thread_log: ThreadLog,
+        thread_handle: Thread,
         context_paths: Vec<PathBuf>,
         skills: Vec<zdx_core::skills::Skill>,
     },
@@ -87,7 +87,7 @@ pub enum ThreadUiEvent {
         cells: Vec<HistoryCell>,
         messages: Vec<ChatMessage>,
         history: Vec<String>,
-        thread_log: ThreadLog,
+        thread_handle: Thread,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
         user_input: Option<String>,
@@ -210,7 +210,7 @@ pub enum UiEvent {
 
     /// Handoff thread creation succeeded.
     HandoffThreadCreated {
-        thread_log: ThreadLog,
+        thread_handle: Thread,
         context_paths: Vec<PathBuf>,
         prompt: String,
     },

@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::thread_persistence as thread_log;
+use crate::core::thread_persistence as tp;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 
 const READ_THREAD_MODEL: &str = "gemini-cli:gemini-2.5-flash-lite";
@@ -68,7 +68,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "goal cannot be empty", None);
     }
 
-    let events = match thread_log::load_thread_events(&thread_id) {
+    let events = match tp::load_thread_events(&thread_id) {
         Ok(events) => events,
         Err(e) => {
             return ToolOutput::failure(
@@ -87,7 +87,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         );
     }
 
-    let thread_content = thread_log::format_transcript(&events);
+    let thread_content = tp::format_transcript(&events);
     let prompt = build_read_thread_prompt(&thread_content, &goal);
 
     match run_subagent(prompt, ctx).await {

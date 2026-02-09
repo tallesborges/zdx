@@ -5,21 +5,21 @@ use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::build_effective_system_prompt_with_paths;
 use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_persistence::{self, ThreadEvent, ThreadLog};
+use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
 use crate::types::IncomingMessage;
 
-pub(crate) fn load_thread_state(thread_id: &str) -> Result<(ThreadLog, Vec<ChatMessage>)> {
-    let thread = ThreadLog::with_id(thread_id.to_string())
-        .map_err(|_| anyhow!("Failed to open thread log"))?;
+pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMessage>)> {
+    let thread =
+        Thread::with_id(thread_id.to_string()).map_err(|_| anyhow!("Failed to open thread log"))?;
     let messages = thread_persistence::load_thread_as_messages(thread_id)
         .map_err(|_| anyhow!("Failed to load thread history"))?;
     Ok((thread, messages))
 }
 
 pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
-    let thread = ThreadLog::with_id(thread_id.to_string())
+    let thread = Thread::with_id(thread_id.to_string())
         .map_err(|_| anyhow!("Failed to resolve thread log"))?;
     let path = thread.path();
     if path.exists() {
@@ -29,7 +29,7 @@ pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
 }
 
 pub(crate) fn record_user_message(
-    thread: &mut ThreadLog,
+    thread: &mut Thread,
     messages: &mut Vec<ChatMessage>,
     incoming: &IncomingMessage,
 ) -> Result<()> {
@@ -81,7 +81,7 @@ pub(crate) fn spawn_agent_turn(
     root: &Path,
     bot_system_prompt: Option<&str>,
     thread_id: &str,
-    thread: &ThreadLog,
+    thread: &Thread,
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
     // Build effective system prompt from config + AGENTS.md + skills

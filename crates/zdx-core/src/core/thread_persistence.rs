@@ -1,4 +1,4 @@
-//! ThreadLog persistence for ZDX.
+//! Thread persistence for ZDX.
 //!
 //! Each thread is stored as a JSONL file where each line is a JSON object
 //! representing an event. Threads use schema versioning (§8 of SPEC).
@@ -359,7 +359,7 @@ fn truncate_str(s: &str, max_bytes: usize) -> &str {
 
 /// Manages a thread file.
 #[derive(Debug, Clone)]
-pub struct ThreadLog {
+pub struct Thread {
     pub id: String,
     path: PathBuf,
     /// Whether this is a new thread (needs meta event written).
@@ -370,7 +370,7 @@ pub struct ThreadLog {
     handoff_from: Option<String>,
 }
 
-impl ThreadLog {
+impl Thread {
     /// Returns the path to the thread file.
     pub fn path(&self) -> &PathBuf {
         &self.path
@@ -389,7 +389,7 @@ impl ThreadLog {
         if std::env::var("ZDX_HOME").is_err() {
             panic!(
                 "Tests must set ZDX_HOME to a temp directory!\n\
-                 ThreadLog would be created in user's home directory.\n\
+                 Thread would be created in user's home directory.\n\
                  Use `setup_temp_zdx_home()` or set ZDX_HOME env var."
             );
         }
@@ -748,7 +748,7 @@ fn generate_thread_id() -> String {
 
 /// Spawns a thread persistence task that consumes events from a channel.
 ///
-/// The task owns the `ThreadLog` and persists relevant events until the channel closes.
+/// The task owns the `Thread` and persists relevant events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been persisted.
 ///
 /// Only tool-related and interrupt events are persisted via this task.
@@ -757,7 +757,7 @@ fn generate_thread_id() -> String {
 /// # Example
 ///
 /// ```ignore
-/// let thread = ThreadLog::new_with_root(Path::new("."))?;
+/// let thread = Thread::new_with_root(Path::new("."))?;
 /// let (tx, rx) = agent::create_event_channel();
 /// let persist_handle = spawn_thread_persist_task(thread, rx);
 ///
@@ -766,7 +766,7 @@ fn generate_thread_id() -> String {
 ///
 /// persist_handle.await.unwrap(); // Wait for persistence to finish
 /// ```
-pub fn spawn_thread_persist_task(mut thread: ThreadLog, mut rx: AgentEventRx) -> JoinHandle<()> {
+pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             if let Some(thread_event) = ThreadEvent::from_agent(&event) {
@@ -843,7 +843,7 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
 
 /// Loads and returns the events from a thread by ID.
 pub fn load_thread_events(id: &str) -> Result<Vec<ThreadEvent>> {
-    let thread = ThreadLog::with_id(id.to_string())?;
+    let thread = Thread::with_id(id.to_string())?;
     thread.read_events()
 }
 
@@ -898,7 +898,7 @@ pub fn set_thread_title(id: &str, title: Option<String>) -> Result<Option<String
         bail!("Thread '{}' not found", id);
     }
 
-    let mut thread = ThreadLog::with_id(id.to_string())?;
+    let mut thread = Thread::with_id(id.to_string())?;
     thread.set_title(title)
 }
 
@@ -1295,7 +1295,7 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
     output.trim_end().to_string()
 }
 
-/// ThreadLog options for CLI commands.
+/// Thread options for CLI commands.
 #[derive(Debug, Clone, Default)]
 pub struct ThreadPersistenceOptions {
     /// Append to an existing thread by ID.
@@ -1305,21 +1305,21 @@ pub struct ThreadPersistenceOptions {
 }
 
 impl ThreadPersistenceOptions {
-    /// Resolves thread options into an optional ThreadLog.
+    /// Resolves thread options into an optional Thread.
     ///
     /// Returns None if no_save is true.
     /// Returns existing thread if thread_id is provided.
     /// Returns new thread otherwise.
-    pub fn resolve(&self, root: &Path) -> Result<Option<ThreadLog>> {
+    pub fn resolve(&self, root: &Path) -> Result<Option<Thread>> {
         if self.no_save {
             return Ok(None);
         }
 
         if let Some(ref id) = self.thread_id {
-            return Ok(Some(ThreadLog::with_id(id.clone())?));
+            return Ok(Some(Thread::with_id(id.clone())?));
         }
 
-        Ok(Some(ThreadLog::new_with_root(root)?))
+        Ok(Some(Thread::new_with_root(root)?))
     }
 }
 
@@ -1357,7 +1357,7 @@ mod tests {
     fn test_thread_creates_file_with_meta() {
         let _temp = setup_temp_zdx_home();
 
-        let mut thread = ThreadLog::with_id(unique_thread_id("creates-meta")).unwrap();
+        let mut thread = Thread::with_id(unique_thread_id("creates-meta")).unwrap();
         thread.append(&ThreadEvent::user_message("hello")).unwrap();
 
         // Read raw file content to verify meta is first
@@ -1372,7 +1372,7 @@ mod tests {
     fn test_thread_appends_jsonl_with_tool_events() {
         let _temp = setup_temp_zdx_home();
 
-        let mut thread = ThreadLog::with_id(unique_thread_id("tool-events")).unwrap();
+        let mut thread = Thread::with_id(unique_thread_id("tool-events")).unwrap();
         thread
             .append(&ThreadEvent::user_message("read main.rs"))
             .unwrap();
@@ -1885,7 +1885,7 @@ mod tests {
     fn test_thread_reasoning_roundtrip() {
         let _temp = setup_temp_zdx_home();
 
-        let mut thread = ThreadLog::with_id(unique_thread_id("reasoning-roundtrip")).unwrap();
+        let mut thread = Thread::with_id(unique_thread_id("reasoning-roundtrip")).unwrap();
         thread
             .append(&ThreadEvent::user_message("explain"))
             .unwrap();
@@ -2002,7 +2002,7 @@ mod tests {
     fn test_thread_usage_roundtrip() {
         let _temp = setup_temp_zdx_home();
 
-        let mut thread = ThreadLog::with_id(unique_thread_id("usage-roundtrip")).unwrap();
+        let mut thread = Thread::with_id(unique_thread_id("usage-roundtrip")).unwrap();
         thread.append(&ThreadEvent::user_message("hello")).unwrap();
         thread
             .append(&ThreadEvent::assistant_message("hi"))
