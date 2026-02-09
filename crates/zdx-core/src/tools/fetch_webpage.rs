@@ -16,20 +16,17 @@ const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Fetch_Webpage".to_string(),
-        description: "Extract clean markdown content from URLs. Converts any public URL into LLM-optimized markdown.".to_string(),
+        description: "Extract clean markdown content from a URL. Converts any public URL into LLM-optimized markdown.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "urls": {
-                    "type": "array",
-                    "items": { "type": "string" },
-                    "description": "URLs to extract content from (max 10 URLs per request)",
-                    "minItems": 1,
-                    "maxItems": 10
+                "url": {
+                    "type": "string",
+                    "description": "URL to extract content from"
                 },
                 "objective": {
                     "type": "string",
-                    "description": "Natural language description of what you're looking for in the pages"
+                    "description": "Natural language description of what you're looking for in the page"
                 },
                 "search_queries": {
                     "type": "array",
@@ -42,7 +39,7 @@ pub fn definition() -> ToolDefinition {
                     "default": false
                 }
             },
-            "required": ["urls", "objective"],
+            "required": ["url", "objective"],
             "additionalProperties": false
         }),
     }
@@ -50,7 +47,7 @@ pub fn definition() -> ToolDefinition {
 
 #[derive(Debug, Deserialize)]
 struct FetchInput {
-    urls: Vec<String>,
+    url: String,
     objective: String,
     #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
@@ -103,18 +100,6 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    // Validate URL count
-    if input.urls.is_empty() {
-        return ToolOutput::failure("invalid_input", "At least one URL is required", None);
-    }
-    if input.urls.len() > 10 {
-        return ToolOutput::failure(
-            "invalid_input",
-            "Maximum 10 URLs per request",
-            Some(format!("Provided {} URLs", input.urls.len())),
-        );
-    }
-
     // Get API key from environment
     let api_key = match std::env::var("PARALLEL_API_KEY") {
         Ok(key) if !key.is_empty() => key,
@@ -129,7 +114,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
 
     // Build request
     let request = ExtractRequest {
-        urls: input.urls,
+        urls: vec![input.url],
         objective: input.objective,
         search_queries: input.search_queries,
         excerpts: !input.full_content, // excerpts if not full_content
@@ -212,13 +197,13 @@ mod tests {
 
         let schema = &def.input_schema;
         let required = schema.get("required").unwrap().as_array().unwrap();
-        assert!(required.iter().any(|v| v == "urls"));
+        assert!(required.iter().any(|v| v == "url"));
         assert!(required.iter().any(|v| v == "objective"));
     }
 
     #[test]
     fn test_input_validation_missing_fields() {
-        let input = json!({"urls": ["https://example.com"]});
+        let input = json!({"url": "https://example.com"});
         let result: Result<FetchInput, _> = serde_json::from_value(input);
         assert!(result.is_err()); // missing objective
     }
@@ -226,7 +211,7 @@ mod tests {
     #[test]
     fn test_input_defaults() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test"
         });
         let parsed: FetchInput = serde_json::from_value(input).unwrap();
@@ -238,7 +223,7 @@ mod tests {
     fn test_search_queries_accepts_string() {
         // LLM sometimes sends a single string instead of an array
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "search_queries": "gpt-5.3-codex CLI model"
         });
@@ -252,7 +237,7 @@ mod tests {
     #[test]
     fn test_search_queries_accepts_array() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "search_queries": ["gpt-5.3-codex", "february 2026"]
         });
@@ -269,7 +254,7 @@ mod tests {
     #[test]
     fn test_search_queries_empty_string_becomes_none() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "search_queries": ""
         });
@@ -280,7 +265,7 @@ mod tests {
     #[test]
     fn test_full_content_accepts_string_true() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "full_content": "true"
         });
@@ -291,7 +276,7 @@ mod tests {
     #[test]
     fn test_full_content_accepts_string_false() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "full_content": "false"
         });
@@ -302,7 +287,7 @@ mod tests {
     #[test]
     fn test_full_content_rejects_invalid_string() {
         let input = json!({
-            "urls": ["https://example.com"],
+            "url": "https://example.com",
             "objective": "test",
             "full_content": "maybe"
         });
