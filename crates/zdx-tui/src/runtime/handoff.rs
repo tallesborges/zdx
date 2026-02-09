@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
-use zdx_core::core::thread_log::{self, ThreadLog};
+use zdx_core::core::thread_persistence::{self, Thread};
 use zdx_core::prompts::HANDOFF_PROMPT_TEMPLATE;
 
 use crate::events::UiEvent;
@@ -31,14 +31,14 @@ fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
 
 /// Loads and validates thread content for handoff.
 fn load_thread_content(thread_id: &str) -> Result<String, String> {
-    let events = thread_log::load_thread_events(thread_id)
+    let events = thread_persistence::load_thread_events(thread_id)
         .map_err(|e| format!("Handoff failed: Could not load thread: {}", e))?;
 
     if events.is_empty() {
         return Err(format!("Handoff failed: Thread '{}' is empty", thread_id));
     }
 
-    Ok(thread_log::format_transcript(&events))
+    Ok(thread_persistence::format_transcript(&events))
 }
 
 /// Processes subagent output into a Result.
@@ -116,8 +116,8 @@ pub fn execute_handoff_submit(
     config: &Config,
     root: &Path,
     handoff_from: Option<String>,
-) -> Result<(ThreadLog, Vec<PathBuf>), String> {
-    let thread_log_handle = thread_log::ThreadLog::new_with_root_and_source(root, handoff_from)
+) -> Result<(Thread, Vec<PathBuf>), String> {
+    let thread_handle = thread_persistence::Thread::new_with_root_and_source(root, handoff_from)
         .map_err(|e| e.to_string())?;
 
     let context_paths =
@@ -126,7 +126,7 @@ pub fn execute_handoff_submit(
             Err(_) => Vec::new(),
         };
 
-    Ok((thread_log_handle, context_paths))
+    Ok((thread_handle, context_paths))
 }
 
 /// Runs handoff generation with cancellation support.

@@ -1,12 +1,16 @@
 use anyhow::{Result, anyhow};
 use tokio_util::sync::CancellationToken;
-use zdx_core::core::thread_log::{self, ThreadEvent};
+use zdx_core::core::events::AgentEvent;
+use zdx_core::core::thread_persistence::{self, ThreadEvent};
 use zdx_core::core::worktree;
 
 use crate::bot::context::BotContext;
 use crate::ingest::AllowlistConfig;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 use crate::{agent, ingest};
+
+/// Minimum interval between Telegram status message edits (avoid rate limiting).
+const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
 
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
     let allowlist = AllowlistConfig {
@@ -109,7 +113,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         if is_worktree_create_command(text) {
             let worktree_root = worktree::ensure_worktree(context.root(), &thread_id)
                 .map_err(|err| anyhow!("Failed to ensure worktree for {}: {}", thread_id, err))?;
-            let mut thread = zdx_core::core::thread_log::ThreadLog::with_id(thread_id.clone())
+            let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.clone())
                 .map_err(|_| anyhow!("Failed to open thread log"))?;
             thread
                 .set_root_path(&worktree_root)
@@ -127,7 +131,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         }
     }
 
-    let worktree_root = thread_log::read_thread_root_path(&thread_id)?
+    let worktree_root = thread_persistence::read_thread_root_path(&thread_id)?
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| context.root().to_path_buf());
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
@@ -137,8 +141,6 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let _typing = context.client().start_typing(incoming.chat_id, topic_id);
 
     // Send "Thinking..." status message with Cancel button.
-    // The cancel callback data uses the user message ID (per-chat unique), so
-    // stale buttons from older turns can't cancel a new turn.
     let cancel_key = (incoming.chat_id, incoming.message_id);
     let cancel_data = format!("cancel:{}:{}", cancel_key.0, cancel_key.1);
     let cancel_markup = InlineKeyboardMarkup {
@@ -149,8 +151,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         }]],
     };
 
-    // Register cancellation token before sending status, so immediate button
-    // taps can always find the token.
+    // Register cancellation token before sending status
     let cancel_token = CancellationToken::new();
     {
         let mut map = context.cancel_map().lock().await;
@@ -170,22 +171,109 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 
     let status_message_id = status_msg.as_ref().ok().map(|m| m.message_id);
 
-    // Race the agent turn against the cancellation token
-    let agent_result = tokio::select! {
-        result = agent::run_agent_turn_with_persist(
-            messages,
-            context.config(),
-            &worktree_root,
-            context.bot_system_prompt(),
-            &thread_id,
-            &thread,
-            context.tool_config(),
-        ) => Some(result),
-        _ = cancel_token.cancelled() => None,
+    // Spawn the agent turn — returns a handle with streaming events
+    let handle = agent::spawn_agent_turn(
+        messages,
+        context.config(),
+        &worktree_root,
+        context.bot_system_prompt(),
+        &thread_id,
+        &thread,
+        context.tool_config(),
+    );
+
+    let mut handle = match handle {
+        Ok(h) => h,
+        Err(err) => {
+            eprintln!("Failed to spawn agent turn: {}", err);
+            if let Some(msg_id) = status_message_id {
+                let _ = context
+                    .client()
+                    .edit_message_text(
+                        incoming.chat_id,
+                        msg_id,
+                        "Sorry, something went wrong.",
+                        None,
+                    )
+                    .await;
+            }
+            // Clean up cancellation token
+            let mut map = context.cancel_map().lock().await;
+            map.remove(&cancel_key);
+            return Err(err);
+        }
     };
 
-    // Stop Telegram typing indicator as soon as processing finishes/cancels,
-    // before we edit/send final status text.
+    // Consume streaming events, updating Telegram status with live activity
+    let mut current_status = "🧠 Thinking...".to_string();
+    let mut last_edit = std::time::Instant::now() - STATUS_DEBOUNCE; // Allow immediate first edit
+    let mut final_text = String::new();
+    let mut got_result = false;
+    let mut had_error = false;
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = cancel_token.cancelled() => {
+                // User pressed Cancel — abort the agent task
+                handle.task.abort();
+                break;
+            }
+            event = handle.rx.recv() => {
+                let Some(event) = event else {
+                    // Channel closed — agent finished (or crashed)
+                    break;
+                };
+
+                match &*event {
+                    AgentEvent::TurnCompleted { final_text: text, .. } => {
+                        final_text = text.clone();
+                        got_result = true;
+                        // Don't break yet — drain remaining events
+                    }
+                    AgentEvent::Error { message, .. } => {
+                        eprintln!("Agent error event: {}", message);
+                        had_error = true;
+                    }
+                    AgentEvent::Interrupted { partial_content } => {
+                        if let Some(partial) = partial_content {
+                            final_text = partial.clone();
+                        }
+                    }
+                    other => {
+                        // Update status based on event
+                        if let Some(new_status) = agent::event_to_status(other)
+                            && new_status != current_status
+                        {
+                            current_status = new_status;
+                            // Debounce edits to avoid Telegram rate limits
+                            if let Some(msg_id) = status_message_id {
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_edit) >= STATUS_DEBOUNCE {
+                                    last_edit = now;
+                                    let _ = context
+                                        .client()
+                                        .edit_message_text(
+                                            incoming.chat_id,
+                                            msg_id,
+                                            &current_status,
+                                            Some(&cancel_markup),
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if got_result {
+                    break;
+                }
+            }
+        }
+    }
+
+    // Stop Telegram typing indicator
     drop(_typing);
 
     // Clean up cancellation token
@@ -194,118 +282,90 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         map.remove(&cancel_key);
     }
 
-    match agent_result {
-        Some(Ok((final_text, _messages))) => {
-            thread
-                .append(&ThreadEvent::assistant_message(&final_text))
-                .map_err(|_| anyhow!("Failed to append assistant message"))?;
-            if !final_text.trim().is_empty() {
-                eprintln!("Sending reply for chat {}", incoming.chat_id);
-                // Try to edit the status message with the final response
-                if let Some(msg_id) = status_message_id {
-                    let edit_result = context
-                        .client()
-                        .edit_message_text(incoming.chat_id, msg_id, &final_text, None)
-                        .await;
-                    if let Err(ref err) = edit_result {
-                        eprintln!(
-                            "Failed to edit status message {} in chat {}: {}",
-                            msg_id, incoming.chat_id, err
-                        );
-                        // Delete the old status message to remove stale cancel button
-                        if let Err(del_err) = context
-                            .client()
-                            .delete_message(incoming.chat_id, msg_id)
-                            .await
-                        {
-                            eprintln!(
-                                "Failed to delete stale status message {}: {}",
-                                msg_id, del_err
-                            );
-                        }
-                        // Fallback: send as a new message
-                        context
-                            .client()
-                            .send_message(
-                                incoming.chat_id,
-                                &final_text,
-                                reply_to_message_id,
-                                topic_id,
-                            )
-                            .await?;
-                    }
-                } else {
-                    // No status message was sent (send_message_with_markup failed)
-                    context
-                        .client()
-                        .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
-                        .await?;
-                }
-            } else if let Some(msg_id) = status_message_id {
-                // Empty response — remove the thinking message
-                if let Err(err) = context
+    // Check if cancelled
+    if cancel_token.is_cancelled() {
+        eprintln!(
+            "Agent turn cancelled for chat {}{}",
+            incoming.chat_id,
+            topic_id
+                .map(|id| format!(" topic {}", id))
+                .unwrap_or_default()
+        );
+        if let Some(msg_id) = status_message_id {
+            let _ = context
+                .client()
+                .edit_message_text(incoming.chat_id, msg_id, "Cancelled ✓", None)
+                .await;
+        }
+        return Ok(());
+    }
+
+    // Handle result
+    if had_error && !got_result {
+        if let Some(msg_id) = status_message_id {
+            let _ = context
+                .client()
+                .edit_message_text(
+                    incoming.chat_id,
+                    msg_id,
+                    "Sorry, something went wrong.",
+                    None,
+                )
+                .await;
+        }
+        return Ok(());
+    }
+
+    // Persist assistant message and send final response
+    if got_result {
+        thread
+            .append(&ThreadEvent::assistant_message(&final_text))
+            .map_err(|_| anyhow!("Failed to append assistant message"))?;
+    }
+
+    if !final_text.trim().is_empty() {
+        eprintln!("Sending reply for chat {}", incoming.chat_id);
+        if let Some(msg_id) = status_message_id {
+            let edit_result = context
+                .client()
+                .edit_message_text(incoming.chat_id, msg_id, &final_text, None)
+                .await;
+            if let Err(ref err) = edit_result {
+                eprintln!(
+                    "Failed to edit status message {} in chat {}: {}",
+                    msg_id, incoming.chat_id, err
+                );
+                // Delete the old status message to remove stale cancel button
+                if let Err(del_err) = context
                     .client()
                     .delete_message(incoming.chat_id, msg_id)
                     .await
                 {
-                    eprintln!("Failed to delete empty status message {}: {}", msg_id, err);
-                }
-            }
-        }
-        Some(Err(err)) => {
-            eprintln!("Agent error: {}", err);
-            if let Some(msg_id) = status_message_id {
-                if let Err(edit_err) = context
-                    .client()
-                    .edit_message_text(
-                        incoming.chat_id,
-                        msg_id,
-                        "Sorry, something went wrong.",
-                        None,
-                    )
-                    .await
-                {
                     eprintln!(
-                        "Failed to edit error status message {}: {}",
-                        msg_id, edit_err
+                        "Failed to delete stale status message {}: {}",
+                        msg_id, del_err
                     );
                 }
-            } else if let Err(send_err) = context
-                .client()
-                .send_message(
-                    incoming.chat_id,
-                    "Sorry, something went wrong.",
-                    reply_to_message_id,
-                    topic_id,
-                )
-                .await
-            {
-                eprintln!(
-                    "Failed to send error message to chat {}: {}",
-                    incoming.chat_id, send_err
-                );
-            }
-        }
-        None => {
-            // Cancelled by user
-            eprintln!(
-                "Agent turn cancelled for chat {}{}",
-                incoming.chat_id,
-                topic_id
-                    .map(|id| format!(" topic {}", id))
-                    .unwrap_or_default()
-            );
-            if let Some(msg_id) = status_message_id
-                && let Err(err) = context
+                // Fallback: send as a new message
+                context
                     .client()
-                    .edit_message_text(incoming.chat_id, msg_id, "Cancelled ✓", None)
-                    .await
-            {
-                eprintln!(
-                    "Failed to edit cancelled status message {}: {}",
-                    msg_id, err
-                );
+                    .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
+                    .await?;
             }
+        } else {
+            context
+                .client()
+                .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
+                .await?;
+        }
+    } else if let Some(msg_id) = status_message_id {
+        // Empty response — remove the thinking message
+        if let Err(err) = context
+            .client()
+            .delete_message(incoming.chat_id, msg_id)
+            .await
+        {
+            eprintln!("Failed to delete empty status message {}: {}", msg_id, err);
         }
     }
 

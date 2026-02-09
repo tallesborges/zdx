@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use zdx_core::config;
-use zdx_core::core::thread_log::ThreadPersistenceOptions;
+use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
 use zdx_core::core::{interrupt, worktree};
 
 mod commands;

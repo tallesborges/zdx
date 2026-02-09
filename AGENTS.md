@@ -21,7 +21,7 @@
     - `crates/zdx-core/src/core/context.rs`: project context loading (AGENTS.md files)
     - `crates/zdx-core/src/core/interrupt.rs`: signal handling
     - `crates/zdx-core/src/core/agent.rs`: agent loop + event channels
-    - `crates/zdx-core/src/core/thread_log.rs`: thread persistence
+    - `crates/zdx-core/src/core/thread_persistence.rs`: thread persistence
     - `crates/zdx-core/src/core/worktree.rs`: git worktree management helpers
   - `crates/zdx-core/src/tools/`: tool implementations + schemas
     - `crates/zdx-core/src/tools/apply_patch/`: apply_patch tool (Codex-style file patching)

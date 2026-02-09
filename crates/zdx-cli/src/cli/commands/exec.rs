@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result};
 use zdx_core::config::{self, ThinkingLevel};
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
-use zdx_core::core::thread_log::ThreadPersistenceOptions;
+use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
 use zdx_core::tools;
 
 use crate::modes;
