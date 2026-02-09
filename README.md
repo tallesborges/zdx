@@ -13,7 +13,6 @@ I added the Telegram bot so I can control it while away from the computer. I don
 >
 > - **YOLO mode**: the agent can access your files and tools. It can make destructive changes. Use at your own risk.
 > - **Early-stage**: expect breaking changes and unstable behavior while the project evolves.
-> - **Unsigned binaries**: macOS builds are not code-signed or notarized yet, so Gatekeeper may block the app after install.
 
 ## Quickstart
 
@@ -21,7 +20,7 @@ I added the Telegram bot so I can control it while away from the computer. I don
 
 ```bash
 brew tap tallesborges/zdx
-brew install --cask zdx
+brew install zdx
 ```
 
 ### Run
