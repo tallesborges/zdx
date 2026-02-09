@@ -3,12 +3,12 @@
 //! This module contains shared logic used by both `AnthropicClient` (API key)
 //! and `ClaudeCliClient` (OAuth).
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 
 use super::sse::SseParser;
 use super::types::{
-    ApiContentBlock, ApiMessage, ApiMessageContent, ApiToolDef, CacheControl,
-    StreamingMessagesRequest, SystemBlock, ThinkingConfig,
+    ApiContentBlock, ApiMessage, ApiMessageContent, ApiToolDef, CacheControl, EffortLevel,
+    OutputConfig, StreamingMessagesRequest, SystemBlock, ThinkingConfig,
 };
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, ProviderStream};
@@ -35,12 +35,69 @@ pub(crate) fn build_tool_defs(tools: &[ToolDefinition]) -> Option<Vec<ApiToolDef
     }
 }
 
-pub(crate) fn build_thinking_config(enabled: bool, budget_tokens: u32) -> Option<ThinkingConfig> {
-    if enabled {
-        Some(ThinkingConfig::enabled(budget_tokens))
+pub(crate) fn build_thinking_and_output_config(
+    model: &str,
+    thinking_enabled: bool,
+    thinking_budget_tokens: u32,
+    thinking_effort: Option<EffortLevel>,
+) -> Result<(Option<ThinkingConfig>, Option<OutputConfig>)> {
+    let normalized_model = normalize_model_id(model);
+
+    let thinking = if thinking_enabled {
+        if is_opus_4_6_model(normalized_model) {
+            Some(ThinkingConfig::adaptive())
+        } else {
+            Some(ThinkingConfig::enabled(thinking_budget_tokens))
+        }
     } else {
         None
+    };
+
+    let output_config = if thinking_enabled && supports_effort_control(normalized_model) {
+        thinking_effort
+            .map(|effort| {
+                if effort == EffortLevel::Max && !is_opus_4_6_model(normalized_model) {
+                    bail!(
+                        "Anthropic model '{normalized_model}' does not support output_config.effort=\"max\". \
+                         thinking_level=\"xhigh\" currently maps to effort=\"max\". \
+                         Use a lower thinking level or switch to claude-opus-4-6."
+                    );
+                }
+                Ok(OutputConfig::new(effort))
+            })
+            .transpose()?
+    } else {
+        None
+    };
+
+    Ok((thinking, output_config))
+}
+
+pub(crate) fn should_enable_interleaved_thinking_beta(model: &str, thinking_enabled: bool) -> bool {
+    if !thinking_enabled {
+        return false;
     }
+
+    let model = normalize_model_id(model);
+    if is_opus_4_6_model(model) {
+        return false;
+    }
+
+    model.starts_with("claude-opus-4")
+        || model.starts_with("claude-sonnet-4")
+        || model.starts_with("claude-haiku-4")
+}
+
+fn normalize_model_id(model: &str) -> &str {
+    model.rsplit(':').next().unwrap_or(model)
+}
+
+fn is_opus_4_6_model(model: &str) -> bool {
+    model.starts_with("claude-opus-4-6")
+}
+
+fn supports_effort_control(model: &str) -> bool {
+    model.starts_with("claude-opus-4-6") || model.starts_with("claude-opus-4-5")
 }
 
 pub(crate) fn build_system_blocks(
@@ -174,5 +231,122 @@ fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
             ProviderErrorKind::HttpStatus,
             format!("Network error: {}", e),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn thinking_and_effort_opus_46_uses_adaptive_and_allows_max() {
+        let (thinking, output_config) =
+            build_thinking_and_output_config("claude-opus-4-6", true, 4096, Some(EffortLevel::Max))
+                .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "max"})
+        );
+    }
+
+    #[test]
+    fn thinking_and_effort_opus_45_keeps_enabled_budget_and_high_effort() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-opus-4-5",
+            true,
+            2048,
+            Some(EffortLevel::High),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "enabled", "budget_tokens": 2048})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "high"})
+        );
+    }
+
+    #[test]
+    fn effort_is_not_sent_for_models_without_effort_support() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-sonnet-4-5",
+            true,
+            1024,
+            Some(EffortLevel::Medium),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "enabled", "budget_tokens": 1024})
+        );
+        assert!(output_config.is_none());
+    }
+
+    #[test]
+    fn max_effort_errors_on_non_opus_46() {
+        let err =
+            build_thinking_and_output_config("claude-opus-4-5", true, 1024, Some(EffortLevel::Max))
+                .expect_err("max effort should fail on opus 4.5");
+
+        assert!(
+            err.to_string()
+                .contains("does not support output_config.effort=\"max\""),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn provider_prefixed_model_ids_are_normalized() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-cli:claude-opus-4-6",
+            true,
+            4096,
+            Some(EffortLevel::High),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "high"})
+        );
+    }
+
+    #[test]
+    fn interleaved_beta_enabled_for_legacy_claude_4_with_thinking() {
+        assert!(should_enable_interleaved_thinking_beta(
+            "claude-opus-4-5",
+            true
+        ));
+        assert!(should_enable_interleaved_thinking_beta(
+            "claude-sonnet-4-5",
+            true
+        ));
+    }
+
+    #[test]
+    fn interleaved_beta_disabled_for_opus_46_or_thinking_off() {
+        assert!(!should_enable_interleaved_thinking_beta(
+            "claude-opus-4-6",
+            true
+        ));
+        assert!(!should_enable_interleaved_thinking_beta(
+            "claude-opus-4-5",
+            false
+        ));
     }
 }
