@@ -242,24 +242,24 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     }
                     other => {
                         // Update status based on event
-                        if let Some(new_status) = agent::event_to_status(other) {
-                            if new_status != current_status {
-                                current_status = new_status;
-                                // Debounce edits to avoid Telegram rate limits
-                                if let Some(msg_id) = status_message_id {
-                                    let now = std::time::Instant::now();
-                                    if now.duration_since(last_edit) >= STATUS_DEBOUNCE {
-                                        last_edit = now;
-                                        let _ = context
-                                            .client()
-                                            .edit_message_text(
-                                                incoming.chat_id,
-                                                msg_id,
-                                                &current_status,
-                                                Some(&cancel_markup),
-                                            )
-                                            .await;
-                                    }
+                        if let Some(new_status) = agent::event_to_status(other)
+                            && new_status != current_status
+                        {
+                            current_status = new_status;
+                            // Debounce edits to avoid Telegram rate limits
+                            if let Some(msg_id) = status_message_id {
+                                let now = std::time::Instant::now();
+                                if now.duration_since(last_edit) >= STATUS_DEBOUNCE {
+                                    last_edit = now;
+                                    let _ = context
+                                        .client()
+                                        .edit_message_text(
+                                            incoming.chat_id,
+                                            msg_id,
+                                            &current_status,
+                                            Some(&cancel_markup),
+                                        )
+                                        .await;
                                 }
                             }
                         }

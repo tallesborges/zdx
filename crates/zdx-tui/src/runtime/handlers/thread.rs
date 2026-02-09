@@ -102,7 +102,7 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         messages,
         history,
         stored_root: stored_root.map(PathBuf::from),
-        thread_handle: thread_handle,
+        thread_handle,
         title,
         usage,
     })
@@ -281,7 +281,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
                 .unwrap_or_default();
 
         UiEvent::Thread(ThreadUiEvent::Created {
-            thread_handle: thread_handle,
+            thread_handle,
             context_paths: context.loaded_agents_paths,
             skills: context.loaded_skills,
         })
@@ -354,7 +354,7 @@ fn fork_thread_sync(
         cells,
         messages,
         history,
-        thread_handle: thread_handle,
+        thread_handle,
         usage,
         user_input,
         turn_number,
