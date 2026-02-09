@@ -51,7 +51,8 @@ pub(crate) async fn dispatch_message(
     context: &Arc<BotContext>,
     message: Message,
 ) {
-    let is_forum_general = message.chat.is_forum_enabled() && message.message_thread_id.is_none();
+    let is_forum_general =
+        message.chat.is_forum_enabled() && message.effective_thread_id().is_none();
 
     if is_forum_general {
         // Quick allowlist check before creating topic (avoid creating topics for
@@ -190,7 +191,7 @@ fn spawn_standalone(context: Arc<BotContext>, message: Message) {
 }
 
 async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, message: Message) {
-    let key = (message.chat.id, message.message_thread_id.unwrap_or(0));
+    let key = (message.chat.id, message.effective_thread_id().unwrap_or(0));
     let queues_map = Arc::clone(queues);
     let (sender, should_show_queued) = {
         let mut map = queues.lock().await;
@@ -218,7 +219,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
     // If there's already a queue worker (potentially busy), show "Queued" status
     if should_show_queued {
         let chat_id = message.chat.id;
-        let topic_id = message.message_thread_id;
+        let topic_id = message.effective_thread_id();
         let user_message_id = message.message_id;
         let cancel_data = format!("cancel_q:{}:{}", chat_id, user_message_id);
         let cancel_markup = InlineKeyboardMarkup {

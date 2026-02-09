@@ -55,6 +55,23 @@ pub struct Message {
     /// Unique identifier of a message thread or forum topic.
     #[serde(default)]
     pub message_thread_id: Option<i64>,
+    /// Original message this message replies to.
+    #[serde(default)]
+    pub reply_to_message: Option<Box<Message>>,
+}
+
+impl Message {
+    /// Returns the best-effort forum topic/thread id for this message.
+    ///
+    /// Telegram usually sets `message_thread_id` on topic messages, but some
+    /// clients/flows can omit it while still including it on `reply_to_message`.
+    pub fn effective_thread_id(&self) -> Option<i64> {
+        self.message_thread_id.or_else(|| {
+            self.reply_to_message
+                .as_ref()
+                .and_then(|m| m.message_thread_id)
+        })
+    }
 }
 
 #[derive(Debug, Deserialize)]
