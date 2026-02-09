@@ -31,12 +31,12 @@ where
             .and_then(|n| {
                 usize::try_from(n)
                     .map(Some)
-                    .map_err(|_| D::Error::custom("number too large"))
+                    .map_err(|_overflow| D::Error::custom("number too large"))
             }),
         Some(Value::String(s)) => s
             .parse::<usize>()
             .map(Some)
-            .map_err(|_| D::Error::custom(format!("invalid number string: {s}"))),
+            .map_err(|_parse| D::Error::custom(format!("invalid number string: {s}"))),
         Some(_) => Err(D::Error::custom("expected number or numeric string")),
     }
 }

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use zdx_core::config::{Config, paths};
@@ -406,12 +406,12 @@ fn save_media_bytes(
     bytes: &[u8],
 ) -> Result<PathBuf> {
     let dir = paths::zdx_home().join("telegram").join(chat_id.to_string());
-    fs::create_dir_all(&dir).map_err(|_| anyhow!("Failed to create media directory"))?;
+    fs::create_dir_all(&dir).context("create media directory")?;
     let safe_name = Path::new(filename)
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(filename);
     let path = dir.join(format!("{message_id}_{safe_name}"));
-    fs::write(&path, bytes).map_err(|_| anyhow!("Failed to write media file"))?;
+    fs::write(&path, bytes).context("write media file")?;
     Ok(path)
 }

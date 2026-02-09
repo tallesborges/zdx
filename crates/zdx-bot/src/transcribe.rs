@@ -1,6 +1,6 @@
 //! Audio transcription support for Telegram voice messages.
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use zdx_core::config::Config;
 use zdx_core::providers::{ProviderKind, resolve_api_key, resolve_base_url};
 
@@ -212,7 +212,7 @@ async fn transcribe_audio(
         .multipart(form)
         .send()
         .await
-        .map_err(|_| anyhow!("{provider_name} transcription request failed"))?;
+        .context(format!("{provider_name} transcription request"))?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -225,6 +225,6 @@ async fn transcribe_audio(
     let payload: TranscriptionResponse = response
         .json()
         .await
-        .map_err(|_| anyhow!("Failed to decode transcription response"))?;
+        .context("decode transcription response")?;
     Ok(payload.text)
 }

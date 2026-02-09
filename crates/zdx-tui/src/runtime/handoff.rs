@@ -102,7 +102,7 @@ async fn run_subagent(
             child.wait_with_output()
         ) => {
             output
-                .map_err(|_| format!("Handoff generation timed out after {HANDOFF_TIMEOUT_SECS} seconds"))
+                .map_err(|_elapsed| format!("Handoff generation timed out after {HANDOFF_TIMEOUT_SECS} seconds"))
                 .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))
                 .and_then(process_subagent_output)
         }

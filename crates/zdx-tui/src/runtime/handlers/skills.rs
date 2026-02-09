@@ -324,7 +324,7 @@ fn github_client() -> Result<reqwest::Client, String> {
     if let Some(token) = github_token() {
         let value = format!("Bearer {token}");
         let header =
-            HeaderValue::from_str(&value).map_err(|_| "Invalid GitHub token.".to_string())?;
+            HeaderValue::from_str(&value).map_err(|_err| "Invalid GitHub token.".to_string())?;
         headers.insert(AUTHORIZATION, header);
     }
 
