@@ -20,7 +20,7 @@ pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
 use zdx_core::config::Config;
-use zdx_core::core::thread_log::ThreadLog;
+use zdx_core::core::thread_persistence::ThreadLog;
 use zdx_core::providers::ChatMessage;
 use zdx_core::skills::Skill;
 

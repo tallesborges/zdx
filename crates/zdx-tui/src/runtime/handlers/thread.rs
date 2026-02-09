@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
-use zdx_core::core::thread_log::ThreadEvent;
-use zdx_core::core::{thread_log, worktree};
+use zdx_core::core::thread_persistence::ThreadEvent;
+use zdx_core::core::{thread_persistence as thread_log, worktree};
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};

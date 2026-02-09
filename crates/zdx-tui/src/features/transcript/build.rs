@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 
 use zdx_core::core::events::ToolOutput;
-use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::thread_persistence::ThreadEvent;
 
 use super::HistoryCell;
 

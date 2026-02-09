@@ -2,9 +2,10 @@ use std::path::Path;
 
 use anyhow::{Result, anyhow};
 use zdx_core::config::Config;
-use zdx_core::core::agent::{self, AgentOptions, ToolConfig};
+use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::build_effective_system_prompt_with_paths;
-use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
+use zdx_core::core::events::AgentEvent;
+use zdx_core::core::thread_persistence::{self, ThreadEvent, ThreadLog};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
 use crate::types::IncomingMessage;
@@ -12,7 +13,7 @@ use crate::types::IncomingMessage;
 pub(crate) fn load_thread_state(thread_id: &str) -> Result<(ThreadLog, Vec<ChatMessage>)> {
     let thread = ThreadLog::with_id(thread_id.to_string())
         .map_err(|_| anyhow!("Failed to open thread log"))?;
-    let messages = thread_log::load_thread_as_messages(thread_id)
+    let messages = thread_persistence::load_thread_as_messages(thread_id)
         .map_err(|_| anyhow!("Failed to load thread history"))?;
     Ok((thread, messages))
 }
@@ -58,7 +59,23 @@ pub(crate) fn record_user_message(
     Ok(())
 }
 
-pub(crate) async fn run_agent_turn_with_persist(
+/// Handle to a running agent turn with streaming events.
+///
+/// The caller consumes events from `rx`. Thread persistence is handled
+/// internally — the caller doesn't need to manage it.
+pub(crate) struct AgentTurnHandle {
+    /// Event stream for the caller to consume.
+    pub rx: AgentEventRx,
+    /// Task handle for the agent. Abort this on cancellation.
+    pub task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
+}
+
+/// Spawns an agent turn and returns a handle with streaming events.
+///
+/// Thread persistence is wired internally via `spawn_broadcaster`.
+/// The caller receives events through `AgentTurnHandle::rx` and should
+/// look for `TurnCompleted` to get the final result.
+pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
     root: &Path,
@@ -66,7 +83,7 @@ pub(crate) async fn run_agent_turn_with_persist(
     thread_id: &str,
     thread: &ThreadLog,
     tool_config: &ToolConfig,
-) -> Result<(String, Vec<ChatMessage>)> {
+) -> Result<AgentTurnHandle> {
     // Build effective system prompt from config + AGENTS.md + skills
     let effective = build_effective_system_prompt_with_paths(config, root)
         .map_err(|_| anyhow!("Failed to build system prompt"))?;
@@ -84,22 +101,53 @@ pub(crate) async fn run_agent_turn_with_persist(
         tool_config: tool_config.clone(),
     };
 
+    // Create channels: agent -> broadcaster -> [bot, persist]
     let (agent_tx, agent_rx) = agent::create_event_channel();
-    let persist_handle = thread_log::spawn_thread_persist_task(thread.clone(), agent_rx);
+    let (bot_tx, bot_rx) = agent::create_event_channel();
+    let (persist_tx, persist_rx) = agent::create_event_channel();
 
-    let result = agent::run_turn(
-        messages,
-        config,
-        &agent_opts,
-        system_prompt.as_deref(),
-        Some(thread_id),
-        agent_tx,
-    )
-    .await;
+    agent::spawn_broadcaster(agent_rx, vec![bot_tx, persist_tx]);
+    thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
 
-    let _ = persist_handle.await;
+    // Spawn agent in background — owned values moved in
+    let config = config.clone();
+    let thread_id = thread_id.to_string();
+    let task = tokio::spawn(async move {
+        agent::run_turn(
+            messages,
+            &config,
+            &agent_opts,
+            system_prompt.as_deref(),
+            Some(&thread_id),
+            agent_tx,
+        )
+        .await
+    });
 
-    result
+    Ok(AgentTurnHandle { rx: bot_rx, task })
+}
+
+/// Maps an `AgentEvent` to a short status emoji + label for Telegram display.
+pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
+    match event {
+        AgentEvent::ReasoningDelta { .. } => Some("🧠 Thinking...".to_string()),
+        AgentEvent::ToolStarted { name, .. } => {
+            let emoji = match name.as_str() {
+                "bash" => "🔧",
+                "read" => "📖",
+                "write" => "✏️",
+                "edit" => "✏️",
+                "apply_patch" => "✏️",
+                "web_search" => "🔍",
+                "fetch_webpage" => "🌐",
+                "read_thread" => "💬",
+                _ => "⚙️",
+            };
+            Some(format!("{} Running `{}`...", emoji, name))
+        }
+        AgentEvent::ToolCompleted { .. } => None, // Don't update for completions alone
+        _ => None,
+    }
 }
 
 fn build_user_text(incoming: &IncomingMessage) -> String {

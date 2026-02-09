@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
-use zdx_core::core::thread_log::{self, short_thread_id};
+use zdx_core::core::thread_persistence::{self, short_thread_id};
 
 use crate::common::truncate_with_ellipsis;
 use crate::overlays::{ThreadPickerState, ThreadScope};
@@ -140,7 +140,7 @@ pub fn render_thread_picker(
             let thread = item.summary;
             let timestamp = thread
                 .modified
-                .and_then(thread_log::format_timestamp_relative)
+                .and_then(thread_persistence::format_timestamp_relative)
                 .unwrap_or_else(|| "—".to_string());
 
             // Show title if available, otherwise fall back to short ID

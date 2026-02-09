@@ -22,7 +22,7 @@ use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::providers::ProviderKind;
 
 use crate::common::TaskKind;

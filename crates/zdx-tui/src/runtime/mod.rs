@@ -35,7 +35,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
 use zdx_core::core::interrupt;
-use zdx_core::core::thread_log::ThreadLog;
+use zdx_core::core::thread_persistence::ThreadLog;
 use zdx_core::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskMeta, TaskStarted};

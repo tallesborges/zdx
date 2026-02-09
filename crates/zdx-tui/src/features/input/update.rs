@@ -4,7 +4,7 @@
 //! All state mutations for input-related events happen here.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
-use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
 use super::CursorMove;

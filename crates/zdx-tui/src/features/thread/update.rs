@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use zdx_core::core::thread_log::{ThreadLog, ThreadSummary, Usage, short_thread_id};
+use zdx_core::core::thread_persistence::{ThreadLog, ThreadSummary, Usage, short_thread_id};
 use zdx_core::providers::ChatMessage;
 
 use crate::effects::UiEffect;

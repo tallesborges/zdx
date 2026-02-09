@@ -8,7 +8,7 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::interrupt;
-use zdx_core::core::thread_log::ThreadEvent;
+use zdx_core::core::thread_persistence::ThreadEvent;
 
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};

@@ -14,7 +14,7 @@ use tokio::task::JoinHandle;
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::{AgentEvent, ToolOutput};
-use zdx_core::core::thread_log::{self, ThreadEvent, ThreadLog};
+use zdx_core::core::thread_persistence::{self, ThreadEvent, ThreadLog};
 use zdx_core::providers::ChatMessage;
 
 /// Options for exec execution.
@@ -93,7 +93,7 @@ pub async fn run_exec(
 
     // Load thread history if continuing an existing thread
     let messages = if let Some(ref existing_thread) = thread {
-        let mut history = thread_log::load_thread_as_messages(&existing_thread.id)?;
+        let mut history = thread_persistence::load_thread_as_messages(&existing_thread.id)?;
         history.push(ChatMessage::user(prompt));
         history
     } else {
@@ -119,7 +119,7 @@ pub async fn run_exec(
         let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
         let broadcaster =
             zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
-        let persist = thread_log::spawn_thread_persist_task(thread_log_handle, persist_rx);
+        let persist = thread_persistence::spawn_thread_persist_task(thread_log_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
         // No thread - just broadcast to renderer

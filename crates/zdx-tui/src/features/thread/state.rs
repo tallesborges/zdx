@@ -2,7 +2,7 @@
 //!
 //! Manages the active thread, message history, and token usage tracking.
 
-use zdx_core::core::thread_log::{ThreadLog, Usage};
+use zdx_core::core::thread_persistence::{ThreadLog, Usage};
 use zdx_core::models::ModelPricing;
 use zdx_core::providers::ChatMessage;
 
@@ -46,7 +46,7 @@ impl ThreadState {
     pub fn with_thread(thread_log: Option<ThreadLog>, messages: Vec<ChatMessage>) -> Self {
         let title = thread_log
             .as_ref()
-            .and_then(|log| zdx_core::core::thread_log::read_thread_title(&log.id).ok())
+            .and_then(|log| zdx_core::core::thread_persistence::read_thread_title(&log.id).ok())
             .flatten();
         Self {
             thread_log,

@@ -10,7 +10,7 @@ use tokio::process::Command;
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
-use crate::core::thread_log;
+use crate::core::thread_persistence as thread_log;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 
 const READ_THREAD_MODEL: &str = "gemini-cli:gemini-2.5-flash-lite";

@@ -1,4 +1,4 @@
-use zdx_core::core::{interrupt, thread_log};
+use zdx_core::core::{interrupt, thread_persistence};
 
 use crate::events::UiEvent;
 use crate::state::TuiState;
@@ -26,7 +26,7 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
         let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
         let _broadcaster =
             zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-        let _persist = thread_log::spawn_thread_persist_task(thread_log_handle, persist_rx);
+        let _persist = thread_persistence::spawn_thread_persist_task(thread_log_handle, persist_rx);
     } else {
         let _broadcaster = zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }

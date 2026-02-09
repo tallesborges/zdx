@@ -66,7 +66,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 // Save per-request delta values (not cumulative) for event-sourcing
                 let usage = app.tui.thread.usage.turn_usage();
                 effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_log::ThreadEvent::usage(usage),
+                    event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
                 });
                 // Mark as saved to prevent duplicate saves on TurnCompleted/Interrupted
                 app.tui.thread.usage.mark_saved();
@@ -84,7 +84,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             {
                 let usage = app.tui.thread.usage.turn_usage();
                 effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_log::ThreadEvent::usage(usage),
+                    event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
                 });
                 app.tui.thread.usage.mark_saved();
             }
@@ -396,7 +396,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
                 // Save as user message event to thread log
                 effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_log::ThreadEvent::user_message(&user_message),
+                    event: zdx_core::core::thread_persistence::ThreadEvent::user_message(
+                        &user_message,
+                    ),
                 });
 
                 // Add user message for LLM context

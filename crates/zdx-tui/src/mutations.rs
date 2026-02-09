@@ -6,7 +6,7 @@
 use std::path::PathBuf;
 
 use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_log::{ThreadLog, Usage};
+use zdx_core::core::thread_persistence::{ThreadLog, Usage};
 use zdx_core::providers::ChatMessage;
 
 use crate::input::HandoffState;
