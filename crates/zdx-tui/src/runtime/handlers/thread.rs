@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
-use zdx_core::core::thread_log::ThreadEvent;
-use zdx_core::core::{thread_log, worktree};
+use zdx_core::core::thread_persistence::ThreadEvent;
+use zdx_core::core::{thread_persistence as tp, worktree};
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
@@ -15,7 +15,7 @@ pub async fn thread_list_load(
     original_cells: Vec<HistoryCell>,
     mode: crate::overlays::ThreadPickerMode,
 ) -> UiEvent {
-    tokio::task::spawn_blocking(move || match thread_log::list_threads() {
+    tokio::task::spawn_blocking(move || match tp::list_threads() {
         Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
             error: "No threads found.".to_string(),
         }),
@@ -52,7 +52,7 @@ pub async fn thread_load(thread_id: String, root: PathBuf) -> UiEvent {
 /// Synchronous thread loading (runs in blocking task).
 fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     // Load thread events (I/O)
-    let events = match thread_log::load_thread_events(thread_id) {
+    let events = match tp::load_thread_events(thread_id) {
         Ok(events) => events,
         Err(e) => {
             return UiEvent::Thread(ThreadUiEvent::LoadFailed {
@@ -62,17 +62,17 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     };
 
     // Extract usage from events before consuming them
-    let usage = thread_log::extract_usage_from_thread_events(&events);
+    let usage = tp::extract_usage_from_thread_events(&events);
 
-    let title = thread_log::extract_title_from_events(&events);
+    let title = tp::extract_title_from_events(&events);
 
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
 
-    let stored_root = thread_log::extract_root_path_from_events(&events);
+    let stored_root = tp::extract_root_path_from_events(&events);
 
     // Build API messages for thread context
-    let messages = thread_log::thread_events_to_messages(events);
+    let messages = tp::thread_events_to_messages(events);
 
     // Build input history from user messages in transcript
     let history: Vec<String> = cells
@@ -87,11 +87,11 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         .collect();
 
     // Create or get the thread handle for future appends
-    let thread_log_handle = thread_log::ThreadLog::with_id(thread_id.to_string()).ok();
+    let thread_handle = tp::Thread::with_id(thread_id.to_string()).ok();
 
     // Backfill thread root for older threads that don't have one yet.
     if stored_root.is_none()
-        && let Some(mut handle) = thread_log_handle.clone()
+        && let Some(mut handle) = thread_handle.clone()
     {
         let _ = handle.set_root_path(root);
     }
@@ -102,7 +102,7 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         messages,
         history,
         stored_root: stored_root.map(PathBuf::from),
-        thread_log: thread_log_handle,
+        thread_handle,
         title,
         usage,
     })
@@ -112,8 +112,8 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
 pub async fn thread_ensure_worktree(thread_id: String, root: PathBuf) -> UiEvent {
     tokio::task::spawn_blocking(move || match worktree::ensure_worktree(&root, &thread_id) {
         Ok(path) => {
-            if let Ok(mut thread_log) = thread_log::ThreadLog::with_id(thread_id) {
-                let _ = thread_log.set_root_path(&path);
+            if let Ok(mut thread_handle) = tp::Thread::with_id(thread_id) {
+                let _ = thread_handle.set_root_path(&path);
             }
             UiEvent::Thread(ThreadUiEvent::WorktreeReady { path })
         }
@@ -247,7 +247,7 @@ pub fn resolve_project_root(root: &Path) -> anyhow::Result<PathBuf> {
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_preview(thread_id: String) -> UiEvent {
-    tokio::task::spawn_blocking(move || match thread_log::load_thread_events(&thread_id) {
+    tokio::task::spawn_blocking(move || match tp::load_thread_events(&thread_id) {
         Ok(events) => {
             let cells = build_transcript_from_events(&events);
             UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
@@ -266,8 +266,8 @@ pub async fn thread_preview(thread_id: String) -> UiEvent {
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> UiEvent {
     tokio::task::spawn_blocking(move || {
-        let thread_log_handle = match thread_log::ThreadLog::new_with_root(&root) {
-            Ok(thread_log_handle) => thread_log_handle,
+        let thread_handle = match tp::Thread::new_with_root(&root) {
+            Ok(thread_handle) => thread_handle,
             Err(e) => {
                 return UiEvent::Thread(ThreadUiEvent::CreateFailed {
                     error: format!("Failed to create thread: {}", e),
@@ -281,7 +281,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
                 .unwrap_or_default();
 
         UiEvent::Thread(ThreadUiEvent::Created {
-            thread_log: thread_log_handle,
+            thread_handle,
             context_paths: context.loaded_agents_paths,
             skills: context.loaded_skills,
         })
@@ -318,8 +318,8 @@ fn fork_thread_sync(
     turn_number: usize,
     root: &Path,
 ) -> UiEvent {
-    let mut thread_log_handle = match thread_log::ThreadLog::new_with_root(root) {
-        Ok(thread_log_handle) => thread_log_handle,
+    let mut thread_handle = match tp::Thread::new_with_root(root) {
+        Ok(thread_handle) => thread_handle,
         Err(e) => {
             return UiEvent::Thread(ThreadUiEvent::ForkFailed {
                 error: format!("Failed to create thread: {}", e),
@@ -328,16 +328,16 @@ fn fork_thread_sync(
     };
 
     for event in &events {
-        if let Err(e) = thread_log_handle.append(event) {
+        if let Err(e) = thread_handle.append(event) {
             return UiEvent::Thread(ThreadUiEvent::ForkFailed {
                 error: format!("Failed to write thread: {}", e),
             });
         }
     }
 
-    let usage = thread_log::extract_usage_from_thread_events(&events);
+    let usage = tp::extract_usage_from_thread_events(&events);
     let cells = build_transcript_from_events(&events);
-    let messages = thread_log::thread_events_to_messages(events);
+    let messages = tp::thread_events_to_messages(events);
     let history: Vec<String> = cells
         .iter()
         .filter_map(|cell| {
@@ -350,11 +350,11 @@ fn fork_thread_sync(
         .collect();
 
     UiEvent::Thread(ThreadUiEvent::ForkedLoaded {
-        thread_id: thread_log_handle.id.clone(),
+        thread_id: thread_handle.id.clone(),
         cells,
         messages,
         history,
-        thread_log: thread_log_handle,
+        thread_handle,
         usage,
         user_input,
         turn_number,
@@ -365,8 +365,8 @@ fn fork_thread_sync(
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_rename(thread_id: String, title: Option<String>) -> UiEvent {
-    tokio::task::spawn_blocking(move || {
-        match thread_log::set_thread_title(&thread_id, title.clone()) {
+    tokio::task::spawn_blocking(
+        move || match tp::set_thread_title(&thread_id, title.clone()) {
             Ok(new_title) => UiEvent::Thread(ThreadUiEvent::Renamed {
                 thread_id,
                 title: new_title,
@@ -374,8 +374,8 @@ pub async fn thread_rename(thread_id: String, title: Option<String>) -> UiEvent 
             Err(e) => UiEvent::Thread(ThreadUiEvent::RenameFailed {
                 error: format!("Failed to rename thread: {}", e),
             }),
-        }
-    })
+        },
+    )
     .await
     .unwrap_or_else(|e| {
         UiEvent::Thread(ThreadUiEvent::RenameFailed {

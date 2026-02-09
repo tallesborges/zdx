@@ -35,7 +35,7 @@ use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
 use zdx_core::core::interrupt;
-use zdx_core::core::thread_log::ThreadLog;
+use zdx_core::core::thread_persistence::Thread;
 use zdx_core::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskMeta, TaskStarted};
@@ -78,9 +78,9 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
     ) -> Result<Self> {
-        Self::with_history(config, root, system_prompt, thread_log, Vec::new())
+        Self::with_history(config, root, system_prompt, thread_handle, Vec::new())
     }
 
     /// Creates a TUI runtime with pre-loaded message history.
@@ -88,7 +88,7 @@ impl TuiRuntime {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Result<Self> {
         // Set up panic hook BEFORE entering alternate screen
@@ -104,7 +104,7 @@ impl TuiRuntime {
         let terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
 
         // Create state
-        let state = AppState::with_history(config, root, system_prompt, thread_log, history);
+        let state = AppState::with_history(config, root, system_prompt, thread_handle, history);
 
         // Create inbox channel for async event collection
         let (inbox_tx, inbox_rx) = mpsc::unbounded_channel();
@@ -447,7 +447,7 @@ impl TuiRuntime {
 
             // Thread effects (pure async handlers)
             UiEffect::SaveThread { event } => {
-                if let Some(ref mut s) = self.state.tui.thread.thread_log {
+                if let Some(ref mut s) = self.state.tui.thread.thread_handle {
                     let _ = s.append(&event);
                     // Errors are silently ignored for thread persistence
                 }
@@ -462,7 +462,7 @@ impl TuiRuntime {
                     .state
                     .tui
                     .thread
-                    .thread_log
+                    .thread_handle
                     .as_ref()
                     .is_some_and(|log| log.id == thread_id);
                 if !is_current {
@@ -508,8 +508,8 @@ impl TuiRuntime {
                 });
             }
             UiEffect::EnsureWorktree => {
-                if let Some(thread_log) = self.state.tui.thread.thread_log.as_ref() {
-                    let thread_id = thread_log.id.clone();
+                if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref() {
+                    let thread_id = thread_handle.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     self.spawn_task(TaskKind::ThreadWorktree, TaskMeta::None, false, move |_| {
                         handlers::thread_ensure_worktree(thread_id, root)
@@ -554,8 +554,8 @@ impl TuiRuntime {
 
             // Handoff effects
             UiEffect::StartHandoff { goal } => {
-                if let Some(ref thread_log) = self.state.tui.thread.thread_log {
-                    let thread_id = thread_log.id.clone();
+                if let Some(ref thread_handle) = self.state.tui.thread.thread_handle {
+                    let thread_id = thread_handle.id.clone();
                     let root = self.state.tui.agent_opts.root.clone();
                     let handoff_model = self.state.tui.config.handoff_model.clone();
                     let meta = TaskMeta::Handoff { goal: goal.clone() };
@@ -576,9 +576,9 @@ impl TuiRuntime {
                 let root = &self.state.tui.agent_opts.root;
                 let config = self.state.tui.config.clone();
                 match handoff::execute_handoff_submit(&config, root, handoff_from) {
-                    Ok((thread_log, context_paths)) => {
+                    Ok((thread_handle, context_paths)) => {
                         self.dispatch_event(UiEvent::HandoffThreadCreated {
-                            thread_log,
+                            thread_handle,
                             context_paths,
                             prompt,
                         });

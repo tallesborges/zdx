@@ -36,7 +36,7 @@ use tokio::sync::mpsc;
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_log::ThreadLog;
+use zdx_core::core::thread_persistence::Thread;
 use zdx_core::providers::{ChatContentBlock, ChatMessage};
 
 use crate::auth::AuthState;
@@ -66,9 +66,9 @@ impl AppState {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
     ) -> Self {
-        Self::with_history(config, root, system_prompt, thread_log, Vec::new())
+        Self::with_history(config, root, system_prompt, thread_handle, Vec::new())
     }
 
     /// Creates an AppState with pre-loaded message history.
@@ -78,11 +78,11 @@ impl AppState {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Self {
         Self {
-            tui: TuiState::with_history(config, root, system_prompt, thread_log, history),
+            tui: TuiState::with_history(config, root, system_prompt, thread_handle, history),
             overlay: None,
         }
     }
@@ -177,7 +177,7 @@ impl TuiState {
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
-        thread_log: Option<ThreadLog>,
+        thread_handle: Option<Thread>,
         history: Vec<ChatMessage>,
     ) -> Self {
         let agent_opts = AgentOptions {
@@ -212,7 +212,7 @@ impl TuiState {
         input.history = command_history;
 
         // Create thread state with history
-        let thread = ThreadState::with_thread(thread_log, history);
+        let thread = ThreadState::with_thread(thread_handle, history);
 
         // Create auth state
         let auth = AuthState::new();

@@ -8,7 +8,7 @@ use std::process::Stdio;
 use std::time::Duration;
 
 use tokio::process::Command;
-use zdx_core::core::thread_log;
+use zdx_core::core::thread_persistence;
 use zdx_core::prompts::THREAD_TITLE_PROMPT_TEMPLATE;
 
 use crate::events::{ThreadUiEvent, UiEvent};
@@ -120,7 +120,7 @@ pub async fn suggest_thread_title(
     }
 
     let title = title
-        .and_then(|title| thread_log::set_thread_title(&thread_id, Some(title)).ok())
+        .and_then(|title| thread_persistence::set_thread_title(&thread_id, Some(title)).ok())
         .flatten();
 
     UiEvent::Thread(ThreadUiEvent::TitleSuggested { thread_id, title })
