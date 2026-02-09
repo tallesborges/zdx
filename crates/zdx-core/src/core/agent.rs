@@ -15,11 +15,12 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 
-use crate::config::Config;
+use crate::config::{Config, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
+    EffortLevel as AnthropicEffortLevel,
 };
 use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
@@ -504,7 +505,7 @@ pub async fn run_turn(
     let thinking_level = if crate::models::model_supports_reasoning(&config.model) {
         config.thinking_level
     } else {
-        crate::config::ThinkingLevel::Off
+        ThinkingLevel::Off
     };
 
     // Get model output limit for budget calculation
@@ -520,6 +521,7 @@ pub async fn run_turn(
             let thinking_budget_tokens = thinking_level
                 .compute_reasoning_budget(max_tokens, model_output_limit)
                 .unwrap_or(0);
+            let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
 
             let anthropic_config = AnthropicConfig::from_env(
                 selection.model.clone(),
@@ -528,6 +530,7 @@ pub async fn run_turn(
                 config.providers.anthropic.effective_api_key(),
                 thinking_enabled,
                 thinking_budget_tokens,
+                thinking_effort,
             )?;
             ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
         }
@@ -536,6 +539,7 @@ pub async fn run_turn(
             let thinking_budget_tokens = thinking_level
                 .compute_reasoning_budget(max_tokens, model_output_limit)
                 .unwrap_or(0);
+            let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
 
             let claude_cli_config = ClaudeCliConfig::new(
                 selection.model.clone(),
@@ -543,6 +547,7 @@ pub async fn run_turn(
                 config.providers.claude_cli.effective_base_url(),
                 thinking_enabled,
                 thinking_budget_tokens,
+                thinking_effort,
             );
             ProviderClient::ClaudeCli(ClaudeCliClient::new(claude_cli_config))
         }
@@ -1131,8 +1136,18 @@ pub async fn run_turn(
     }
 }
 
-fn map_thinking_to_reasoning(level: crate::config::ThinkingLevel) -> Option<String> {
+fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
     level.effort_label().map(|s| s.to_string())
+}
+
+fn map_thinking_to_anthropic_effort(level: ThinkingLevel) -> Option<AnthropicEffortLevel> {
+    match level {
+        ThinkingLevel::Off => None,
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some(AnthropicEffortLevel::Low),
+        ThinkingLevel::Medium => Some(AnthropicEffortLevel::Medium),
+        ThinkingLevel::High => Some(AnthropicEffortLevel::High),
+        ThinkingLevel::XHigh => Some(AnthropicEffortLevel::Max),
+    }
 }
 
 /// Executes all tool uses in parallel and emits events via async channel.

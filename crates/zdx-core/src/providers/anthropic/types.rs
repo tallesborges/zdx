@@ -10,18 +10,42 @@ use crate::tools::{ToolDefinition, ToolResultBlock, ToolResultContent};
 
 /// Thinking configuration for extended thinking feature.
 #[derive(Debug, Serialize)]
-pub(crate) struct ThinkingConfig {
-    #[serde(rename = "type")]
-    thinking_type: &'static str,
-    budget_tokens: u32,
+#[serde(tag = "type")]
+pub(crate) enum ThinkingConfig {
+    #[serde(rename = "enabled")]
+    Enabled { budget_tokens: u32 },
+    #[serde(rename = "adaptive")]
+    Adaptive,
 }
 
 impl ThinkingConfig {
     pub(crate) fn enabled(budget_tokens: u32) -> Self {
-        Self {
-            thinking_type: "enabled",
-            budget_tokens,
-        }
+        Self::Enabled { budget_tokens }
+    }
+
+    pub(crate) fn adaptive() -> Self {
+        Self::Adaptive
+    }
+}
+
+/// Effort levels for `output_config.effort`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Max,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct OutputConfig {
+    effort: EffortLevel,
+}
+
+impl OutputConfig {
+    pub(crate) fn new(effort: EffortLevel) -> Self {
+        Self { effort }
     }
 }
 
@@ -36,6 +60,8 @@ pub(crate) struct StreamingMessagesRequest<'a> {
     pub(crate) system: Option<Vec<SystemBlock>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) thinking: Option<ThinkingConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) output_config: Option<OutputConfig>,
     pub(crate) stream: bool,
 }
 

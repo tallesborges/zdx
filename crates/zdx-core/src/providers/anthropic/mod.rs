@@ -23,3 +23,4 @@ pub(crate) mod types;
 
 pub use api::{AnthropicClient, AnthropicConfig, DEFAULT_BASE_URL};
 pub use cli::{ClaudeCliClient, ClaudeCliConfig};
+pub use types::EffortLevel;
