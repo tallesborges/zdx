@@ -114,7 +114,7 @@ async fn install_skill_inner(
 
     tokio::fs::create_dir_all(&dest_root)
         .await
-        .map_err(|err| format!("Failed to create skill directory: {}", err))?;
+        .map_err(|err| format!("Failed to create skill directory: {err}"))?;
 
     let skill_repo_path = join_repo_path(&spec.path, skill_path);
     let result = download_repo_dir(&client, &spec, &skill_repo_path, &dest_root, cancel).await;
@@ -137,14 +137,14 @@ async fn fetch_skill_instructions_inner(
     let spec = parse_repo_spec(repo)?;
     let client = github_client()?;
     let skill_repo_path = join_repo_path(&spec.path, skill_path);
-    let file_path = format!("{}/SKILL.md", skill_repo_path);
+    let file_path = format!("{skill_repo_path}/SKILL.md");
     let url = contents_url(&spec, &file_path)?;
 
     let response = client
         .get(url)
         .send()
         .await
-        .map_err(|err| format!("Request failed: {}", err))?;
+        .map_err(|err| format!("Request failed: {err}"))?;
 
     if !response.status().is_success() {
         return Err("No SKILL.md found.".to_string());
@@ -153,7 +153,7 @@ async fn fetch_skill_instructions_inner(
     let item: GitHubContentItem = response
         .json()
         .await
-        .map_err(|err| format!("Failed to parse response: {}", err))?;
+        .map_err(|err| format!("Failed to parse response: {err}"))?;
 
     let download_url = item
         .download_url
@@ -163,12 +163,12 @@ async fn fetch_skill_instructions_inner(
         .get(&download_url)
         .send()
         .await
-        .map_err(|err| format!("Failed to download: {}", err))?;
+        .map_err(|err| format!("Failed to download: {err}"))?;
 
     content_response
         .text()
         .await
-        .map_err(|err| format!("Failed to read content: {}", err))
+        .map_err(|err| format!("Failed to read content: {err}"))
 }
 
 async fn download_repo_dir(
@@ -205,7 +205,7 @@ async fn download_repo_dir(
                     let sub_dest = dest_root.join(&entry.name);
                     tokio::fs::create_dir_all(&sub_dest)
                         .await
-                        .map_err(|err| format!("Failed to create directory: {}", err))?;
+                        .map_err(|err| format!("Failed to create directory: {err}"))?;
                     stack.push((entry.path, sub_dest));
                 }
                 _ => {}
@@ -227,14 +227,14 @@ async fn download_file(
         .get(download_url)
         .send()
         .await
-        .map_err(|err| format!("Failed to download file: {}", err))?;
+        .map_err(|err| format!("Failed to download file: {err}"))?;
     if !response.status().is_success() {
         return Err(format!("Failed to download file ({}).", response.status()));
     }
     let bytes = response
         .bytes()
         .await
-        .map_err(|err| format!("Failed to read file bytes: {}", err))?;
+        .map_err(|err| format!("Failed to read file bytes: {err}"))?;
 
     let relative = repo_path
         .strip_prefix(repo_root)
@@ -245,12 +245,12 @@ async fn download_file(
     if let Some(parent) = dest_path.parent() {
         tokio::fs::create_dir_all(parent)
             .await
-            .map_err(|err| format!("Failed to create directory: {}", err))?;
+            .map_err(|err| format!("Failed to create directory: {err}"))?;
     }
 
     tokio::fs::write(&dest_path, bytes)
         .await
-        .map_err(|err| format!("Failed to write file: {}", err))?;
+        .map_err(|err| format!("Failed to write file: {err}"))?;
 
     Ok(())
 }
@@ -268,7 +268,7 @@ async fn list_directory(
         .get(url)
         .send()
         .await
-        .map_err(|err| format!("Request failed: {}", err))?;
+        .map_err(|err| format!("Request failed: {err}"))?;
 
     let status = response.status();
     if !status.is_success() {
@@ -284,14 +284,14 @@ async fn list_directory(
             );
         }
 
-        let body = response.text().await.unwrap_or_else(|_| "".to_string());
-        return Err(format!("GitHub API error ({}): {}", status, body));
+        let body = response.text().await.unwrap_or_else(|_| String::new());
+        return Err(format!("GitHub API error ({status}): {body}"));
     }
 
     response
         .json::<Vec<GitHubContentItem>>()
         .await
-        .map_err(|err| format!("Failed to parse GitHub response: {}", err))
+        .map_err(|err| format!("Failed to parse GitHub response: {err}"))
 }
 
 fn parse_repo_spec(spec: &str) -> Result<RepoSpec, String> {
@@ -322,7 +322,7 @@ fn github_client() -> Result<reqwest::Client, String> {
     headers.insert(USER_AGENT, HeaderValue::from_static("zdx"));
 
     if let Some(token) = github_token() {
-        let value = format!("Bearer {}", token);
+        let value = format!("Bearer {token}");
         let header =
             HeaderValue::from_str(&value).map_err(|_| "Invalid GitHub token.".to_string())?;
         headers.insert(AUTHORIZATION, header);
@@ -331,7 +331,7 @@ fn github_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .default_headers(headers)
         .build()
-        .map_err(|err| format!("Failed to build HTTP client: {}", err))
+        .map_err(|err| format!("Failed to build HTTP client: {err}"))
 }
 
 fn github_token() -> Option<String> {
@@ -347,7 +347,7 @@ fn github_token() -> Option<String> {
 
 fn contents_url(spec: &RepoSpec, path: &str) -> Result<Url, String> {
     let mut url = Url::parse("https://api.github.com")
-        .map_err(|err| format!("Invalid GitHub API URL: {}", err))?;
+        .map_err(|err| format!("Invalid GitHub API URL: {err}"))?;
     let path = if path.is_empty() {
         format!("/repos/{}/{}/contents", spec.owner, spec.repo)
     } else {

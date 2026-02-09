@@ -5,7 +5,7 @@
 //! - Draw to a ratatui Frame
 //! - Never mutate state or return effects
 //!
-//! The separation from TuiRuntime eliminates borrow-checker conflicts
+//! The separation from `TuiRuntime` eliminates borrow-checker conflicts
 //! that previously required cloning state for rendering.
 
 use ratatui::Frame;
@@ -208,9 +208,9 @@ fn format_elapsed(d: std::time::Duration) -> String {
     if secs >= 60 {
         let mins = secs / 60;
         let remaining_secs = secs % 60;
-        format!("{}m{:02}s", mins, remaining_secs)
+        format!("{mins}m{remaining_secs:02}s")
     } else {
-        format!("{}s", secs)
+        format!("{secs}s")
     }
 }
 
@@ -322,7 +322,7 @@ fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total
         })
         .collect();
 
-    let title = format!(" Queued ({}) ", total);
+    let title = format!(" Queued ({total}) ");
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::DarkGray))
@@ -352,7 +352,7 @@ pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height:
 
 /// Calculates cell line info and returns it for external application.
 ///
-/// This is a thin wrapper around transcript::calculate_cell_line_counts
+/// This is a thin wrapper around `transcript::calculate_cell_line_counts`
 /// that passes the combined horizontal overhead (margins + scrollbar).
 pub fn calculate_cell_line_counts(state: &TuiState, terminal_width: usize) -> Vec<(CellId, usize)> {
     let horizontal_overhead = (TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;

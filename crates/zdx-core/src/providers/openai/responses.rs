@@ -38,6 +38,9 @@ pub struct ResponsesConfig {
 }
 
 /// Sends a Responses API request and returns a stream of normalized events.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn send_responses_stream(
     http: &reqwest::Client,
     config: &ResponsesConfig,
@@ -46,7 +49,7 @@ pub async fn send_responses_stream(
     tools: &[ToolDefinition],
     system: Option<&str>,
 ) -> Result<ProviderStream> {
-    let input = build_input(messages, system)?;
+    let input = build_input(messages, system);
     if input.is_empty() {
         bail!("No input messages provided for OpenAI request");
     }
@@ -95,14 +98,14 @@ pub async fn send_responses_stream(
             .body(body)
             .send()
             .await
-            .map_err(classify_reqwest_error)?
+            .map_err(|e| classify_reqwest_error(&e))?
     } else {
         http.post(&url)
             .headers(headers)
             .json(&request)
             .send()
             .await
-            .map_err(classify_reqwest_error)?
+            .map_err(|e| classify_reqwest_error(&e))?
     };
 
     let status = response.status();
@@ -117,25 +120,18 @@ pub async fn send_responses_stream(
     Ok(maybe_wrap_with_metrics(event_stream))
 }
 
-fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
     if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {}", e))
+        ProviderError::timeout(format!("Request timed out: {e}"))
     } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {}", e))
+        ProviderError::timeout(format!("Connection failed: {e}"))
     } else if e.is_request() {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Request error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
     } else {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Network error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
-
-fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<InputItem>> {
+fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
     use crate::providers::MessageContent;
 
     let mut input = Vec::new();
@@ -295,7 +291,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                             // If there's an image, add it as a separate user message
                             // OpenAI Responses API doesn't support images in function_call_output
                             if let Some((mime_type, data)) = has_image {
-                                let image_url = format!("data:{};base64,{}", mime_type, data);
+                                let image_url = format!("data:{mime_type};base64,{data}");
                                 input.push(InputItem {
                                     id: None,
                                     item_type: "message".to_string(),
@@ -327,7 +323,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
                             content_parts.push(InputContent::InputText { text: text.clone() });
                         }
                         ChatContentBlock::Image { mime_type, data } => {
-                            let image_url = format!("data:{};base64,{}", mime_type, data);
+                            let image_url = format!("data:{mime_type};base64,{data}");
                             content_parts.push(InputContent::InputImage {
                                 image_url,
                                 detail: Some("auto".to_string()),
@@ -380,7 +376,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
 
                             // If there's an image, add it as a separate user message
                             if let Some((mime_type, data)) = has_image {
-                                let image_url = format!("data:{};base64,{}", mime_type, data);
+                                let image_url = format!("data:{mime_type};base64,{data}");
                                 input.push(InputItem {
                                     id: None,
                                     item_type: "message".to_string(),
@@ -422,11 +418,11 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Result<Vec<Inp
         }
     }
 
-    Ok(input)
+    input
 }
 
 /// Extracts text and optional image from tool result content.
-/// Returns (text_output, Option<(mime_type, base64_data)>)
+/// Returns (`text_output`, Option<(`mime_type`, `base64_data`)>)
 fn extract_tool_result_with_image(
     content: &ToolResultContent,
 ) -> (String, Option<(String, String)>) {
@@ -437,7 +433,7 @@ fn extract_tool_result_with_image(
                 .iter()
                 .find_map(|block| match block {
                     crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
-                    _ => None,
+                    crate::tools::ToolResultBlock::Image { .. } => None,
                 })
                 .unwrap_or_default();
 
@@ -445,7 +441,7 @@ fn extract_tool_result_with_image(
                 crate::tools::ToolResultBlock::Image { mime_type, data } => {
                     Some((mime_type.clone(), data.clone()))
                 }
-                _ => None,
+                crate::tools::ToolResultBlock::Text { .. } => None,
             });
 
             (text, image)

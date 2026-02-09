@@ -1,7 +1,7 @@
 //! Context module for loading project-specific guidelines.
 //!
 //! AGENTS.md files are loaded hierarchically:
-//! 1. ZDX_HOME/AGENTS.md (global user guidelines)
+//! 1. `ZDX_HOME/AGENTS.md` (global user guidelines)
 //! 2. ~/AGENTS.md (user home)
 //! 3. Ancestor directories from home to project root
 //! 4. Project root (--root or cwd)
@@ -69,7 +69,7 @@ pub struct LoadedContext {
 /// Collects all AGENTS.md paths to check, in order.
 ///
 /// Order:
-/// 1. ZDX_HOME/AGENTS.md (always included - global user config)
+/// 1. `ZDX_HOME/AGENTS.md` (always included - global user config)
 /// 2. ~/AGENTS.md (only if root is under home)
 /// 3. Ancestors from home to root (only if root is under home)
 /// 4. root/AGENTS.md
@@ -212,13 +212,16 @@ pub struct EffectivePrompt {
 /// Builds the effective system prompt by combining config and AGENTS.md files.
 ///
 /// AGENTS.md files are loaded hierarchically from:
-/// 1. ZDX_HOME/AGENTS.md
+/// 1. `ZDX_HOME/AGENTS.md`
 /// 2. ~/AGENTS.md  
 /// 3. Ancestor directories from home to project root
 /// 4. Project root
 ///
 /// Returns the combined prompt, the list of loaded AGENTS.md paths, and any warnings.
 /// This function is UI-agnostic; callers should surface warnings via the renderer.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
@@ -242,15 +245,13 @@ pub fn build_effective_system_prompt_with_paths(
     }
 
     let mut skill_options = LoadSkillsOptions::new(root);
-    skill_options.enable_zdx_user = config.skills.enable_zdx_user;
-    skill_options.enable_zdx_project = config.skills.enable_zdx_project;
-    skill_options.enable_codex_user = config.skills.enable_codex_user;
-    skill_options.enable_claude_user = config.skills.enable_claude_user;
-    skill_options.enable_claude_project = config.skills.enable_claude_project;
-    skill_options.enable_agents_user = config.skills.enable_agents_user;
-    skill_options.enable_agents_project = config.skills.enable_agents_project;
-    skill_options.ignored_skills = config.skills.ignored_skills.clone();
-    skill_options.include_skills = config.skills.include_skills.clone();
+    skill_options.sources = config.skills.sources.clone();
+    skill_options
+        .ignored_skills
+        .clone_from(&config.skills.ignored_skills);
+    skill_options
+        .include_skills
+        .clone_from(&config.skills.include_skills);
 
     let skills_result = load_skills(&skill_options);
     let LoadSkillsResult {
@@ -260,7 +261,7 @@ pub fn build_effective_system_prompt_with_paths(
 
     if let Some(skills_block) = format_skills_for_prompt(&skills) {
         let combined = match system_prompt {
-            Some(sp) => format!("{}\n\n{}", sp, skills_block),
+            Some(sp) => format!("{sp}\n\n{skills_block}"),
             None => skills_block,
         };
         system_prompt = Some(combined);
@@ -306,8 +307,7 @@ mod tests {
         let zdx_home_agents = zdx_home.path().join("AGENTS.md");
         assert!(
             paths.contains(&zdx_home_agents),
-            "Should include ZDX_HOME/AGENTS.md, got: {:?}",
-            paths
+            "Should include ZDX_HOME/AGENTS.md, got: {paths:?}"
         );
     }
 
@@ -320,8 +320,7 @@ mod tests {
         let root_agents = dir.path().canonicalize().unwrap().join("AGENTS.md");
         assert!(
             paths.contains(&root_agents),
-            "Should include root/AGENTS.md, got: {:?}",
-            paths
+            "Should include root/AGENTS.md, got: {paths:?}"
         );
     }
 
@@ -344,7 +343,7 @@ mod tests {
                         .unwrap_or_else(|_| zdx_agents.clone())
             })
             .count();
-        assert!(count <= 1, "Should deduplicate paths, got count: {}", count);
+        assert!(count <= 1, "Should deduplicate paths, got count: {count}");
     }
 
     #[test]
@@ -429,7 +428,7 @@ mod tests {
             // Should include ZDX_HOME first
             let zdx_home_agents = zdx_home.path().join("AGENTS.md");
             assert_eq!(
-                paths.first().map(|p| p.as_path()),
+                paths.first().map(std::path::PathBuf::as_path),
                 Some(zdx_home_agents.as_path()),
                 "ZDX_HOME/AGENTS.md should be first"
             );

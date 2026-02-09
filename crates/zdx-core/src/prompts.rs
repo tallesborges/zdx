@@ -12,7 +12,7 @@ pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/thread_title_prompt.md"
 ));
 
-/// Prompt template for Codex (openai_codex provider).
+/// Prompt template for Codex (`openai_codex` provider).
 pub const CODEX_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/openai_codex.md"
@@ -24,7 +24,7 @@ pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/read_thread_prompt.md"
 ));
 
-/// Prompt template for zdx agentic coding (Gemini, StepFun, Moonshot, etc.).
+/// Prompt template for zdx agentic coding (Gemini, `StepFun`, Moonshot, etc.).
 pub const ZDX_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/zdx_agentic.md"

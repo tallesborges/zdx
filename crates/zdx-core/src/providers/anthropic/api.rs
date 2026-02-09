@@ -26,7 +26,7 @@ pub struct AnthropicConfig {
     pub max_tokens: u32,
     /// Whether extended thinking is enabled
     pub thinking_enabled: bool,
-    /// Token budget for thinking (only used when thinking_enabled = true)
+    /// Token budget for thinking (only used when `thinking_enabled` = true)
     pub thinking_budget_tokens: u32,
     /// Optional effort level for supported models
     pub thinking_effort: Option<EffortLevel>,
@@ -47,6 +47,9 @@ impl AnthropicConfig {
     /// 1. `ANTHROPIC_BASE_URL` env var (if set and non-empty)
     /// 2. `config_base_url` parameter (if Some and non-empty)
     /// 3. Default: `https://api.anthropic.com`
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: u32,
@@ -94,14 +97,13 @@ impl AnthropicClient {
     pub fn new(config: AnthropicConfig) -> Self {
         // Compile-time guard for unit tests
         #[cfg(test)]
-        if config.base_url == DEFAULT_BASE_URL {
-            panic!(
-                "Tests must not use the production Anthropic API!\n\
+        assert!(
+            (config.base_url != DEFAULT_BASE_URL),
+            "Tests must not use the production Anthropic API!\n\
                  Set ANTHROPIC_BASE_URL to a mock server (e.g., wiremock).\n\
                  Found base_url: {}",
-                config.base_url
-            );
-        }
+            config.base_url
+        );
 
         // Runtime guard for integration tests (set ZDX_BLOCK_REAL_API=1 in test harness)
         #[cfg(not(test))]
@@ -125,6 +127,9 @@ impl AnthropicClient {
     /// Sends a thread and returns an async stream of events.
     ///
     /// This enables chunk-by-chunk token streaming from the API.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],

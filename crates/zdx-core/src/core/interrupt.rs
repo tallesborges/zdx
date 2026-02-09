@@ -23,6 +23,9 @@ impl std::error::Error for InterruptedError {}
 /// The handler sets an interrupt flag only; it does not print anything.
 /// The renderer is responsible for printing the interruption message.
 /// This keeps stdout/stderr ownership in the renderer (per SPEC §10).
+///
+/// # Panics
+/// Panics if registering the Ctrl+C handler fails.
 pub fn init() {
     ctrlc::set_handler(move || {
         trigger_ctrl_c();

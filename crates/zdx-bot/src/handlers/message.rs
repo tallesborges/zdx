@@ -12,6 +12,9 @@ use crate::{agent, ingest};
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
 const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
     let allowlist = AllowlistConfig {
         user_ids: context.allowlist_user_ids(),
@@ -75,7 +78,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         incoming.user_id,
         incoming.chat_id,
         topic_id
-            .map(|id| format!(" (topic {})", id))
+            .map(|id| format!(" (topic {id})"))
             .unwrap_or_default()
     );
 
@@ -115,8 +118,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                 Ok(path) => path,
                 Err(err) => {
                     let msg = format!(
-                        "Failed to enable worktree: {}\n\nTip: start the bot from inside a git repo (or a subdirectory of one).",
-                        err
+                        "Failed to enable worktree: {err}\n\nTip: start the bot from inside a git repo (or a subdirectory of one)."
                     );
                     context
                         .client()
@@ -132,7 +134,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     .client()
                     .send_message(
                         incoming.chat_id,
-                        &format!("Failed to persist worktree root: {}", err),
+                        &format!("Failed to persist worktree root: {err}"),
                         reply_to_message_id,
                         topic_id,
                     )
@@ -153,13 +155,12 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     }
 
     let worktree_root = thread_persistence::read_thread_root_path(&thread_id)?
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| context.root().to_path_buf());
+        .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
     let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
     // Keep Telegram native typing indicator alongside the Thinking status.
-    let _typing = context.client().start_typing(incoming.chat_id, topic_id);
+    let typing = context.client().start_typing(incoming.chat_id, topic_id);
 
     // Send "Thinking..." status message with Cancel button.
     let cancel_key = (incoming.chat_id, incoming.message_id);
@@ -206,7 +207,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     let mut handle = match handle {
         Ok(h) => h,
         Err(err) => {
-            eprintln!("Failed to spawn agent turn: {}", err);
+            eprintln!("Failed to spawn agent turn: {err}");
             if let Some(msg_id) = status_message_id {
                 let _ = context
                     .client()
@@ -227,7 +228,9 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 
     // Consume streaming events, updating Telegram status with live activity
     let mut current_status = "🧠 Thinking...".to_string();
-    let mut last_edit = std::time::Instant::now() - STATUS_DEBOUNCE; // Allow immediate first edit
+    let mut last_edit = std::time::Instant::now()
+        .checked_sub(STATUS_DEBOUNCE)
+        .unwrap(); // Allow immediate first edit
     let mut final_text = String::new();
     let mut got_result = false;
     let mut had_error = false;
@@ -235,7 +238,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     loop {
         tokio::select! {
             biased;
-            _ = cancel_token.cancelled() => {
+            () = cancel_token.cancelled() => {
                 // User pressed Cancel — abort the agent task
                 handle.task.abort();
                 break;
@@ -248,17 +251,17 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 
                 match &*event {
                     AgentEvent::TurnCompleted { final_text: text, .. } => {
-                        final_text = text.clone();
+                        final_text.clone_from(text);
                         got_result = true;
                         // Don't break yet — drain remaining events
                     }
                     AgentEvent::Error { message, .. } => {
-                        eprintln!("Agent error event: {}", message);
+                        eprintln!("Agent error event: {message}");
                         had_error = true;
                     }
                     AgentEvent::Interrupted { partial_content } => {
                         if let Some(partial) = partial_content {
-                            final_text = partial.clone();
+                            final_text.clone_from(partial);
                         }
                     }
                     other => {
@@ -295,7 +298,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     }
 
     // Stop Telegram typing indicator
-    drop(_typing);
+    drop(typing);
 
     // Clean up cancellation token
     {
@@ -309,7 +312,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             "Agent turn cancelled for chat {}{}",
             incoming.chat_id,
             topic_id
-                .map(|id| format!(" topic {}", id))
+                .map(|id| format!(" topic {id}"))
                 .unwrap_or_default()
         );
         if let Some(msg_id) = status_message_id {
@@ -362,10 +365,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     .delete_message(incoming.chat_id, msg_id)
                     .await
                 {
-                    eprintln!(
-                        "Failed to delete stale status message {}: {}",
-                        msg_id, del_err
-                    );
+                    eprintln!("Failed to delete stale status message {msg_id}: {del_err}");
                 }
                 // Fallback: send as a new message
                 context
@@ -386,7 +386,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             .delete_message(incoming.chat_id, msg_id)
             .await
         {
-            eprintln!("Failed to delete empty status message {}: {}", msg_id, err);
+            eprintln!("Failed to delete empty status message {msg_id}: {err}");
         }
     }
 
@@ -395,8 +395,8 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 
 fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
     match message_thread_id {
-        Some(topic_id) => format!("telegram-{}-topic-{}", chat_id, topic_id),
-        None => format!("telegram-{}", chat_id),
+        Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
+        None => format!("telegram-{chat_id}"),
     }
 }
 

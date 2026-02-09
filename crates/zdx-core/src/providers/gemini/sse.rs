@@ -78,12 +78,17 @@ impl<S> GeminiSseParser<S> {
         let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
             ProviderError::new(
                 ProviderErrorKind::Parse,
-                format!("Failed to parse SSE JSON: {}", err),
+                format!("Failed to parse SSE JSON: {err}"),
             )
         })?;
         self.handle_chunk(value)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::needless_pass_by_value,
+        clippy::unnecessary_wraps
+    )]
     fn handle_chunk(&mut self, value: Value) -> ProviderResult<()> {
         let payload = value.get("response").unwrap_or(&value);
 
@@ -112,25 +117,26 @@ impl<S> GeminiSseParser<S> {
         {
             let prompt = usage
                 .get("promptTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             let completion = usage
                 .get("candidatesTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(0);
             let cached_from_details = usage
                 .get("cacheTokensDetails")
                 .and_then(|v| v.as_array())
-                .map(|details| {
+                .map_or(0, |details| {
                     details
                         .iter()
-                        .filter_map(|item| item.get("tokenCount").and_then(|v| v.as_u64()))
+                        .filter_map(|item| {
+                            item.get("tokenCount").and_then(serde_json::Value::as_u64)
+                        })
                         .sum::<u64>()
-                })
-                .unwrap_or(0);
+                });
             let cached = usage
                 .get("cachedContentTokenCount")
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
                 .unwrap_or(cached_from_details);
             self.final_usage = Some(Usage {
                 input_tokens: prompt.saturating_sub(cached),
@@ -155,7 +161,7 @@ impl<S> GeminiSseParser<S> {
                 for part in parts {
                     let is_thought = part
                         .get("thought")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
                     if is_thought {
                         // Accumulate thought text
@@ -202,7 +208,7 @@ impl<S> GeminiSseParser<S> {
                 for part in parts {
                     let is_thought = part
                         .get("thought")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
                     if !is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                         combined_text.push_str(text);
@@ -241,7 +247,7 @@ impl<S> GeminiSseParser<S> {
                     if let Some(call) = part.get("functionCall") {
                         let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
                         let args = call.get("args").unwrap_or(&Value::Null);
-                        let key = format!("{}:{}", name, args);
+                        let key = format!("{name}:{args}");
                         if self.emitted_tool_calls.contains(&key) {
                             continue;
                         }
@@ -350,7 +356,7 @@ where
                 Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(ProviderError::new(
                         ProviderErrorKind::Parse,
-                        format!("SSE stream error: {}", e),
+                        format!("SSE stream error: {e}"),
                     ))));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),
@@ -386,8 +392,8 @@ mod tests {
     /// Test: Part with `thought: true` and text emits full reasoning event sequence.
     ///
     /// When a chunk contains a thought part with text content, the parser should emit:
-    /// 1. ContentBlockStart { block_type: Reasoning }
-    /// 2. ReasoningDelta with the thought text
+    /// 1. `ContentBlockStart` { `block_type`: Reasoning }
+    /// 2. `ReasoningDelta` with the thought text
     ///
     /// The signature and completion events are emitted when finishReason is present.
     #[test]
@@ -437,7 +443,7 @@ mod tests {
     /// Test: Part with `thought: true` and empty text captures signature, emits no reasoning block.
     ///
     /// When a thought part has empty text but has a signature, we should capture the signature
-    /// but not emit a reasoning block (no ContentBlockStart, no ReasoningDelta).
+    /// but not emit a reasoning block (no `ContentBlockStart`, no `ReasoningDelta`).
     #[test]
     fn test_thought_part_empty_text_with_signature_captures_signature_only() {
         let mut parser = create_test_parser();

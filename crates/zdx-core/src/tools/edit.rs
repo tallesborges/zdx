@@ -63,7 +63,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for edit tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -81,7 +81,13 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         );
     }
 
-    let expected = input.expected_replacements as usize;
+    let Ok(expected) = usize::try_from(input.expected_replacements) else {
+        return ToolOutput::failure(
+            "invalid_input",
+            "'expected_replacements' is out of supported range",
+            None,
+        );
+    };
 
     // Resolve path
     let file_path = match resolve_existing_path(&input.path, &ctx.root) {
@@ -96,7 +102,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "read_error",
                 format!("Failed to read file '{}'", file_path.display()),
-                Some(format!("OS error: {}", e)),
+                Some(format!("OS error: {e}")),
             );
         }
     };
@@ -118,10 +124,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     if count != expected {
         return ToolOutput::failure(
             "replacement_count_mismatch",
-            format!(
-                "Expected {} replacement(s), but found {} occurrence(s)",
-                expected, count
-            ),
+            format!("Expected {expected} replacement(s), but found {count} occurrence(s)"),
             Some(format!("File: {}", file_path.display())),
         );
     }
@@ -138,7 +141,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => ToolOutput::failure(
             "write_error",
             format!("Failed to write file '{}'", file_path.display()),
-            Some(format!("OS error: {}", e)),
+            Some(format!("OS error: {e}")),
         ),
     }
 }

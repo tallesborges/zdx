@@ -71,7 +71,7 @@ pub struct PositionMap {
     /// Mapping for each visual line.
     lines: RefCell<Vec<LineMapping>>,
     /// Scroll offset when this map was built (for lazy rendering support).
-    /// When lazy rendering is used, lines[0] corresponds to global line scroll_offset.
+    /// When lazy rendering is used, lines[0] corresponds to global line `scroll_offset`.
     /// When full rendering is used, this is 0 (lines[i] corresponds to global line i).
     scroll_offset: RefCell<usize>,
 }

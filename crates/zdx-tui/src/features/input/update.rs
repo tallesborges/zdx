@@ -64,6 +64,9 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 }
 
 /// Handles main key input when no overlay is active.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyEvent) -> KeyResult {
     let mods = Modifiers::from(&key);
 
@@ -139,8 +142,7 @@ fn handle_line_editing(
                 .textarea
                 .lines()
                 .get(row)
-                .map(|s| s.as_str())
-                .unwrap_or("");
+                .map_or("", std::string::String::as_str);
             if current_line.is_empty() && row > 0 {
                 // Line is empty, move to end of previous line and delete the newline
                 input.textarea.move_cursor(CursorMove::Up);
@@ -576,7 +578,7 @@ fn submit_input(
     }
 
     // Try handoff submissions
-    if let Some(result) = handle_handoff_submission(input, trimmed, &text, &thread_id) {
+    if let Some(result) = handle_handoff_submission(input, trimmed, &text, thread_id.as_deref()) {
         return result;
     }
 
@@ -665,7 +667,7 @@ fn handle_handoff_submission(
     input: &mut InputState,
     trimmed: &str,
     text: &str,
-    thread_id: &Option<String>,
+    thread_id: Option<&str>,
 ) -> Option<KeyResult> {
     // Submitting handoff goal (to trigger generation)
     if input.handoff.is_pending() {
@@ -708,7 +710,7 @@ fn handle_handoff_submission(
         return Some((
             vec![UiEffect::HandoffSubmit {
                 prompt: text.to_string(),
-                handoff_from: thread_id.clone(),
+                handoff_from: thread_id.map(std::string::ToString::to_string),
             }],
             vec![
                 StateMutation::Transcript(TranscriptMutation::Clear),
@@ -757,6 +759,9 @@ pub fn build_send_effects(
 }
 
 /// Handles the handoff generation result.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn handle_handoff_result(
     input: &mut InputState,
     goal: String,
@@ -777,8 +782,7 @@ pub fn handle_handoff_result(
         Err(error) => {
             let mut mutations = vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(format!(
-                    "Handoff generation failed: {}",
-                    error
+                    "Handoff generation failed: {error}"
                 )),
             )];
 

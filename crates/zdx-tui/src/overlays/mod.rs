@@ -106,11 +106,13 @@ impl OverlayUpdate {
         Self::new(OverlayTransition::Open(request))
     }
 
+    #[must_use]
     pub fn with_mutations(mut self, mutations: Vec<StateMutation>) -> Self {
         self.mutations = mutations;
         self
     }
 
+    #[must_use]
     pub fn with_ui_effects(mut self, effects: Vec<UiEffect>) -> Self {
         self.effects = effects.into_iter().map(OverlayEffect::Ui).collect();
         self
@@ -206,6 +208,7 @@ mod tests {
     use zdx_core::config::ThinkingLevel;
 
     use super::*;
+    use crate::transcript::ScrollState;
 
     #[test]
     fn test_overlay_is_some() {
@@ -243,7 +246,6 @@ mod tests {
         let overlay: Option<Overlay> = Some(Overlay::FilePicker(file_picker));
         assert!(overlay.is_some());
 
-        use crate::transcript::ScrollState;
         let scroll = ScrollState::default();
         let (timeline, _, _) = TimelineState::open(&[], &scroll, ScrollMode::FollowLatest);
         let overlay: Option<Overlay> = Some(Overlay::Timeline(timeline));

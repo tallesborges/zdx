@@ -1,4 +1,4 @@
-//! MiMo provider (Xiaomi MiMo OpenAI-compatible Chat Completions).
+//! `MiMo` provider (Xiaomi `MiMo` OpenAI-compatible Chat Completions).
 
 use anyhow::Result;
 use reqwest::header::HeaderMap;
@@ -12,7 +12,7 @@ use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 
-/// MiMo API configuration.
+/// `MiMo` API configuration.
 #[derive(Debug, Clone)]
 pub struct MimoConfig {
     pub api_key: String,
@@ -33,6 +33,9 @@ impl MimoConfig {
     /// Environment variables:
     /// - `MIMO_API_KEY` (fallback if not in config)
     /// - `MIMO_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -56,7 +59,7 @@ impl MimoConfig {
     }
 }
 
-/// MiMo client.
+/// `MiMo` client.
 pub struct MimoClient {
     inner: OpenAIChatCompletionsClient,
 }
@@ -80,6 +83,9 @@ impl MimoClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],

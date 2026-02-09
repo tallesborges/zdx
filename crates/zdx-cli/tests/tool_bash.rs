@@ -13,7 +13,7 @@ use tempfile::TempDir;
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, Request};
 
-/// Creates a temp ZDX_HOME directory for test isolation.
+/// Creates a temp `ZDX_HOME` directory for test isolation.
 fn temp_zdx_home() -> TempDir {
     TempDir::new().expect("create temp zdx home")
 }
@@ -78,20 +78,17 @@ async fn test_bash_executes_command() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("hello_from_bash"),
-        "Tool result should contain command output. Got: {}",
-        body
+        "Tool result should contain command output. Got: {body}"
     );
     // New structured envelope format (escaped in JSON content):
     // {"ok":true,"data":{"stdout":"...","exit_code":0,...}}
     assert!(
         body.contains(r#"\"exit_code\":0"#),
-        "Tool result should contain exit_code in escaped JSON format. Got: {}",
-        body
+        "Tool result should contain exit_code in escaped JSON format. Got: {body}"
     );
     assert!(
         body.contains(r#"\"ok\":true"#),
-        "Tool result should use structured envelope format. Got: {}",
-        body
+        "Tool result should use structured envelope format. Got: {body}"
     );
 }
 
@@ -149,8 +146,7 @@ async fn test_bash_runs_in_root_directory() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("marker.txt"),
-        "ls should show marker.txt from root dir. Got: {}",
-        body
+        "ls should show marker.txt from root dir. Got: {body}"
     );
 }
 
@@ -214,7 +210,6 @@ async fn test_bash_times_out_when_configured() {
     // {"ok":true,"data":{"timed_out":true,...}}
     assert!(
         body.contains(r#"\"timed_out\":true"#),
-        "Tool result should indicate timeout with timed_out field in escaped JSON. Got: {}",
-        body
+        "Tool result should indicate timeout with timed_out field in escaped JSON. Got: {body}"
     );
 }

@@ -56,7 +56,7 @@ impl ModelPickerState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_model_picker(frame, self, area, input_y)
+        render_model_picker(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
@@ -97,7 +97,7 @@ impl ModelPickerState {
                     .with_mutations(vec![
                         StateMutation::Config(ConfigMutation::SetModel(model_id)),
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
-                            format!("Switched to {}", display_name),
+                            format!("Switched to {display_name}"),
                         )),
                     ])
             }
@@ -247,7 +247,7 @@ pub fn render_model_picker(
 fn model_label(model: &ModelOption) -> String {
     let label = provider_label(model.provider);
     let name = cleaned_display_name(model, model.provider);
-    format!("{} · {}", label, name)
+    format!("{label} · {name}")
 }
 
 fn cleaned_display_name(model: &ModelOption, provider: &str) -> String {
@@ -274,7 +274,7 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     let is_subscription = ProviderKind::all()
         .iter()
         .find(|kind| kind.id() == model.provider)
-        .is_some_and(|kind| kind.is_subscription());
+        .is_some_and(zdx_core::providers::ProviderKind::is_subscription);
 
     // Build the right side with pricing and context
     let (pricing_text, pricing_suffix) = if is_subscription && !pricing.is_empty() {
@@ -288,9 +288,9 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     } else if pricing_text.is_empty() {
         context.clone()
     } else if context.is_empty() {
-        format!("{}{}", pricing_text, pricing_suffix)
+        format!("{pricing_text}{pricing_suffix}")
     } else {
-        format!("{}{} · {}", pricing_text, pricing_suffix, context)
+        format!("{pricing_text}{pricing_suffix} · {context}")
     };
 
     let left_width = (label.len() + 3 + name.len()) as u16;
@@ -306,7 +306,7 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
         .add_modifier(Modifier::BOLD);
     let mut spans = Vec::new();
     spans.push(Span::styled(
-        format!("{} · ", label),
+        format!("{label} · "),
         Style::default().fg(Color::DarkGray),
     ));
     spans.push(Span::styled(name, left_style));
@@ -324,7 +324,7 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
         ));
         if !context.is_empty() {
             spans.push(Span::styled(
-                format!(" · {}", context),
+                format!(" · {context}"),
                 Style::default().fg(Color::DarkGray),
             ));
         }
@@ -346,9 +346,9 @@ fn format_context(context_limit: u64) -> String {
     if context_limit >= 1_000_000 {
         let millions = context_limit as f64 / 1_000_000.0;
         if (millions - millions.round()).abs() < 0.05 {
-            format!("{:.0}M", millions)
+            format!("{millions:.0}M")
         } else {
-            format!("{:.1}M", millions)
+            format!("{millions:.1}M")
         }
     } else {
         format!("{}k", context_limit / 1_000)
@@ -356,8 +356,16 @@ fn format_context(context_limit: u64) -> String {
 }
 
 fn format_pricing(input: f64, output: f64) -> String {
-    let input = if input == 0.0 { 0.0 } else { input };
-    let output = if output == 0.0 { 0.0 } else { output };
+    let input = if input.abs() <= f64::EPSILON {
+        0.0
+    } else {
+        input
+    };
+    let output = if output.abs() <= f64::EPSILON {
+        0.0
+    } else {
+        output
+    };
     format!("${}/{}", trim_price(input), trim_price(output))
 }
 
@@ -410,7 +418,7 @@ fn capability_line(model: &ModelOption) -> Line<'static> {
 }
 
 fn trim_price(value: f64) -> String {
-    let mut text = format!("{:.3}", value);
+    let mut text = format!("{value:.3}");
     while text.contains('.') && text.ends_with('0') {
         text.pop();
     }
@@ -454,8 +462,7 @@ fn provider_label(provider_id: &str) -> String {
     ProviderKind::all()
         .iter()
         .find(|kind| kind.id() == provider_id)
-        .map(|kind| kind.label().to_string())
-        .unwrap_or_else(|| provider_id.to_string())
+        .map_or_else(|| provider_id.to_string(), |kind| kind.label().to_string())
 }
 
 /// Collects the set of enabled provider IDs from the config.

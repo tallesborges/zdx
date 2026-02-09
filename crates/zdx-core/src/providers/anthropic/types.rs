@@ -132,7 +132,7 @@ pub(crate) enum ApiMessageContent {
 
 /// Content block for image data in API requests.
 ///
-/// This is used within tool_result content arrays when returning images.
+/// This is used within `tool_result` content arrays when returning images.
 #[derive(Debug, Clone, Serialize)]
 pub(crate) struct ApiImageSource {
     #[serde(rename = "type")]
@@ -141,7 +141,7 @@ pub(crate) struct ApiImageSource {
     data: String,
 }
 
-/// Content block types that can appear in tool_result content arrays.
+/// Content block types that can appear in `tool_result` content arrays.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub(crate) enum ApiToolResultBlock {
@@ -195,7 +195,7 @@ pub(crate) enum ApiContentBlock {
 }
 
 impl ApiMessage {
-    /// Converts a ChatMessage to ApiMessage with optional cache control.
+    /// Converts a `ChatMessage` to `ApiMessage` with optional cache control.
     ///
     /// Handles thinking blocks with missing signatures (aborted thinking) by
     /// converting them to text blocks wrapped in `<thinking>` tags, following
@@ -219,7 +219,7 @@ impl ApiMessage {
                                     // This follows the pi-mono pattern.
                                     if signature.is_empty() {
                                         Some(ApiContentBlock::Text {
-                                            text: format!("<thinking>\n{}\n</thinking>", thinking),
+                                            text: format!("<thinking>\n{thinking}\n</thinking>"),
                                             cache_control: None,
                                         })
                                     } else if thinking.is_empty() {
@@ -237,7 +237,7 @@ impl ApiMessage {
                                 }
                                 // No replay data; treat as text-only thinking for compatibility
                                 None => text.as_ref().map(|thinking| ApiContentBlock::Text {
-                                    text: format!("<thinking>\n{}\n</thinking>", thinking),
+                                    text: format!("<thinking>\n{thinking}\n</thinking>"),
                                     cache_control: None,
                                 }),
                             }

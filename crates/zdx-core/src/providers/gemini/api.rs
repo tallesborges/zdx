@@ -33,6 +33,9 @@ impl GeminiConfig {
     /// Environment variables:
     /// - `GEMINI_API_KEY` (fallback if not in config)
     /// - `GEMINI_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_output_tokens: u32,
@@ -72,6 +75,9 @@ impl GeminiClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],
@@ -102,7 +108,7 @@ impl GeminiClient {
                 .body(body)
                 .send()
                 .await
-                .map_err(classify_reqwest_error)?
+                .map_err(|e| classify_reqwest_error(&e))?
         } else {
             self.http
                 .post(&url)
@@ -110,7 +116,7 @@ impl GeminiClient {
                 .json(&request)
                 .send()
                 .await
-                .map_err(classify_reqwest_error)?
+                .map_err(|e| classify_reqwest_error(&e))?
         };
 
         let status = response.status();

@@ -1,7 +1,7 @@
 //! Application state composition.
 //!
 //! This module defines the top-level state hierarchy for the TUI:
-//! - `AppState` - combined state (TuiState + overlay)
+//! - `AppState` - combined state (`TuiState` + overlay)
 //! - `TuiState` - non-overlay UI state (input, transcript, thread, auth, agent)
 //! - `AgentState` - agent execution state (idle, waiting, streaming)
 //!
@@ -60,7 +60,7 @@ pub struct AppState {
 }
 
 impl AppState {
-    /// Creates a new AppState.
+    /// Creates a new `AppState`.
     #[cfg(test)]
     pub fn new(
         config: Config,
@@ -71,7 +71,7 @@ impl AppState {
         Self::with_history(config, root, system_prompt, thread_handle, Vec::new())
     }
 
-    /// Creates an AppState with pre-loaded message history.
+    /// Creates an `AppState` with pre-loaded message history.
     ///
     /// Used for resuming previous threads.
     pub fn with_history(
@@ -170,7 +170,7 @@ pub struct TuiState {
 }
 
 impl TuiState {
-    /// Creates a TuiState with pre-loaded message history.
+    /// Creates a `TuiState` with pre-loaded message history.
     ///
     /// Used for resuming previous threads.
     pub fn with_history(
@@ -353,7 +353,7 @@ fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String
     if segments.len() <= keep_segments_each_side * 2 {
         let joined = segments.join("/");
         if has_leading_slash {
-            return format!("/{}", joined);
+            return format!("/{joined}");
         }
         return joined;
     }
@@ -365,7 +365,7 @@ fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String
 
     let joined = compact.join("/");
     if has_leading_slash {
-        format!("/{}", joined)
+        format!("/{joined}")
     } else {
         joined
     }
@@ -382,5 +382,5 @@ fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
         .chars()
         .skip(char_count.saturating_sub(keep_chars_each_side))
         .collect();
-    format!("{}...{}", start, end)
+    format!("{start}...{end}")
 }

@@ -1,3 +1,9 @@
+#![allow(
+    clippy::match_same_arms,
+    clippy::cast_possible_truncation,
+    clippy::too_many_lines
+)]
+
 use std::path::PathBuf;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -61,7 +67,7 @@ impl FilePickerState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_file_picker(frame, self, area, input_y)
+        render_file_picker(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, input: &InputState, key: KeyEvent) -> OverlayUpdate {
@@ -157,7 +163,7 @@ impl FilePickerState {
             let pattern = Pattern::parse(pattern, CaseMatching::Ignore, Normalization::Smart);
 
             // Collect matches with scores
-            let mut matches: Vec<FileMatch> = self
+            let mut matched_files: Vec<FileMatch> = self
                 .files
                 .iter()
                 .enumerate()
@@ -176,7 +182,7 @@ impl FilePickerState {
 
                         FileMatch {
                             file_idx: idx,
-                            score: Some(score as i64),
+                            score: Some(i64::from(score)),
                             match_indices: byte_indices,
                         }
                     })
@@ -184,9 +190,9 @@ impl FilePickerState {
                 .collect();
 
             // Sort by score descending (best matches first)
-            matches.sort_by_key(|m| std::cmp::Reverse(m.score.unwrap_or(i64::MIN)));
+            matched_files.sort_by_key(|m| std::cmp::Reverse(m.score.unwrap_or(i64::MIN)));
 
-            self.filtered = matches;
+            self.filtered = matched_files;
         }
 
         self.selected = 0;
@@ -267,7 +273,7 @@ impl FilePickerState {
             ""
         };
 
-        let new_text = format!("{}{} {}", before_at, path_str, after_cursor);
+        let new_text = format!("{before_at}{path_str} {after_cursor}");
 
         let new_cursor_byte_pos = trigger_pos + 1 + path_str.len() + 1;
 
@@ -289,7 +295,7 @@ impl FilePickerState {
 
         if target_row >= new_lines.len() {
             target_row = new_lines.len().saturating_sub(1);
-            target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
+            target_col = new_lines.last().map_or(0, |l| l.len());
         }
 
         Some(InputMutation::SetTextAndCursor {
@@ -435,7 +441,7 @@ pub fn render_file_picker(
     let title = if picker.loading {
         "Files (loading...)".to_string()
     } else {
-        format!("Files ({})", file_count)
+        format!("Files ({file_count})")
     };
     let hints = [
         InputHint::new("↑↓", "nav"),

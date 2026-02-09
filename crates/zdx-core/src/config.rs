@@ -1,6 +1,6 @@
 //! Configuration management for ZDX.
 //!
-//! Loads configuration from ${ZDX_HOME}/config.toml with sensible defaults.
+//! Loads configuration from ${`ZDX_HOME}/config.toml` with sensible defaults.
 
 use std::fs;
 use std::path::Path;
@@ -8,6 +8,35 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
+
+/// Binary toggle for config options.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum Toggle {
+    #[default]
+    On,
+    Off,
+}
+
+impl Toggle {
+    #[must_use]
+    pub fn is_on(self) -> bool {
+        matches!(self, Self::On)
+    }
+}
+
+/// Skill source toggles grouped by source/type.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct SkillSourceToggles {
+    pub zdx_user: Toggle,
+    pub zdx_project: Toggle,
+    pub codex_user: Toggle,
+    pub claude_user: Toggle,
+    pub claude_project: Toggle,
+    pub agents_user: Toggle,
+    pub agents_project: Toggle,
+}
 
 /// Thinking level for extended thinking feature.
 ///
@@ -43,13 +72,7 @@ fn default_skill_repositories() -> Vec<String> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct SkillsConfig {
-    pub enable_zdx_user: bool,
-    pub enable_zdx_project: bool,
-    pub enable_codex_user: bool,
-    pub enable_claude_user: bool,
-    pub enable_claude_project: bool,
-    pub enable_agents_user: bool,
-    pub enable_agents_project: bool,
+    pub sources: SkillSourceToggles,
     #[serde(
         default = "default_skill_repositories",
         skip_serializing_if = "Vec::is_empty"
@@ -64,13 +87,15 @@ pub struct SkillsConfig {
 impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
-            enable_zdx_user: true,
-            enable_zdx_project: true,
-            enable_codex_user: true,
-            enable_claude_user: true,
-            enable_claude_project: true,
-            enable_agents_user: true,
-            enable_agents_project: true,
+            sources: SkillSourceToggles {
+                zdx_user: Toggle::On,
+                zdx_project: Toggle::On,
+                codex_user: Toggle::On,
+                claude_user: Toggle::On,
+                claude_project: Toggle::On,
+                agents_user: Toggle::On,
+                agents_project: Toggle::On,
+            },
             skill_repositories: default_skill_repositories(),
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
@@ -179,7 +204,7 @@ impl ThinkingLevel {
         ]
     }
 
-    /// Computes the reasoning budget in tokens based on effort percent and max_tokens.
+    /// Computes the reasoning budget in tokens based on effort percent and `max_tokens`.
     ///
     /// Uses min 1024 tokens to ensure meaningful reasoning.
     /// Returns None if thinking is Off.
@@ -188,6 +213,8 @@ impl ThinkingLevel {
         max_tokens: u32,
         model_output_limit: Option<u32>,
     ) -> Option<u32> {
+        const MIN_BUDGET: u32 = 1024;
+
         let percent = self.effort_percent()?;
 
         // Base for calculation: min of max_tokens and model output limit
@@ -197,18 +224,18 @@ impl ThinkingLevel {
         };
 
         // Calculate raw budget from percentage
-        let raw_budget = (base as u64 * percent as u64 / 100) as u32;
+        let raw_budget =
+            u32::try_from(u64::from(base) * u64::from(percent) / 100).unwrap_or(u32::MAX);
 
         // Ensure minimum budget for meaningful reasoning
-        const MIN_BUDGET: u32 = 1024;
         Some(raw_budget.max(MIN_BUDGET))
     }
 }
 
 /// Returns the default config template with comments.
 ///
-/// This is embedded from default_config.toml at compile time.
-/// To update, edit default_config.toml directly.
+/// This is embedded from `default_config.toml` at compile time.
+/// To update, edit `default_config.toml` directly.
 fn default_config_template() -> &'static str {
     include_str!("../default_config.toml")
 }
@@ -238,7 +265,7 @@ fn merge_with_template(user_config: &str) -> Result<String> {
 fn merge_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
     use toml_edit::Item;
 
-    for (key, value) in source.iter() {
+    for (key, value) in source {
         match value {
             Item::Value(v) => {
                 // Scalar value: override in target
@@ -262,18 +289,44 @@ fn merge_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
     }
 }
 
+fn merge_generated_items(target: &mut toml_edit::Table, source: &toml_edit::Table) {
+    use toml_edit::Item;
+
+    for (key, value) in source {
+        match value {
+            Item::Value(v) => {
+                target[key] = Item::Value(v.clone());
+            }
+            Item::Table(src_table) => {
+                if let Some(Item::Table(target_table)) = target.get_mut(key) {
+                    merge_generated_items(target_table, src_table);
+                } else {
+                    target[key] = Item::Table(src_table.clone());
+                }
+            }
+            Item::ArrayOfTables(arr) => {
+                target[key] = Item::ArrayOfTables(arr.clone());
+            }
+            Item::None => {}
+        }
+    }
+}
+
 pub mod paths {
     //! Path resolution for ZDX configuration and data directories.
     //!
-    //! ZDX_HOME resolution order:
-    //! 1. ZDX_HOME environment variable (if set)
+    //! `ZDX_HOME` resolution order:
+    //! 1. `ZDX_HOME` environment variable (if set)
     //! 2. ~/.zdx (default)
 
     use std::path::PathBuf;
 
     /// Returns the ZDX home directory.
     ///
-    /// Checks ZDX_HOME env var first, falls back to ~/.zdx
+    /// Checks `ZDX_HOME` env var first, falls back to ~/.zdx
+    ///
+    /// # Panics
+    /// Panics if the home directory cannot be determined.
     pub fn zdx_home() -> PathBuf {
         if let Ok(home) = std::env::var("ZDX_HOME") {
             return PathBuf::from(home);
@@ -295,12 +348,12 @@ pub mod paths {
     }
 }
 
-/// Default value for serde when handoff_model is missing.
+/// Default value for serde when `handoff_model` is missing.
 fn default_handoff_model() -> String {
     Config::DEFAULT_HANDOFF_MODEL.to_string()
 }
 
-/// Default value for serde when title_model is missing.
+/// Default value for serde when `title_model` is missing.
 fn default_title_model() -> String {
     Config::DEFAULT_TITLE_MODEL.to_string()
 }
@@ -370,12 +423,18 @@ impl Config {
     const DEFAULT_TITLE_MODEL: &str = "gemini-cli:gemini-2.5-flash";
 
     /// Loads configuration from the default config path.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load() -> Result<Self> {
         Self::load_from(&paths::config_path())
     }
 
     /// Loads configuration from a specific path.
     /// Returns defaults if file doesn't exist.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load_from(path: &Path) -> Result<Self> {
         if path.exists() {
             let contents = fs::read_to_string(path)
@@ -390,7 +449,10 @@ impl Config {
     /// Saves only the model field to the config file.
     ///
     /// Creates the file if it doesn't exist.
-    /// Preserves existing fields and comments using toml_edit.
+    /// Preserves existing fields and comments using `toml_edit`.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_model(model: &str) -> Result<()> {
         Self::save_model_to(&paths::config_path(), model)
     }
@@ -399,6 +461,9 @@ impl Config {
     ///
     /// Creates the file with default template if it doesn't exist.
     /// If file exists, merges user values into the latest template.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_model_to(path: &Path, model: &str) -> Result<()> {
         use toml_edit::{DocumentMut, value};
 
@@ -422,18 +487,24 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
-    /// Saves only the thinking_level field to the config file.
+    /// Saves only the `thinking_level` field to the config file.
     ///
     /// Creates the file if it doesn't exist.
-    /// Preserves existing fields and comments using toml_edit.
+    /// Preserves existing fields and comments using `toml_edit`.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_thinking_level(level: ThinkingLevel) -> Result<()> {
         Self::save_thinking_level_to(&paths::config_path(), level)
     }
 
-    /// Saves only the thinking_level field to a specific config file path.
+    /// Saves only the `thinking_level` field to a specific config file path.
     ///
     /// Creates the file with default template if it doesn't exist.
     /// If file exists, merges user values into the latest template.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_thinking_level_to(path: &Path, level: ThinkingLevel) -> Result<()> {
         use toml_edit::{DocumentMut, value};
 
@@ -458,11 +529,14 @@ impl Config {
     }
 
     /// Returns the effective system prompt, preferring the file if both are set.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn effective_system_prompt(&self) -> Result<Option<String>> {
         if let Some(path_str) = &self.system_prompt_file {
             let path = Path::new(path_str);
             let content = fs::read_to_string(path)
-                .with_context(|| format!("Failed to read system prompt file: {}", path_str))?;
+                .with_context(|| format!("Failed to read system prompt file: {path_str}"))?;
             let trimmed = content.trim();
             return Ok((!trimmed.is_empty()).then(|| trimmed.to_string()));
         }
@@ -475,7 +549,7 @@ impl Config {
         if self.tool_timeout_secs == 0 {
             None
         } else {
-            Some(Duration::from_secs(self.tool_timeout_secs as u64))
+            Some(Duration::from_secs(u64::from(self.tool_timeout_secs)))
         }
     }
 
@@ -486,10 +560,10 @@ impl Config {
         base.join("models.toml")
     }
 
-    /// Returns the effective max_tokens to use in API requests for a model.
+    /// Returns the effective `max_tokens` to use in API requests for a model.
     ///
     /// Resolution order:
-    /// 1) Explicit config max_tokens (if set)
+    /// 1) Explicit config `max_tokens` (if set)
     /// 2) Model output limit from the registry (exclusive, minus 1)
     /// 3) Fallback default
     pub fn effective_max_tokens_for(&self, model_id: &str) -> u32 {
@@ -516,6 +590,9 @@ impl Config {
 
     /// Creates a default config file at the given path.
     /// Returns an error if the file already exists.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn init(path: &Path) -> Result<()> {
         if path.exists() {
             anyhow::bail!("Config file already exists at {}", path.display());
@@ -531,8 +608,11 @@ impl Config {
     ///
     /// Uses the embedded template for structure/comments and merges
     /// generated values from `Config::default()` into it.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn generate() -> Result<String> {
-        use toml_edit::{DocumentMut, Item};
+        use toml_edit::DocumentMut;
 
         let config = Config::default();
         let generated_toml =
@@ -549,28 +629,7 @@ impl Config {
             .context("Failed to parse generated config")?;
 
         // Merge generated values into template (overwrites values, keeps comments)
-        fn merge(target: &mut toml_edit::Table, source: &toml_edit::Table) {
-            for (key, value) in source.iter() {
-                match value {
-                    Item::Value(v) => {
-                        target[key] = Item::Value(v.clone());
-                    }
-                    Item::Table(src_table) => {
-                        if let Some(Item::Table(target_table)) = target.get_mut(key) {
-                            merge(target_table, src_table);
-                        } else {
-                            target[key] = Item::Table(src_table.clone());
-                        }
-                    }
-                    Item::ArrayOfTables(arr) => {
-                        target[key] = Item::ArrayOfTables(arr.clone());
-                    }
-                    Item::None => {}
-                }
-            }
-        }
-
-        merge(doc.as_table_mut(), generated_doc.as_table());
+        merge_generated_items(doc.as_table_mut(), generated_doc.as_table());
 
         Ok(doc.to_string())
     }
@@ -1009,7 +1068,7 @@ mod tests {
         assert_eq!(config.providers.anthropic.effective_base_url(), None);
     }
 
-    /// save_model: creates new config file with template if it doesn't exist.
+    /// `save_model`: creates new config file with template if it doesn't exist.
     #[test]
     fn test_save_model_creates_file_with_template() {
         let dir = tempdir().unwrap();
@@ -1030,7 +1089,7 @@ mod tests {
         assert!(contents.contains("# max_tokens = 12288"));
     }
 
-    /// save_model: preserves other fields in existing config.
+    /// `save_model`: preserves other fields in existing config.
     #[test]
     fn test_save_model_preserves_other_fields() {
         let dir = tempdir().unwrap();
@@ -1054,7 +1113,7 @@ tool_timeout_secs = 60
         assert_eq!(config.tool_timeout_secs, 60); // preserved
     }
 
-    /// save_model: uses template structure but preserves user values.
+    /// `save_model`: uses template structure but preserves user values.
     #[test]
     fn test_save_model_merges_with_template() {
         let dir = tempdir().unwrap();
@@ -1082,7 +1141,7 @@ max_tokens = 2048
         assert_eq!(config.max_tokens, Some(2048));
     }
 
-    /// save_model: creates parent directories if needed.
+    /// `save_model`: creates parent directories if needed.
     #[test]
     fn test_save_model_creates_parent_dirs() {
         let dir = tempdir().unwrap();
@@ -1103,7 +1162,7 @@ max_tokens = 2048
         assert!(!config.thinking_level.is_enabled());
     }
 
-    /// ThinkingLevel: effort_percent returns correct values.
+    /// `ThinkingLevel`: `effort_percent` returns correct values.
     #[test]
     fn test_thinking_level_effort_percent() {
         assert_eq!(ThinkingLevel::Off.effort_percent(), None);
@@ -1114,7 +1173,7 @@ max_tokens = 2048
         assert_eq!(ThinkingLevel::XHigh.effort_percent(), Some(95));
     }
 
-    /// ThinkingLevel: compute_reasoning_budget returns correct values.
+    /// `ThinkingLevel`: `compute_reasoning_budget` returns correct values.
     #[test]
     fn test_thinking_level_compute_reasoning_budget() {
         // Off returns None
@@ -1149,18 +1208,18 @@ max_tokens = 2048
 
         // Uses min of max_tokens and model_output_limit
         assert_eq!(
-            ThinkingLevel::Medium.compute_reasoning_budget(20000, Some(10000)),
-            Some(5000) // 50% of min(20000, 10000) = 5000
+            ThinkingLevel::Medium.compute_reasoning_budget(20_000, Some(10_000)),
+            Some(5000) // 50% of min(20_000, 10_000) = 5000
         );
 
         // No max clamp - XHigh (95%) of 200000 = 190000
         assert_eq!(
-            ThinkingLevel::XHigh.compute_reasoning_budget(200000, None),
+            ThinkingLevel::XHigh.compute_reasoning_budget(200_000, None),
             Some(190_000)
         );
     }
 
-    /// ThinkingLevel: display_name returns short names.
+    /// `ThinkingLevel`: `display_name` returns short names.
     #[test]
     fn test_thinking_level_display_name() {
         assert_eq!(ThinkingLevel::Off.display_name(), "off");
@@ -1168,7 +1227,7 @@ max_tokens = 2048
         assert_eq!(ThinkingLevel::High.display_name(), "high");
     }
 
-    /// ThinkingLevel: all() returns all levels.
+    /// `ThinkingLevel`: `all()` returns all levels.
     #[test]
     fn test_thinking_level_all() {
         let all = ThinkingLevel::all();
@@ -1177,7 +1236,7 @@ max_tokens = 2048
         assert_eq!(all[5], ThinkingLevel::XHigh);
     }
 
-    /// Thinking: effective_max_tokens returns raw value when thinking disabled.
+    /// Thinking: `effective_max_tokens` returns raw value when thinking disabled.
     #[test]
     fn test_effective_max_tokens_thinking_disabled() {
         let config = Config {
@@ -1188,7 +1247,7 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 1024);
     }
 
-    /// Thinking: effective_max_tokens auto-adjusts when thinking enabled and max_tokens too low.
+    /// Thinking: `effective_max_tokens` auto-adjusts when thinking enabled and `max_tokens` too low.
     #[test]
     fn test_effective_max_tokens_returns_configured_value() {
         let config = Config {
@@ -1200,7 +1259,7 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 1024);
     }
 
-    /// Thinking: effective_max_tokens respects user value when sufficient.
+    /// Thinking: `effective_max_tokens` respects user value when sufficient.
     #[test]
     fn test_effective_max_tokens_respects_high_value() {
         let config = Config {
@@ -1211,7 +1270,7 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for("claude-haiku-4-5"), 20000);
     }
 
-    /// effective_max_tokens uses the model output limit (exclusive) when max_tokens is unset.
+    /// `effective_max_tokens` uses the model output limit (exclusive) when `max_tokens` is unset.
     #[test]
     fn test_effective_max_tokens_uses_model_output_limit_when_unset() {
         let config = Config {
@@ -1231,7 +1290,7 @@ max_tokens = 2048
         assert_eq!(config.effective_max_tokens_for(model_id), expected);
     }
 
-    /// Thinking: config loads from file with thinking_level.
+    /// Thinking: config loads from file with `thinking_level`.
     #[test]
     fn test_thinking_config_loads_from_file() {
         let dir = tempdir().unwrap();
@@ -1244,7 +1303,7 @@ max_tokens = 2048
         assert!(config.thinking_level.is_enabled());
     }
 
-    /// Thinking: old configs without thinking_level use defaults (serde default).
+    /// Thinking: old configs without `thinking_level` use defaults (serde default).
     #[test]
     fn test_thinking_config_missing_uses_defaults() {
         let dir = tempdir().unwrap();
@@ -1257,7 +1316,7 @@ max_tokens = 2048
         assert_eq!(config.thinking_level, ThinkingLevel::Off);
     }
 
-    /// save_thinking_level: creates new config file with template if it doesn't exist.
+    /// `save_thinking_level`: creates new config file with template if it doesn't exist.
     #[test]
     fn test_save_thinking_level_creates_file_with_template() {
         let dir = tempdir().unwrap();
@@ -1277,7 +1336,7 @@ max_tokens = 2048
         assert!(contents.contains("thinking_level = \"high\""));
     }
 
-    /// save_thinking_level: preserves other fields in existing config.
+    /// `save_thinking_level`: preserves other fields in existing config.
     #[test]
     fn test_save_thinking_level_preserves_other_fields() {
         let dir = tempdir().unwrap();
@@ -1301,7 +1360,7 @@ thinking_level = "off"
         assert_eq!(config.max_tokens, Some(4096)); // preserved
     }
 
-    /// save_thinking_level: uses template structure but preserves user values.
+    /// `save_thinking_level`: uses template structure but preserves user values.
     #[test]
     fn test_save_thinking_level_merges_with_template() {
         let dir = tempdir().unwrap();
@@ -1330,7 +1389,7 @@ max_tokens = 4096
         assert_eq!(config.max_tokens, Some(4096));
     }
 
-    /// save_thinking_level: roundtrip - save and reload works correctly.
+    /// `save_thinking_level`: roundtrip - save and reload works correctly.
     #[test]
     fn test_save_thinking_level_roundtrip() {
         let dir = tempdir().unwrap();
@@ -1355,7 +1414,7 @@ max_tokens = 4096
         assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
     }
 
-    /// filter_tools: returns all tools when no filtering configured.
+    /// `filter_tools`: returns all tools when no filtering configured.
     #[test]
     fn test_filter_tools_no_filtering() {
         let config = ProviderConfig::default();
@@ -1372,7 +1431,7 @@ max_tokens = 4096
         assert_eq!(filtered, all_tools);
     }
 
-    /// filter_tools: explicit tools list.
+    /// `filter_tools`: explicit tools list.
     #[test]
     fn test_filter_tools_explicit_include() {
         let config = ProviderConfig {
@@ -1392,7 +1451,7 @@ max_tokens = 4096
         assert_eq!(filtered, vec!["bash", "read"]);
     }
 
-    /// filter_tools: case-insensitive matching.
+    /// `filter_tools`: case-insensitive matching.
     #[test]
     fn test_filter_tools_case_insensitive() {
         let config = ProviderConfig {
@@ -1412,7 +1471,7 @@ max_tokens = 4096
         assert_eq!(filtered, vec!["bash", "read"]);
     }
 
-    /// filter_tools: trims whitespace from tool names.
+    /// `filter_tools`: trims whitespace from tool names.
     #[test]
     fn test_filter_tools_trims_whitespace() {
         let config = ProviderConfig {
@@ -1432,14 +1491,14 @@ max_tokens = 4096
         assert_eq!(filtered, vec!["bash", "read"]);
     }
 
-    /// filter_tools: ignores empty strings after trimming.
+    /// `filter_tools`: ignores empty strings after trimming.
     #[test]
     fn test_filter_tools_ignores_empty_strings() {
         let config = ProviderConfig {
             tools: Some(vec![
                 "bash".to_string(),
                 "  ".to_string(),
-                "".to_string(),
+                String::new(),
                 "read".to_string(),
             ]),
             ..Default::default()
@@ -1457,7 +1516,7 @@ max_tokens = 4096
         assert_eq!(filtered, vec!["bash", "read"]);
     }
 
-    /// filter_tools: openai_codex default has no tool filtering.
+    /// `filter_tools`: `openai_codex` default has no tool filtering.
     #[test]
     fn test_openai_codex_default_tools() {
         let config = default_openai_codex_provider();
@@ -1475,7 +1534,7 @@ max_tokens = 4096
         assert_eq!(filtered, all_tools);
     }
 
-    /// filter_tools: anthropic default has no tool filtering.
+    /// `filter_tools`: anthropic default has no tool filtering.
     #[test]
     fn test_anthropic_default_tools() {
         let config = default_anthropic_provider();
@@ -1493,7 +1552,7 @@ max_tokens = 4096
         assert_eq!(filtered, all_tools);
     }
 
-    /// ProvidersConfig::get returns correct provider config.
+    /// `ProvidersConfig::get` returns correct provider config.
     #[test]
     fn test_providers_config_get() {
         use crate::providers::ProviderKind;
@@ -1508,7 +1567,7 @@ max_tokens = 4096
         assert!(codex.tools.is_none());
     }
 
-    /// TranscriptionConfig: defaults are all None (auto-detect, no model override, no language).
+    /// `TranscriptionConfig`: defaults are all None (auto-detect, no model override, no language).
     #[test]
     fn test_transcription_config_defaults() {
         let config = TranscriptionConfig::default();

@@ -8,8 +8,8 @@ use crate::bot::context::{BotContext, QueueCancelKey};
 use crate::handlers::message::handle_message;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
-/// Queue key: (chat_id, topic_id). Different topics run concurrently.
-/// DMs use (chat_id, 0) since they have no topic.
+/// Queue key: (`chat_id`, `topic_id`). Different topics run concurrently.
+/// DMs use (`chat_id`, 0) since they have no topic.
 type QueueKey = (i64, i64);
 
 /// Item sent through the per-topic queue channel.
@@ -28,12 +28,11 @@ pub(crate) struct QueueState {
     /// actively being processed by the worker).
     pending: usize,
 }
-
 struct QueuedStatus {
     chat_id: i64,
-    /// message_id of the "⏳ Queued" bot message.
+    /// `message_id` of the "⏳ Queued" bot message.
     status_message_id: i64,
-    /// message_id of the user's original message (for deletion on cancel).
+    /// `message_id` of the user's original message (for deletion on cancel).
     user_message_id: i64,
 }
 
@@ -97,7 +96,7 @@ pub(crate) async fn dispatch_message(
                     );
                     // Fall back to processing in General (no queue, replies in General)
                     if let Err(err) = handle_message(context.as_ref(), message).await {
-                        eprintln!("Standalone message handling error: {}", err);
+                        eprintln!("Standalone message handling error: {err}");
                     }
                 }
             }
@@ -185,7 +184,7 @@ fn generate_topic_name(text: Option<&str>) -> String {
 fn spawn_standalone(context: Arc<BotContext>, message: Message) {
     tokio::spawn(async move {
         if let Err(err) = handle_message(context.as_ref(), message).await {
-            eprintln!("Standalone message handling error: {}", err);
+            eprintln!("Standalone message handling error: {err}");
         }
     });
 }
@@ -221,7 +220,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
         let chat_id = message.chat.id;
         let topic_id = message.effective_thread_id();
         let user_message_id = message.message_id;
-        let cancel_data = format!("cancel_q:{}:{}", chat_id, user_message_id);
+        let cancel_data = format!("cancel_q:{chat_id}:{user_message_id}");
         let cancel_markup = InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
                 text: "✖ Cancel".to_string(),
@@ -257,7 +256,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
                 }
             }
             Err(err) => {
-                eprintln!("Failed to send queued status: {}", err);
+                eprintln!("Failed to send queued status: {err}");
             }
         }
     }
@@ -315,7 +314,7 @@ fn spawn_queue_worker(
 
             if cancel_token.is_cancelled() {
                 // Item was cancelled while queued — update status and skip
-                eprintln!("Skipping cancelled queued message for {:?}", key);
+                eprintln!("Skipping cancelled queued message for {key:?}");
                 if let Some(status) = queued_status {
                     if let Err(err) = context
                         .client()
@@ -362,7 +361,7 @@ fn spawn_queue_worker(
             }
 
             if let Err(err) = handle_message(context.as_ref(), message).await {
-                eprintln!("Message handling error for {:?}: {}", key, err);
+                eprintln!("Message handling error for {key:?}: {err}");
             }
 
             let mut queues = queues.lock().await;

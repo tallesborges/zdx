@@ -1,13 +1,14 @@
 //! Skills discovery and parsing.
 
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
-use crate::config::paths;
+use crate::config::{SkillSourceToggles, Toggle, paths};
 
 /// Skill source location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -78,13 +79,7 @@ pub struct LoadSkillsResult {
 #[derive(Debug, Clone)]
 pub struct LoadSkillsOptions {
     pub cwd: PathBuf,
-    pub enable_zdx_user: bool,
-    pub enable_zdx_project: bool,
-    pub enable_codex_user: bool,
-    pub enable_claude_user: bool,
-    pub enable_claude_project: bool,
-    pub enable_agents_user: bool,
-    pub enable_agents_project: bool,
+    pub sources: SkillSourceToggles,
     pub ignored_skills: Vec<String>,
     pub include_skills: Vec<String>,
 }
@@ -93,13 +88,15 @@ impl LoadSkillsOptions {
     pub fn new(cwd: impl Into<PathBuf>) -> Self {
         Self {
             cwd: cwd.into(),
-            enable_zdx_user: true,
-            enable_zdx_project: true,
-            enable_codex_user: true,
-            enable_claude_user: true,
-            enable_claude_project: true,
-            enable_agents_user: true,
-            enable_agents_project: true,
+            sources: SkillSourceToggles {
+                zdx_user: Toggle::On,
+                zdx_project: Toggle::On,
+                codex_user: Toggle::On,
+                claude_user: Toggle::On,
+                claude_project: Toggle::On,
+                agents_user: Toggle::On,
+                agents_project: Toggle::On,
+            },
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         }
@@ -187,6 +184,9 @@ impl SkillFilters {
 }
 
 /// Loads skills from all enabled sources.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn load_skills(options: &LoadSkillsOptions) -> LoadSkillsResult {
     let zdx_home = paths::zdx_home();
     let home_dir = dirs::home_dir();
@@ -202,6 +202,9 @@ pub fn load_skills(options: &LoadSkillsOptions) -> LoadSkillsResult {
 }
 
 /// Loads skills from a single directory using recursive discovery.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn load_skills_from_dir(dir: &Path, source: SkillSource) -> LoadSkillsResult {
     let mut state = LoadState::new(SkillFilters::default(), Vec::new());
     load_skills_from_dir_with_format(dir, source, SkillDirFormat::Recursive, &mut state);
@@ -219,7 +222,7 @@ fn build_skill_sources(
 ) -> Vec<SkillSourceSpec> {
     let mut sources = Vec::new();
 
-    if options.enable_zdx_user {
+    if options.sources.zdx_user.is_on() {
         if let Some(home) = home_dir {
             sources.push(SkillSourceSpec::recursive(
                 SkillSource::ZdxUser,
@@ -232,14 +235,14 @@ fn build_skill_sources(
         ));
     }
 
-    if options.enable_zdx_project {
+    if options.sources.zdx_project.is_on() {
         sources.push(SkillSourceSpec::recursive(
             SkillSource::ZdxProject,
             options.cwd.join(".zdx").join("skills"),
         ));
     }
 
-    if options.enable_codex_user
+    if options.sources.codex_user.is_on()
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::recursive(
@@ -248,7 +251,7 @@ fn build_skill_sources(
         ));
     }
 
-    if options.enable_claude_user
+    if options.sources.claude_user.is_on()
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::claude(
@@ -257,14 +260,14 @@ fn build_skill_sources(
         ));
     }
 
-    if options.enable_claude_project {
+    if options.sources.claude_project.is_on() {
         sources.push(SkillSourceSpec::claude(
             SkillSource::ClaudeProject,
             options.cwd.join(".claude").join("skills"),
         ));
     }
 
-    if options.enable_agents_user
+    if options.sources.agents_user.is_on()
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::recursive(
@@ -273,7 +276,7 @@ fn build_skill_sources(
         ));
     }
 
-    if options.enable_agents_project {
+    if options.sources.agents_project.is_on() {
         sources.push(SkillSourceSpec::recursive(
             SkillSource::AgentsProject,
             options.cwd.join(".agents").join("skills"),
@@ -334,7 +337,7 @@ fn scan_recursive(dir: &Path, source: SkillSource, state: &mut LoadState) {
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
-            state.warn(dir, format!("Failed to read skills directory: {}", e));
+            state.warn(dir, format!("Failed to read skills directory: {e}"));
             return;
         }
     };
@@ -343,7 +346,7 @@ fn scan_recursive(dir: &Path, source: SkillSource, state: &mut LoadState) {
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                state.warn(dir, format!("Failed to read skills directory entry: {}", e));
+                state.warn(dir, format!("Failed to read skills directory entry: {e}"));
                 continue;
             }
         };
@@ -352,7 +355,7 @@ fn scan_recursive(dir: &Path, source: SkillSource, state: &mut LoadState) {
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(e) => {
-                state.warn(&path, format!("Failed to read entry type: {}", e));
+                state.warn(&path, format!("Failed to read entry type: {e}"));
                 continue;
             }
         };
@@ -386,7 +389,7 @@ fn scan_claude_one_level(dir: &Path, source: SkillSource, state: &mut LoadState)
     let entries = match fs::read_dir(dir) {
         Ok(entries) => entries,
         Err(e) => {
-            state.warn(dir, format!("Failed to read skills directory: {}", e));
+            state.warn(dir, format!("Failed to read skills directory: {e}"));
             return;
         }
     };
@@ -395,7 +398,7 @@ fn scan_claude_one_level(dir: &Path, source: SkillSource, state: &mut LoadState)
         let entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
-                state.warn(dir, format!("Failed to read skills directory entry: {}", e));
+                state.warn(dir, format!("Failed to read skills directory entry: {e}"));
                 continue;
             }
         };
@@ -404,7 +407,7 @@ fn scan_claude_one_level(dir: &Path, source: SkillSource, state: &mut LoadState)
         let file_type = match entry.file_type() {
             Ok(file_type) => file_type,
             Err(e) => {
-                state.warn(&path, format!("Failed to read entry type: {}", e));
+                state.warn(&path, format!("Failed to read entry type: {e}"));
                 continue;
             }
         };
@@ -433,8 +436,7 @@ fn scan_claude_one_level(dir: &Path, source: SkillSource, state: &mut LoadState)
 fn is_skill_file(path: &Path) -> bool {
     path.file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name == "SKILL.md")
-        .unwrap_or(false)
+        .is_some_and(|name| name == "SKILL.md")
 }
 
 fn load_skill_file(path: &Path, source: SkillSource, state: &mut LoadState) {
@@ -447,7 +449,7 @@ fn load_skill_file(path: &Path, source: SkillSource, state: &mut LoadState) {
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(e) => {
-            state.warn(path, format!("Failed to read skill file: {}", e));
+            state.warn(path, format!("Failed to read skill file: {e}"));
             return;
         }
     };
@@ -501,17 +503,14 @@ fn load_skill_file(path: &Path, source: SkillSource, state: &mut LoadState) {
     {
         state.warn(
             path,
-            format!(
-                "Skill name '{}' does not match directory '{}'",
-                name, dir_name
-            ),
+            format!("Skill name '{name}' does not match directory '{dir_name}'"),
         );
     }
 
     if !state.seen_names.insert(name.clone()) {
         state.warn(
             path,
-            format!("Duplicate skill name '{}' detected; skipping", name),
+            format!("Duplicate skill name '{name}' detected; skipping"),
         );
         return;
     }
@@ -548,7 +547,7 @@ fn parse_frontmatter(content: &str) -> Result<SkillFrontmatter, String> {
         if trimmed == "---" || trimmed == "..." {
             let yaml = yaml_lines.join("\n");
             return serde_yaml::from_str(&yaml)
-                .map_err(|e| format!("Failed to parse YAML frontmatter: {}", e));
+                .map_err(|e| format!("Failed to parse YAML frontmatter: {e}"));
         }
         yaml_lines.push(line);
     }
@@ -562,20 +561,18 @@ fn strip_utf8_bom(content: &str) -> &str {
 
 fn validate_name(name: &str) -> Result<(), String> {
     if name.len() > 64 {
-        return Err(format!("Skill name '{}' exceeds 64 characters", name));
+        return Err(format!("Skill name '{name}' exceeds 64 characters"));
     }
 
     if name.starts_with('-') || name.ends_with('-') {
         return Err(format!(
-            "Skill name '{}' must not start or end with '-'",
-            name
+            "Skill name '{name}' must not start or end with '-'"
         ));
     }
 
     if name.contains("--") {
         return Err(format!(
-            "Skill name '{}' must not contain consecutive '-'",
-            name
+            "Skill name '{name}' must not contain consecutive '-'"
         ));
     }
 
@@ -584,8 +581,7 @@ fn validate_name(name: &str) -> Result<(), String> {
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
     {
         return Err(format!(
-            "Skill name '{}' must be lowercase alphanumeric or '-'",
-            name
+            "Skill name '{name}' must be lowercase alphanumeric or '-'"
         ));
     }
 
@@ -632,7 +628,7 @@ fn compile_globset(
             }
             Err(err) => warnings.push(SkillWarning::new(
                 warning_path,
-                format!("Invalid skill glob pattern '{}': {}", pattern, err),
+                format!("Invalid skill glob pattern '{pattern}': {err}"),
             )),
         }
     }
@@ -646,7 +642,7 @@ fn compile_globset(
         Err(err) => {
             warnings.push(SkillWarning::new(
                 warning_path,
-                format!("Failed to build skill glob matcher: {}", err),
+                format!("Failed to build skill glob matcher: {err}"),
             ));
             None
         }
@@ -675,15 +671,19 @@ pub fn format_skills_for_prompt(skills: &[Skill]) -> Option<String> {
 
     for skill in skills {
         output.push_str("  <skill>\n");
-        output.push_str(&format!("    <name>{}</name>\n", escape_xml(&skill.name)));
-        output.push_str(&format!(
-            "    <description>{}</description>\n",
+        writeln!(output, "    <name>{}</name>", escape_xml(&skill.name)).expect("write");
+        writeln!(
+            output,
+            "    <description>{}</description>",
             escape_xml(&skill.description)
-        ));
-        output.push_str(&format!(
-            "    <path>{}</path>\n",
+        )
+        .expect("write");
+        writeln!(
+            output,
+            "    <path>{}</path>",
             escape_xml(&skill.file_path.display().to_string())
-        ));
+        )
+        .expect("write");
         output.push_str("  </skill>\n");
     }
 
@@ -717,10 +717,8 @@ mod tests {
     fn write_skill(dir: &Path, name: &str, description: &str) -> PathBuf {
         let skill_dir = dir.join(name);
         fs::create_dir_all(&skill_dir).unwrap();
-        let content = format!(
-            "---\nname: {}\ndescription: {}\n---\n# Instructions\n",
-            name, description
-        );
+        let content =
+            format!("---\nname: {name}\ndescription: {description}\n---\n# Instructions\n");
         fs::write(skill_dir.join("SKILL.md"), content).unwrap();
         skill_dir
     }
@@ -941,13 +939,15 @@ mod tests {
 
         let options = LoadSkillsOptions {
             cwd: root.path().to_path_buf(),
-            enable_zdx_user: true,
-            enable_zdx_project: true,
-            enable_codex_user: false,
-            enable_claude_user: false,
-            enable_claude_project: true,
-            enable_agents_user: false,
-            enable_agents_project: true,
+            sources: SkillSourceToggles {
+                zdx_user: Toggle::On,
+                zdx_project: Toggle::On,
+                codex_user: Toggle::Off,
+                claude_user: Toggle::Off,
+                claude_project: Toggle::On,
+                agents_user: Toggle::Off,
+                agents_project: Toggle::On,
+            },
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
         };

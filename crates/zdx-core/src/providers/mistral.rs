@@ -33,6 +33,9 @@ impl MistralConfig {
     /// Environment variables:
     /// - `MISTRAL_API_KEY` (fallback if not in config)
     /// - `MISTRAL_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -84,6 +87,9 @@ impl MistralClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],

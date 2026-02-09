@@ -1,4 +1,4 @@
-//! OpenAI Codex (ChatGPT OAuth) provider.
+//! `OpenAI` Codex (`ChatGPT` OAuth) provider.
 
 use anyhow::{Context, Result};
 use base64::Engine;
@@ -23,7 +23,7 @@ const HEADER_SESSION_ID: &str = "session_id";
 const ORIGINATOR_VALUE: &str = "zdx";
 const USER_AGENT_VALUE: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
 
-/// Runtime config for OpenAI Codex requests.
+/// Runtime config for `OpenAI` Codex requests.
 #[derive(Debug, Clone)]
 pub struct OpenAICodexConfig {
     pub model: String,
@@ -50,6 +50,9 @@ impl OpenAICodexConfig {
 }
 
 /// Resolves OAuth credentials, refreshing if expired.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn resolve_credentials() -> Result<oauth_codex::OpenAICodexCredentials> {
     let mut creds = oauth_codex::load_credentials()?
         .ok_or_else(|| anyhow::anyhow!("No OpenAI Codex OAuth credentials found"))?;
@@ -62,15 +65,14 @@ pub async fn resolve_credentials() -> Result<oauth_codex::OpenAICodexCredentials
         creds = refreshed;
     }
 
-    let account_id = match creds.account_id.clone() {
-        Some(id) => id,
-        None => {
-            let id = decode_account_id(&creds.access)
-                .ok_or_else(|| anyhow::anyhow!("Failed to extract account_id from token"))?;
-            creds.account_id = Some(id.clone());
-            oauth_codex::save_credentials(&creds)?;
-            id
-        }
+    let account_id = if let Some(id) = creds.account_id.clone() {
+        id
+    } else {
+        let id = decode_account_id(&creds.access)
+            .ok_or_else(|| anyhow::anyhow!("Failed to extract account_id from token"))?;
+        creds.account_id = Some(id.clone());
+        oauth_codex::save_credentials(&creds)?;
+        id
     };
 
     Ok(oauth_codex::OpenAICodexCredentials {
@@ -93,7 +95,7 @@ fn decode_account_id(token: &str) -> Option<String> {
     claim
         .get("chatgpt_account_id")
         .and_then(|v| v.as_str())
-        .map(|s| s.to_string())
+        .map(std::string::ToString::to_string)
 }
 
 pub struct OpenAICodexClient {
@@ -109,6 +111,9 @@ impl OpenAICodexClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],
@@ -147,7 +152,7 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {}", access_token))
+        HeaderValue::from_str(&format!("Bearer {access_token}"))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
     headers.insert(

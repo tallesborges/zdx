@@ -50,7 +50,7 @@ impl DebugTrace {
             .map(|d| d.as_millis())
             .unwrap_or(0);
         let counter = TRACE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let id = format!("{}_{}_{}", safe, ts, counter);
+        let id = format!("{safe}_{ts}_{counter}");
 
         Some(Self { id, dir })
     }
@@ -148,6 +148,9 @@ where
     }
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn wrap_stream<S, E>(trace: Option<DebugTrace>, stream: S) -> TraceStream<S>
 where
     S: Stream<Item = std::result::Result<Bytes, E>> + Unpin,

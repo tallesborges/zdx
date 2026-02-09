@@ -6,7 +6,7 @@ use std::borrow::Cow;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Truncates a string with ellipsis if it exceeds max_width (unicode-aware).
+/// Truncates a string with ellipsis if it exceeds `max_width` (unicode-aware).
 ///
 /// Uses unicode width for accurate terminal column calculation, handling
 /// wide characters (CJK, emoji) correctly.
@@ -36,7 +36,7 @@ pub fn truncate_with_ellipsis(text: &str, max_width: usize) -> String {
     truncated
 }
 
-/// Truncates a string from the start with ellipsis if it exceeds max_width (unicode-aware).
+/// Truncates a string from the start with ellipsis if it exceeds `max_width` (unicode-aware).
 ///
 /// Shows the end of the string with `…` prefix when truncated.
 /// Uses unicode width for accurate terminal column calculation.
@@ -91,7 +91,7 @@ pub fn truncate_start_with_ellipsis(text: &str, max_width: usize) -> String {
 /// (to the next tab stop, typically every 8 columns).
 ///
 /// This function uses a fixed 4-space expansion for simplicity, matching
-/// OpenAI's Codex CLI approach. This is a pragmatic "good enough" solution
+/// `OpenAI`'s Codex CLI approach. This is a pragmatic "good enough" solution
 /// that works correctly for the common case of tabs at line start, with minor
 /// inaccuracy for mid-line tabs.
 ///

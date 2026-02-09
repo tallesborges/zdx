@@ -1,3 +1,11 @@
+#![allow(
+    clippy::cast_precision_loss,
+    clippy::match_same_arms,
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss
+)]
+
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -18,9 +26,9 @@ fn format_byte_truncation(stream: &str, total_bytes: u64) -> String {
     } else if total_bytes >= 1024 {
         format!("{:.1} KB", total_bytes as f64 / 1024.0)
     } else {
-        format!("{} bytes", total_bytes)
+        format!("{total_bytes} bytes")
     };
-    format!("{} truncated: {} total", stream, size_str)
+    format!("{stream} truncated: {size_str} total")
 }
 
 fn extract_u64(value: &Value) -> Option<u64> {
@@ -36,10 +44,10 @@ fn format_read_preview(input: &Value) -> Option<String> {
     let mut params = Vec::new();
 
     if let Some(offset) = input.get("offset").and_then(extract_u64) {
-        params.push(format!("offset={}", offset));
+        params.push(format!("offset={offset}"));
     }
     if let Some(limit) = input.get("limit").and_then(extract_u64) {
-        params.push(format!("limit={}", limit));
+        params.push(format!("limit={limit}"));
     }
 
     if params.is_empty() {
@@ -306,6 +314,7 @@ impl HistoryCell {
 
     /// Appends text to an assistant cell's content.
     ///
+    /// # Panics
     /// Panics if called on a non-assistant cell.
     pub fn append_assistant_delta(&mut self, delta: &str) {
         match self {
@@ -318,6 +327,7 @@ impl HistoryCell {
 
     /// Marks an assistant cell as finalized (no longer streaming).
     ///
+    /// # Panics
     /// Panics if called on a non-assistant cell.
     pub fn finalize_assistant(&mut self) {
         match self {
@@ -330,6 +340,7 @@ impl HistoryCell {
 
     /// Appends text to a thinking cell's content.
     ///
+    /// # Panics
     /// Panics if called on a non-thinking cell.
     pub fn append_thinking_delta(&mut self, delta: &str) {
         match self {
@@ -342,6 +353,7 @@ impl HistoryCell {
 
     /// Finalizes a thinking cell with its replay token (if any).
     ///
+    /// # Panics
     /// Panics if called on a non-thinking cell.
     pub fn finalize_thinking(&mut self, replay: Option<ReplayToken>) {
         match self {
@@ -359,9 +371,10 @@ impl HistoryCell {
 
     /// Updates the input on a tool cell.
     ///
-    /// Used when ToolInputCompleted arrives with the complete input after
-    /// ToolRequested created the cell with empty input.
+    /// Used when `ToolInputCompleted` arrives with the complete input after
+    /// `ToolRequested` created the cell with empty input.
     ///
+    /// # Panics
     /// Panics if called on a non-tool cell.
     pub fn set_tool_input(&mut self, new_input: serde_json::Value) {
         match self {
@@ -379,6 +392,7 @@ impl HistoryCell {
     ///
     /// Used for tool input streaming before JSON is complete.
     ///
+    /// # Panics
     /// Panics if called on a non-tool cell.
     pub fn set_tool_input_delta(&mut self, delta: String) {
         match self {
@@ -391,6 +405,7 @@ impl HistoryCell {
 
     /// Sets the result on a tool cell and updates state to Done or Error.
     ///
+    /// # Panics
     /// Panics if called on a non-tool cell.
     pub fn set_tool_result(&mut self, tool_result: ToolOutput) {
         match self {
@@ -561,7 +576,7 @@ impl HistoryCell {
                         let frame = SPINNER_FRAMES[spinner_frame % SPINNER_FRAMES.len()];
                         // Need to allocate since we're selecting from array
                         (
-                            format!("{} ", frame),
+                            format!("{frame} "),
                             Style::ToolRunning,
                             Style::ToolStatus,
                             None,
@@ -592,7 +607,7 @@ impl HistoryCell {
                     input
                         .get("command")
                         .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
+                        .map(std::string::ToString::to_string)
                 } else {
                     // For other tools, show tool name and key input
                     let input_preview = match name.as_str() {
@@ -600,15 +615,15 @@ impl HistoryCell {
                         "write" => input
                             .get("path")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                            .map(std::string::ToString::to_string),
                         "edit" => input
                             .get("path")
                             .and_then(|v| v.as_str())
-                            .map(|s| s.to_string()),
+                            .map(std::string::ToString::to_string),
                         _ => None,
                     };
                     Some(if let Some(preview) = input_preview {
-                        format!("{}: {}", name, preview)
+                        format!("{name}: {preview}")
                     } else {
                         name.to_string()
                     })
@@ -740,24 +755,24 @@ impl HistoryCell {
                     // Check for Bash tool truncation (stdout_truncated, stderr_truncated)
                     let stdout_truncated = data
                         .get("stdout_truncated")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
                     let stderr_truncated = data
                         .get("stderr_truncated")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
 
                     if stdout_truncated {
                         let total = data
                             .get("stdout_total_bytes")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0);
                         truncation_warnings.push(format_byte_truncation("stdout", total));
                     }
                     if stderr_truncated {
                         let total = data
                             .get("stderr_total_bytes")
-                            .and_then(|v| v.as_u64())
+                            .and_then(serde_json::Value::as_u64)
                             .unwrap_or(0);
                         truncation_warnings.push(format_byte_truncation("stderr", total));
                     }
@@ -765,12 +780,12 @@ impl HistoryCell {
                     // Check for Read tool truncation (truncated, total_lines, lines_shown)
                     let file_truncated = data
                         .get("truncated")
-                        .and_then(|v| v.as_bool())
+                        .and_then(serde_json::Value::as_bool)
                         .unwrap_or(false);
                     if file_truncated {
                         let byte_limited = data
                             .get("byte_limited")
-                            .and_then(|v| v.as_bool())
+                            .and_then(serde_json::Value::as_bool)
                             .unwrap_or(false);
                         let read_has_explicit_limit =
                             name == "read" && input.get("limit").and_then(extract_u64).is_some();
@@ -780,15 +795,14 @@ impl HistoryCell {
                         if should_warn {
                             let total_lines = data
                                 .get("total_lines")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             let lines_shown = data
                                 .get("lines_shown")
-                                .and_then(|v| v.as_u64())
+                                .and_then(serde_json::Value::as_u64)
                                 .unwrap_or(0);
                             truncation_warnings.push(format!(
-                                "file truncated: showing {} of {} lines",
-                                lines_shown, total_lines
+                                "file truncated: showing {lines_shown} of {total_lines} lines"
                             ));
                         }
                     }
@@ -797,7 +811,7 @@ impl HistoryCell {
                     for warning in truncation_warnings {
                         lines.push(StyledLine {
                             spans: vec![StyledSpan {
-                                text: format!("[⚠ {}]", warning),
+                                text: format!("[⚠ {warning}]"),
                                 style: Style::ToolTruncation,
                             }],
                         });
@@ -811,7 +825,7 @@ impl HistoryCell {
                             // Show error code and message
                             lines.push(StyledLine {
                                 spans: vec![StyledSpan {
-                                    text: format!("Error [{}]: {}", code, message),
+                                    text: format!("Error [{code}]: {message}"),
                                     style: Style::ToolError,
                                 }],
                             });
@@ -824,7 +838,7 @@ impl HistoryCell {
                                     for line in wrapped {
                                         lines.push(StyledLine {
                                             spans: vec![StyledSpan {
-                                                text: format!("  {}", line),
+                                                text: format!("  {line}"),
                                                 style: Style::ToolOutput,
                                             }],
                                         });
@@ -902,22 +916,22 @@ impl HistoryCell {
                 let duration_str = if secs >= 60.0 {
                     let mins = (secs / 60.0).floor() as u64;
                     let remaining_secs = secs % 60.0;
-                    format!("{}m{:.1}s", mins, remaining_secs)
+                    format!("{mins}m{remaining_secs:.1}s")
                 } else {
-                    format!("{:.1}s", secs)
+                    format!("{secs:.1}s")
                 };
 
                 // Format tool count
                 let tool_str = if *tool_count == 1 {
                     "1 tool".to_string()
                 } else {
-                    format!("{} tools", tool_count)
+                    format!("{tool_count} tools")
                 };
 
-                let message = format!("{} · {}", tool_str, duration_str);
+                let message = format!("{tool_str} · {duration_str}");
 
                 // Build centered separator line: ─── 3 tools · 3.5s ───
-                let text_with_padding = format!(" {} ", message);
+                let text_with_padding = format!(" {message} ");
                 let text_width = text_with_padding.chars().count();
                 let remaining = width.saturating_sub(text_width);
                 let left_dashes = remaining / 2;
@@ -967,7 +981,7 @@ impl HistoryCell {
                 ..
             } => {
                 // Include is_interrupted in discriminator to invalidate cache when marked
-                content.len() + if *is_interrupted { 1 } else { 0 }
+                content.len() + usize::from(*is_interrupted)
             }
             HistoryCell::Assistant {
                 content,
@@ -975,11 +989,11 @@ impl HistoryCell {
                 ..
             } => {
                 // Include is_interrupted in discriminator
-                content.len() + if *is_interrupted { 1 } else { 0 }
+                content.len() + usize::from(*is_interrupted)
             }
             HistoryCell::Tool { result, .. } => {
                 // Use result presence as cache discriminator
-                if result.is_some() { 1 } else { 0 }
+                usize::from(result.is_some())
             }
             HistoryCell::System { content, .. } => content.len(),
             HistoryCell::Thinking {
@@ -988,7 +1002,7 @@ impl HistoryCell {
                 ..
             } => {
                 // Include is_interrupted in discriminator
-                content.len() + if *is_interrupted { 1 } else { 0 }
+                content.len() + usize::from(*is_interrupted)
             }
             HistoryCell::Timing { duration, .. } => {
                 // Duration doesn't change, use millis as discriminator
@@ -1515,7 +1529,7 @@ mod tests {
         // Debug: print what we actually get
         for (i, line) in lines.iter().enumerate() {
             let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
-            eprintln!("Line {}: {:?}", i, texts);
+            eprintln!("Line {i}: {texts:?}");
         }
 
         // First line should have "Thinking:" prefix
@@ -1542,7 +1556,7 @@ mod tests {
         eprintln!("\n=== Thinking with blank lines ===");
         for (i, line) in lines.iter().enumerate() {
             let texts: Vec<&str> = line.spans.iter().map(|s| s.text.as_str()).collect();
-            eprintln!("Line {}: {:?}", i, texts);
+            eprintln!("Line {i}: {texts:?}");
         }
 
         // Should have 5 lines: Para1, blank, Para2, blank, Para3
@@ -1555,8 +1569,7 @@ mod tests {
         for (i, _) in lines.iter().enumerate().skip(1) {
             assert_eq!(
                 lines[i].spans[0].text, "          ",
-                "Line {} should be indented, not prefixed",
-                i
+                "Line {i} should be indented, not prefixed"
             );
         }
     }
@@ -1584,10 +1597,7 @@ mod tests {
 
             assert!(
                 line_width <= width,
-                "Line {} width {} exceeds limit {}",
-                i,
-                line_width,
-                width
+                "Line {i} width {line_width} exceeds limit {width}"
             );
         }
     }
@@ -1603,11 +1613,11 @@ mod tests {
             "stdout truncated: 512 bytes total"
         );
         assert_eq!(
-            format_byte_truncation("stdout", 51200),
+            format_byte_truncation("stdout", 51_200),
             "stdout truncated: 50.0 KB total"
         );
         assert_eq!(
-            format_byte_truncation("stderr", 1048576),
+            format_byte_truncation("stderr", 1_048_576),
             "stderr truncated: 1.0 MB total"
         );
     }
@@ -1625,8 +1635,8 @@ mod tests {
             "timed_out": false,
             "stdout_truncated": true,
             "stderr_truncated": true,
-            "stdout_total_bytes": 102400,
-            "stderr_total_bytes": 1048576
+            "stdout_total_bytes": 102_400,
+            "stderr_total_bytes": 1_048_576
         })));
 
         let lines = cell.display_lines(80, 0);
@@ -1638,8 +1648,7 @@ mod tests {
         // Should show truncation warnings with sizes
         assert!(
             all_text.contains("stdout truncated"),
-            "Expected stdout truncation warning, got: {}",
-            all_text
+            "Expected stdout truncation warning, got: {all_text}"
         );
         assert!(
             all_text.contains("100.0 KB total"),
@@ -1679,8 +1688,7 @@ mod tests {
         // Should show file truncation warning
         assert!(
             all_text.contains("file truncated"),
-            "Expected file truncation warning, got: {}",
-            all_text
+            "Expected file truncation warning, got: {all_text}"
         );
         assert!(
             all_text.contains("showing 2000 of 5000 lines"),

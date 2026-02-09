@@ -25,6 +25,9 @@ pub struct TelegramSettings {
 }
 
 impl TelegramSettings {
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_config(config: &Config) -> Result<Self> {
         let token = config
             .telegram
@@ -86,6 +89,9 @@ impl TelegramClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn get_updates(&self, offset: Option<i64>, timeout: Duration) -> Result<Vec<Update>> {
         let request = GetUpdatesRequest {
             offset,
@@ -95,11 +101,17 @@ impl TelegramClient {
         self.post("getUpdates", &request).await
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn get_file(&self, file_id: &str) -> Result<TelegramFile> {
         let request = GetFileRequest { file_id };
         self.post("getFile", &request).await
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn download_file(&self, file_path: &str) -> Result<Vec<u8>> {
         let url = format!("{}/file/bot{}/{}", self.base_url, self.token, file_path);
         let response = self
@@ -123,6 +135,9 @@ impl TelegramClient {
         Ok(bytes.to_vec())
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_message(
         &self,
         chat_id: i64,
@@ -137,6 +152,9 @@ impl TelegramClient {
 
     /// Send a message with an inline keyboard. Returns the sent [`Message`] so
     /// the caller can later edit or delete it by `message_id`.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_message_with_markup(
         &self,
         chat_id: i64,
@@ -218,6 +236,9 @@ impl TelegramClient {
     }
 
     /// Edit the text (and optionally the inline keyboard) of a bot message.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn edit_message_text(
         &self,
         chat_id: i64,
@@ -270,6 +291,9 @@ impl TelegramClient {
 
     /// Delete a message. Bot can delete its own messages anytime, and other
     /// users' messages if it has `can_delete_messages` admin right.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn delete_message(&self, chat_id: i64, message_id: i64) -> Result<()> {
         let request = DeleteMessageRequest {
             chat_id,
@@ -281,6 +305,9 @@ impl TelegramClient {
 
     /// Acknowledge a callback query (dismisses the loading spinner on the
     /// button). Optionally show a notification to the user.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn answer_callback_query(
         &self,
         callback_query_id: &str,
@@ -295,13 +322,19 @@ impl TelegramClient {
     }
 
     /// Create a forum topic in a supergroup.
-    /// Returns the message_thread_id of the created topic.
+    /// Returns the `message_thread_id` of the created topic.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn create_forum_topic(&self, chat_id: i64, name: &str) -> Result<i64> {
         let request = CreateForumTopicRequest { chat_id, name };
         let topic: ForumTopic = self.post("createForumTopic", &request).await?;
         Ok(topic.message_thread_id)
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_chat_action(
         &self,
         chat_id: i64,
@@ -329,8 +362,8 @@ impl TelegramClient {
                     .await;
 
                 tokio::select! {
-                    _ = cancel_clone.cancelled() => break,
-                    _ = tokio::time::sleep(Duration::from_secs(4)) => {}
+                    () = cancel_clone.cancelled() => break,
+                    () = tokio::time::sleep(Duration::from_secs(4)) => {}
                 }
             }
         });
@@ -365,7 +398,7 @@ impl TelegramClient {
             let description = error
                 .description
                 .unwrap_or_else(|| "Telegram API error".to_string());
-            bail!("{}", description);
+            bail!("{description}");
         }
 
         // Parse success response (has result field)

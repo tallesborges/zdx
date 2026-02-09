@@ -29,15 +29,21 @@ const BOT_SYSTEM_PROMPT: &str = include_str!(concat!(
 /// Exit code used to signal the wrapper script to rebuild.
 pub const EXIT_REBUILD: i32 = 42;
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn run() -> Result<()> {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
     run_with_root(root).await
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn run_with_root(root: PathBuf) -> Result<()> {
     let mut config = Config::load().map_err(|_| anyhow!("Failed to load zdx config"))?;
     // Apply telegram-specific model + thinking_level
-    config.model = config.telegram.model.clone();
+    config.model.clone_from(&config.telegram.model);
     config.thinking_level = config.telegram.thinking_level;
     let settings = TelegramSettings::from_config(&config)?;
     let config_path = zdx_core::config::paths::config_path();
@@ -92,8 +98,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     tokio::pin!(shutdown);
 
     eprintln!(
-        "zdx-bot started. Allowlist: {} user(s), {} chat(s). Polling for updates...",
-        allowlist_user_len, allowlist_chat_len
+        "zdx-bot started. Allowlist: {allowlist_user_len} user(s), {allowlist_chat_len} chat(s). Polling for updates..."
     );
 
     loop {
@@ -103,7 +108,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 eprintln!("Shutting down Telegram bot.");
                 break;
             }
-            _ = context.rebuild_notified() => {
+            () = context.rebuild_notified() => {
                 eprintln!("Rebuild requested via /rebuild command.");
                 std::process::exit(EXIT_REBUILD);
             }
@@ -111,7 +116,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 let updates = match updates {
                     Ok(updates) => updates,
                     Err(err) => {
-                        eprintln!("Telegram polling error: {}", err);
+                        eprintln!("Telegram polling error: {err}");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         continue;
                     }
@@ -172,14 +177,14 @@ async fn handle_callback_query(
                 .answer_callback_query(&callback.id, Some("Cancelling..."))
                 .await
             {
-                eprintln!("Failed to answer cancel callback: {}", err);
+                eprintln!("Failed to answer cancel callback: {err}");
             }
-            eprintln!("Cancelled agent turn for {:?}", key);
+            eprintln!("Cancelled agent turn for {key:?}");
         } else if let Err(err) = client
             .answer_callback_query(&callback.id, Some("Nothing to cancel"))
             .await
         {
-            eprintln!("Failed to answer callback: {}", err);
+            eprintln!("Failed to answer callback: {err}");
         }
     } else if let Some(key) = parse_queue_cancel_callback(data) {
         // Cancel a queued (not-yet-processing) item
@@ -194,21 +199,21 @@ async fn handle_callback_query(
                 .answer_callback_query(&callback.id, Some("Removed from queue"))
                 .await
             {
-                eprintln!("Failed to answer queue cancel callback: {}", err);
+                eprintln!("Failed to answer queue cancel callback: {err}");
             }
-            eprintln!("Cancelled queued item for {:?}", key);
+            eprintln!("Cancelled queued item for {key:?}");
         } else {
             // Token gone — item may have already started processing
             if let Err(err) = client
                 .answer_callback_query(&callback.id, Some("Already processing"))
                 .await
             {
-                eprintln!("Failed to answer callback: {}", err);
+                eprintln!("Failed to answer callback: {err}");
             }
         }
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
-            eprintln!("Failed to answer unknown callback: {}", err);
+            eprintln!("Failed to answer unknown callback: {err}");
         }
         eprintln!(
             "Unknown callback from user {}: {:?}",
@@ -217,7 +222,7 @@ async fn handle_callback_query(
     }
 }
 
-/// Parse `cancel:{chat_id}:{user_message_id}` callback data into a CancelKey.
+/// Parse `cancel:{chat_id}:{user_message_id}` callback data into a `CancelKey`.
 fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
     let rest = data.strip_prefix("cancel:")?;
     // Guard against matching cancel_q: prefix
@@ -230,7 +235,7 @@ fn parse_cancel_callback(data: &str) -> Option<CancelKey> {
     Some((chat_id, user_message_id))
 }
 
-/// Parse `cancel_q:{chat_id}:{message_id}` callback data into a QueueCancelKey.
+/// Parse `cancel_q:{chat_id}:{message_id}` callback data into a `QueueCancelKey`.
 fn parse_queue_cancel_callback(data: &str) -> Option<QueueCancelKey> {
     let rest = data.strip_prefix("cancel_q:")?;
     let (chat_str, msg_str) = rest.split_once(':')?;

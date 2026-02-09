@@ -71,7 +71,7 @@ pub enum Style {
     CodeInline,
     /// Fenced code block content.
     CodeBlock,
-    /// Code fence markers (``` - rendered subtly).
+    /// Code fence markers (` ``` ` - rendered subtly).
     CodeFence,
     /// Emphasized text (*italic*).
     Emphasis,
@@ -81,7 +81,7 @@ pub enum Style {
     H1,
     /// Heading level 2 (## Heading).
     H2,
-    /// Heading level 3+ (### Heading).
+    /// Heading level 3+ (`### Heading`).
     H3,
     /// Link text.
     Link,

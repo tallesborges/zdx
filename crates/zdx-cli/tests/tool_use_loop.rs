@@ -1,10 +1,10 @@
 //! Tests for the tool use loop with wiremock.
 //!
 //! Simulates a two-step interaction:
-//! 1. First response asks for tool_use(read)
+//! 1. First response asks for `tool_use(read)`
 //! 2. Second response returns final text
 //!
-//! Verifies that the second request includes tool_result block.
+//! Verifies that the second request includes `tool_result` block.
 
 mod fixtures;
 
@@ -19,7 +19,7 @@ use tempfile::TempDir;
 use wiremock::matchers::{header, method, path};
 use wiremock::{Mock, MockServer, Request};
 
-/// Creates a temp ZDX_HOME directory for test isolation.
+/// Creates a temp `ZDX_HOME` directory for test isolation.
 fn temp_zdx_home() -> TempDir {
     TempDir::new().expect("create temp zdx home")
 }
@@ -141,18 +141,15 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("tool_result"),
-        "Second request should contain tool_result block. Got: {}",
-        body
+        "Second request should contain tool_result block. Got: {body}"
     );
     assert!(
         body.contains("toolu_abc123"),
-        "Second request should reference the tool_use_id. Got: {}",
-        body
+        "Second request should reference the tool_use_id. Got: {body}"
     );
     assert!(
         body.contains("secret data"),
-        "Second request should contain the file content. Got: {}",
-        body
+        "Second request should contain the file content. Got: {body}"
     );
 }
 
@@ -175,7 +172,7 @@ async fn test_tool_read_outside_root_allowed() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = second_request_body.clone();
 
-    let input_json = format!(r#"{{"path": "{}"}}"#, outside_path);
+    let input_json = format!(r#"{{"path": "{outside_path}"}}"#);
     let first_response = tool_use_sse("toolu_evil", "read", &input_json);
     let second_response = text_sse("File read successfully.");
 
@@ -214,13 +211,11 @@ async fn test_tool_read_outside_root_allowed() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("outside content"),
-        "Tool result should include outside file content. Got: {}",
-        body
+        "Tool result should include outside file content. Got: {body}"
     );
     assert!(
         !body.contains("\"is_error\":true"),
-        "Tool result should not be marked as error. Got: {}",
-        body
+        "Tool result should not be marked as error. Got: {body}"
     );
 }
 
@@ -328,19 +323,16 @@ async fn test_tool_use_loop_writes_file() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("tool_result"),
-        "Second request should contain tool_result block. Got: {}",
-        body
+        "Second request should contain tool_result block. Got: {body}"
     );
     assert!(
         body.contains("toolu_write001"),
-        "Second request should reference the tool_use_id. Got: {}",
-        body
+        "Second request should reference the tool_use_id. Got: {body}"
     );
     // The ok:true appears inside a JSON string, so it's escaped as \"ok\":true
     assert!(
         body.contains(r#"\"ok\":true"#),
-        "Tool result should indicate success. Got: {}",
-        body
+        "Tool result should indicate success. Got: {body}"
     );
 }
 
@@ -410,24 +402,20 @@ async fn test_tool_use_loop_edits_file() {
     let body = second_request_body.lock().unwrap().clone();
     assert!(
         body.contains("tool_result"),
-        "Second request should contain tool_result block. Got: {}",
-        body
+        "Second request should contain tool_result block. Got: {body}"
     );
     assert!(
         body.contains("toolu_edit001"),
-        "Second request should reference the tool_use_id. Got: {}",
-        body
+        "Second request should reference the tool_use_id. Got: {body}"
     );
     // The ok:true appears inside a JSON string, so it's escaped as \"ok\":true
     assert!(
         body.contains(r#"\"ok\":true"#),
-        "Tool result should indicate success. Got: {}",
-        body
+        "Tool result should indicate success. Got: {body}"
     );
     assert!(
         body.contains(r#"\"replacements\":1"#),
-        "Tool result should show 1 replacement. Got: {}",
-        body
+        "Tool result should show 1 replacement. Got: {body}"
     );
 }
 

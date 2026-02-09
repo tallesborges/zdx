@@ -9,21 +9,28 @@ const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
 const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 
+#[derive(serde::Deserialize)]
+struct TranscriptionResponse {
+    text: String,
+}
+
 /// Supported transcription providers.
 const TRANSCRIPTION_PROVIDERS: &[ProviderKind] = &[ProviderKind::OpenAI, ProviderKind::Mistral];
 
 /// Transcribes audio if a supported provider is configured.
 ///
 /// Returns `Ok(None)` if no transcription provider is available.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn transcribe_audio_if_configured(
     config: &Config,
     bytes: Vec<u8>,
     filename: &str,
     mime_type: Option<&str>,
 ) -> Result<Option<String>> {
-    let provider = match detect_provider(config) {
-        Some(p) => p,
-        None => return Ok(None),
+    let Some(provider) = detect_provider(config) else {
+        return Ok(None);
     };
 
     let provider_config = config.providers.get(provider);
@@ -124,17 +131,33 @@ fn parse_provider_str(s: &str) -> Option<ProviderKind> {
 
 fn default_base_url(provider: ProviderKind) -> &'static str {
     match provider {
-        ProviderKind::OpenAI => DEFAULT_OPENAI_BASE_URL,
         ProviderKind::Mistral => DEFAULT_MISTRAL_BASE_URL,
-        _ => DEFAULT_OPENAI_BASE_URL,
+        ProviderKind::OpenAI
+        | ProviderKind::Anthropic
+        | ProviderKind::ClaudeCli
+        | ProviderKind::OpenAICodex
+        | ProviderKind::OpenRouter
+        | ProviderKind::Mimo
+        | ProviderKind::Moonshot
+        | ProviderKind::Stepfun
+        | ProviderKind::Gemini
+        | ProviderKind::GeminiCli => DEFAULT_OPENAI_BASE_URL,
     }
 }
 
 fn default_model(provider: ProviderKind) -> &'static str {
     match provider {
-        ProviderKind::OpenAI => DEFAULT_OPENAI_MODEL,
         ProviderKind::Mistral => DEFAULT_MISTRAL_MODEL,
-        _ => DEFAULT_OPENAI_MODEL,
+        ProviderKind::OpenAI
+        | ProviderKind::Anthropic
+        | ProviderKind::ClaudeCli
+        | ProviderKind::OpenAICodex
+        | ProviderKind::OpenRouter
+        | ProviderKind::Mimo
+        | ProviderKind::Moonshot
+        | ProviderKind::Stepfun
+        | ProviderKind::Gemini
+        | ProviderKind::GeminiCli => DEFAULT_OPENAI_MODEL,
     }
 }
 
@@ -156,8 +179,6 @@ fn resolve_model(config: &Config, provider: ProviderKind) -> String {
         })
         .unwrap_or_else(|| default_model(provider).to_string())
 }
-
-#[allow(clippy::too_many_arguments)]
 async fn transcribe_audio(
     provider_name: &str,
     base_url: &str,
@@ -191,22 +212,14 @@ async fn transcribe_audio(
         .multipart(form)
         .send()
         .await
-        .map_err(|_| anyhow!("{} transcription request failed", provider_name))?;
+        .map_err(|_| anyhow!("{provider_name} transcription request failed"))?;
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
         return Err(anyhow!(
-            "{} transcription failed: {} {}",
-            provider_name,
-            status,
-            body
+            "{provider_name} transcription failed: {status} {body}"
         ));
-    }
-
-    #[derive(serde::Deserialize)]
-    struct TranscriptionResponse {
-        text: String,
     }
 
     let payload: TranscriptionResponse = response

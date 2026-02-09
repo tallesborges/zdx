@@ -1,3 +1,4 @@
+use std::fmt::Write as _;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -50,9 +51,9 @@ pub fn run(dirs: Option<Vec<String>>) -> anyhow::Result<()> {
     output.push_str(&"=".repeat(80));
     output.push_str("\n\nDirectories included:\n");
     for dir in &dirs_to_include {
-        output.push_str(&format!("  - {}\n", dir));
+        writeln!(output, "  - {dir}").expect("write to string");
     }
-    output.push_str(&format!("\nTotal files: {}\n", files.len()));
+    writeln!(output, "\nTotal files: {}", files.len()).expect("write to string");
     output.push('\n');
     output.push_str(&"=".repeat(80));
     output.push_str("\n\n");
@@ -89,7 +90,7 @@ fn collect_files(root: &Path, dirs_to_include: &[String]) -> io::Result<Vec<Path
     for dir_name in dirs_to_include {
         let dir_path = root.join(dir_name);
         if !dir_path.exists() {
-            eprintln!("Warning: Directory '{}' not found, skipping...", dir_name);
+            eprintln!("Warning: Directory '{dir_name}' not found, skipping...");
             continue;
         }
 
@@ -111,8 +112,7 @@ fn walk_dir(dir_path: &Path, files: &mut Vec<PathBuf>) -> io::Result<()> {
             // Skip hidden directories
             if path
                 .file_name()
-                .map(|name| name.to_string_lossy().starts_with('.'))
-                .unwrap_or(false)
+                .is_some_and(|name| name.to_string_lossy().starts_with('.'))
             {
                 continue;
             }
@@ -154,8 +154,8 @@ fn format_file_content(file_path: &Path) -> anyhow::Result<String> {
     let mut output = String::new();
     output.push_str(&"=".repeat(80));
     output.push('\n');
-    output.push_str(&format!("FILE: {}\n", file_path.display()));
-    output.push_str(&format!("SIZE: {} bytes\n", size_bytes));
+    writeln!(output, "FILE: {}", file_path.display()).expect("write to string");
+    writeln!(output, "SIZE: {size_bytes} bytes").expect("write to string");
     output.push_str(&"=".repeat(80));
     output.push_str("\n\n");
     output.push_str(&content);

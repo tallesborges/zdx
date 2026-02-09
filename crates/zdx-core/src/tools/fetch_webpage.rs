@@ -12,7 +12,7 @@ use crate::core::events::ToolOutput;
 const PARALLEL_EXTRACT_URL: &str = "https://api.parallel.ai/v1beta/extract";
 const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 
-/// Returns the tool definition for the fetch_webpage tool.
+/// Returns the tool definition for the `fetch_webpage` tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Fetch_Webpage".to_string(),
@@ -87,7 +87,7 @@ struct ExtractResult {
     full_content: Option<String>,
 }
 
-/// Executes the fetch_webpage tool asynchronously.
+/// Executes the `fetch_webpage` tool asynchronously.
 pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     let input: FetchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -95,7 +95,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for fetch_webpage tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -137,7 +137,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "request_error",
                 "Failed to send extract request",
-                Some(format!("HTTP error: {}", e)),
+                Some(format!("HTTP error: {e}")),
             );
         }
     };
@@ -148,7 +148,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         let body = response.text().await.unwrap_or_default();
         return ToolOutput::failure(
             "http_error",
-            format!("Extract API returned HTTP {}", status),
+            format!("Extract API returned HTTP {status}"),
             Some(body),
         );
     }
@@ -160,7 +160,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "parse_error",
                 "Failed to parse extract response",
-                Some(format!("JSON error: {}", e)),
+                Some(format!("JSON error: {e}")),
             );
         }
     };

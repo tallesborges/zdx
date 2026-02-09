@@ -32,7 +32,7 @@ impl Default for ThreadState {
 }
 
 impl ThreadState {
-    /// Creates a new ThreadState with no active thread.
+    /// Creates a new `ThreadState` with no active thread.
     pub fn new() -> Self {
         Self {
             thread_handle: None,
@@ -42,7 +42,7 @@ impl ThreadState {
         }
     }
 
-    /// Creates a ThreadState with an active thread and message history.
+    /// Creates a `ThreadState` with an active thread and message history.
     pub fn with_thread(thread_handle: Option<Thread>, messages: Vec<ChatMessage>) -> Self {
         let title = thread_handle
             .as_ref()
@@ -121,7 +121,7 @@ pub struct ThreadUsage {
     // ========================================================================
     // Latest request (for context window percentage)
     // ========================================================================
-    /// Total input tokens from latest request (input + cache_read + cache_write)
+    /// Total input tokens from latest request (input + `cache_read` + `cache_write`)
     latest_input: u64,
     /// Output tokens from latest request
     latest_output: u64,
@@ -136,7 +136,7 @@ pub struct ThreadUsage {
 }
 
 impl ThreadUsage {
-    /// Creates a new empty ThreadUsage.
+    /// Creates a new empty `ThreadUsage`.
     pub fn new() -> Self {
         Self::default()
     }
@@ -147,8 +147,8 @@ impl ThreadUsage {
     /// and latest values (for context %).
     ///
     /// Note: Usage updates for a single API request come in two parts:
-    /// 1. MessageStart: input_tokens, cache_read, cache_write (output_tokens=0)
-    /// 2. MessageDelta: output_tokens (other fields=0)
+    /// 1. `MessageStart`: `input_tokens`, `cache_read`, `cache_write` (`output_tokens=0`)
+    /// 2. `MessageDelta`: `output_tokens` (other fields=0)
     ///
     /// We accumulate the latest values to handle split updates correctly.
     pub fn add(&mut self, input: u64, output: u64, cache_read: u64, cache_write: u64) {
@@ -246,7 +246,7 @@ impl ThreadUsage {
     /// Each request's `input_tokens` already includes all previous thread
     /// history, so we only need the latest request's tokens.
     ///
-    /// Source: https://docs.anthropic.com/en/docs/build-with-claude/context-windows
+    /// Source: <https://docs.anthropic.com/en/docs/build-with-claude/context-windows>
     pub fn context_tokens(&self) -> u64 {
         self.latest_input + self.latest_output
     }
@@ -284,7 +284,7 @@ impl ThreadUsage {
 
     /// Calculates the cost savings from cache hits.
     ///
-    /// Returns the amount saved by using cache_read instead of regular input pricing.
+    /// Returns the amount saved by using `cache_read` instead of regular input pricing.
     pub fn cache_savings(&self, pricing: &ModelPricing) -> f64 {
         let million = 1_000_000.0;
 
@@ -320,11 +320,11 @@ impl ThreadUsage {
     /// Formats a cost for display (e.g., "$0.008").
     pub fn format_cost(cost: f64) -> String {
         if cost < 0.001 {
-            format!("${:.4}", cost)
+            format!("${cost:.4}")
         } else if cost < 0.01 {
-            format!("${:.3}", cost)
+            format!("${cost:.3}")
         } else {
-            format!("${:.2}", cost)
+            format!("${cost:.2}")
         }
     }
 }
@@ -426,16 +426,16 @@ mod tests {
         let mut usage = ThreadUsage::new();
         // Latest request: input=10000, cache_read=4000, cache_write=1000, output=5000
         // Context = 10000 + 4000 + 1000 + 5000 = 20000
-        usage.add(10000, 5000, 4000, 1000);
+        usage.add(10_000, 5_000, 4_000, 1_000);
         // context_limit = 200000 -> 10%
-        let pct = usage.context_percentage(200000);
+        let pct = usage.context_percentage(200_000);
         assert!((pct - 10.0).abs() < 0.001);
     }
 
     #[test]
     fn test_thread_usage_context_percentage_zero_limit() {
         let usage = ThreadUsage::new();
-        assert_eq!(usage.context_percentage(0), 0.0);
+        assert!(usage.context_percentage(0).abs() <= f64::EPSILON);
     }
 
     #[test]

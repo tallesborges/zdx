@@ -1,6 +1,6 @@
 //! Custom scrollbar widget with stable thumb size.
 //!
-//! ratatui's built-in Scrollbar rounds thumb_start and thumb_end separately,
+//! ratatui's built-in Scrollbar rounds `thumb_start` and `thumb_end` separately,
 //! which causes the thumb size to fluctuate with scroll position. This custom
 //! implementation computes a fixed thumb length and positions it manually.
 

@@ -27,12 +27,16 @@ where
         None => Ok(None),
         Some(Value::Number(n)) => n
             .as_u64()
-            .map(|n| Some(n as usize))
-            .ok_or_else(|| D::Error::custom("expected positive integer")),
+            .ok_or_else(|| D::Error::custom("expected positive integer"))
+            .and_then(|n| {
+                usize::try_from(n)
+                    .map(Some)
+                    .map_err(|_| D::Error::custom("number too large"))
+            }),
         Some(Value::String(s)) => s
             .parse::<usize>()
             .map(Some)
-            .map_err(|_| D::Error::custom(format!("invalid number string: {}", s))),
+            .map_err(|_| D::Error::custom(format!("invalid number string: {s}"))),
         Some(_) => Err(D::Error::custom("expected number or numeric string")),
     }
 }
@@ -47,7 +51,7 @@ const MAX_LINES: usize = 2000;
 const MAX_LINE_LENGTH: usize = 500;
 
 /// Maximum bytes to read per line (memory-safe buffer for huge single-line files).
-/// Set to MAX_LINE_LENGTH * 4 to accommodate multi-byte UTF-8 characters.
+/// Set to `MAX_LINE_LENGTH` * 4 to accommodate multi-byte UTF-8 characters.
 const MAX_LINE_BYTES: usize = MAX_LINE_LENGTH * 4;
 
 /// Maximum bytes per page (secondary safety limit).
@@ -124,7 +128,7 @@ struct ReadInput {
     /// Line number to start reading from (1-indexed, default: 1)
     #[serde(default, deserialize_with = "deserialize_optional_usize")]
     offset: Option<usize>,
-    /// Maximum number of lines to return (default: MAX_LINES)
+    /// Maximum number of lines to return (default: `MAX_LINES`)
     #[serde(default, deserialize_with = "deserialize_optional_usize")]
     limit: Option<usize>,
 }
@@ -137,7 +141,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for read tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -167,7 +171,7 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
             return ToolOutput::failure(
                 "read_error",
                 format!("Failed to read metadata for '{}'", path.display()),
-                Some(format!("OS error: {}", e)),
+                Some(format!("OS error: {e}")),
             );
         }
     };
@@ -178,8 +182,7 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
             "image_too_large",
             format!("Image file '{}' is too large", path.display()),
             Some(format!(
-                "Size: {:.2} MB, Maximum: 3.75 MB",
-                file_size as f64 / (1024.0 * 1024.0)
+                "Size: {file_size} bytes, Maximum: 3932160 bytes (3.75 MB)"
             )),
         );
     }
@@ -191,7 +194,7 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
             return ToolOutput::failure(
                 "read_error",
                 format!("Failed to read image file '{}'", path.display()),
-                Some(format!("OS error: {}", e)),
+                Some(format!("OS error: {e}")),
             );
         }
     };
@@ -230,7 +233,7 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
             return ToolOutput::failure(
                 "read_error",
                 format!("Failed to read file '{}'", path.display()),
-                Some(format!("OS error: {}", e)),
+                Some(format!("OS error: {e}")),
             );
         }
     };
@@ -260,7 +263,7 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
                 return ToolOutput::failure(
                     "read_error",
                     format!("Failed to read file '{}'", path.display()),
-                    Some(format!("OS error: {}", e)),
+                    Some(format!("OS error: {e}")),
                 );
             }
         };
@@ -284,7 +287,7 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
                         return ToolOutput::failure(
                             "read_error",
                             format!("Failed to read file '{}'", path.display()),
-                            Some(format!("OS error: {}", e)),
+                            Some(format!("OS error: {e}")),
                         );
                     }
                 };
@@ -368,6 +371,9 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
 
 #[cfg(test)]
 mod tests {
+    use std::fmt::Write as _;
+    use std::io::Write;
+
     use tempfile::TempDir;
 
     use super::*;
@@ -535,7 +541,14 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("large.txt");
         // Create a file with 100 lines
-        let content: String = (0..100).map(|i| format!("line {}\n", i)).collect();
+        let content = (0..100)
+            .map(|i| {
+                let mut line = i.to_string();
+                line.insert_str(0, "line ");
+                line.push('\n');
+                line
+            })
+            .collect::<String>();
         fs::write(&file_path, &content).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
@@ -586,9 +599,10 @@ mod tests {
         let file_path = temp.path().join("long_lines.txt");
         // Create file with 300 lines of 200 chars each = 60KB total
         // Should hit 40KB byte limit around line 204
-        let content: String = (0..300)
-            .map(|i| format!("{:0>199}\n", i)) // 199 digits + newline = 200 bytes
-            .collect();
+        let mut content = String::new();
+        for i in 0..300 {
+            writeln!(content, "{i:0>199}").expect("write to string"); // 199 digits + newline = 200 bytes
+        }
         fs::write(&file_path, &content).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
@@ -896,7 +910,6 @@ mod tests {
             0x00, 0x00, 0x00, 0x0D,
             0x49, 0x48, 0x44, 0x52,
         ];
-        use std::io::Write;
         file.write_all(png_header).unwrap();
 
         // Extend to 4MB (just over the 3.75MB limit)

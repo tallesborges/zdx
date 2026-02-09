@@ -8,7 +8,7 @@ use crate::providers::shared::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
 };
 
-/// SSE parser that converts a byte stream into StreamEvents.
+/// SSE parser that converts a byte stream into `StreamEvents`.
 pub struct SseParser<S> {
     inner: EventStream<S>,
 }
@@ -43,7 +43,7 @@ where
             }
             Poll::Ready(Some(Err(e))) => Poll::Ready(Some(Err(ProviderError::new(
                 ProviderErrorKind::Parse,
-                format!("SSE stream error: {}", e),
+                format!("SSE stream error: {e}"),
             )))),
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Pending => Poll::Pending,
@@ -51,8 +51,11 @@ where
     }
 }
 
-/// Parses a single SSE event block into a StreamEvent.
+/// Parses a single SSE event block into a `StreamEvent`.
 #[allow(dead_code)]
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn parse_sse_event(event_text: &str) -> ProviderResult<StreamEvent> {
     let mut event_type = None;
     let mut data = None;
@@ -70,7 +73,6 @@ pub fn parse_sse_event(event_text: &str) -> ProviderResult<StreamEvent> {
 
     parse_sse_event_fields(event_type, data)
 }
-
 fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<StreamEvent> {
     let data = if data.trim().is_empty() {
         None
@@ -87,7 +89,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseMessageStart = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse message_start: {}", err),
+                    format!("Failed to parse message_start: {err}"),
                 )
             })?;
             Ok(StreamEvent::MessageStart {
@@ -105,7 +107,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseContentBlockStart = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse content_block_start: {}", err),
+                    format!("Failed to parse content_block_start: {err}"),
                 )
             })?;
             let block_type = parsed
@@ -130,7 +132,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseContentBlockDelta = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse content_block_delta: {}", err),
+                    format!("Failed to parse content_block_delta: {err}"),
                 )
             })?;
             match parsed.delta.delta_type.as_str() {
@@ -152,7 +154,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
                 }),
                 other => Err(ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Unknown delta type: {}", other),
+                    format!("Unknown delta type: {other}"),
                 )),
             }
         }
@@ -166,7 +168,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseContentBlockCompleted = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse content_block_stop: {}", err),
+                    format!("Failed to parse content_block_stop: {err}"),
                 )
             })?;
             Ok(StreamEvent::ContentBlockCompleted {
@@ -180,12 +182,12 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseMessageDelta = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse message_delta: {}", err),
+                    format!("Failed to parse message_delta: {err}"),
                 )
             })?;
             Ok(StreamEvent::MessageDelta {
                 stop_reason: parsed.delta.stop_reason.clone(),
-                usage: parsed.usage.map(|u| u.into()),
+                usage: parsed.usage.map(std::convert::Into::into),
             })
         }
         "message_stop" => Ok(StreamEvent::MessageCompleted),
@@ -196,7 +198,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
             let parsed: SseError = serde_json::from_str(data).map_err(|err| {
                 ProviderError::new(
                     ProviderErrorKind::Parse,
-                    format!("Failed to parse error: {}", err),
+                    format!("Failed to parse error: {err}"),
                 )
             })?;
             Ok(StreamEvent::Error {
@@ -206,7 +208,7 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
         }
         other => Err(ProviderError::new(
             ProviderErrorKind::Parse,
-            format!("Unknown SSE event type: {}", other),
+            format!("Unknown SSE event type: {other}"),
         )),
     }
 }
@@ -228,23 +230,23 @@ struct SseMessageInfo {
 /// Usage data from Anthropic SSE events.
 #[derive(Debug, Default, Deserialize)]
 struct SseUsage {
-    #[serde(default)]
-    input_tokens: u64,
-    #[serde(default)]
-    output_tokens: u64,
-    #[serde(default)]
-    cache_read_input_tokens: u64,
-    #[serde(default)]
-    cache_creation_input_tokens: u64,
+    #[serde(default, rename = "input_tokens")]
+    input: u64,
+    #[serde(default, rename = "output_tokens")]
+    output: u64,
+    #[serde(default, rename = "cache_read_input_tokens")]
+    cache_read: u64,
+    #[serde(default, rename = "cache_creation_input_tokens")]
+    cache_write: u64,
 }
 
 impl From<SseUsage> for Usage {
     fn from(u: SseUsage) -> Self {
         Usage {
-            input_tokens: u.input_tokens,
-            output_tokens: u.output_tokens,
-            cache_read_input_tokens: u.cache_read_input_tokens,
-            cache_creation_input_tokens: u.cache_creation_input_tokens,
+            input_tokens: u.input,
+            output_tokens: u.output,
+            cache_read_input_tokens: u.cache_read,
+            cache_creation_input_tokens: u.cache_write,
         }
     }
 }

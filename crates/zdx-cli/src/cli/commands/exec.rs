@@ -67,8 +67,7 @@ fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
         "medium" => Ok(ThinkingLevel::Medium),
         "high" => Ok(ThinkingLevel::High),
         _ => anyhow::bail!(
-            "Invalid thinking level '{}'. Valid options: off, minimal, low, medium, high",
-            s
+            "Invalid thinking level '{s}'. Valid options: off, minimal, low, medium, high"
         ),
     }
 }
@@ -76,9 +75,9 @@ fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
 fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
     let tools: Vec<String> = raw
         .split(',')
-        .map(|t| t.trim())
+        .map(str::trim)
         .filter(|t| !t.is_empty())
-        .map(|t| t.to_string())
+        .map(std::string::ToString::to_string)
         .collect();
 
     if tools.is_empty() {

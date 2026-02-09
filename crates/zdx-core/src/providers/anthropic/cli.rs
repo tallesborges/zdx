@@ -24,7 +24,7 @@ pub struct ClaudeCliConfig {
     pub base_url: String,
     /// Whether extended thinking is enabled
     pub thinking_enabled: bool,
-    /// Token budget for thinking (only used when thinking_enabled = true)
+    /// Token budget for thinking (only used when `thinking_enabled` = true)
     pub thinking_budget_tokens: u32,
     /// Optional effort level for supported models
     pub thinking_effort: Option<EffortLevel>,
@@ -52,6 +52,9 @@ impl ClaudeCliConfig {
 }
 
 /// Resolves OAuth credentials, refreshing if expired.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn resolve_credentials() -> Result<oauth_claude_cli::ClaudeCliCredentials> {
     let mut creds = oauth_claude_cli::load_credentials()?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -90,6 +93,9 @@ impl ClaudeCliClient {
     }
 
     /// Sends a thread and returns an async stream of events.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],

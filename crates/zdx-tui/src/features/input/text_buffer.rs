@@ -412,7 +412,7 @@ impl TextBuffer {
 
         let prefix = &start_line[..start_byte];
         let suffix = &end_line[end_byte..];
-        let merged = format!("{}{}", prefix, suffix);
+        let merged = format!("{prefix}{suffix}");
 
         self.lines.splice(start_row..=end_row, [merged]);
     }
@@ -471,10 +471,7 @@ fn char_to_byte_index(line: &str, col: usize) -> usize {
     if col == 0 {
         return 0;
     }
-    line.char_indices()
-        .nth(col)
-        .map(|(i, _)| i)
-        .unwrap_or(line.len())
+    line.char_indices().nth(col).map_or(line.len(), |(i, _)| i)
 }
 
 #[cfg(test)]

@@ -11,6 +11,8 @@ use zdx_core::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
 use crate::overlays::LoginState;
 
+type LoadFn = fn() -> anyhow::Result<Option<zdx_core::providers::oauth::OAuthCredentials>>;
+
 /// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
     use crate::overlays::render_utils::{calculate_overlay_area, render_overlay_container};
@@ -124,7 +126,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             )),
             Line::from(""),
             Line::from(Span::styled(
-                format!("Set {} in your shell.", env_var),
+                format!("Set {env_var} in your shell."),
                 Style::default().fg(Color::Yellow),
             )),
             Line::from(""),
@@ -139,7 +141,7 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     frame.render_widget(para, inner);
 }
 
-/// Truncates a string in the middle with "..." if it exceeds max_len.
+/// Truncates a string in the middle with "..." if it exceeds `max_len`.
 fn truncate_middle(s: &str, max_len: usize) -> String {
     if s.len() <= max_len || max_len < 10 {
         return s.to_string();
@@ -153,8 +155,6 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
     let selected_style = Style::default().fg(Color::Cyan);
     let status_on = Style::default().fg(Color::Green);
     let pad = " ".repeat(2);
-
-    type LoadFn = fn() -> anyhow::Result<Option<zdx_core::providers::oauth::OAuthCredentials>>;
 
     let providers: [(&str, LoadFn); 3] = [
         ("Claude CLI", claude_cli::load_credentials),
@@ -179,7 +179,7 @@ fn render_cli_provider_entries(width: u16, selected: usize) -> Vec<Line<'static>
             } else {
                 label_style
             };
-            let name = format!("{} {}", pointer, label);
+            let name = format!("{pointer} {label}");
             let spacing = width
                 .saturating_sub(name.len() as u16)
                 .saturating_sub(status.len() as u16)

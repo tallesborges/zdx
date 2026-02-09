@@ -30,7 +30,7 @@ pub enum AgentEvent {
     AssistantCompleted { text: String },
 
     /// Model has decided to call a tool (emitted early for UI feedback).
-    /// The input may be empty at this point; ToolInputCompleted follows with full input.
+    /// The input may be empty at this point; `ToolInputCompleted` follows with full input.
     ToolRequested {
         id: String,
         name: String,
@@ -38,7 +38,7 @@ pub enum AgentEvent {
     },
 
     /// Tool input JSON is fully received (for thread persistence).
-    /// Emitted after ToolRequested once all input JSON has been streamed.
+    /// Emitted after `ToolRequested` once all input JSON has been streamed.
     ToolInputCompleted {
         id: String,
         name: String,
@@ -90,7 +90,7 @@ pub enum AgentEvent {
 
     /// Token usage update from the provider.
     ///
-    /// Emitted at message_start (initial) and message_delta (final output tokens).
+    /// Emitted at `message_start` (initial) and `message_delta` (final output tokens).
     /// The TUI accumulates these for thread-wide tracking.
     UsageUpdate {
         /// Input tokens (non-cached)
@@ -104,7 +104,7 @@ pub enum AgentEvent {
     },
 }
 
-/// Error categories for AgentEvent::Error.
+/// Error categories for `AgentEvent::Error`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ErrorKind {
@@ -153,7 +153,7 @@ impl fmt::Display for ErrorKind {
 /// The optional `image` field is not serialized to JSON - it's handled
 /// separately when building API requests for vision-capable models.
 ///
-/// Note: The `details` field in ToolError is optional and will be omitted during
+/// Note: The `details` field in `ToolError` is optional and will be omitted during
 /// JSON serialization if empty. In the TUI, it's displayed to provide additional
 /// debugging context for failed tool executions.
 #[derive(Debug, Clone, PartialEq, Eq)]

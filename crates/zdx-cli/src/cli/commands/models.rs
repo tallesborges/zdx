@@ -166,17 +166,13 @@ pub async fn update(config: &config::Config) -> Result<()> {
         // The registry is used for model lookups (e.g., checking reasoning support)
         // which should work even if the provider isn't currently enabled.
         if provider_cfg.models.is_empty() {
-            eprintln!(
-                "Warning: providers.{}.models is empty; skipping.",
-                provider_id
-            );
+            eprintln!("Warning: providers.{provider_id}.models is empty; skipping.");
             continue;
         }
 
         let Some(provider_entry) = api.providers.get(api_id) else {
             eprintln!(
-                "Warning: provider '{}' not found in models.dev response; falling back to defaults",
-                api_id
+                "Warning: provider '{api_id}' not found in models.dev response; falling back to defaults"
             );
             let mut fallback = Vec::new();
             for pattern in &provider_cfg.models {
@@ -186,8 +182,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
                 }
                 if is_pure_wildcard(pattern) {
                     eprintln!(
-                        "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
-                        pattern, provider_id
+                        "Warning: wildcard pattern '{pattern}' for provider '{provider_id}' requires models.dev data"
                     );
                     continue;
                 }
@@ -217,7 +212,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
         };
 
         let Some(models_map) = provider_entry.models.as_ref() else {
-            bail!("Provider '{}' has no models in models.dev response", api_id);
+            bail!("Provider '{api_id}' has no models in models.dev response");
         };
 
         let candidates = build_candidates(provider_id, prefix, models_map);
@@ -235,10 +230,7 @@ pub async fn update(config: &config::Config) -> Result<()> {
         }
 
         if all_selected.is_empty() {
-            eprintln!(
-                "Warning: no models matched providers.{}.models",
-                provider_id
-            );
+            eprintln!("Warning: no models matched providers.{provider_id}.models");
             continue;
         }
 
@@ -352,27 +344,26 @@ fn select_candidates(
             continue;
         }
 
-        let matches: Vec<&ModelCandidate> = candidates
+        let candidates_for_pattern: Vec<&ModelCandidate> = candidates
             .iter()
             .filter(|candidate| matches_pattern(pattern, candidate))
             .collect();
 
-        if matches.is_empty() {
+        if candidates_for_pattern.is_empty() {
             // Only track as unmatched if it's not a pure wildcard pattern
             // Patterns like "xiaomi/mimo-v2-flash" or "gpt-5*" are candidates for defaults
             // Pure "*" wildcards are not - they just mean "all models" which matched nothing
-            if !is_pure_wildcard(pattern) {
-                unmatched_patterns.push(pattern.to_string());
-            } else {
+            if is_pure_wildcard(pattern) {
                 eprintln!(
-                    "Warning: wildcard pattern '{}' for provider '{}' matched no models",
-                    pattern, provider_id
+                    "Warning: wildcard pattern '{pattern}' for provider '{provider_id}' matched no models"
                 );
+            } else {
+                unmatched_patterns.push(pattern.to_string());
             }
             continue;
         }
 
-        matched.extend(matches.into_iter().cloned());
+        matched.extend(candidates_for_pattern.into_iter().cloned());
     }
 
     SelectResult {
@@ -386,7 +377,7 @@ fn is_pure_wildcard(pattern: &str) -> bool {
     pattern == "*"
 }
 
-/// Looks up a model in the embedded default_models.toml by ID.
+/// Looks up a model in the embedded `default_models.toml` by ID.
 /// Uses provider resolution to match models with different prefixes.
 fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
     use zdx_core::providers::{provider_kind_from_id, resolve_provider};
@@ -409,8 +400,8 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
     })
 }
 
-/// Creates a default ModelCandidate for a model ID not found in the API.
-/// Looks up pricing and capabilities from embedded default_models.toml if available.
+/// Creates a default `ModelCandidate` for a model ID not found in the API.
+/// Looks up pricing and capabilities from embedded `default_models.toml` if available.
 fn create_default_candidate(
     provider_id: &str,
     prefix: Option<&str>,
@@ -434,7 +425,7 @@ fn create_default_candidate(
     }
 
     // Fall back to generic defaults
-    let display_name = format!("{} (custom)", model_id);
+    let display_name = format!("{model_id} (custom)");
 
     ModelCandidate {
         full_id,
@@ -447,17 +438,17 @@ fn create_default_candidate(
 
 fn build_match_targets(provider_id: &str, raw_id: &str, full_id: &str) -> Vec<String> {
     let mut targets = vec![full_id.to_string(), raw_id.to_string()];
-    targets.push(format!("{}:{}", provider_id, raw_id));
-    targets.push(format!("{}/{}", provider_id, raw_id));
+    targets.push(format!("{provider_id}:{raw_id}"));
+    targets.push(format!("{provider_id}/{raw_id}"));
 
     if provider_id == "anthropic" || provider_id == "claude-cli" {
-        targets.push(format!("claude:{}", raw_id));
-        targets.push(format!("claude/{}", raw_id));
+        targets.push(format!("claude:{raw_id}"));
+        targets.push(format!("claude/{raw_id}"));
     }
 
     if provider_id == "gemini" {
-        targets.push(format!("google:{}", raw_id));
-        targets.push(format!("google/{}", raw_id));
+        targets.push(format!("google:{raw_id}"));
+        targets.push(format!("google/{raw_id}"));
     }
 
     targets
@@ -523,7 +514,7 @@ fn format_display_name(provider_id: &str, name: &str) -> String {
 
 fn format_model_id(prefix: Option<&str>, raw_id: &str) -> String {
     match prefix {
-        Some(prefix) => format!("{}:{}", prefix, raw_id),
+        Some(prefix) => format!("{prefix}:{raw_id}"),
         None => raw_id.to_string(),
     }
 }
@@ -548,7 +539,7 @@ fn write_models_file(path: &Path, models: &[ModelRecord]) -> Result<()> {
         "# Edit this file to customize the model picker.\n\n",
     );
 
-    let mut content = format!("{}{}", header, body);
+    let mut content = format!("{header}{body}");
     if !content.ends_with('\n') {
         content.push('\n');
     }

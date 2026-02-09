@@ -49,7 +49,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for write tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -69,7 +69,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure(
             "mkdir_error",
             format!("Failed to create directory '{}'", parent.display()),
-            Some(format!("OS error: {}", e)),
+            Some(format!("OS error: {e}")),
         );
     }
 
@@ -87,7 +87,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => ToolOutput::failure(
             "write_error",
             format!("Failed to write file '{}'", file_path.display()),
-            Some(format!("OS error: {}", e)),
+            Some(format!("OS error: {e}")),
         ),
     }
 }

@@ -38,7 +38,7 @@ impl StatusLineAccumulator {
     /// Update with frame time (ms).
     pub fn on_frame(&mut self, frame_ms: u16) {
         let fps = if frame_ms > 0 {
-            1000.0 / frame_ms as f32
+            1000.0 / f32::from(frame_ms)
         } else {
             self.fps_ema
         };
@@ -58,7 +58,7 @@ impl StatusLineAccumulator {
 
     /// Clear turn timing and return elapsed duration with tool count.
     ///
-    /// Returns (duration, tool_count) if tools were used, None otherwise.
+    /// Returns (duration, `tool_count`) if tools were used, None otherwise.
     pub fn end_turn(&mut self) -> Option<(Duration, usize)> {
         let tool_count = self.turn_tool_count;
         self.turn_tool_count = 0;

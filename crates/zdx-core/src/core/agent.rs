@@ -61,6 +61,7 @@ impl ToolConfig {
         }
     }
 
+    #[must_use]
     pub fn with_selection(mut self, selection: ToolSelection) -> Self {
         self.selection = selection;
         self
@@ -119,22 +120,22 @@ pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
 
 /// Event sender wrapper that provides best-effort and reliable send modes.
 ///
-/// Use `send_delta()` for high-volume events (TextDelta) that can be dropped
+/// Use `send_delta()` for high-volume events (`TextDelta`) that can be dropped
 /// if the consumer is slow. Use `send_important()` for events that must be
-/// delivered (ToolStarted, ToolCompleted, Completed, Error, Interrupted).
+/// delivered (`ToolStarted`, `ToolCompleted`, Completed, Error, Interrupted).
 #[derive(Clone)]
 pub struct EventSender {
     tx: AgentEventTx,
 }
 
 impl EventSender {
-    /// Creates a new EventSender wrapping the given channel sender.
+    /// Creates a new `EventSender` wrapping the given channel sender.
     pub fn new(tx: AgentEventTx) -> Self {
         Self { tx }
     }
 
     /// Best-effort send: never awaits, drops if channel is full.
-    /// Use for high-volume events like TextDelta that can afford loss.
+    /// Use for high-volume events like `TextDelta` that can afford loss.
     pub fn send_delta(&self, ev: AgentEvent) {
         let _ = self.tx.try_send(Arc::new(ev));
     }
@@ -234,9 +235,8 @@ pub fn spawn_broadcaster(
         while let Some(event) = rx.recv().await {
             subscribers.retain(|tx| {
                 match tx.try_send(event.clone()) {
-                    Ok(()) => true,
-                    Err(TrySendError::Full(_)) => true, // drop this event, keep channel
-                    Err(TrySendError::Closed(_)) => false, // remove closed channel
+                    Ok(()) | Err(TrySendError::Full(_)) => true, // drop this event, keep channel
+                    Err(TrySendError::Closed(_)) => false,       // remove closed channel
                 }
             });
         }
@@ -285,7 +285,7 @@ impl AssistantTurnBuilder {
         Self::default()
     }
 
-    /// Converts accumulated content into ChatContentBlocks for API messages.
+    /// Converts accumulated content into `ChatContentBlocks` for API messages.
     pub fn into_blocks(self, finalized_tools: Vec<ToolUse>) -> Vec<ChatContentBlock> {
         let mut blocks = Vec::with_capacity(self.thinking_blocks.len() + 1 + finalized_tools.len());
 
@@ -333,6 +333,9 @@ impl AssistantTurnBuilder {
 impl ToolUseBuilder {
     /// Finalizes the builder by parsing the accumulated JSON input.
     /// Returns an error if the JSON is malformed.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn finalize(self) -> Result<ToolUse, serde_json::Error> {
         let input = serde_json::from_str(&self.input_json)?;
         Ok(ToolUse {
@@ -354,7 +357,7 @@ fn extract_partial_tool_input(name: &str, input_json: &str) -> Option<String> {
 }
 
 fn extract_partial_json_string_field(input_json: &str, field: &str) -> Option<String> {
-    let key = format!("\"{}\"", field);
+    let key = format!("\"{field}\"");
     let mut search_start = 0;
 
     while let Some(rel_pos) = input_json[search_start..].find(&key) {
@@ -429,7 +432,7 @@ fn decode_partial_json_string(input: &str) -> String {
 }
 
 /// Sends an error event via the async channel and returns the original error.
-/// This preserves the full error chain (including ProviderError details) for callers.
+/// This preserves the full error chain (including `ProviderError` details) for callers.
 async fn emit_error_async(err: anyhow::Error, sender: &EventSender) -> anyhow::Error {
     let event = if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
         AgentEvent::Error {
@@ -489,6 +492,9 @@ const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 /// and thread persistence.
 ///
 /// Returns the final assistant text and the updated message history.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn run_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -553,7 +559,7 @@ pub async fn run_turn(
         }
         ProviderKind::OpenAICodex => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
 
             let openai_config = OpenAICodexConfig::new(
                 selection.model.clone(),
@@ -564,7 +570,7 @@ pub async fn run_turn(
             ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
         }
         ProviderKind::OpenAI => {
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
 
             let openai_config = OpenAIConfig::from_env(
                 selection.model.clone(),
@@ -577,7 +583,7 @@ pub async fn run_turn(
         }
         ProviderKind::OpenRouter => {
             let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
             let openrouter_config = OpenRouterConfig::from_env(
                 selection.model.clone(),
                 config.max_tokens,
@@ -601,7 +607,7 @@ pub async fn run_turn(
             ProviderClient::Mimo(MimoClient::new(mimo_config))
         }
         ProviderKind::Mistral => {
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
             let thinking_enabled = thinking_level.is_enabled();
             let mistral_config = MistralConfig::from_env(
                 selection.model.clone(),
@@ -614,7 +620,7 @@ pub async fn run_turn(
             ProviderClient::Mistral(MistralClient::new(mistral_config))
         }
         ProviderKind::Moonshot => {
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
             let thinking_enabled = thinking_level.is_enabled();
             let moonshot_config = MoonshotConfig::from_env(
                 selection.model.clone(),
@@ -627,7 +633,7 @@ pub async fn run_turn(
             ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
         }
         ProviderKind::Stepfun => {
-            let cache_key = thread_id.map(|s| s.to_string());
+            let cache_key = thread_id.map(std::string::ToString::to_string);
             let thinking_enabled = thinking_level.is_enabled();
             let stepfun_config = StepfunConfig::from_env(
                 selection.model.clone(),
@@ -732,7 +738,7 @@ pub async fn run_turn(
         // like Opus with extended thinking which can take 30+ seconds before first chunk)
         let stream_result = tokio::select! {
             biased;
-            _ = interrupt::wait_for_interrupt() => {
+            () = interrupt::wait_for_interrupt() => {
                 sender.send_important(AgentEvent::Interrupted { partial_content: None }).await;
                 return Err(InterruptedError.into());
             }
@@ -1016,7 +1022,7 @@ pub async fn run_turn(
                         // Create a failed tool result
                         let error_output = ToolOutput::failure(
                             "invalid_json",
-                            format!("Failed to parse tool arguments: {}", e),
+                            format!("Failed to parse tool arguments: {e}"),
                             Some(truncate_for_error(&tu.input_json, 500)),
                         );
                         malformed_results
@@ -1137,7 +1143,7 @@ pub async fn run_turn(
 }
 
 fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
-    level.effort_label().map(|s| s.to_string())
+    level.effort_label().map(std::string::ToString::to_string)
 }
 
 fn map_thinking_to_anthropic_effort(level: ThinkingLevel) -> Option<AnthropicEffortLevel> {
@@ -1152,9 +1158,9 @@ fn map_thinking_to_anthropic_effort(level: ThinkingLevel) -> Option<AnthropicEff
 
 /// Executes all tool uses in parallel and emits events via async channel.
 ///
-/// Tools are spawned concurrently using `tokio::JoinSet`. ToolStarted events
+/// Tools are spawned concurrently using `tokio::JoinSet`. `ToolStarted` events
 /// are emitted sequentially before spawning to preserve CLI output order.
-/// ToolCompleted events are emitted as each task completes.
+/// `ToolCompleted` events are emitted as each task completes.
 ///
 /// On interrupt, aborts all remaining tasks and emits abort results for
 /// incomplete tools. The caller should check `is_interrupted()` after this
@@ -1197,7 +1203,7 @@ async fn execute_tools_async(
     loop {
         tokio::select! {
             biased;
-            _ = interrupt::wait_for_interrupt() => {
+            () = interrupt::wait_for_interrupt() => {
                 // Abort all remaining tasks
                 join_set.abort_all();
 
@@ -1249,7 +1255,7 @@ async fn execute_tools_async(
                         // This is rare and typically only happens if a task panics.
                         // Log it but continue - the slot will remain None and be
                         // caught by the expect below (which is a bug if it happens).
-                        eprintln!("Task join error: {:?}", e);
+                        eprintln!("Task join error: {e:?}");
                     }
                     None => break, // All tasks completed
                 }
@@ -1271,7 +1277,7 @@ mod tests {
 
     use super::*;
 
-    /// Verifies agent emits ToolStarted and ToolCompleted events (SPEC §7).
+    /// Verifies agent emits `ToolStarted` and `ToolCompleted` events (SPEC §7).
     #[tokio::test]
     async fn test_execute_tools_emits_events() {
         use tempfile::TempDir;
@@ -1344,7 +1350,7 @@ mod tests {
         assert!(rx.recv().await.is_none());
     }
 
-    /// Verifies EventSender send_delta() is best-effort (doesn't block on full channel).
+    /// Verifies `EventSender` `send_delta()` is best-effort (doesn't block on full channel).
     #[tokio::test]
     async fn test_event_sender_send_delta_is_best_effort() {
         // Create a tiny channel that will fill up quickly
@@ -1354,13 +1360,13 @@ mod tests {
         // This should not block even though channel is tiny
         for i in 0..100 {
             sender.send_delta(AgentEvent::AssistantDelta {
-                text: format!("chunk {}", i),
+                text: format!("chunk {i}"),
             });
         }
         // If we got here without blocking, the test passes
     }
 
-    /// Verifies ToolUseBuilder finalization fails on invalid JSON.
+    /// Verifies `ToolUseBuilder` finalization fails on invalid JSON.
     #[tokio::test]
     async fn test_tool_use_builder_finalize_fails_on_invalid_json() {
         let builder = ToolUseBuilder {

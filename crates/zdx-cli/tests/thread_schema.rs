@@ -2,7 +2,7 @@
 //!
 //! Tests the schema v1 format including:
 //! - meta event as first line
-//! - tool_use and tool_result events during tool loops
+//! - `tool_use` and `tool_result` events during tool loops
 //! - resume with full tool history
 
 use std::fs;

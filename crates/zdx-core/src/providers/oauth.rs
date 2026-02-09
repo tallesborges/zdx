@@ -17,6 +17,14 @@ use crate::config::paths;
 /// OAuth token cache filename.
 const OAUTH_CACHE_FILE: &str = "oauth.json";
 
+fn now_millis_u64() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()
+        .and_then(|d| u64::try_from(d.as_millis()).ok())
+        .unwrap_or(u64::MAX)
+}
+
 /// OAuth credentials for a provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OAuthCredentials {
@@ -37,10 +45,7 @@ pub struct OAuthCredentials {
 impl OAuthCredentials {
     /// Returns true if the access token is expired or about to expire.
     pub fn is_expired(&self) -> bool {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = now_millis_u64();
         now >= self.expires
     }
 }
@@ -62,6 +67,9 @@ impl OAuthCache {
 
     /// Loads the OAuth cache from disk.
     /// Returns an empty cache if the file doesn't exist.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load() -> Result<Self> {
         let path = Self::cache_path();
         if !path.exists() {
@@ -76,6 +84,9 @@ impl OAuthCache {
     }
 
     /// Saves the OAuth cache to disk with restricted permissions (0600).
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save(&self) -> Result<()> {
         let path = Self::cache_path();
 
@@ -134,7 +145,7 @@ pub mod claude_cli {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
 
-    use super::*;
+    use super::{Context, Deserialize, OAuthCache, OAuthCredentials, Result};
 
     /// Provider key for Claude CLI in the OAuth cache.
     pub const PROVIDER_KEY: &str = "claude-cli";
@@ -203,12 +214,12 @@ pub mod claude_cli {
             .extend_pairs(params)
             .finish();
 
-        format!("{}?{}", AUTHORIZE_URL, query)
+        format!("{AUTHORIZE_URL}?{query}")
     }
 
     /// Builds the redirect URI for a given localhost port.
     pub fn build_redirect_uri(port: u16) -> String {
-        format!("http://localhost:{}{}", port, LOCAL_CALLBACK_PATH)
+        format!("http://localhost:{port}{LOCAL_CALLBACK_PATH}")
     }
 
     /// Generates a random high localhost port for OAuth callbacks.
@@ -243,13 +254,19 @@ pub mod claude_cli {
             let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
             let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
             let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
-            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+            return (
+                code.map(std::string::ToString::to_string),
+                state.map(std::string::ToString::to_string),
+            );
         }
 
         (Some(value.to_string()), None)
     }
 
     /// Exchange authorization code for tokens
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn exchange_code(
         auth_code: &str,
         pkce: &Pkce,
@@ -289,7 +306,7 @@ pub mod claude_cli {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token exchange failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token exchange failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -298,10 +315,7 @@ pub mod claude_cli {
             .context("Failed to parse token response")?;
 
         // Calculate expiry time (current time + expires_in seconds - 5 min buffer)
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = super::now_millis_u64();
         let expires_at = now + (token_data.expires_in * 1000) - (5 * 60 * 1000);
 
         Ok(OAuthCredentials {
@@ -314,6 +328,9 @@ pub mod claude_cli {
     }
 
     /// Refresh an expired access token
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn refresh_token(refresh_token: &str) -> Result<OAuthCredentials> {
         let client = reqwest::Client::new();
         let response = client
@@ -331,7 +348,7 @@ pub mod claude_cli {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token refresh failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -339,10 +356,7 @@ pub mod claude_cli {
             .await
             .context("Failed to parse token response")?;
 
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = super::now_millis_u64();
         let expires_at = now + (token_data.expires_in * 1000) - (5 * 60 * 1000);
 
         Ok(OAuthCredentials {
@@ -362,12 +376,18 @@ pub mod claude_cli {
     }
 
     /// Loads the Claude CLI OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
         Ok(cache.get(PROVIDER_KEY).cloned())
     }
 
     /// Saves Claude CLI OAuth credentials to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
         cache.set(PROVIDER_KEY, creds.clone());
@@ -376,6 +396,9 @@ pub mod claude_cli {
     }
 
     /// Removes the Claude CLI OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn clear_credentials() -> Result<bool> {
         let mut cache = OAuthCache::load()?;
         let had_creds = cache.remove(PROVIDER_KEY).is_some();
@@ -392,27 +415,27 @@ pub mod claude_cli {
     }
 }
 
-/// OpenAI Codex (ChatGPT OAuth) helpers.
+/// `OpenAI` Codex (`ChatGPT` OAuth) helpers.
 pub mod openai_codex {
     use base64::Engine;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
 
-    use super::*;
+    use super::{Context, Deserialize, OAuthCache, OAuthCredentials, Result};
 
-    /// Provider key for OpenAI Codex in the OAuth cache.
+    /// Provider key for `OpenAI` Codex in the OAuth cache.
     pub const PROVIDER_KEY: &str = "openai-codex";
 
-    /// OpenAI Codex OAuth client ID (public, not a secret)
+    /// `OpenAI` Codex OAuth client ID (public, not a secret)
     const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
-    /// OpenAI OAuth URLs
+    /// `OpenAI` OAuth URLs
     const AUTHORIZE_URL: &str = "https://auth.openai.com/oauth/authorize";
     const TOKEN_URL: &str = "https://auth.openai.com/oauth/token";
     const REDIRECT_URI: &str = "http://localhost:1455/auth/callback";
     const SCOPES: &str = "openid profile email offline_access";
 
-    /// JWT claim path used to extract the ChatGPT account id.
+    /// JWT claim path used to extract the `ChatGPT` account id.
     pub const JWT_CLAIM_PATH: &str = "https://api.openai.com/auth";
 
     /// PKCE code verifier and challenge
@@ -421,7 +444,7 @@ pub mod openai_codex {
         pub challenge: String,
     }
 
-    /// OpenAI Codex credentials with account id.
+    /// `OpenAI` Codex credentials with account id.
     #[derive(Debug, Clone)]
     #[allow(dead_code)]
     pub struct OpenAICodexCredentials {
@@ -450,7 +473,7 @@ pub mod openai_codex {
         }
     }
 
-    /// Build the authorization URL for OpenAI Codex OAuth
+    /// Build the authorization URL for `OpenAI` Codex OAuth
     pub fn build_auth_url(pkce: &Pkce, state: &str) -> String {
         let params = [
             ("response_type", "code"),
@@ -469,7 +492,7 @@ pub mod openai_codex {
             .extend_pairs(params)
             .finish();
 
-        format!("{}?{}", AUTHORIZE_URL, query)
+        format!("{AUTHORIZE_URL}?{query}")
     }
 
     /// Parses a pasted authorization input into code + optional state.
@@ -496,13 +519,19 @@ pub mod openai_codex {
             let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
             let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
             let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
-            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+            return (
+                code.map(std::string::ToString::to_string),
+                state.map(std::string::ToString::to_string),
+            );
         }
 
         (Some(value.to_string()), None)
     }
 
     /// Exchanges authorization code for tokens.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
         let client = reqwest::Client::new();
         let body = url::form_urlencoded::Serializer::new(String::new())
@@ -524,7 +553,7 @@ pub mod openai_codex {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token exchange failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token exchange failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -545,6 +574,9 @@ pub mod openai_codex {
     }
 
     /// Refreshes an expired access token.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn refresh_token(refresh_token: &str) -> Result<OAuthCredentials> {
         let client = reqwest::Client::new();
         let body = url::form_urlencoded::Serializer::new(String::new())
@@ -564,7 +596,7 @@ pub mod openai_codex {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token refresh failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -592,10 +624,7 @@ pub mod openai_codex {
     }
 
     fn compute_expires_at(expires_in_secs: u64) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = super::now_millis_u64();
         now + (expires_in_secs * 1000).saturating_sub(5 * 60 * 1000)
     }
 
@@ -611,16 +640,22 @@ pub mod openai_codex {
         claim
             .get("chatgpt_account_id")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
+            .map(std::string::ToString::to_string)
     }
 
-    /// Loads the OpenAI Codex OAuth credentials from cache.
+    /// Loads the `OpenAI` Codex OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
         Ok(cache.get(PROVIDER_KEY).cloned())
     }
 
-    /// Saves OpenAI Codex OAuth credentials to cache.
+    /// Saves `OpenAI` Codex OAuth credentials to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
         cache.set(PROVIDER_KEY, creds.clone());
@@ -628,7 +663,10 @@ pub mod openai_codex {
         Ok(())
     }
 
-    /// Removes the OpenAI Codex OAuth credentials from cache.
+    /// Removes the `OpenAI` Codex OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn clear_credentials() -> Result<bool> {
         let mut cache = OAuthCache::load()?;
         let had_creds = cache.remove(PROVIDER_KEY).is_some();
@@ -643,7 +681,7 @@ pub mod gemini_cli {
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use sha2::{Digest, Sha256};
 
-    use super::*;
+    use super::{Context, Deserialize, OAuthCache, OAuthCredentials, Result};
 
     /// Provider key for Gemini CLI in the OAuth cache.
     pub const PROVIDER_KEY: &str = "gemini-cli";
@@ -719,7 +757,7 @@ pub mod gemini_cli {
             .extend_pairs(params)
             .finish();
 
-        format!("{}?{}", AUTHORIZE_URL, query)
+        format!("{AUTHORIZE_URL}?{query}")
     }
 
     /// Parses a pasted authorization input into code + optional state.
@@ -746,13 +784,19 @@ pub mod gemini_cli {
             let params = url::form_urlencoded::parse(value.as_bytes()).collect::<Vec<_>>();
             let code = params.iter().find(|(k, _)| k == "code").map(|(_, v)| v);
             let state = params.iter().find(|(k, _)| k == "state").map(|(_, v)| v);
-            return (code.map(|v| v.to_string()), state.map(|v| v.to_string()));
+            return (
+                code.map(std::string::ToString::to_string),
+                state.map(std::string::ToString::to_string),
+            );
         }
 
         (Some(value.to_string()), None)
     }
 
     /// Exchanges authorization code for tokens.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn exchange_code(auth_code: &str, pkce: &Pkce) -> Result<OAuthCredentials> {
         let client = reqwest::Client::new();
         let body = url::form_urlencoded::Serializer::new(String::new())
@@ -775,7 +819,7 @@ pub mod gemini_cli {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token exchange failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token exchange failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -795,6 +839,9 @@ pub mod gemini_cli {
     }
 
     /// Refreshes an expired access token.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn refresh_token(refresh_token: &str, project_id: &str) -> Result<OAuthCredentials> {
         let client = reqwest::Client::new();
         let body = url::form_urlencoded::Serializer::new(String::new())
@@ -815,7 +862,7 @@ pub mod gemini_cli {
         if !response.status().is_success() {
             let status = response.status();
             let body = response.text().await.unwrap_or_default();
-            anyhow::bail!("Token refresh failed (HTTP {}): {}", status, body);
+            anyhow::bail!("Token refresh failed (HTTP {status}): {body}");
         }
 
         let token_data: TokenResponse = response
@@ -837,6 +884,9 @@ pub mod gemini_cli {
     }
 
     /// Discovers or provisions a Cloud Code Assist project.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn discover_project(access_token: &str) -> Result<String> {
         let client = reqwest::Client::new();
 
@@ -847,10 +897,10 @@ pub mod gemini_cli {
         });
 
         // Try to load existing project first
-        let load_url = format!("{}/v1internal:loadCodeAssist", CLOUD_CODE_API);
+        let load_url = format!("{CLOUD_CODE_API}/v1internal:loadCodeAssist");
         let response = client
             .post(&load_url)
-            .header("Authorization", format!("Bearer {}", access_token))
+            .header("Authorization", format!("Bearer {access_token}"))
             .header("Content-Type", "application/json")
             .body(serde_json::json!({ "metadata": metadata.clone() }).to_string())
             .send()
@@ -869,7 +919,9 @@ pub mod gemini_cli {
                 .and_then(|tiers| {
                     tiers
                         .iter()
-                        .find(|tier| tier.get("isDefault").and_then(|v| v.as_bool()) == Some(true))
+                        .find(|tier| {
+                            tier.get("isDefault").and_then(serde_json::Value::as_bool) == Some(true)
+                        })
                         .or_else(|| tiers.first())
                 })
                 .and_then(|tier| tier.get("id").and_then(|v| v.as_str()))
@@ -877,11 +929,11 @@ pub mod gemini_cli {
                 .to_string();
 
             // Try to onboard user (provision new project) with retries.
-            let onboard_url = format!("{}/v1internal:onboardUser", CLOUD_CODE_API);
+            let onboard_url = format!("{CLOUD_CODE_API}/v1internal:onboardUser");
             for attempt in 0..10 {
                 let response = client
                     .post(&onboard_url)
-                    .header("Authorization", format!("Bearer {}", access_token))
+                    .header("Authorization", format!("Bearer {access_token}"))
                     .header("Content-Type", "application/json")
                     .body(
                         serde_json::json!({
@@ -899,7 +951,7 @@ pub mod gemini_cli {
                         .json()
                         .await
                         .context("Failed to parse onboard response")?;
-                    let done = data.get("done").and_then(|v| v.as_bool()) == Some(true);
+                    let done = data.get("done").and_then(serde_json::Value::as_bool) == Some(true);
                     let project_id = data
                         .get("response")
                         .and_then(|v| v.get("cloudaicompanionProject"))
@@ -929,20 +981,23 @@ pub mod gemini_cli {
     }
 
     fn compute_expires_at(expires_in_secs: u64) -> u64 {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis() as u64)
-            .unwrap_or(0);
+        let now = super::now_millis_u64();
         now + (expires_in_secs * 1000).saturating_sub(5 * 60 * 1000)
     }
 
     /// Loads the Gemini CLI OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn load_credentials() -> Result<Option<OAuthCredentials>> {
         let cache = OAuthCache::load()?;
         Ok(cache.get(PROVIDER_KEY).cloned())
     }
 
     /// Saves Gemini CLI OAuth credentials to cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn save_credentials(creds: &OAuthCredentials) -> Result<()> {
         let mut cache = OAuthCache::load()?;
         cache.set(PROVIDER_KEY, creds.clone());
@@ -951,6 +1006,9 @@ pub mod gemini_cli {
     }
 
     /// Removes the Gemini CLI OAuth credentials from cache.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn clear_credentials() -> Result<bool> {
         let mut cache = OAuthCache::load()?;
         let had_creds = cache.remove(PROVIDER_KEY).is_some();
@@ -963,13 +1021,10 @@ pub mod gemini_cli {
 mod tests {
     use super::*;
 
-    /// Test: OAuthCredentials expiry check.
+    /// Test: `OAuthCredentials` expiry check.
     #[test]
     fn test_credentials_expiry() {
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis() as u64;
+        let now = now_millis_u64();
 
         let expired = OAuthCredentials {
             cred_type: "oauth".to_string(),
@@ -990,7 +1045,7 @@ mod tests {
         assert!(!valid.is_expired());
     }
 
-    /// Test: OAuthCache serialization roundtrip (in-memory, no fs).
+    /// Test: `OAuthCache` serialization roundtrip (in-memory, no fs).
     #[test]
     fn test_oauth_cache_serialization() {
         let mut cache = OAuthCache::default();
@@ -1000,7 +1055,7 @@ mod tests {
                 cred_type: "oauth".to_string(),
                 refresh: "refresh-token".to_string(),
                 access: "access-token".to_string(),
-                expires: 1234567890000,
+                expires: 1_234_567_890_000,
                 account_id: None,
             },
         );
@@ -1014,7 +1069,7 @@ mod tests {
         assert_eq!(creds.refresh, "refresh-token");
     }
 
-    /// Test: OAuthCache remove.
+    /// Test: `OAuthCache` remove.
     #[test]
     fn test_oauth_cache_remove() {
         let mut cache = OAuthCache::default();

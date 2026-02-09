@@ -18,6 +18,6 @@ pub fn init() -> Result<()> {
 
 pub fn generate() -> Result<()> {
     let toml = config::Config::generate()?;
-    print!("{}", toml);
+    print!("{toml}");
     Ok(())
 }
