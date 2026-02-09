@@ -1,4 +1,4 @@
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, ThreadEvent};
@@ -128,7 +128,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                 }
             };
             let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.clone())
-                .map_err(|_| anyhow!("Failed to open thread log"))?;
+                .context("open thread log")?;
             if let Err(err) = thread.set_root_path(&worktree_root) {
                 context
                     .client()
@@ -344,7 +344,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     if got_result {
         thread
             .append(&ThreadEvent::assistant_message(&final_text))
-            .map_err(|_| anyhow!("Failed to append assistant message"))?;
+            .context("append assistant message")?;
     }
 
     if !final_text.trim().is_empty() {

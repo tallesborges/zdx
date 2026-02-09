@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::build_effective_system_prompt_with_paths;
@@ -15,9 +15,9 @@ use crate::types::IncomingMessage;
 /// Returns an error if the operation fails.
 pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMessage>)> {
     let thread =
-        Thread::with_id(thread_id.to_string()).map_err(|_| anyhow!("Failed to open thread log"))?;
+        Thread::with_id(thread_id.to_string()).context("open thread log")?;
     let messages = thread_persistence::load_thread_as_messages(thread_id)
-        .map_err(|_| anyhow!("Failed to load thread history"))?;
+        .context("load thread history")?;
     Ok((thread, messages))
 }
 
@@ -26,10 +26,10 @@ pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMess
 /// Returns an error if the operation fails.
 pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
     let thread = Thread::with_id(thread_id.to_string())
-        .map_err(|_| anyhow!("Failed to resolve thread log"))?;
+        .context("resolve thread log")?;
     let path = thread.path();
     if path.exists() {
-        std::fs::remove_file(path).map_err(|_| anyhow!("Failed to clear thread history"))?;
+        std::fs::remove_file(path).context("clear thread history")?;
     }
     Ok(())
 }
@@ -45,7 +45,7 @@ pub(crate) fn record_user_message(
     let text = build_user_text(incoming);
     thread
         .append(&ThreadEvent::user_message(text.clone()))
-        .map_err(|_| anyhow!("Failed to append user message"))?;
+        .context("append user message")?;
 
     if incoming.images.is_empty() {
         messages.push(ChatMessage::user(text));
@@ -98,7 +98,7 @@ pub(crate) fn spawn_agent_turn(
 ) -> Result<AgentTurnHandle> {
     // Build effective system prompt from config + AGENTS.md + skills
     let effective = build_effective_system_prompt_with_paths(config, root)
-        .map_err(|_| anyhow!("Failed to build system prompt"))?;
+        .context("build system prompt")?;
 
     // Append bot-specific prompt if provided
     let system_prompt = match (effective.prompt, bot_system_prompt) {

@@ -2,7 +2,7 @@ use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow, bail};
+use anyhow::{Context, Result, bail};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -119,7 +119,7 @@ impl TelegramClient {
             .get(url)
             .send()
             .await
-            .map_err(|_| anyhow!("Telegram file download failed"))?;
+            .context("Telegram file download")?;
 
         if !response.status().is_success() {
             bail!(
@@ -131,7 +131,7 @@ impl TelegramClient {
         let bytes = response
             .bytes()
             .await
-            .map_err(|_| anyhow!("Failed to read Telegram file bytes"))?;
+            .context("read Telegram file bytes")?;
         Ok(bytes.to_vec())
     }
 
@@ -379,22 +379,22 @@ impl TelegramClient {
             .json(body)
             .send()
             .await
-            .map_err(|_| anyhow!("Telegram request failed"))?;
+            .context("Telegram request")?;
 
         // Read raw bytes so we can deserialize twice if needed
         let bytes = response
             .bytes()
             .await
-            .map_err(|_| anyhow!("Failed to read Telegram response"))?;
+            .context("read Telegram response")?;
 
         // First check if request succeeded
         let envelope: TelegramEnvelope =
-            serde_json::from_slice(&bytes).map_err(|_| anyhow!("Invalid Telegram response"))?;
+            serde_json::from_slice(&bytes).context("parse Telegram response envelope")?;
 
         if !envelope.ok {
             // Parse error response (no result field)
             let error: TelegramError = serde_json::from_slice(&bytes)
-                .map_err(|_| anyhow!("Failed to decode Telegram error"))?;
+                .context("decode Telegram error")?;
             let description = error
                 .description
                 .unwrap_or_else(|| "Telegram API error".to_string());
@@ -403,7 +403,7 @@ impl TelegramClient {
 
         // Parse success response (has result field)
         let success: TelegramSuccess<T> = serde_json::from_slice(&bytes)
-            .map_err(|_| anyhow!("Failed to decode Telegram result"))?;
+            .context("decode Telegram result")?;
 
         Ok(success.result)
     }
@@ -450,7 +450,7 @@ pub fn telegram_send_tool(client: TelegramClient) -> (ToolDefinition, ToolHandle
 
     let client = Arc::new(client);
     let handler: ToolHandler = Arc::new(move |input: &Value, ctx: &ToolContext| {
-        let client = client.clone();
+        let client = Arc::clone(&client);
         let input = input.clone();
         let timeout = ctx.timeout;
         Box::pin(async move {

@@ -80,7 +80,7 @@ async fn run_subagent(
         child.wait_with_output(),
     )
     .await
-    .map_err(|_| format!("Auto-title generation timed out after {TITLE_TIMEOUT_SECS} seconds"))
+    .map_err(|_elapsed| format!("Auto-title generation timed out after {TITLE_TIMEOUT_SECS} seconds"))
     .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))?;
 
     if !output.status.success() {

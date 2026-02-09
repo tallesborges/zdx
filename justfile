@@ -44,7 +44,7 @@ fmt:
 
 # Lint
 clippy:
-    cargo clippy --workspace --all-targets -- -D warnings
+    cargo clippy --workspace --all-targets --all-features -- -D warnings
 
 # Run tests (fast path, no doctests)
 test:

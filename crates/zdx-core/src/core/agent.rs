@@ -234,7 +234,7 @@ pub fn spawn_broadcaster(
     tokio::spawn(async move {
         while let Some(event) = rx.recv().await {
             subscribers.retain(|tx| {
-                match tx.try_send(event.clone()) {
+                match tx.try_send(Arc::clone(&event)) {
                     Ok(()) | Err(TrySendError::Full(_)) => true, // drop this event, keep channel
                     Err(TrySendError::Closed(_)) => false,       // remove closed channel
                 }

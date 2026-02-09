@@ -127,7 +127,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
     let output = if let Some(timeout) = ctx.timeout {
         tokio::time::timeout(timeout, child.wait_with_output())
             .await
-            .map_err(|_| format!("Read thread timed out after {} seconds", timeout.as_secs()))
+            .map_err(|_elapsed| format!("Read thread timed out after {} seconds", timeout.as_secs()))
             .and_then(|result| result.map_err(|e| format!("Failed to get subagent output: {e}")))?
     } else {
         child
