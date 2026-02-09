@@ -83,26 +83,49 @@ jobs:
           find dist -name 'zdx-*.tar.gz' -exec mv {} dist/assets/ \;
           ls -la dist/assets
 
-      - name: Generate Homebrew cask
+      - name: Generate Homebrew formula
         run: |
           version="${GITHUB_REF_NAME#v}"
           sha_arm=$(sha256sum dist/assets/zdx-aarch64-apple-darwin.tar.gz | awk '{print $1}')
           sha_intel=$(sha256sum dist/assets/zdx-x86_64-apple-darwin.tar.gz | awk '{print $1}')
-          cat > dist/assets/zdx.rb <<EOF
-          cask "zdx" do
-            arch arm: "aarch64", intel: "x86_64"
-
-            version "${version}"
-            sha256 arm: "${sha_arm}", intel: "${sha_intel}"
-
-            url "https://github.com/${GITHUB_REPOSITORY}/releases/download/v#{version}/zdx-#{arch}-apple-darwin.tar.gz"
-            name "zdx"
+          sha_linux=$(sha256sum dist/assets/zdx-x86_64-unknown-linux-gnu.tar.gz | awk '{print $1}')
+          cat > dist/assets/zdx.rb <<'FORMULA'
+          class Zdx < Formula
             desc "Terminal AI assistant"
-            homepage "https://github.com/${GITHUB_REPOSITORY}"
+            homepage "https://github.com/REPO_PLACEHOLDER"
+            version "VERSION_PLACEHOLDER"
+            license "MIT"
 
-            binary "zdx"
+            on_macos do
+              if Hardware::CPU.arm?
+                url "https://github.com/REPO_PLACEHOLDER/releases/download/v#{version}/zdx-aarch64-apple-darwin.tar.gz"
+                sha256 "SHA_ARM_PLACEHOLDER"
+              else
+                url "https://github.com/REPO_PLACEHOLDER/releases/download/v#{version}/zdx-x86_64-apple-darwin.tar.gz"
+                sha256 "SHA_INTEL_PLACEHOLDER"
+              end
+            end
+
+            on_linux do
+              url "https://github.com/REPO_PLACEHOLDER/releases/download/v#{version}/zdx-x86_64-unknown-linux-gnu.tar.gz"
+              sha256 "SHA_LINUX_PLACEHOLDER"
+            end
+
+            def install
+              bin.install "zdx"
+            end
+
+            test do
+              assert_match "zdx", shell_output("#{bin}/zdx --version")
+            end
           end
-          EOF
+          FORMULA
+          # Replace placeholders with actual values
+          sed -i "s|REPO_PLACEHOLDER|${GITHUB_REPOSITORY}|g" dist/assets/zdx.rb
+          sed -i "s|VERSION_PLACEHOLDER|${version}|g" dist/assets/zdx.rb
+          sed -i "s|SHA_ARM_PLACEHOLDER|${sha_arm}|g" dist/assets/zdx.rb
+          sed -i "s|SHA_INTEL_PLACEHOLDER|${sha_intel}|g" dist/assets/zdx.rb
+          sed -i "s|SHA_LINUX_PLACEHOLDER|${sha_linux}|g" dist/assets/zdx.rb
 
       - name: Checkout Homebrew tap
         if: env.HOMEBREW_TAP_TOKEN != ''
@@ -112,21 +135,26 @@ jobs:
           token: ${{ env.HOMEBREW_TAP_TOKEN }}
           path: homebrew-zdx
 
-      - name: Update Homebrew cask
+      - name: Update Homebrew formula
         if: env.HOMEBREW_TAP_TOKEN != ''
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          cp dist/assets/zdx.rb homebrew-zdx/Casks/zdx.rb
+          mkdir -p homebrew-zdx/Formula
+          cp dist/assets/zdx.rb homebrew-zdx/Formula/zdx.rb
           cd homebrew-zdx
+          # Clean up old Cask if it exists
+          if [ -d Casks ]; then
+            git rm -rf Casks || true
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add Casks/zdx.rb
+          git add Formula/zdx.rb
           if git diff --cached --quiet; then
-            echo "Cask already up to date."
+            echo "Formula already up to date."
             exit 0
           fi
-          git commit -m "chore: update zdx cask to v${version}"
+          git commit -m "chore: update zdx formula to v${version}"
           git push
 
       - name: Publish GitHub Release
