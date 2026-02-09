@@ -111,13 +111,34 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         }
 
         if is_worktree_create_command(text) {
-            let worktree_root = worktree::ensure_worktree(context.root(), &thread_id)
-                .map_err(|err| anyhow!("Failed to ensure worktree for {}: {}", thread_id, err))?;
+            let worktree_root = match worktree::ensure_worktree(context.root(), &thread_id) {
+                Ok(path) => path,
+                Err(err) => {
+                    let msg = format!(
+                        "Failed to enable worktree: {}\n\nTip: start the bot from inside a git repo (or a subdirectory of one).",
+                        err
+                    );
+                    context
+                        .client()
+                        .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
+                        .await?;
+                    return Ok(());
+                }
+            };
             let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.clone())
                 .map_err(|_| anyhow!("Failed to open thread log"))?;
-            thread
-                .set_root_path(&worktree_root)
-                .map_err(|err| anyhow!("Failed to set thread root: {}", err))?;
+            if let Err(err) = thread.set_root_path(&worktree_root) {
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        &format!("Failed to persist worktree root: {}", err),
+                        reply_to_message_id,
+                        topic_id,
+                    )
+                    .await?;
+                return Ok(());
+            }
             context
                 .client()
                 .send_message(

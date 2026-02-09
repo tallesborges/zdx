@@ -58,14 +58,14 @@ pub(crate) async fn parse_incoming_message(
                 chat_id,
                 "Access denied.",
                 Some(message_id),
-                message.message_thread_id,
+                message.effective_thread_id(),
             )
             .await;
         return Ok(None);
     }
 
-    // Use message_thread_id when present (don't require is_topic_message flag)
-    let message_thread_id = message.message_thread_id;
+    // Use best-effort thread id for forum topics.
+    let message_thread_id = message.effective_thread_id();
 
     let mut text = extract_text(&message);
     let mut images = Vec::new();
