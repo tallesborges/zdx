@@ -38,7 +38,7 @@ impl From<&ExecOptions> for AgentOptions {
 /// Sends a prompt to the LLM and streams text response to stdout.
 ///
 /// If a thread is provided, logs the user prompt and final assistant response,
-/// plus tool_use and tool_result events for full history.
+/// plus `tool_use` and `tool_result` events for full history.
 /// Implements tool loop - if the model requests tools, executes them and continues.
 /// Returns the complete response text.
 ///
@@ -49,19 +49,19 @@ pub async fn run_exec(
     mut thread: Option<Thread>,
     options: &ExecOptions,
 ) -> Result<String> {
+    use std::io::Write;
+
     let effective =
         zdx_core::core::context::build_effective_system_prompt_with_paths(config, &options.root)?;
 
     // Emit warnings from context loading to stderr
     for warning in &effective.warnings {
-        use std::io::Write;
         let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
     }
 
     // Emit config path info (only if config exists on disk).
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
-        use std::io::Write;
         let _ = writeln!(std::io::stderr(), "Config file: {}", config_path.display());
     }
 
@@ -72,7 +72,6 @@ pub async fn run_exec(
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        use std::io::Write;
         let _ = writeln!(
             std::io::stderr(),
             "Loaded AGENTS.md from: {}",
@@ -87,7 +86,6 @@ pub async fn run_exec(
             .iter()
             .map(|skill| skill.name.clone())
             .collect();
-        use std::io::Write;
         let _ = writeln!(std::io::stderr(), "Loaded skills: {}", names.join(", "));
     }
 
@@ -166,7 +164,7 @@ pub struct ExecRenderer {
     stderr: Stderr,
     /// Whether the final newline has been printed after assistant output.
     needs_final_newline: bool,
-    /// Tracks tool_use id -> name for ToolCompleted rendering.
+    /// Tracks `tool_use` id -> name for `ToolCompleted` rendering.
     tool_names: HashMap<String, String>,
     /// Tracks tool start times for duration calculation.
     tool_start_times: HashMap<String, Instant>,
@@ -195,7 +193,7 @@ impl ExecRenderer {
         match event {
             AgentEvent::AssistantDelta { text } => {
                 if !text.is_empty() {
-                    let _ = write!(self.stdout, "{}", text);
+                    let _ = write!(self.stdout, "{text}");
                     let _ = self.stdout.flush();
                     self.needs_final_newline = true;
                 }
@@ -223,7 +221,7 @@ impl ExecRenderer {
                 if name == "bash"
                     && let Some(command) = input.get("command").and_then(|v| v.as_str())
                 {
-                    let _ = writeln!(self.stderr, "Tool requested: bash command=\"{}\"", command);
+                    let _ = writeln!(self.stderr, "Tool requested: bash command=\"{command}\"");
                 }
 
                 // Track tool name for ToolCompleted rendering (if not already tracked)
@@ -231,7 +229,7 @@ impl ExecRenderer {
             }
             AgentEvent::ToolStarted { id, name } => {
                 self.tool_start_times.insert(id, Instant::now());
-                let _ = write!(self.stderr, "⚙ Running {}...", name);
+                let _ = write!(self.stderr, "⚙ Running {name}...");
                 let _ = self.stderr.flush();
             }
             AgentEvent::ToolCompleted { id, result } => {
@@ -242,7 +240,7 @@ impl ExecRenderer {
                     .map(|start| format!(" ({:.2}s)", start.elapsed().as_secs_f64()))
                     .unwrap_or_default();
 
-                let _ = writeln!(self.stderr, " Done.{}", duration_str);
+                let _ = writeln!(self.stderr, " Done.{duration_str}");
 
                 // Emit debug line for bash tool (per SPEC §10)
                 if let Some(name) = self.tool_names.get(&id)
@@ -257,10 +255,10 @@ impl ExecRenderer {
                 details,
             } => {
                 // Print one-liner to stderr
-                let _ = writeln!(self.stderr, "Error [{}]: {}", kind, message);
+                let _ = writeln!(self.stderr, "Error [{kind}]: {message}");
                 // Print details if present (indented)
                 if let Some(ref detail_text) = details {
-                    let _ = writeln!(self.stderr, "  Details: {}", detail_text);
+                    let _ = writeln!(self.stderr, "  Details: {detail_text}");
                 }
             }
             AgentEvent::Interrupted { .. } => {
@@ -274,7 +272,7 @@ impl ExecRenderer {
             AgentEvent::ReasoningDelta { text } => {
                 // In exec mode, stream thinking text to stderr (no styling)
                 if !text.is_empty() {
-                    let _ = write!(self.stderr, "{}", text);
+                    let _ = write!(self.stderr, "{text}");
                     let _ = self.stderr.flush();
                 }
             }
@@ -304,10 +302,16 @@ impl ExecRenderer {
         match result {
             ToolOutput::Success { data, .. } => {
                 // Check for timed_out first
-                if let Some(true) = data.get("timed_out").and_then(|v| v.as_bool()) {
+                if let Some(true) = data
+                    .get("timed_out")
+                    .and_then(serde_json::value::Value::as_bool)
+                {
                     let _ = writeln!(self.stderr, "Tool finished: bash timed_out=true");
-                } else if let Some(exit_code) = data.get("exit_code").and_then(|v| v.as_i64()) {
-                    let _ = writeln!(self.stderr, "Tool finished: bash exit={}", exit_code);
+                } else if let Some(exit_code) = data
+                    .get("exit_code")
+                    .and_then(serde_json::value::Value::as_i64)
+                {
+                    let _ = writeln!(self.stderr, "Tool finished: bash exit={exit_code}");
                 }
             }
             ToolOutput::Failure { error, .. } => {
@@ -318,7 +322,7 @@ impl ExecRenderer {
                 );
             }
             ToolOutput::Canceled { message } => {
-                let _ = writeln!(self.stderr, "Tool finished: bash canceled ({})", message);
+                let _ = writeln!(self.stderr, "Tool finished: bash canceled ({message})");
             }
         }
     }

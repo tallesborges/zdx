@@ -189,7 +189,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                                     if provider == zdx_core::providers::ProviderKind::ClaudeCli {
                                         let state =
                                             oauth_state.clone().unwrap_or_else(|| verifier.clone());
-                                        format!("{}#{}", code, state)
+                                        format!("{code}#{state}")
                                     } else {
                                         code
                                     };
@@ -257,10 +257,10 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 let state = app.tui.tasks.state_mut(kind);
                 state.finish_if_active(completed.id)
             };
-            if !ok {
-                vec![]
-            } else {
+            if ok {
                 update(app, *completed.result)
+            } else {
+                vec![]
             }
         }
         UiEvent::HandoffResult { goal, result } => {
@@ -285,8 +285,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::HandoffThreadCreateFailed { error } => {
             app.tui.transcript.push_cell(HistoryCell::system(format!(
-                "Warning: Failed to create thread: {}",
-                error
+                "Warning: Failed to create thread: {error}"
             )));
             vec![]
         }
@@ -312,7 +311,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             SkillUiEvent::ListFailed { repo, error } => {
                 if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_error(&repo, format!("Failed to load skills: {}", error));
+                    picker.set_error(&repo, format!("Failed to load skills: {error}"));
                 }
                 vec![]
             }
@@ -326,8 +325,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     &mut app.tui,
                     vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(format!(
-                            "Installed skill \"{}\". Restart ZDX to pick up new skills.",
-                            skill
+                            "Installed skill \"{skill}\". Restart ZDX to pick up new skills."
                         )),
                     )],
                 );
@@ -336,14 +334,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             SkillUiEvent::InstallFailed { repo, skill, error } => {
                 if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
                     picker.set_installing(None);
-                    picker.set_error(&repo, format!("Install failed: {}", error));
+                    picker.set_error(&repo, format!("Install failed: {error}"));
                 }
                 apply_mutations(
                     &mut app.tui,
                     vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(format!(
-                            "Failed to install {}: {}",
-                            skill, error
+                            "Failed to install {skill}: {error}"
                         )),
                     )],
                 );
@@ -549,9 +546,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     app.overlay.as_ref(),
                     Some(overlays::Overlay::ThreadPicker(_))
                 );
-                if !allow {
-                    vec![]
-                } else {
+                if allow {
                     let (mut effects, mutations, overlay_action) =
                         thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
                     apply_mutations(&mut app.tui, mutations);
@@ -581,6 +576,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     }
 
                     effects
+                } else {
+                    vec![]
                 }
             }
             ThreadUiEvent::PreviewFailed => {
@@ -588,13 +585,13 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     app.overlay.as_ref(),
                     Some(overlays::Overlay::ThreadPicker(_))
                 );
-                if !allow {
-                    vec![]
-                } else {
+                if allow {
                     let (effects, mutations, _) =
                         thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
                     apply_mutations(&mut app.tui, mutations);
                     effects
+                } else {
+                    vec![]
                 }
             }
             ThreadUiEvent::Created {
@@ -735,9 +732,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                     .thread_handle
                     .as_ref()
                     .is_some_and(|log| log.id == thread_id);
-                if !is_current {
-                    vec![]
-                } else {
+                if is_current {
                     let (effects, mutations, _) =
                         thread::handle_thread_event(ThreadUiEvent::TitleSuggested {
                             thread_id,
@@ -745,6 +740,8 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                         });
                     apply_mutations(&mut app.tui, mutations);
                     effects
+                } else {
+                    vec![]
                 }
             }
             ThreadUiEvent::RenameFailed { error } => {

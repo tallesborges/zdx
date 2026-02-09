@@ -1,4 +1,4 @@
-//! OpenRouter provider (OpenAI-compatible Chat Completions).
+//! `OpenRouter` provider (OpenAI-compatible Chat Completions).
 
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -12,7 +12,7 @@ use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
-/// OpenRouter API configuration.
+/// `OpenRouter` API configuration.
 #[derive(Debug, Clone)]
 pub struct OpenRouterConfig {
     pub api_key: String,
@@ -34,6 +34,9 @@ impl OpenRouterConfig {
     /// Environment variables:
     /// - `OPENROUTER_API_KEY` (fallback if not in config)
     /// - `OPENROUTER_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -62,7 +65,7 @@ impl OpenRouterConfig {
     }
 }
 
-/// OpenRouter client.
+/// `OpenRouter` client.
 pub struct OpenRouterClient {
     inner: OpenAIChatCompletionsClient,
 }
@@ -87,6 +90,9 @@ impl OpenRouterClient {
         Self { inner }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],

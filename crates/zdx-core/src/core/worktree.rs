@@ -9,6 +9,9 @@ use anyhow::{Context, Result, anyhow, bail};
 /// Ensures a git worktree exists for the given ID.
 ///
 /// Returns the worktree path (existing or newly created).
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn ensure_worktree(root: &Path, id: &str) -> Result<PathBuf> {
     let repo_root = git_root(root)?;
     let worktree_path = worktree_path_for_id(&repo_root, id);
@@ -93,7 +96,7 @@ fn worktree_base_dir(repo_root: &Path) -> PathBuf {
     parent
         .join(".zdx")
         .join("worktrees")
-        .join(format!("{}-{}", repo_name, hash))
+        .join(format!("{repo_name}-{hash}"))
 }
 
 fn is_worktree_registered(repo_root: &Path, worktree_path: &Path) -> Result<bool> {
@@ -133,7 +136,7 @@ fn git_worktree_list(repo_root: &Path) -> Result<Vec<PathBuf>> {
 }
 
 fn git_branch_exists(repo_root: &Path, branch_name: &str) -> Result<bool> {
-    let ref_name = format!("refs/heads/{}", branch_name);
+    let ref_name = format!("refs/heads/{branch_name}");
     let status = Command::new("git")
         .arg("-C")
         .arg(repo_root)
@@ -221,12 +224,12 @@ fn sanitize_branch_name(input: &str) -> String {
 
 fn stable_hash(input: &str) -> String {
     // FNV-1a 64-bit
-    const FNV_OFFSET: u64 = 0xcbf29ce484222325;
-    const FNV_PRIME: u64 = 0x100000001b3;
+    const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+    const FNV_PRIME: u64 = 0x0100_0000_01b3;
     let mut hash = FNV_OFFSET;
     for byte in input.as_bytes() {
-        hash ^= *byte as u64;
+        hash ^= u64::from(*byte);
         hash = hash.wrapping_mul(FNV_PRIME);
     }
-    format!("{:016x}", hash)
+    format!("{hash:016x}")
 }

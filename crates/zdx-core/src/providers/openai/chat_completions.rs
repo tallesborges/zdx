@@ -49,13 +49,16 @@ impl OpenAIChatCompletionsClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let request = ChatCompletionRequest::new(&self.config, messages, tools, system)?;
+        let request = ChatCompletionRequest::new(&self.config, messages, tools, system);
         let trace =
             DebugTrace::from_env(&self.config.model, self.config.prompt_cache_key.as_deref());
 
@@ -71,7 +74,7 @@ impl OpenAIChatCompletionsClient {
                 .body(body)
                 .send()
                 .await
-                .map_err(classify_reqwest_error)?
+                .map_err(|e| classify_reqwest_error(&e))?
         } else {
             self.http
                 .post(&url)
@@ -79,7 +82,7 @@ impl OpenAIChatCompletionsClient {
                 .json(&request)
                 .send()
                 .await
-                .map_err(classify_reqwest_error)?
+                .map_err(|e| classify_reqwest_error(&e))?
         };
 
         let status = response.status();
@@ -98,7 +101,7 @@ fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {}", api_key))
+        HeaderValue::from_str(&format!("Bearer {api_key}"))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));
@@ -108,28 +111,22 @@ fn build_headers(api_key: &str, extra_headers: &HeaderMap) -> HeaderMap {
         HeaderValue::from_static(crate::providers::shared::USER_AGENT),
     );
 
-    for (name, value) in extra_headers.iter() {
+    for (name, value) in extra_headers {
         headers.insert(name, value.clone());
     }
 
     headers
 }
 
-fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
     if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {}", e))
+        ProviderError::timeout(format!("Request timed out: {e}"))
     } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {}", e))
+        ProviderError::timeout(format!("Connection failed: {e}"))
     } else if e.is_request() {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Request error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
     } else {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Network error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
 
@@ -274,7 +271,7 @@ impl ChatCompletionRequest {
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
-    ) -> Result<Self> {
+    ) -> Self {
         let mut out_messages = Vec::new();
 
         if let Some(prompt) = system
@@ -336,9 +333,8 @@ impl ChatCompletionRequest {
                                     reasoning_content.push_str(text);
                                 }
                             }
-                            ChatContentBlock::ToolResult(_) => {}
                             // Assistant images are not supported in chat-completions payloads.
-                            ChatContentBlock::Image { .. } => {}
+                            ChatContentBlock::ToolResult(_) | ChatContentBlock::Image { .. } => {}
                         }
                     }
 
@@ -368,7 +364,7 @@ impl ChatCompletionRequest {
                             }
                             ChatContentBlock::Image { mime_type, data } => {
                                 // Convert to data URL format
-                                let url = format!("data:{};base64,{}", mime_type, data);
+                                let url = format!("data:{mime_type};base64,{data}");
                                 content_parts.push(ChatContentPart::ImageUrl {
                                     image_url: ImageUrlData { url },
                                 });
@@ -399,7 +395,7 @@ impl ChatCompletionRequest {
                                 .iter()
                                 .filter_map(|p| match p {
                                     ChatContentPart::Text { text } => Some(text.as_str()),
-                                    _ => None,
+                                    ChatContentPart::ImageUrl { .. } => None,
                                 })
                                 .collect::<Vec<_>>()
                                 .join("");
@@ -434,7 +430,7 @@ impl ChatCompletionRequest {
                         // If there's an image in the tool result, add it as a follow-up user message
                         // (OpenAI-compatible chat completions don't support images in tool responses)
                         if let Some((mime_type, data)) = image {
-                            let url = format!("data:{};base64,{}", mime_type, data);
+                            let url = format!("data:{mime_type};base64,{data}");
                             out_messages.push(ChatCompletionMessage {
                                 role: "user".to_string(),
                                 content: Some(ChatMessageContent::Parts(vec![
@@ -463,7 +459,7 @@ impl ChatCompletionRequest {
             include_usage: true,
         });
 
-        let request = Self {
+        Self {
             model: config.model.clone(),
             stream: true,
             messages: out_messages,
@@ -477,13 +473,12 @@ impl ChatCompletionRequest {
                 .map(|effort| ReasoningConfig { effort }),
             thinking: config.thinking.clone(),
             prompt_cache_key: config.prompt_cache_key.clone(),
-        };
-        Ok(request)
+        }
     }
 }
 
 /// Extracts text and optional image from tool result content.
-/// Returns (text, Option<(mime_type, base64_data)>)
+/// Returns (text, Option<(`mime_type`, `base64_data`)>)
 fn extract_tool_result_with_image(
     content: &ToolResultContent,
 ) -> (String, Option<(String, String)>) {
@@ -494,7 +489,7 @@ fn extract_tool_result_with_image(
                 .iter()
                 .find_map(|block| match block {
                     crate::tools::ToolResultBlock::Text { text } => Some(text.clone()),
-                    _ => None,
+                    crate::tools::ToolResultBlock::Image { .. } => None,
                 })
                 .unwrap_or_default();
 
@@ -502,7 +497,7 @@ fn extract_tool_result_with_image(
                 crate::tools::ToolResultBlock::Image { mime_type, data } => {
                     Some((mime_type.clone(), data.clone()))
                 }
-                _ => None,
+                crate::tools::ToolResultBlock::Text { .. } => None,
             });
 
             (text, image)
@@ -591,7 +586,7 @@ impl<S> ChatCompletionsSseParser<S> {
         }
     }
 
-    /// Emit completion events. Called either when we have both finish_reason + usage,
+    /// Emit completion events. Called either when we have both `finish_reason` + usage,
     /// or when the stream ends (force=true).
     fn emit_completion_if_pending(&mut self, force: bool) {
         if self.emitted_done {
@@ -658,13 +653,13 @@ impl<S> ChatCompletionsSseParser<S> {
         let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
             ProviderError::new(
                 ProviderErrorKind::Parse,
-                format!("Failed to parse SSE JSON: {}", err),
+                format!("Failed to parse SSE JSON: {err}"),
             )
         })?;
-        self.handle_chunk(value)
+        self.handle_chunk(&value);
+        Ok(())
     }
-
-    fn handle_chunk(&mut self, value: Value) -> ProviderResult<()> {
+    fn handle_chunk(&mut self, value: &Value) {
         // Handle errors first - these are terminal, no completion should follow
         if let Some(error) = value.get("error") {
             let error_type = error
@@ -683,7 +678,7 @@ impl<S> ChatCompletionsSseParser<S> {
             });
             // Mark as done to prevent completion events after error
             self.emitted_done = true;
-            return Ok(());
+            return;
         }
 
         // Parse choices first (may be absent in usage-only chunks)
@@ -706,7 +701,9 @@ impl<S> ChatCompletionsSseParser<S> {
 
         // Parse usage (can arrive in any chunk, often in a separate final chunk)
         // Check root level first (standard OpenAI), then choice level (Moonshot/Kimi)
-        let usage_value = value.get("usage").or_else(|| first_choice?.get("usage"));
+        let usage_value = value
+            .get("usage")
+            .or_else(|| first_choice.and_then(|choice| choice.get("usage")));
         if let Some(usage) = usage_value {
             self.final_usage = Some(parse_usage(usage));
 
@@ -715,13 +712,11 @@ impl<S> ChatCompletionsSseParser<S> {
             let choices_empty = value
                 .get("choices")
                 .and_then(|v| v.as_array())
-                .is_some_and(|arr| arr.is_empty());
+                .is_some_and(std::vec::Vec::is_empty);
             if choices_empty && !self.emitted_done {
                 self.emit_completion_if_pending(true);
             }
         }
-
-        Ok(())
     }
 
     fn process_delta(&mut self, delta: &Value) {
@@ -775,7 +770,13 @@ impl<S> ChatCompletionsSseParser<S> {
         // Handle tool calls
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
             for tool_call in tool_calls {
-                let idx = tool_call.get("index").and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+                let idx = u32::try_from(
+                    tool_call
+                        .get("index")
+                        .and_then(serde_json::Value::as_u64)
+                        .unwrap_or(0),
+                )
+                .unwrap_or(u32::MAX);
                 let id = tool_call.get("id").and_then(|v| v.as_str()).unwrap_or("");
                 let function = tool_call.get("function").unwrap_or(&Value::Null);
                 let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
@@ -795,7 +796,7 @@ impl<S> ChatCompletionsSseParser<S> {
                     let stream_index = self.next_index;
                     self.next_index += 1;
                     let tool_id = if id.is_empty() {
-                        format!("toolcall-{}", idx)
+                        format!("toolcall-{idx}")
                     } else {
                         id.to_string()
                     };
@@ -848,7 +849,7 @@ where
                 Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(ProviderError::new(
                         ProviderErrorKind::Parse,
-                        format!("SSE stream error: {}", e),
+                        format!("SSE stream error: {e}"),
                     ))));
                 }
                 Poll::Ready(None) => {
@@ -875,15 +876,15 @@ fn map_finish_reason(reason: &str) -> String {
 }
 
 /// Parse usage from a JSON value.
-/// Handles both standard OpenAI format and provider-specific variations (e.g., Moonshot/Kimi's `cached_tokens`).
+/// Handles both standard `OpenAI` format and provider-specific variations (e.g., Moonshot/Kimi's `cached_tokens`).
 fn parse_usage(usage: &Value) -> Usage {
     let prompt_tokens = usage
         .get("prompt_tokens")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
     let completion_tokens = usage
         .get("completion_tokens")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .unwrap_or(0);
 
     // Parse cached tokens - different providers use different field names:
@@ -891,12 +892,12 @@ fn parse_usage(usage: &Value) -> Usage {
     // - `prompt_tokens_details.cached_tokens` (OpenAI)
     let cached_tokens = usage
         .get("cached_tokens")
-        .and_then(|v| v.as_u64())
+        .and_then(serde_json::Value::as_u64)
         .or_else(|| {
             usage
                 .get("prompt_tokens_details")
                 .and_then(|d| d.get("cached_tokens"))
-                .and_then(|v| v.as_u64())
+                .and_then(serde_json::Value::as_u64)
         })
         .unwrap_or(0);
 
@@ -957,7 +958,7 @@ mod tests {
         parser.filter_map(|r| async { r.ok() }).collect().await
     }
 
-    /// Helper to extract tool names from ContentBlockStart events
+    /// Helper to extract tool names from `ContentBlockStart` events
     fn extract_tool_names(events: &[StreamEvent]) -> Vec<String> {
         events
             .iter()

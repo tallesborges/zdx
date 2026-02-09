@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::struct_excessive_bools,
+    clippy::match_same_arms
+)]
+
 use comfy_table::{ContentArrangement, Table};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
@@ -398,7 +404,7 @@ impl MarkdownRenderer {
         // Inline code in tables
         if self.in_table {
             let code = code.replace('\n', " ");
-            self.table_buffer.push_cell_text(&format!("`{}`", code));
+            self.table_buffer.push_cell_text(&format!("`{code}`"));
             return;
         }
 
@@ -458,7 +464,7 @@ impl MarkdownRenderer {
 
         // Opening fence with optional language (subtle)
         let fence_text = match &self.code_block_lang {
-            Some(lang) => format!("```{}", lang),
+            Some(lang) => format!("```{lang}"),
             None => "```".to_string(),
         };
         self.lines.push(StyledLine {
@@ -610,8 +616,7 @@ mod tests {
         // Should have spaces around the code
         assert!(
             combined.contains("word ") && combined.contains(" word"),
-            "Expected spaces around inline code, got: {:?}",
-            combined
+            "Expected spaces around inline code, got: {combined:?}"
         );
     }
 

@@ -41,7 +41,7 @@ impl CommandPaletteState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_command_palette(frame, self, area, input_y)
+        render_command_palette(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
@@ -215,10 +215,10 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
             openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))
         }
         _ => {
-            let message = provider
-                .api_key_env_var()
-                .map(|env| format!("Unset {} to log out.", env))
-                .unwrap_or_else(|| "No OAuth credentials to clear.".to_string());
+            let message = provider.api_key_env_var().map_or_else(
+                || "No OAuth credentials to clear.".to_string(),
+                |env| format!("Unset {env} to log out."),
+            );
             mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(message),
             ));
@@ -230,10 +230,7 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         Ok((true, label)) => {
             mutations.push(StateMutation::Auth(AuthMutation::RefreshStatus));
             mutations.push(StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(format!(
-                    "Logged out from {} OAuth.",
-                    label
-                )),
+                TranscriptMutation::AppendSystemMessage(format!("Logged out from {label} OAuth.")),
             ));
         }
         Ok((false, _)) => {
@@ -245,7 +242,7 @@ fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         }
         Err(e) => {
             mutations.push(StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(format!("Logout failed: {}", e)),
+                TranscriptMutation::AppendSystemMessage(format!("Logout failed: {e}")),
             ));
         }
     }
@@ -261,18 +258,14 @@ fn execute_copy_id(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
                 Ok(()) => (
                     vec![],
                     vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(format!(
-                            "Thread ID copied: {}",
-                            id
-                        )),
+                        TranscriptMutation::AppendSystemMessage(format!("Thread ID copied: {id}")),
                     )],
                 ),
                 Err(e) => (
                     vec![],
                     vec![StateMutation::Transcript(
                         TranscriptMutation::AppendSystemMessage(format!(
-                            "Failed to copy thread ID: {}",
-                            e
+                            "Failed to copy thread ID: {e}"
                         )),
                     )],
                 ),
@@ -509,8 +502,7 @@ pub fn render_command_palette(
     // Render selected command description (centered)
     let description = commands
         .get(palette.selected)
-        .map(|cmd| cmd.description)
-        .unwrap_or("");
+        .map_or("", |cmd| cmd.description);
     let desc_area = Rect::new(
         layout.body.x,
         layout.body.y + 3 + list_height,

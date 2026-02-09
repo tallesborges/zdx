@@ -1,7 +1,7 @@
 //! Shared Gemini API helpers for both API key and OAuth providers.
 //!
 //! This module contains common code for:
-//! - SSE parsing (GeminiSseParser)
+//! - SSE parsing (`GeminiSseParser`)
 //! - Message conversion to Gemini format
 //! - Error classification
 //! - Common utility functions
@@ -36,7 +36,7 @@ pub enum GeminiThinkingConfig {
 }
 
 impl GeminiThinkingConfig {
-    /// Maps zdx's ThinkingLevel to Gemini-specific config based on model name.
+    /// Maps zdx's `ThinkingLevel` to Gemini-specific config based on model name.
     ///
     /// For Gemini 3 models: maps to thinkingLevel strings.
     /// For Gemini 2.5 models: maps to thinkingBudget tokens.
@@ -135,22 +135,16 @@ impl GeminiThinkingConfig {
 /// Synthetic thought signature for active loop messages.
 pub const SYNTHETIC_THOUGHT_SIGNATURE: &str = "skip_thought_signature_validator";
 
-/// Classifies a reqwest error into a ProviderError.
-pub fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+/// Classifies a reqwest error into a `ProviderError`.
+pub fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
     if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {}", e))
+        ProviderError::timeout(format!("Request timed out: {e}"))
     } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {}", e))
+        ProviderError::timeout(format!("Connection failed: {e}"))
     } else if e.is_request() {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Request error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
     } else {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Network error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
 
@@ -225,9 +219,8 @@ pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, 
                             }
                             parts.push(part);
                         }
-                        // Skip reasoning blocks (signature already extracted above)
-                        ChatContentBlock::Reasoning(_) => {}
-                        ChatContentBlock::ToolResult(_) => {}
+                        // Skip reasoning/tool_result blocks (signature extracted above)
+                        ChatContentBlock::Reasoning(_) | ChatContentBlock::ToolResult(_) => {}
                     }
                 }
 
@@ -341,6 +334,9 @@ pub fn build_tools(tools: &[ToolDefinition]) -> Option<Value> {
 }
 
 /// Builds a standard Gemini API request body (for API key auth).
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn build_gemini_request(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
@@ -408,11 +404,14 @@ pub struct CloudCodeRequestParams<'a> {
 ///
 /// `session_id` and `prompt_seq` are used to generate `user_prompt_id` in the format
 /// used by the official Gemini CLI: `<session_id>########<seq>`.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn build_cloud_code_assist_request(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system: Option<&str>,
-    params: CloudCodeRequestParams<'_>,
+    params: &CloudCodeRequestParams<'_>,
 ) -> Result<Value> {
     let (contents, _) = build_contents(messages);
     let tools_value = build_tools(tools);
@@ -488,7 +487,7 @@ fn matches_user_text(msg: &ChatMessage) -> bool {
 }
 
 /// Extracts text and optional image from tool result content.
-/// Returns (text, Option<(mime_type, base64_data)>)
+/// Returns (text, Option<(`mime_type`, `base64_data`)>)
 fn extract_tool_result_with_image(
     content: &ToolResultContent,
 ) -> (String, Option<(String, String)>) {
@@ -499,7 +498,7 @@ fn extract_tool_result_with_image(
                 .iter()
                 .find_map(|block| match block {
                     ToolResultBlock::Text { text } => Some(text.clone()),
-                    _ => None,
+                    ToolResultBlock::Image { .. } => None,
                 })
                 .unwrap_or_default();
 
@@ -507,7 +506,7 @@ fn extract_tool_result_with_image(
                 ToolResultBlock::Image { mime_type, data } => {
                     Some((mime_type.clone(), data.clone()))
                 }
-                _ => None,
+                ToolResultBlock::Text { .. } => None,
             });
 
             (text, image)
@@ -610,7 +609,7 @@ mod tests {
         assert!(matches!(config, GeminiThinkingConfig::Budget(512)));
     }
 
-    /// GeminiThinkingConfig::to_json produces correct format.
+    /// `GeminiThinkingConfig::to_json` produces correct format.
     #[test]
     fn test_thinking_config_to_json() {
         // Level produces thinkingLevel
@@ -628,7 +627,7 @@ mod tests {
         assert!(config.to_json().is_none());
     }
 
-    /// build_contents uses real Gemini thought signature when available.
+    /// `build_contents` uses real Gemini thought signature when available.
     #[test]
     fn test_build_contents_uses_real_gemini_signature() {
         use crate::providers::{ReasoningBlock, ReplayToken};
@@ -674,7 +673,7 @@ mod tests {
         );
     }
 
-    /// build_contents falls back to synthetic signature when no Gemini signature available.
+    /// `build_contents` falls back to synthetic signature when no Gemini signature available.
     #[test]
     fn test_build_contents_fallback_to_synthetic_signature() {
         // Create a message history without reasoning blocks
@@ -724,7 +723,7 @@ mod integration_tests {
             &messages,
             &tools,
             system,
-            CloudCodeRequestParams {
+            &CloudCodeRequestParams {
                 model: "gemini-2.5-flash",
                 project_id: "test-project",
                 max_output_tokens: Some(8192),
@@ -764,7 +763,7 @@ mod integration_tests {
             &messages,
             &tools,
             system,
-            CloudCodeRequestParams {
+            &CloudCodeRequestParams {
                 model: "gemini-3-flash-preview",
                 project_id: "test-project",
                 max_output_tokens: Some(8192),
@@ -846,7 +845,7 @@ mod integration_tests {
         );
     }
 
-    /// When thinking_config is None or Default, no thinkingConfig should be present
+    /// When `thinking_config` is None or Default, no thinkingConfig should be present
     #[test]
     fn test_build_gemini_request_no_thinking_config_when_disabled() {
         let messages = vec![ChatMessage::user("hello")];
@@ -880,7 +879,7 @@ mod integration_tests {
         assert!(matches!(config, GeminiThinkingConfig::Budget(128)));
     }
 
-    /// Gemini 2.5 Pro: XHigh maps to max budget (32768)
+    /// Gemini 2.5 Pro: `XHigh` maps to max budget (32768)
     #[test]
     fn test_thinking_config_gemini_25_pro_xhigh() {
         let config =
@@ -896,7 +895,7 @@ mod integration_tests {
         assert!(matches!(config, GeminiThinkingConfig::Budget(1024)));
     }
 
-    /// Gemini 3 XHigh maps to high (since XHigh isn't a Gemini level)
+    /// Gemini 3 `XHigh` maps to high (since `XHigh` isn't a Gemini level)
     #[test]
     fn test_thinking_config_gemini_3_xhigh() {
         // Both Pro and Flash should map XHigh to "high"

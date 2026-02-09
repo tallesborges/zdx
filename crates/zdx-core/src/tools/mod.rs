@@ -37,6 +37,9 @@ pub(crate) mod string_or_vec {
     use serde::{Deserialize, Deserializer, de};
 
     /// Deserializes a `Vec<String>` that also accepts a single string.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<Vec<String>>, D::Error>
     where
         D: Deserializer<'de>,
@@ -86,6 +89,9 @@ pub(crate) mod bool_or_string {
 
     /// Deserializes a `bool` that also accepts string values like
     /// `"true"`, `"false"`, `"1"`, `"0"`, `"yes"`, `"no"`.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn deserialize<'de, D>(deserializer: D) -> Result<bool, D::Error>
     where
         D: Deserializer<'de>,
@@ -105,8 +111,7 @@ pub(crate) mod bool_or_string {
                     "true" | "1" | "yes" | "y" | "on" => Ok(true),
                     "false" | "0" | "no" | "n" | "off" | "" => Ok(false),
                     _ => Err(de::Error::custom(format!(
-                        "expected boolean or boolean-like string, got '{}'",
-                        raw
+                        "expected boolean or boolean-like string, got '{raw}'"
                     ))),
                 }
             }
@@ -125,6 +130,9 @@ pub(crate) mod bool_or_string {
 /// - Returns error if the file doesn't exist
 ///
 /// Use this for `read` and `edit` tools where the file must exist.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
     let requested = Path::new(path);
 
@@ -140,7 +148,7 @@ pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOut
         ToolOutput::failure(
             "path_error",
             format!("Path does not exist '{}'", full_path.display()),
-            Some(format!("OS error: {}", e)),
+            Some(format!("OS error: {e}")),
         )
     })
 }
@@ -156,8 +164,9 @@ pub struct ToolDefinition {
 impl ToolDefinition {
     /// Returns a copy with the name lowercased.
     ///
-    /// Anthropic requires PascalCase tool names, but other providers
-    /// (OpenAI, Gemini, OpenRouter) work better with lowercase.
+    /// Anthropic requires `PascalCase` tool names, but other providers
+    /// (`OpenAI`, Gemini, `OpenRouter`) work better with lowercase.
+    #[must_use]
     pub fn with_lowercase_name(&self) -> Self {
         Self {
             name: self.name.to_ascii_lowercase(),
@@ -168,7 +177,7 @@ impl ToolDefinition {
 
 /// Content block within a tool result.
 ///
-/// Anthropic API requires tool_result content to be an array of blocks
+/// Anthropic API requires `tool_result` content to be an array of blocks
 /// when including images: `[{type: "text", ...}, {type: "image", ...}]`
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -204,7 +213,7 @@ impl ToolResultContent {
             ToolResultContent::Text(s) => Some(s),
             ToolResultContent::Blocks(blocks) => blocks.iter().find_map(|b| match b {
                 ToolResultBlock::Text { text } => Some(text.as_str()),
-                _ => None,
+                ToolResultBlock::Image { .. } => None,
             }),
         }
     }
@@ -220,7 +229,7 @@ pub struct ToolResult {
 }
 
 impl ToolResult {
-    /// Creates a ToolResult from a ToolOutput.
+    /// Creates a `ToolResult` from a `ToolOutput`.
     ///
     /// If the output contains image content, creates a Blocks content with
     /// both text (JSON envelope) and image blocks. Otherwise, creates Text content.
@@ -274,6 +283,7 @@ impl ToolContext {
         }
     }
 
+    #[must_use]
     pub fn with_config(mut self, config: &crate::config::Config) -> Self {
         self.model = Some(config.model.clone());
         self.thinking_level = Some(config.thinking_level);
@@ -334,6 +344,7 @@ impl std::fmt::Debug for ToolRegistry {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ToolRegistry")
             .field("definitions", &self.definitions)
+            .field("handlers_len", &self.handlers.len())
             .finish()
     }
 }
@@ -352,6 +363,7 @@ impl ToolRegistry {
         registry
     }
 
+    #[must_use]
     pub fn with_tool(mut self, definition: ToolDefinition, handler: ToolHandler) -> Self {
         self.register(definition, handler);
         self
@@ -407,19 +419,25 @@ impl ToolRegistry {
         provider_config: &crate::config::ProviderConfig,
     ) -> Vec<ToolDefinition> {
         let all_names = self.tool_names();
-        let all_names_refs: Vec<&str> = all_names.iter().map(|s| s.as_str()).collect();
+        let all_names_refs: Vec<&str> = all_names.iter().map(std::string::String::as_str).collect();
         let enabled_names = provider_config.filter_tools(&all_names_refs);
         self.tools_from_names(enabled_names)
     }
 
-    pub async fn execute_tool(
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn execute_tool<S>(
         &self,
         name: &str,
         tool_use_id: &str,
         input: &Value,
         ctx: &ToolContext,
-        enabled_tools: &std::collections::HashSet<String>,
-    ) -> (ToolOutput, ToolResult) {
+        enabled_tools: &std::collections::HashSet<String, S>,
+    ) -> (ToolOutput, ToolResult)
+    where
+        S: std::hash::BuildHasher,
+    {
         let name_lower = name.to_ascii_lowercase();
         let is_enabled = enabled_tools
             .iter()
@@ -515,15 +533,18 @@ impl ToolRegistry {
     }
 }
 
-fn unknown_tool_output(
+fn unknown_tool_output<S>(
     name: &str,
-    enabled_tools: &std::collections::HashSet<String>,
-) -> ToolOutput {
+    enabled_tools: &std::collections::HashSet<String, S>,
+) -> ToolOutput
+where
+    S: std::hash::BuildHasher,
+{
     let mut available: Vec<_> = enabled_tools.iter().cloned().collect();
     available.sort();
     ToolOutput::failure_with_details(
         "unknown_tool",
-        format!("Unknown tool: {}", name),
+        format!("Unknown tool: {name}"),
         format!("Available tools: {}", available.join(", ")),
     )
 }
@@ -546,7 +567,7 @@ pub fn tools_for_provider(provider_config: &crate::config::ProviderConfig) -> Ve
 }
 
 /// Executes a tool by name with the given input.
-/// Returns the structured ToolOutput (envelope format).
+/// Returns the structured `ToolOutput` (envelope format).
 ///
 /// Validates that the tool is in the enabled set before execution.
 /// If the tool is unknown or not enabled, returns an error with the
@@ -554,13 +575,19 @@ pub fn tools_for_provider(provider_config: &crate::config::ProviderConfig) -> Ve
 ///
 /// Tool names are matched case-insensitively, making the API resilient
 /// to provider casing differences.
-pub async fn execute_tool(
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub async fn execute_tool<S>(
     name: &str,
     tool_use_id: &str,
     input: &Value,
     ctx: &ToolContext,
-    enabled_tools: &std::collections::HashSet<String>,
-) -> (ToolOutput, ToolResult) {
+    enabled_tools: &std::collections::HashSet<String, S>,
+) -> (ToolOutput, ToolResult)
+where
+    S: std::hash::BuildHasher,
+{
     ToolRegistry::builtins()
         .execute_tool(name, tool_use_id, input, ctx, enabled_tools)
         .await
@@ -647,7 +674,7 @@ mod tests {
 
     use super::*;
 
-    /// Helper to create enabled_tools set with all tools (canonical names)
+    /// Helper to create `enabled_tools` set with all tools (canonical names)
     fn all_enabled_tools() -> std::collections::HashSet<String> {
         all_tools().into_iter().map(|t| t.name).collect()
     }

@@ -26,7 +26,7 @@ impl ThinkingPickerState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_thinking_picker(frame, self, area, input_y)
+        render_thinking_picker(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
@@ -115,7 +115,7 @@ pub fn render_thinking_picker(
             // Calculate available width for description (account for borders, highlight symbol, name, right padding)
             // inner_area.width - 2 (highlight "▶ ") - name_width - 1 (right padding)
             let desc_width = layout.body.width.saturating_sub(2 + name_width as u16 + 1) as usize;
-            let desc_padded = format!("{:>width$}", desc, width = desc_width);
+            let desc_padded = format!("{desc:>desc_width$}");
 
             let line = Line::from(vec![
                 Span::styled(

@@ -7,7 +7,7 @@
 pub struct Command {
     /// Primary name (e.g., "clear") - without the leading slash.
     pub name: &'static str,
-    /// Aliases (e.g., ["new"]) - without leading slashes.
+    /// Aliases (e.g., `["new"]`) - without leading slashes.
     pub aliases: &'static [&'static str],
     /// Short description shown in palette.
     pub description: &'static str,

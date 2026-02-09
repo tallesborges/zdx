@@ -24,7 +24,7 @@ pub fn render_overlay_container(frame: &mut Frame, area: Rect, title: &str, bord
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
-        .title(format!(" {} ", title))
+        .title(format!(" {title} "))
         .title_style(
             Style::default()
                 .fg(border_color)
@@ -71,7 +71,7 @@ pub fn render_overlay(
         render_hints(frame, inner, config.hints, config.border_color);
     }
 
-    let footer_height = if config.hints.is_empty() { 0 } else { 1 };
+    let footer_height = u16::from(!config.hints.is_empty());
     let body_height = inner.height.saturating_sub(footer_height);
     let footer = Rect::new(inner.x, inner.y + body_height, inner.width, footer_height);
     let body = Rect::new(inner.x, inner.y, inner.width, body_height);

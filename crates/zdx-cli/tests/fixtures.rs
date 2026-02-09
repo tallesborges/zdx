@@ -14,7 +14,7 @@ pub fn text_sse(text: &str) -> String {
     SSE_TEXT.replace("{{TEXT}}", &escape_json(text))
 }
 
-/// Create a tool_use SSE response.
+/// Create a `tool_use` SSE response.
 pub fn tool_use_sse(tool_id: &str, tool_name: &str, input_json: &str) -> String {
     SSE_TOOL_USE
         .replace("{{TOOL_ID}}", tool_id)
@@ -22,7 +22,7 @@ pub fn tool_use_sse(tool_id: &str, tool_name: &str, input_json: &str) -> String 
         .replace("{{INPUT_JSON}}", &escape_json(input_json))
 }
 
-/// Create a tool_use SSE response with preceding text.
+/// Create a `tool_use` SSE response with preceding text.
 pub fn text_and_tool_use_sse(
     text: &str,
     tool_id: &str,
@@ -36,19 +36,19 @@ pub fn text_and_tool_use_sse(
         .replace("{{INPUT_JSON}}", &escape_json(input_json))
 }
 
-/// Wrap SSE body string in a ResponseTemplate.
+/// Wrap SSE body string in a `ResponseTemplate`.
 pub fn sse_response(body: &str) -> ResponseTemplate {
     ResponseTemplate::new(200)
         .insert_header("content-type", "text/event-stream")
         .set_body_string(body.to_string())
 }
 
-/// Convenience: text SSE wrapped in ResponseTemplate.
+/// Convenience: text SSE wrapped in `ResponseTemplate`.
 pub fn text_response(text: &str) -> ResponseTemplate {
     sse_response(&text_sse(text))
 }
 
-/// Convenience: tool_use SSE wrapped in ResponseTemplate.
+/// Convenience: `tool_use` SSE wrapped in `ResponseTemplate`.
 pub fn tool_use_response(tool_id: &str, tool_name: &str, input_json: &str) -> ResponseTemplate {
     sse_response(&tool_use_sse(tool_id, tool_name, input_json))
 }

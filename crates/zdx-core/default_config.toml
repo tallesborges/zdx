@@ -39,13 +39,14 @@ title_model = "gemini-cli:gemini-2.5-flash"
 # Skill discovery configuration
 # Enable/disable skill sources (all enabled by default)
 [skills]
-enable_zdx_user = true
-enable_zdx_project = true
-enable_codex_user = true
-enable_claude_user = true
-enable_claude_project = true
-enable_agents_user = true
-enable_agents_project = true
+[skills.sources]
+zdx_user = "on"
+zdx_project = "on"
+codex_user = "on"
+claude_user = "on"
+claude_project = "on"
+agents_user = "on"
+agents_project = "on"
 # GitHub repositories containing skills (owner/repo/path)
 skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]
 # ignored_skills = ["test-*", "wip-*"]

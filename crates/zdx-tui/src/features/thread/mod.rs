@@ -4,7 +4,7 @@
 //!
 //! ## Module Structure
 //!
-//! - `state.rs`: ThreadState, ThreadUsage - in-memory thread state
+//! - `state.rs`: `ThreadState`, `ThreadUsage` - in-memory thread state
 //! - `update.rs`: Thread event handlers (loading, switching, creating, renaming)
 //! - `render.rs`: Thread picker overlay rendering
 //! - `tree.rs`: Thread tree derivation for hierarchical display

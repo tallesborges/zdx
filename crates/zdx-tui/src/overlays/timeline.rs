@@ -1,3 +1,10 @@
+#![allow(
+    clippy::cast_possible_wrap,
+    clippy::cast_sign_loss,
+    clippy::cast_possible_truncation,
+    clippy::match_same_arms
+)]
+
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Rect};
@@ -83,7 +90,7 @@ impl TimelineState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_timeline(frame, self, area, input_y)
+        render_timeline(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {

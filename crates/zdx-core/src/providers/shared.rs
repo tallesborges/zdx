@@ -25,8 +25,11 @@ pub const USER_AGENT: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
 ///
 /// # Arguments
 /// * `config_api_key` - Value from config file (if present)
-/// * `env_var` - Environment variable name (e.g., "OPENAI_API_KEY")
+/// * `env_var` - Environment variable name (e.g., "`OPENAI_API_KEY`")
 /// * `config_section` - Config section name (e.g., "openai")
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn resolve_api_key(
     config_api_key: Option<&str>,
     env_var: &str,
@@ -42,8 +45,7 @@ pub fn resolve_api_key(
 
     // Fall back to env var
     std::env::var(env_var).context(format!(
-        "No API key available. Set {} or api_key in [providers.{}].",
-        env_var, config_section
+        "No API key available. Set {env_var} or api_key in [providers.{config_section}]."
     ))
 }
 
@@ -51,9 +53,12 @@ pub fn resolve_api_key(
 ///
 /// # Arguments
 /// * `config_base_url` - Value from config file (if present)
-/// * `env_var` - Environment variable name (e.g., "OPENAI_BASE_URL")
+/// * `env_var` - Environment variable name (e.g., "`OPENAI_BASE_URL`")
 /// * `default_url` - Default URL if neither env nor config is set
 /// * `provider_name` - Human-readable provider name for error messages
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn resolve_base_url(
     config_base_url: Option<&str>,
     env_var: &str,
@@ -84,7 +89,7 @@ pub fn resolve_base_url(
 
 /// Validates that a URL is well-formed.
 fn validate_url(url: &str, provider_name: &str) -> Result<()> {
-    url::Url::parse(url).with_context(|| format!("Invalid {} base URL: {}", provider_name, url))?;
+    url::Url::parse(url).with_context(|| format!("Invalid {provider_name} base URL: {url}"))?;
     Ok(())
 }
 
@@ -109,7 +114,7 @@ pub enum ReplayToken {
     /// Anthropic extended thinking - requires signature for replay
     #[serde(rename = "anthropic")]
     Anthropic { signature: String },
-    /// OpenAI Responses API reasoning - requires id + encrypted content for cache replay
+    /// `OpenAI` Responses API reasoning - requires id + encrypted content for cache replay
     #[serde(rename = "openai")]
     OpenAI {
         id: String,
@@ -148,7 +153,7 @@ impl FromStr for ContentBlockType {
             "text" => Ok(Self::Text),
             "tool_use" => Ok(Self::ToolUse),
             "thinking" | "reasoning" => Ok(Self::Reasoning),
-            _ => Err(format!("Unknown content block type: {}", value)),
+            _ => Err(format!("Unknown content block type: {value}")),
         }
     }
 }
@@ -211,6 +216,9 @@ impl ChatMessage {
     }
 
     /// Creates a user message with tool results.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn tool_results(results: Vec<ToolResult>) -> Self {
         let blocks: Vec<ChatContentBlock> = results
             .into_iter()
@@ -233,7 +241,7 @@ pub enum ProviderErrorKind {
     Timeout,
     /// Failed to parse response (JSON parse error, invalid SSE, etc.)
     Parse,
-    /// API-level error returned by the provider (e.g., overloaded, rate_limit)
+    /// API-level error returned by the provider (e.g., overloaded, `rate_limit`)
     ApiError,
 }
 
@@ -272,7 +280,7 @@ impl ProviderError {
     /// Creates a provider error with details.
     /// Creates an HTTP status error.
     pub fn http_status(status: u16, body: &str) -> Self {
-        let message = format!("HTTP {}", status);
+        let message = format!("HTTP {status}");
         let details = if body.is_empty() {
             None
         } else {
@@ -283,7 +291,7 @@ impl ProviderError {
             {
                 return Self {
                     kind: ProviderErrorKind::HttpStatus,
-                    message: format!("HTTP {}: {}", status, msg),
+                    message: format!("HTTP {status}: {msg}"),
                     details: Some(body.to_string()),
                 };
             }
@@ -305,7 +313,7 @@ impl ProviderError {
     pub fn api_error(error_type: &str, message: &str) -> Self {
         Self {
             kind: ProviderErrorKind::ApiError,
-            message: format!("{}: {}", error_type, message),
+            message: format!("{error_type}: {message}"),
             details: None,
         }
     }
@@ -342,13 +350,13 @@ pub struct Usage {
 pub enum StreamEvent {
     /// Message started, contains model info and initial usage
     MessageStart { model: String, usage: Usage },
-    /// A content block has started (text, tool_use, reasoning)
+    /// A content block has started (text, `tool_use`, reasoning)
     ContentBlockStart {
         index: usize,
         block_type: ContentBlockType,
-        /// For tool_use blocks: the tool use ID
+        /// For `tool_use` blocks: the tool use ID
         id: Option<String>,
-        /// For tool_use blocks: the tool name
+        /// For `tool_use` blocks: the tool name
         name: Option<String>,
     },
     /// Text delta within a content block
@@ -359,7 +367,7 @@ pub enum StreamEvent {
     ReasoningDelta { index: usize, reasoning: String },
     /// Signature delta within a reasoning content block
     ReasoningSignatureDelta { index: usize, signature: String },
-    /// OpenAI reasoning item with encrypted content (for caching/replay)
+    /// `OpenAI` reasoning item with encrypted content (for caching/replay)
     ReasoningCompleted {
         index: usize,
         id: String,
@@ -369,7 +377,7 @@ pub enum StreamEvent {
     },
     /// A content block has ended
     ContentBlockCompleted { index: usize },
-    /// Message delta (e.g., stop_reason update, final usage)
+    /// Message delta (e.g., `stop_reason` update, final usage)
     MessageDelta {
         stop_reason: Option<String>,
         usage: Option<Usage>,
@@ -389,7 +397,7 @@ pub type ProviderStream = BoxStream<'static, ProviderResult<StreamEvent>>;
 mod tests {
     use super::*;
 
-    /// Test: ReplayToken::Gemini serialization round-trips correctly.
+    /// Test: `ReplayToken::Gemini` serialization round-trips correctly.
     ///
     /// Verifies that Gemini replay tokens serialize to JSON with the correct
     /// tagged format and deserialize back to the same value.
@@ -411,7 +419,7 @@ mod tests {
         assert_eq!(token, parsed);
     }
 
-    /// Test: ContentBlockType parsing for reasoning variants.
+    /// Test: `ContentBlockType` parsing for reasoning variants.
     #[test]
     fn test_content_block_type_reasoning_parsing() {
         // Both "thinking" and "reasoning" should parse to Reasoning

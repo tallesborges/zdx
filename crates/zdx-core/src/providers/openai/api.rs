@@ -1,4 +1,4 @@
-//! OpenAI API key provider (Responses API).
+//! `OpenAI` API key provider (Responses API).
 
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
@@ -12,7 +12,7 @@ const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 const RESPONSES_PATH: &str = "/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
-/// OpenAI API configuration.
+/// `OpenAI` API configuration.
 #[derive(Debug, Clone)]
 pub struct OpenAIConfig {
     pub api_key: String,
@@ -32,6 +32,9 @@ impl OpenAIConfig {
     /// Environment variables:
     /// - `OPENAI_API_KEY` (fallback if not in config)
     /// - `OPENAI_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_output_tokens: u32,
@@ -57,7 +60,7 @@ impl OpenAIConfig {
     }
 }
 
-/// OpenAI API client.
+/// `OpenAI` API client.
 pub struct OpenAIClient {
     config: OpenAIConfig,
     http: reqwest::Client,
@@ -71,6 +74,9 @@ impl OpenAIClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],
@@ -105,7 +111,7 @@ fn build_headers(api_key: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {}", api_key))
+        HeaderValue::from_str(&format!("Bearer {api_key}"))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
     headers.insert("accept", HeaderValue::from_static("text/event-stream"));

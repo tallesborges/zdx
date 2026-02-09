@@ -35,6 +35,9 @@ pub(crate) fn build_tool_defs(tools: &[ToolDefinition]) -> Option<Vec<ApiToolDef
     }
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) fn build_thinking_and_output_config(
     model: &str,
     thinking_enabled: bool,
@@ -121,6 +124,9 @@ pub(crate) fn build_system_blocks(
     }
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) async fn send_streaming_request(
     client: &reqwest::Client,
     url: &str,
@@ -142,12 +148,12 @@ pub(crate) async fn send_streaming_request(
         header_fn(builder.body(body))
             .send()
             .await
-            .map_err(classify_reqwest_error)?
+            .map_err(|e| classify_reqwest_error(&e))?
     } else {
         header_fn(builder.json(request))
             .send()
             .await
-            .map_err(classify_reqwest_error)?
+            .map_err(|e| classify_reqwest_error(&e))?
     };
 
     let status = response.status();
@@ -167,10 +173,8 @@ fn apply_cache_control_to_last_user_block(api_messages: &mut [ApiMessage]) {
         && let Some(last_block) = blocks.last_mut()
     {
         match last_block {
-            ApiContentBlock::Text { cache_control, .. } => {
-                *cache_control = Some(CacheControl::ephemeral());
-            }
-            ApiContentBlock::ToolResult { cache_control, .. } => {
+            ApiContentBlock::Text { cache_control, .. }
+            | ApiContentBlock::ToolResult { cache_control, .. } => {
                 *cache_control = Some(CacheControl::ephemeral());
             }
             _ => {}
@@ -216,21 +220,15 @@ fn sanitize_tool_use_ids(api_messages: &mut [ApiMessage]) {
     }
 }
 
-fn classify_reqwest_error(e: reqwest::Error) -> ProviderError {
+fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
     if e.is_timeout() {
-        ProviderError::timeout(format!("Request timed out: {}", e))
+        ProviderError::timeout(format!("Request timed out: {e}"))
     } else if e.is_connect() {
-        ProviderError::timeout(format!("Connection failed: {}", e))
+        ProviderError::timeout(format!("Connection failed: {e}"))
     } else if e.is_request() {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Request error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Request error: {e}"))
     } else {
-        ProviderError::new(
-            ProviderErrorKind::HttpStatus,
-            format!("Network error: {}", e),
-        )
+        ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
 

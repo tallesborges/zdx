@@ -100,7 +100,7 @@ impl ThreadPickerState {
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
         // Delegate to thread feature view
-        render_thread_picker(frame, self, area, input_y)
+        render_thread_picker(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
@@ -223,8 +223,7 @@ impl ThreadPickerState {
     /// Returns true if the "Copied!" feedback should be shown.
     pub fn should_show_copied(&self) -> bool {
         self.copied_at
-            .map(|t| t.elapsed().as_millis() < COPIED_FEEDBACK_DURATION_MS)
-            .unwrap_or(false)
+            .is_some_and(|t| t.elapsed().as_millis() < COPIED_FEEDBACK_DURATION_MS)
     }
 
     pub fn visible_threads(&self) -> Vec<&ThreadSummary> {
@@ -269,7 +268,7 @@ impl ThreadPickerState {
     /// Returns the number of threads visible in the picker list.
     ///
     /// Calculated dynamically based on the filtered thread count, capped at
-    /// MAX_VISIBLE_THREADS. This ensures scroll logic matches render layout.
+    /// `MAX_VISIBLE_THREADS`. This ensures scroll logic matches render layout.
     fn visible_height(&self) -> usize {
         let count = self.visible_tree_items().len();
         if count == 0 {
@@ -335,7 +334,7 @@ impl ThreadPickerState {
 
         if target_row >= new_lines.len() {
             target_row = new_lines.len().saturating_sub(1);
-            target_col = new_lines.last().map(|l| l.len()).unwrap_or(0);
+            target_col = new_lines.last().map_or(0, |l| l.len());
         }
 
         Some(InputMutation::SetTextAndCursor {
@@ -534,7 +533,7 @@ mod tests {
         let (mut picker, _) = ThreadPickerState::open(
             (0..15)
                 .map(|i| ThreadSummary {
-                    id: format!("thread-{}", i),
+                    id: format!("thread-{i}"),
                     title: None,
                     root_path: None,
                     modified: None,
@@ -571,7 +570,7 @@ mod tests {
         let (mut picker, _) = ThreadPickerState::open(
             (0..15)
                 .map(|i| ThreadSummary {
-                    id: format!("thread-{}", i),
+                    id: format!("thread-{i}"),
                     title: None,
                     root_path: None,
                     modified: None,

@@ -12,7 +12,7 @@ use crate::core::events::ToolOutput;
 const PARALLEL_SEARCH_URL: &str = "https://api.parallel.ai/v1beta/search";
 const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 
-/// Returns the tool definition for the web_search tool.
+/// Returns the tool definition for the `web_search` tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Web_Search".to_string(),
@@ -82,7 +82,7 @@ struct SearchResult {
     excerpts: Vec<String>,
 }
 
-/// Executes the web_search tool asynchronously.
+/// Executes the `web_search` tool asynchronously.
 pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
     let input: WebSearchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -90,7 +90,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for web_search tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -119,7 +119,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             if query.len() > 200 {
                 return ToolOutput::failure(
                     "invalid_input",
-                    format!("Search query exceeds 200 characters: \"{}\"", query),
+                    format!("Search query exceeds 200 characters: \"{query}\""),
                     None,
                 );
             }
@@ -162,7 +162,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "request_error",
                 "Failed to send search request",
-                Some(format!("HTTP error: {}", e)),
+                Some(format!("HTTP error: {e}")),
             );
         }
     };
@@ -173,7 +173,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         let body = response.text().await.unwrap_or_default();
         return ToolOutput::failure(
             "http_error",
-            format!("Search API returned HTTP {}", status),
+            format!("Search API returned HTTP {status}"),
             Some(body),
         );
     }
@@ -185,7 +185,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "parse_error",
                 "Failed to parse search response",
-                Some(format!("JSON error: {}", e)),
+                Some(format!("JSON error: {e}")),
             );
         }
     };

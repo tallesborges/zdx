@@ -19,9 +19,9 @@ use crate::providers::{ProviderResult, ProviderStream, StreamEvent};
 /// How the stream ended.
 #[derive(Debug, Clone, Copy, Serialize)]
 pub enum CompletionState {
-    /// MessageCompleted event received.
+    /// `MessageCompleted` event received.
     Completed,
-    /// Stream ended without MessageCompleted.
+    /// Stream ended without `MessageCompleted`.
     EndedWithoutCompleted,
     /// Stream returned an error.
     Error,
@@ -61,6 +61,10 @@ impl GapBuckets {
     }
 }
 
+fn usize_to_f64(value: usize) -> f64 {
+    f64::from(u32::try_from(value).unwrap_or(u32::MAX))
+}
+
 /// Metrics collected during stream processing.
 #[derive(Debug)]
 pub struct StreamMetrics {
@@ -68,11 +72,11 @@ pub struct StreamMetrics {
     pub stream_start: Instant,
     /// Time to receive the first SSE event.
     pub t_first_event: Option<Duration>,
-    /// Time to first assistant output (TextDelta or ContentBlockStart with text).
+    /// Time to first assistant output (`TextDelta` or `ContentBlockStart` with text).
     pub t_first_output: Option<Duration>,
-    /// Time to first TextDelta event specifically.
+    /// Time to first `TextDelta` event specifically.
     pub t_first_text_delta: Option<Duration>,
-    /// Time to MessageCompleted event.
+    /// Time to `MessageCompleted` event.
     pub t_message_completed: Option<Duration>,
     /// Largest gap between consecutive events (includes consumer delay).
     pub largest_gap: Duration,
@@ -92,19 +96,19 @@ pub struct StreamMetrics {
     last_event_time: Option<Instant>,
     /// Time of last Ready(Some(_)) return.
     last_ready_time: Option<Instant>,
-    /// Model name (extracted from MessageStart).
+    /// Model name (extracted from `MessageStart`).
     pub model: Option<String>,
 
     // === Backpressure / poll metrics ===
-    /// Time of first poll_next call.
+    /// Time of first `poll_next` call.
     pub t_first_poll: Option<Duration>,
-    /// Total number of poll_next calls.
+    /// Total number of `poll_next` calls.
     pub poll_count: usize,
-    /// Number of Poll::Pending returns.
+    /// Number of `Poll::Pending` returns.
     pub pending_count: usize,
-    /// Largest gap between consecutive poll_next calls (consumer/UI stalls).
+    /// Largest gap between consecutive `poll_next` calls (consumer/UI stalls).
     pub largest_poll_gap: Duration,
-    /// Time of last poll_next call.
+    /// Time of last `poll_next` call.
     last_poll_time: Option<Instant>,
     /// Current consecutive Pending streak.
     current_pending_streak: usize,
@@ -112,9 +116,9 @@ pub struct StreamMetrics {
     pub max_pending_streak: usize,
 
     // === Text throughput metrics ===
-    /// Total bytes received via TextDelta (note: bytes, not chars).
+    /// Total bytes received via `TextDelta` (note: bytes, not chars).
     pub text_delta_bytes: usize,
-    /// Number of TextDelta events.
+    /// Number of `TextDelta` events.
     pub text_delta_count: usize,
     /// Time to reach 100 bytes.
     pub t_100_bytes: Option<Duration>,
@@ -162,7 +166,7 @@ impl StreamMetrics {
         }
     }
 
-    /// Record a poll_next call (for backpressure detection).
+    /// Record a `poll_next` call (for backpressure detection).
     fn record_poll(&mut self) {
         let now = Instant::now();
         let elapsed = now.duration_since(self.stream_start);
@@ -182,7 +186,7 @@ impl StreamMetrics {
         self.last_poll_time = Some(now);
     }
 
-    /// Record a Poll::Pending return.
+    /// Record a `Poll::Pending` return.
     fn record_pending(&mut self) {
         self.pending_count += 1;
         self.current_pending_streak += 1;
@@ -191,7 +195,7 @@ impl StreamMetrics {
         }
     }
 
-    /// Record a Poll::Ready return (resets pending streak).
+    /// Record a `Poll::Ready` return (resets pending streak).
     fn record_ready(&mut self) {
         self.current_pending_streak = 0;
     }
@@ -308,7 +312,6 @@ impl StreamMetrics {
             format!("{}ms", d.as_millis())
         }
     }
-
     fn write_to_file(&self, path: &str) -> std::io::Result<()> {
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
 
@@ -319,14 +322,14 @@ impl StreamMetrics {
             file,
             "\n============================================================"
         )?;
-        writeln!(file, "=== Stream Metrics @ {} ===", timestamp)?;
+        writeln!(file, "=== Stream Metrics @ {timestamp} ===")?;
         writeln!(
             file,
             "============================================================"
         )?;
 
         if let Some(model) = &self.model {
-            writeln!(file, "Model: {}", model)?;
+            writeln!(file, "Model: {model}")?;
         }
         writeln!(file, "Completion: {:?}", self.completion_state)?;
 
@@ -357,7 +360,7 @@ impl StreamMetrics {
             Self::format_duration(self.largest_gap)
         )?;
         if let Some(ref after) = self.largest_gap_after_event {
-            writeln!(file, "  (after {})", after)?;
+            writeln!(file, "  (after {after})")?;
         }
         writeln!(
             file,
@@ -365,7 +368,7 @@ impl StreamMetrics {
             Self::format_duration(self.largest_ready_gap)
         )?;
         if let Some(ref after) = self.largest_ready_gap_after_event {
-            writeln!(file, "  (after {})", after)?;
+            writeln!(file, "  (after {after})")?;
         }
 
         // Gap buckets
@@ -387,8 +390,8 @@ impl StreamMetrics {
             writeln!(file, "Time to 1k bytes:   {}", Self::format_duration(t))?;
         }
         if total_duration.as_secs_f64() > 0.0 {
-            let bytes_per_sec = self.text_delta_bytes as f64 / total_duration.as_secs_f64();
-            writeln!(file, "Bytes/second:       {:.1}", bytes_per_sec)?;
+            let bytes_per_sec = usize_to_f64(self.text_delta_bytes) / total_duration.as_secs_f64();
+            writeln!(file, "Bytes/second:       {bytes_per_sec:.1}")?;
         }
 
         // Backpressure / poll metrics
@@ -406,7 +409,7 @@ impl StreamMetrics {
         )?;
         if self.poll_count > 0 && self.pending_count > 0 {
             let ready_ratio =
-                (self.poll_count - self.pending_count) as f64 / self.poll_count as f64;
+                usize_to_f64(self.poll_count - self.pending_count) / usize_to_f64(self.poll_count);
             writeln!(file, "Ready ratio:        {:.1}%", ready_ratio * 100.0)?;
         }
 
@@ -414,7 +417,7 @@ impl StreamMetrics {
         let mut counts: Vec<_> = self.event_counts.iter().collect();
         counts.sort_by(|a, b| b.1.cmp(a.1));
         for (event_type, count) in counts {
-            writeln!(file, "  {:<25} {}", event_type, count)?;
+            writeln!(file, "  {event_type:<25} {count}")?;
         }
 
         writeln!(file)?;
@@ -465,7 +468,7 @@ impl StreamMetrics {
                 "t_100_bytes_ms": self.t_100_bytes.map(|d| d.as_millis()),
                 "t_1k_bytes_ms": self.t_1k_bytes.map(|d| d.as_millis()),
                 "bytes_per_second": if total_duration.as_secs_f64() > 0.0 {
-                    Some(self.text_delta_bytes as f64 / total_duration.as_secs_f64())
+                    Some(usize_to_f64(self.text_delta_bytes) / total_duration.as_secs_f64())
                 } else {
                     None
                 },
@@ -513,10 +516,10 @@ impl<S> MetricsStream<S> {
     /// Write both human-readable and JSONL metrics.
     fn write_metrics(&self) {
         if let Err(e) = self.metrics.write_to_file(&self.output_path) {
-            eprintln!("Failed to write stream metrics: {}", e);
+            eprintln!("Failed to write stream metrics: {e}");
         }
         if let Err(e) = self.metrics.write_jsonl(&self.output_path) {
-            eprintln!("Failed to write stream metrics JSONL: {}", e);
+            eprintln!("Failed to write stream metrics JSONL: {e}");
         }
     }
 }
@@ -596,6 +599,9 @@ pub fn debug_stream_path() -> Option<String> {
 
 /// Wraps a stream with metrics tracking if `ZDX_DEBUG_STREAM` is set.
 /// Otherwise returns the stream unchanged.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn maybe_wrap_with_metrics<S>(stream: S) -> ProviderStream
 where
     S: Stream<Item = ProviderResult<StreamEvent>> + Send + 'static,

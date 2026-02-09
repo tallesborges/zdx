@@ -66,7 +66,7 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                             ToolOutput::failure(
                                 "parse_error",
                                 "Failed to parse tool result",
-                                Some(format!("Deserialization error: {}", e)),
+                                Some(format!("Deserialization error: {e}")),
                             )
                         });
                     cell.set_tool_result(tool_output);

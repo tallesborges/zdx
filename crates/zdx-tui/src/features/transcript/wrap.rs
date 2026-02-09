@@ -15,7 +15,7 @@ use super::style::{Style, StyledLine, StyledSpan};
 /// render passes.
 #[derive(Debug, Default)]
 pub struct WrapCache {
-    /// Maps (cell_id, width, content_len) -> cached styled lines
+    /// Maps (`cell_id`, width, `content_len`) -> cached styled lines
     cache: RefCell<HashMap<(CellId, usize, usize), Vec<StyledLine>>>,
 }
 

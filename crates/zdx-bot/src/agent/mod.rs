@@ -10,6 +10,9 @@ use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
 use crate::types::IncomingMessage;
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMessage>)> {
     let thread =
         Thread::with_id(thread_id.to_string()).map_err(|_| anyhow!("Failed to open thread log"))?;
@@ -18,6 +21,9 @@ pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMess
     Ok((thread, messages))
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
     let thread = Thread::with_id(thread_id.to_string())
         .map_err(|_| anyhow!("Failed to resolve thread log"))?;
@@ -28,6 +34,9 @@ pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
     Ok(())
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) fn record_user_message(
     thread: &mut Thread,
     messages: &mut Vec<ChatMessage>,
@@ -75,6 +84,9 @@ pub(crate) struct AgentTurnHandle {
 /// Thread persistence is wired internally via `spawn_broadcaster`.
 /// The caller receives events through `AgentTurnHandle::rx` and should
 /// look for `TurnCompleted` to get the final result.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
@@ -90,7 +102,7 @@ pub(crate) fn spawn_agent_turn(
 
     // Append bot-specific prompt if provided
     let system_prompt = match (effective.prompt, bot_system_prompt) {
-        (Some(base), Some(bot)) => Some(format!("{}\n\n{}", base, bot)),
+        (Some(base), Some(bot)) => Some(format!("{base}\n\n{bot}")),
         (Some(base), None) => Some(base),
         (None, Some(bot)) => Some(bot.to_string()),
         (None, None) => None,
@@ -135,17 +147,14 @@ pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
             let emoji = match name.as_str() {
                 "bash" => "🔧",
                 "read" => "📖",
-                "write" => "✏️",
-                "edit" => "✏️",
-                "apply_patch" => "✏️",
+                "write" | "edit" | "apply_patch" => "✏️",
                 "web_search" => "🔍",
                 "fetch_webpage" => "🌐",
                 "read_thread" => "💬",
                 _ => "⚙️",
             };
-            Some(format!("{} Running `{}`...", emoji, name))
+            Some(format!("{emoji} Running `{name}`..."))
         }
-        AgentEvent::ToolCompleted { .. } => None, // Don't update for completions alone
         _ => None,
     }
 }
@@ -160,7 +169,7 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
 
     for audio in &incoming.audios {
         if let Some(transcript) = &audio.transcript {
-            parts.push(format!("Audio transcript:\n{}", transcript));
+            parts.push(format!("Audio transcript:\n{transcript}"));
         } else {
             parts.push(format!(
                 "Audio attachment saved at {} (transcription unavailable).",

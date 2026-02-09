@@ -1,11 +1,11 @@
 //! Parser for thinking/reasoning block transitions.
 //!
-//! Some models (like StepFun) output reasoning content with `<think>` tags
+//! Some models (like `StepFun`) output reasoning content with `<think>` tags
 //! and may bleed the final response content into the reasoning field
 //! immediately after the `</think>` tag. This parser handles splitting
 //! reasoning from content at the `</think>` boundary.
 //!
-//! Example input in reasoning_content field:
+//! Example input in `reasoning_content` field:
 //! ```text
 //! Let me analyze this...
 //! </think>
@@ -38,6 +38,9 @@ pub struct ThinkingParseResult {
 /// - The entire content is returned as `reasoning`
 /// - `content` is `None`
 /// - `thinking_complete` is `false`
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn parse_thinking(content: &str) -> ThinkingParseResult {
     if let Some(think_end) = content.find("</think>") {
         let reasoning_text = &content[..think_end];

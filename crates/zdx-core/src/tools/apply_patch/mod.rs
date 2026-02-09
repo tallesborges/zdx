@@ -16,7 +16,7 @@ pub mod types;
 
 pub use types::{Hunk, ParseError, UpdateFileChunk};
 
-/// Returns the tool definition for the apply_patch tool.
+/// Returns the tool definition for the `apply_patch` tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Apply_Patch".to_string(),
@@ -40,7 +40,7 @@ struct ApplyPatchInput {
     patch: String,
 }
 
-/// Executes the apply_patch tool and returns a structured envelope.
+/// Executes the `apply_patch` tool and returns a structured envelope.
 pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: ApplyPatchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
@@ -48,7 +48,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for apply_patch tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -69,7 +69,7 @@ fn map_error(err: ApplyPatchError) -> ToolOutput {
             line_number,
         }) => ToolOutput::failure(
             "invalid_patch",
-            format!("Invalid hunk at line {}", line_number),
+            format!("Invalid hunk at line {line_number}"),
             Some(message),
         ),
         ApplyPatchError::FileNotFound { path } => ToolOutput::failure(
@@ -90,7 +90,7 @@ fn map_error(err: ApplyPatchError) -> ToolOutput {
         ApplyPatchError::IoError { path, source } => {
             let details = match path {
                 Some(path) => format!("Path: {} (OS error: {})", path.display(), source),
-                None => format!("OS error: {}", source),
+                None => format!("OS error: {source}"),
             };
             ToolOutput::failure("io_error", "I/O error while applying patch", Some(details))
         }
@@ -178,6 +178,9 @@ impl From<ParseError> for ApplyPatchError {
     }
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchError> {
     let hunks = parser::parse_patch(patch)?;
     let mut result = ApplyResult::default();
@@ -232,7 +235,9 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                     if target_path != target && target_path.exists() {
                         return Err(ApplyPatchError::FileExists { path: target_path });
                     }
-                    if target_path != target {
+                    if target_path == target {
+                        None
+                    } else {
                         if let Some(parent) = target_path.parent()
                             && !parent.as_os_str().is_empty()
                         {
@@ -248,8 +253,6 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
                             }
                         })?;
                         Some(target_path)
-                    } else {
-                        None
                     }
                 } else {
                     None
@@ -299,7 +302,7 @@ fn apply_update(path: &Path, chunks: &[UpdateFileChunk]) -> Result<usize, ApplyP
             {
                 return Err(ApplyPatchError::PatternNotFound {
                     path: path.to_path_buf(),
-                    message: format!("Context '{}' not found", ctx),
+                    message: format!("Context '{ctx}' not found"),
                 });
             }
             let insert_at = lines.len();
@@ -314,7 +317,7 @@ fn apply_update(path: &Path, chunks: &[UpdateFileChunk]) -> Result<usize, ApplyP
                 None => {
                     return Err(ApplyPatchError::PatternNotFound {
                         path: path.to_path_buf(),
-                        message: format!("Context '{}' not found", ctx),
+                        message: format!("Context '{ctx}' not found"),
                     });
                 }
             }

@@ -148,7 +148,7 @@ impl LoginState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
-        render_login_overlay(frame, self, area)
+        render_login_overlay(frame, self, area);
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {

@@ -11,8 +11,8 @@ async fn test_cancellation_token_stops_handler() {
     // Spawn a task that waits for cancellation or sleeps forever
     let handle = tokio::spawn(async move {
         tokio::select! {
-            _ = token_clone.cancelled() => "cancelled",
-            _ = tokio::time::sleep(Duration::from_secs(60)) => "timeout",
+            () = token_clone.cancelled() => "cancelled",
+            () = tokio::time::sleep(Duration::from_secs(60)) => "timeout",
         }
     });
 

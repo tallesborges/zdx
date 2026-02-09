@@ -49,6 +49,9 @@ impl GeminiCliConfig {
 }
 
 /// Resolves OAuth credentials, refreshing if expired.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredentials> {
     let mut creds = oauth_gemini_cli::load_credentials()?.ok_or_else(|| {
         anyhow::anyhow!(
@@ -81,7 +84,7 @@ pub async fn resolve_credentials() -> Result<oauth_gemini_cli::GeminiCliCredenti
 pub struct GeminiCliClient {
     config: GeminiCliConfig,
     http: reqwest::Client,
-    /// Prompt sequence counter for user_prompt_id generation.
+    /// Prompt sequence counter for `user_prompt_id` generation.
     prompt_seq: AtomicU32,
 }
 
@@ -94,6 +97,9 @@ impl GeminiCliClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],
@@ -108,7 +114,7 @@ impl GeminiCliClient {
             messages,
             tools,
             system_prompt.as_deref(),
-            CloudCodeRequestParams {
+            &CloudCodeRequestParams {
                 model: &self.config.model,
                 project_id: &creds.project_id,
                 max_output_tokens: Some(self.config.max_tokens),
@@ -118,7 +124,7 @@ impl GeminiCliClient {
             },
         )?;
 
-        let url = format!("{}{}?alt=sse", API_ENDPOINT, STREAM_PATH);
+        let url = format!("{API_ENDPOINT}{STREAM_PATH}?alt=sse");
         let headers = build_headers(&creds.access);
 
         let response = self
@@ -128,7 +134,7 @@ impl GeminiCliClient {
             .json(&request)
             .send()
             .await
-            .map_err(classify_reqwest_error)?;
+            .map_err(|e| classify_reqwest_error(&e))?;
 
         let status = response.status();
         if !status.is_success() {
@@ -147,7 +153,7 @@ fn build_headers(access_token: &str) -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(
         "Authorization",
-        HeaderValue::from_str(&format!("Bearer {}", access_token))
+        HeaderValue::from_str(&format!("Bearer {access_token}"))
             .unwrap_or_else(|_| HeaderValue::from_static("")),
     );
     // Mimic official Gemini CLI User-Agent for better rate limits

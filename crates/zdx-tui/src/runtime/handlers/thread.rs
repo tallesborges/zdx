@@ -25,13 +25,13 @@ pub async fn thread_list_load(
             mode,
         }),
         Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
-            error: format!("Failed to load threads: {}", e),
+            error: format!("Failed to load threads: {e}"),
         }),
     })
     .await
     .unwrap_or_else(|e| {
         UiEvent::Thread(ThreadUiEvent::ListFailed {
-            error: format!("Task failed: {}", e),
+            error: format!("Task failed: {e}"),
         })
     })
 }
@@ -44,7 +44,7 @@ pub async fn thread_load(thread_id: String, root: PathBuf) -> UiEvent {
         .await
         .unwrap_or_else(|e| {
             UiEvent::Thread(ThreadUiEvent::LoadFailed {
-                error: format!("Task failed: {}", e),
+                error: format!("Task failed: {e}"),
             })
         })
 }
@@ -56,7 +56,7 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         Ok(events) => events,
         Err(e) => {
             return UiEvent::Thread(ThreadUiEvent::LoadFailed {
-                error: format!("Failed to load thread: {}", e),
+                error: format!("Failed to load thread: {e}"),
             });
         }
     };
@@ -118,13 +118,13 @@ pub async fn thread_ensure_worktree(thread_id: String, root: PathBuf) -> UiEvent
             UiEvent::Thread(ThreadUiEvent::WorktreeReady { path })
         }
         Err(error) => UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
-            error: format!("Failed to enable worktree: {}", error),
+            error: format!("Failed to enable worktree: {error}"),
         }),
     })
     .await
     .unwrap_or_else(|e| {
         UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
-            error: format!("Task failed: {}", e),
+            error: format!("Task failed: {e}"),
         })
     })
 }
@@ -142,7 +142,7 @@ pub fn resolve_root_display(path: PathBuf) -> UiEvent {
 pub fn refresh_system_prompt(config: zdx_core::config::Config, path: PathBuf) -> UiEvent {
     let result = zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &path)
         .map(|context| context.prompt)
-        .map_err(|error| format!("Failed to refresh system prompt: {}", error));
+        .map_err(|error| format!("Failed to refresh system prompt: {error}"));
 
     UiEvent::SystemPromptRefreshed { result }
 }
@@ -179,7 +179,7 @@ fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String
     if segments.len() <= keep_segments_each_side * 2 {
         let joined = segments.join("/");
         if has_leading_slash {
-            return format!("/{}", joined);
+            return format!("/{joined}");
         }
         return joined;
     }
@@ -191,7 +191,7 @@ fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String
 
     let joined = compact.join("/");
     if has_leading_slash {
-        format!("/{}", joined)
+        format!("/{joined}")
     } else {
         joined
     }
@@ -208,9 +208,12 @@ fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
         .chars()
         .skip(char_count.saturating_sub(keep_chars_each_side))
         .collect();
-    format!("{}...{}", start, end)
+    format!("{start}...{end}")
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn resolve_project_root(root: &Path) -> anyhow::Result<PathBuf> {
     let output = Command::new("git")
         .arg("-C")
@@ -270,7 +273,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
             Ok(thread_handle) => thread_handle,
             Err(e) => {
                 return UiEvent::Thread(ThreadUiEvent::CreateFailed {
-                    error: format!("Failed to create thread: {}", e),
+                    error: format!("Failed to create thread: {e}"),
                 });
             }
         };
@@ -289,7 +292,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
     .await
     .unwrap_or_else(|e| {
         UiEvent::Thread(ThreadUiEvent::CreateFailed {
-            error: format!("Task failed: {}", e),
+            error: format!("Task failed: {e}"),
         })
     })
 }
@@ -307,7 +310,7 @@ pub async fn thread_fork(
         .await
         .unwrap_or_else(|e| {
             UiEvent::Thread(ThreadUiEvent::ForkFailed {
-                error: format!("Task failed: {}", e),
+                error: format!("Task failed: {e}"),
             })
         })
 }
@@ -322,7 +325,7 @@ fn fork_thread_sync(
         Ok(thread_handle) => thread_handle,
         Err(e) => {
             return UiEvent::Thread(ThreadUiEvent::ForkFailed {
-                error: format!("Failed to create thread: {}", e),
+                error: format!("Failed to create thread: {e}"),
             });
         }
     };
@@ -330,7 +333,7 @@ fn fork_thread_sync(
     for event in &events {
         if let Err(e) = thread_handle.append(event) {
             return UiEvent::Thread(ThreadUiEvent::ForkFailed {
-                error: format!("Failed to write thread: {}", e),
+                error: format!("Failed to write thread: {e}"),
             });
         }
     }
@@ -372,14 +375,14 @@ pub async fn thread_rename(thread_id: String, title: Option<String>) -> UiEvent 
                 title: new_title,
             }),
             Err(e) => UiEvent::Thread(ThreadUiEvent::RenameFailed {
-                error: format!("Failed to rename thread: {}", e),
+                error: format!("Failed to rename thread: {e}"),
             }),
         },
     )
     .await
     .unwrap_or_else(|e| {
         UiEvent::Thread(ThreadUiEvent::RenameFailed {
-            error: format!("Task failed: {}", e),
+            error: format!("Task failed: {e}"),
         })
     })
 }

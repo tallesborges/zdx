@@ -64,7 +64,7 @@ impl HandoffState {
 
     /// Cancels any in-progress generation and resets to Idle.
     ///
-    /// Note: This is called from InputMutation::SetHandoffState. For explicit
+    /// Note: This is called from `InputMutation::SetHandoffState`. For explicit
     /// cancellation via hotkey, the reducer should emit `UiEffect::CancelTask`.
     pub fn cancel(&mut self) {
         *self = HandoffState::Idle;
@@ -107,7 +107,7 @@ impl Default for InputState {
 }
 
 impl InputState {
-    /// Creates a new InputState with default textarea styling.
+    /// Creates a new `InputState` with default textarea styling.
     pub fn new() -> Self {
         let textarea = TextBuffer::default();
 
@@ -131,7 +131,7 @@ impl InputState {
     /// Gets the current input text with pending paste placeholders expanded.
     ///
     /// Replaces all placeholder strings with their original pasted content,
-    /// then clears pending_pastes. Should only be called at submission time.
+    /// then clears `pending_pastes`. Should only be called at submission time.
     ///
     /// If a placeholder appears multiple times (e.g., user copy-pasted it),
     /// all occurrences are expanded to the same content.
@@ -152,7 +152,7 @@ impl InputState {
     /// Removes pending pastes whose placeholders no longer exist in the textarea.
     ///
     /// Called after any text mutation that might delete or modify placeholders.
-    /// This keeps pending_pastes in sync with what's actually in the textarea.
+    /// This keeps `pending_pastes` in sync with what's actually in the textarea.
     pub fn sync_pending_pastes(&mut self) {
         if self.pending_pastes.is_empty() {
             return;
@@ -191,8 +191,7 @@ impl InputState {
             text[..cursor_byte_offset]
                 .char_indices()
                 .last()
-                .map(|(i, _)| i)
-                .unwrap_or(0)
+                .map_or(0, |(i, _)| i)
         } else {
             // Delete deletes the char at cursor
             if cursor_byte_offset >= text.len() {
@@ -237,7 +236,7 @@ impl InputState {
                 offset += line.len() + 1; // +1 for newline
             } else {
                 // col is in char units, need to convert to bytes
-                offset += line.chars().take(col).map(|c| c.len_utf8()).sum::<usize>();
+                offset += line.chars().take(col).map(char::len_utf8).sum::<usize>();
                 break;
             }
         }
@@ -265,7 +264,7 @@ impl InputState {
         }
 
         // If byte_offset is at or past end, put cursor at end of last line
-        let last_line_chars = text.lines().last().map(|l| l.chars().count()).unwrap_or(0);
+        let last_line_chars = text.lines().last().map_or(0, |l| l.chars().count());
         (row.saturating_sub(1), last_line_chars)
     }
 
@@ -542,7 +541,7 @@ impl InputState {
     ///
     /// Format: `[Pasted Content N chars #xxxxxxxx]`
     pub fn generate_placeholder(char_count: usize, id: &str) -> String {
-        format!("[Pasted Content {} chars #{}]", char_count, id)
+        format!("[Pasted Content {char_count} chars #{id}]")
     }
 
     /// Clears the input textarea.

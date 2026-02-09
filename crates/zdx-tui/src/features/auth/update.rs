@@ -14,6 +14,9 @@ pub enum LoginOverlayAction {
     Reopen { error: String },
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn handle_login_result(
     auth: &mut AuthState,
     result: Result<(), String>,

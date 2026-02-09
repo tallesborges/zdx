@@ -1,3 +1,9 @@
+#![allow(
+    clippy::cast_possible_truncation,
+    clippy::match_same_arms,
+    clippy::too_many_lines
+)]
+
 //! TUI runtime - owns terminal, runs event loop, executes effects.
 //!
 //! This is the "Elm runtime" boundary: all side effects happen here.
@@ -11,7 +17,7 @@
 //! - This eliminates per-operation receivers and simplifies event collection
 //!
 //! Structure:
-//! - `mod.rs`: Core runtime (TuiRuntime, event loop, effect dispatch)
+//! - `mod.rs`: Core runtime (`TuiRuntime`, event loop, effect dispatch)
 //! - `inbox.rs`: Inbox channel types
 //! - `handlers/`: Effect handler implementations (I/O, spawning, etc.)
 //! - `handoff.rs`: Handoff generation handlers (subagent spawning)
@@ -74,6 +80,9 @@ pub struct TuiRuntime {
 
 impl TuiRuntime {
     /// Creates a new TUI runtime.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn new(
         config: Config,
         root: PathBuf,
@@ -84,6 +93,9 @@ impl TuiRuntime {
     }
 
     /// Creates a TUI runtime with pre-loaded message history.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn with_history(
         config: Config,
         root: PathBuf,
@@ -122,6 +134,9 @@ impl TuiRuntime {
     }
 
     /// Runs the main event loop.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn run(&mut self) -> Result<()> {
         // Enable bracketed paste and mouse capture
         terminal::enable_input_features()?;

@@ -12,7 +12,7 @@ fn create_thread_file(temp_dir: &TempDir, thread_id: &str, events: &[(String, St
     let threads_dir = temp_dir.path().join("threads");
     fs::create_dir_all(&threads_dir).unwrap();
 
-    let thread_path = threads_dir.join(format!("{}.jsonl", thread_id));
+    let thread_path = threads_dir.join(format!("{thread_id}.jsonl"));
     let mut content = String::new();
 
     for (role, text, ts) in events {
@@ -38,7 +38,7 @@ fn create_thread_with_meta(
     let threads_dir = temp_dir.path().join("threads");
     fs::create_dir_all(&threads_dir).unwrap();
 
-    let thread_path = threads_dir.join(format!("{}.jsonl", thread_id));
+    let thread_path = threads_dir.join(format!("{thread_id}.jsonl"));
     let mut content = String::new();
 
     let mut meta = json!({

@@ -102,9 +102,7 @@ impl ModelOption {
 
 /// Returns true if the model supports reasoning, defaulting to true when unknown.
 pub fn model_supports_reasoning(id: &str) -> bool {
-    ModelOption::find_by_id(id)
-        .map(|model| model.capabilities.reasoning)
-        .unwrap_or(true)
+    ModelOption::find_by_id(id).is_none_or(|model| model.capabilities.reasoning)
 }
 
 #[derive(Debug, Deserialize)]
@@ -159,7 +157,7 @@ fn load_models_from_str(contents: &str) -> Option<Vec<ModelOption>> {
     let file: ModelsFile = match toml::from_str(contents) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("Warning: failed to parse models file: {}", err);
+            eprintln!("Warning: failed to parse models file: {err}");
             return None;
         }
     };

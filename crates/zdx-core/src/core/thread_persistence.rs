@@ -14,6 +14,7 @@
 //! { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
 //! ```
 
+use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
@@ -82,6 +83,7 @@ impl Usage {
     }
 
     /// Returns a new Usage that is the sum of self and other.
+    #[must_use]
     pub fn plus(&self, other: &Usage) -> Usage {
         Usage {
             input: self.input + other.input,
@@ -386,25 +388,26 @@ impl Thread {
     fn guard_thread_creation() {
         // Compile-time guard for unit tests
         #[cfg(test)]
-        if std::env::var("ZDX_HOME").is_err() {
-            panic!(
-                "Tests must set ZDX_HOME to a temp directory!\n\
+        assert!(
+            std::env::var("ZDX_HOME").is_ok(),
+            "Tests must set ZDX_HOME to a temp directory!\n\
                  Thread would be created in user's home directory.\n\
                  Use `setup_temp_zdx_home()` or set ZDX_HOME env var."
-            );
-        }
+        );
 
         // Runtime guard for integration tests
         #[cfg(not(test))]
-        if std::env::var("ZDX_BLOCK_THREAD_WRITES").is_ok_and(|v| v == "1") {
-            panic!(
-                "ZDX_BLOCK_THREAD_WRITES=1 but trying to create a thread!\n\
+        assert!(
+            !std::env::var("ZDX_BLOCK_THREAD_WRITES").is_ok_and(|v| v == "1"),
+            "ZDX_BLOCK_THREAD_WRITES=1 but trying to create a thread!\n\
                  Use --no-thread flag or set ZDX_HOME to a temp directory."
-            );
-        }
+        );
     }
 
     /// Creates a new thread and associates it with a root path.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn new_with_root(root: &Path) -> Result<Self> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let root_path = Some(root.display().to_string());
@@ -415,6 +418,9 @@ impl Thread {
     ///
     /// Use this when creating a thread from a `/handoff` command to record
     /// the parent thread relationship.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn new_with_root_and_source(root: &Path, handoff_from: Option<String>) -> Result<Self> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let root_path = Some(root.display().to_string());
@@ -431,7 +437,7 @@ impl Thread {
         let dir = threads_dir();
         fs::create_dir_all(&dir).context("Failed to create threads directory")?;
 
-        let path = dir.join(format!("{}.jsonl", id));
+        let path = dir.join(format!("{id}.jsonl"));
         let is_new = !path.exists();
 
         Ok(Self {
@@ -447,13 +453,16 @@ impl Thread {
     ///
     /// # Panics
     /// In tests, panics if `ZDX_HOME` is not set (to prevent polluting user's home).
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn with_id(id: String) -> Result<Self> {
         Self::guard_thread_creation();
 
         let dir = threads_dir();
         fs::create_dir_all(&dir).context("Failed to create threads directory")?;
 
-        let path = dir.join(format!("{}.jsonl", id));
+        let path = dir.join(format!("{id}.jsonl"));
         let is_new = !path.exists();
 
         Ok(Self {
@@ -486,7 +495,7 @@ impl Thread {
             .context("Failed to open thread file")?;
 
         let json = serde_json::to_string(event).context("Failed to serialize event")?;
-        writeln!(file, "{}", json).context("Failed to write to thread file")?;
+        writeln!(file, "{json}").context("Failed to write to thread file")?;
 
         Ok(())
     }
@@ -494,6 +503,9 @@ impl Thread {
     /// Appends an event to the thread file.
     ///
     /// For new threads, automatically writes the meta event first.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn append(&mut self, event: &ThreadEvent) -> Result<()> {
         // Don't write meta before another meta
         if !matches!(event, ThreadEvent::Meta { .. }) {
@@ -503,6 +515,9 @@ impl Thread {
     }
 
     /// Reads all events from the thread file.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn read_events(&self) -> Result<Vec<ThreadEvent>> {
         read_thread_events(&self.path)
     }
@@ -512,6 +527,9 @@ impl Thread {
     /// Writes the meta line with the provided title (or clears it if None/empty),
     /// preserving all subsequent events. The update is performed atomically via
     /// write-to-temp-then-rename.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn set_title(&mut self, title: Option<String>) -> Result<Option<String>> {
         self.ensure_meta()?;
         let normalized = title.and_then(normalize_title);
@@ -520,6 +538,9 @@ impl Thread {
     }
 
     /// Updates the thread root path stored in the meta event.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn set_root_path(&mut self, root: &Path) -> Result<()> {
         let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let root_path = Some(root.display().to_string());
@@ -583,11 +604,11 @@ fn rewrite_meta_with_title(path: &PathBuf, title: Option<String>) -> Result<()> 
 
     let new_meta =
         serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
-    writeln!(temp, "{}", new_meta).context("Failed to write updated meta")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
 
     for line in lines {
         let line = line.context("Failed to read thread line")?;
-        writeln!(temp, "{}", line).context("Failed to write thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
     }
 
     temp.sync_all().context("Failed to sync temp thread file")?;
@@ -624,11 +645,11 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
 
     let new_meta =
         serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
-    writeln!(temp, "{}", new_meta).context("Failed to write updated meta")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
 
     for line in lines {
         let line = line.context("Failed to read thread line")?;
-        writeln!(temp, "{}", line).context("Failed to write thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
     }
 
     temp.sync_all().context("Failed to sync temp thread file")?;
@@ -637,7 +658,7 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
 }
 
 /// Reads only the meta line to extract title (backward compatible).
-fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
+fn read_meta_title(path: &PathBuf) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -651,7 +672,7 @@ fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
         first_line.clear();
         let bytes = reader.read_line(&mut first_line)?;
         if bytes == 0 {
-            return Ok(None); // Empty file
+            return Ok(None);
         }
         if !first_line.trim().is_empty() {
             break;
@@ -661,18 +682,18 @@ fn read_meta_title(path: &PathBuf) -> Result<Option<Option<String>>> {
     // Parse meta event, defaulting title to None if missing
     let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
         Ok(event) => event,
-        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+        Err(_) => return Ok(None),
     };
 
     if let ThreadEvent::Meta { title, .. } = parsed {
-        Ok(Some(title))
+        Ok(title)
     } else {
-        Ok(None) // First event wasn't meta
+        Ok(None)
     }
 }
 
 /// Reads only the meta line to extract root path (backward compatible).
-fn read_meta_root_path(path: &PathBuf) -> Result<Option<Option<String>>> {
+fn read_meta_root_path(path: &PathBuf) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -686,7 +707,7 @@ fn read_meta_root_path(path: &PathBuf) -> Result<Option<Option<String>>> {
         first_line.clear();
         let bytes = reader.read_line(&mut first_line)?;
         if bytes == 0 {
-            return Ok(None); // Empty file
+            return Ok(None);
         }
         if !first_line.trim().is_empty() {
             break;
@@ -696,18 +717,18 @@ fn read_meta_root_path(path: &PathBuf) -> Result<Option<Option<String>>> {
     // Parse meta event, defaulting root_path to None if missing
     let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
         Ok(event) => event,
-        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+        Err(_) => return Ok(None),
     };
 
     if let ThreadEvent::Meta { root_path, .. } = parsed {
-        Ok(Some(root_path))
+        Ok(root_path)
     } else {
-        Ok(None) // First event wasn't meta
+        Ok(None)
     }
 }
 
-/// Reads only the meta line to extract handoff_from (backward compatible).
-fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<Option<String>>> {
+/// Reads only the meta line to extract `handoff_from` (backward compatible).
+fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<String>> {
     if !path.exists() {
         return Ok(None);
     }
@@ -721,7 +742,7 @@ fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<Option<String>>> {
         first_line.clear();
         let bytes = reader.read_line(&mut first_line)?;
         if bytes == 0 {
-            return Ok(None); // Empty file
+            return Ok(None);
         }
         if !first_line.trim().is_empty() {
             break;
@@ -731,13 +752,13 @@ fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<Option<String>>> {
     // Parse meta event, defaulting handoff_from to None if missing
     let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
         Ok(event) => event,
-        Err(_) => return Ok(None), // Unparseable meta, fallback to None
+        Err(_) => return Ok(None),
     };
 
     if let ThreadEvent::Meta { handoff_from, .. } = parsed {
-        Ok(Some(handoff_from))
+        Ok(handoff_from)
     } else {
-        Ok(None) // First event wasn't meta
+        Ok(None)
     }
 }
 
@@ -772,7 +793,7 @@ pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> Jo
             if let Some(thread_event) = ThreadEvent::from_agent(&event) {
                 // Best-effort persistence - log errors but don't panic
                 if let Err(e) = thread.append(&thread_event) {
-                    eprintln!("Warning: Failed to persist thread event: {}", e);
+                    eprintln!("Warning: Failed to persist thread event: {e}");
                 }
             }
         }
@@ -801,7 +822,10 @@ impl ThreadSummary {
 
 /// Lists all saved threads.
 ///
-/// Returns a vector of ThreadSummary sorted by modification time (newest first).
+/// Returns a vector of `ThreadSummary` sorted by modification time (newest first).
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn list_threads() -> Result<Vec<ThreadSummary>> {
     let dir = threads_dir();
 
@@ -821,9 +845,9 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
         {
             let id = stem.to_string_lossy().to_string();
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
-            let title = read_meta_title(&path).unwrap_or(None).flatten();
-            let root_path = read_meta_root_path(&path).unwrap_or(None).flatten();
-            let handoff_from = read_meta_handoff_from(&path).unwrap_or(None).flatten();
+            let title = read_meta_title(&path).unwrap_or(None);
+            let root_path = read_meta_root_path(&path).unwrap_or(None);
+            let handoff_from = read_meta_handoff_from(&path).unwrap_or(None);
 
             threads.push(ThreadSummary {
                 id,
@@ -842,6 +866,9 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
 }
 
 /// Loads and returns the events from a thread by ID.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn load_thread_events(id: &str) -> Result<Vec<ThreadEvent>> {
     let thread = Thread::with_id(id.to_string())?;
     thread.read_events()
@@ -866,36 +893,51 @@ pub fn extract_title_from_events(events: &[ThreadEvent]) -> Option<String> {
 /// Returns the ID of the most recently modified thread.
 ///
 /// Returns None if no threads exist.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn latest_thread_id() -> Result<Option<String>> {
     let threads = list_threads()?;
     Ok(threads.into_iter().next().map(|s| s.id))
 }
 
 /// Reads a thread's title by ID (if present in meta).
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn read_thread_title(id: &str) -> Result<Option<String>> {
-    let path = threads_dir().join(format!("{}.jsonl", id));
-    Ok(read_meta_title(&path)?.flatten())
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    read_meta_title(&path)
 }
 
 /// Reads a thread's root path by ID (if present in meta).
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn read_thread_root_path(id: &str) -> Result<Option<String>> {
-    let path = threads_dir().join(format!("{}.jsonl", id));
-    Ok(read_meta_root_path(&path)?.flatten())
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    read_meta_root_path(&path)
 }
 
-/// Loads thread events and converts them to ChatMessages for API use.
+/// Loads thread events and converts them to `ChatMessages` for API use.
 ///
 /// Reconstructs the full thread including tool use/result pairs.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::ChatMessage>> {
     let events = load_thread_events(id)?;
     Ok(thread_events_to_messages(events))
 }
 
 /// Updates a thread's title by ID.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn set_thread_title(id: &str, title: Option<String>) -> Result<Option<String>> {
-    let path = threads_dir().join(format!("{}.jsonl", id));
+    let path = threads_dir().join(format!("{id}.jsonl"));
     if !path.exists() {
-        bail!("Thread '{}' not found", id);
+        bail!("Thread '{id}' not found");
     }
 
     let mut thread = Thread::with_id(id.to_string())?;
@@ -923,46 +965,44 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
             }
         };
 
-    /// Flushes pending assistant content (thinking + tool_use) and tool results into messages.
-    fn flush_pending_assistant(
-        messages: &mut Vec<ChatMessage>,
-        pending_reasoning: &mut Vec<ReasoningBlock>,
-        pending_tool_uses: &mut Vec<(String, String, Value)>,
-        pending_tool_results: &mut Vec<crate::tools::ToolResult>,
-    ) {
-        // First, flush any pending thinking/tool_use as an assistant message
-        if !pending_reasoning.is_empty() || !pending_tool_uses.is_empty() {
-            let mut blocks: Vec<ChatContentBlock> = Vec::new();
+    let flush_pending_assistant =
+        |messages: &mut Vec<ChatMessage>,
+         pending_reasoning: &mut Vec<ReasoningBlock>,
+         pending_tool_uses: &mut Vec<(String, String, Value)>,
+         pending_tool_results: &mut Vec<crate::tools::ToolResult>| {
+            // First, flush any pending thinking/tool_use as an assistant message
+            if !pending_reasoning.is_empty() || !pending_tool_uses.is_empty() {
+                let mut blocks: Vec<ChatContentBlock> = Vec::new();
 
-            // Add reasoning blocks first
-            for reasoning in std::mem::take(pending_reasoning) {
-                blocks.push(ChatContentBlock::Reasoning(reasoning));
+                // Add reasoning blocks first
+                for reasoning in std::mem::take(pending_reasoning) {
+                    blocks.push(ChatContentBlock::Reasoning(reasoning));
+                }
+
+                // Add tool_use blocks
+                for (id, name, input) in std::mem::take(pending_tool_uses) {
+                    blocks.push(ChatContentBlock::ToolUse { id, name, input });
+                }
+
+                if !blocks.is_empty() {
+                    messages.push(ChatMessage::assistant_blocks(blocks));
+                }
             }
 
-            // Add tool_use blocks
-            for (id, name, input) in std::mem::take(pending_tool_uses) {
-                blocks.push(ChatContentBlock::ToolUse { id, name, input });
+            // Then, flush any pending tool results as a user message
+            // (This is separate because tool_results may need to be flushed
+            // even when thinking/tool_use have already been flushed)
+            if !pending_tool_results.is_empty() {
+                messages.push(ChatMessage::tool_results(std::mem::take(
+                    pending_tool_results,
+                )));
             }
-
-            if !blocks.is_empty() {
-                messages.push(ChatMessage::assistant_blocks(blocks));
-            }
-        }
-
-        // Then, flush any pending tool results as a user message
-        // (This is separate because tool_results may need to be flushed
-        // even when thinking/tool_use have already been flushed)
-        if !pending_tool_results.is_empty() {
-            messages.push(ChatMessage::tool_results(std::mem::take(
-                pending_tool_results,
-            )));
-        }
-    }
+        };
 
     for event in events {
         match event {
-            ThreadEvent::Meta { .. } => {
-                // Skip meta events
+            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {
+                // Skip meta/usage events
             }
             ThreadEvent::Message { role, text, .. } => {
                 // For assistant messages with pending reasoning (but no pending tool uses),
@@ -1103,9 +1143,6 @@ pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::provide
                     )));
                 }
             }
-            ThreadEvent::Usage { .. } => {
-                // Skip usage events when loading for API (they're for thread tracking only)
-            }
         }
     }
 
@@ -1185,13 +1222,13 @@ pub fn extract_usage_from_thread_events(events: &[ThreadEvent]) -> (Usage, Usage
     (cumulative, latest)
 }
 
-/// Formats a SystemTime as a simple date/time string (YYYY-MM-DD HH:MM).
+/// Formats a `SystemTime` as a simple date/time string (YYYY-MM-DD HH:MM).
 pub fn format_timestamp(time: SystemTime) -> Option<String> {
     let datetime: DateTime<Utc> = time.into();
     Some(datetime.format("%Y-%m-%d %H:%M").to_string())
 }
 
-/// Formats a SystemTime as a short relative age (e.g., "2m ago", "3h ago", "5d ago").
+/// Formats a `SystemTime` as a short relative age (e.g., "2m ago", "3h ago", "5d ago").
 pub fn format_timestamp_relative(time: SystemTime) -> Option<String> {
     let datetime: DateTime<Utc> = time.into();
     let now = Utc::now();
@@ -1202,31 +1239,31 @@ pub fn format_timestamp_relative(time: SystemTime) -> Option<String> {
         return Some("just now".to_string());
     }
     if mins < 60 {
-        return Some(format!("{}m ago", mins));
+        return Some(format!("{mins}m ago"));
     }
 
     let hours = mins / 60;
     if hours < 24 {
-        return Some(format!("{}h ago", hours));
+        return Some(format!("{hours}h ago"));
     }
 
     let days = hours / 24;
     if days < 7 {
-        return Some(format!("{}d ago", days));
+        return Some(format!("{days}d ago"));
     }
 
     let weeks = days / 7;
     if weeks < 5 {
-        return Some(format!("{}w ago", weeks));
+        return Some(format!("{weeks}w ago"));
     }
 
     let months = days / 30;
     if months < 12 {
-        return Some(format!("{}mo ago", months));
+        return Some(format!("{months}mo ago"));
     }
 
     let years = days / 365;
-    Some(format!("{}y ago", years))
+    Some(format!("{years}y ago"))
 }
 
 /// Formats a thread transcript in a human-readable format.
@@ -1236,7 +1273,8 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
     for event in events {
         match event {
             ThreadEvent::Meta { schema_version, .. } => {
-                output.push_str(&format!("### Thread (schema v{})\n\n", schema_version));
+                writeln!(output, "### Thread (schema v{schema_version})").expect("write");
+                output.push('\n');
             }
             ThreadEvent::Message { role, text, .. } => {
                 let role_label = match role.as_str() {
@@ -1244,7 +1282,7 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
                     "assistant" => "Assistant",
                     _ => role,
                 };
-                output.push_str(&format!("### {}\n", role_label));
+                writeln!(output, "### {role_label}").expect("write");
                 output.push_str(text);
                 output.push_str("\n\n");
             }
@@ -1261,26 +1299,26 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
                 }
             }
             ThreadEvent::ToolUse { name, input, .. } => {
-                output.push_str(&format!("### Tool: {}\n", name));
-                output.push_str(&format!(
-                    "```json\n{}\n```\n\n",
+                writeln!(output, "### Tool: {name}").expect("write");
+                writeln!(
+                    output,
+                    "```json\n{}\n```\n",
                     serde_json::to_string_pretty(input).unwrap_or_default()
-                ));
+                )
+                .expect("write");
             }
             ThreadEvent::ToolResult {
                 ok, output: out, ..
             } => {
                 let status = if *ok { "✓" } else { "✗" };
-                output.push_str(&format!("### Result {}\n", status));
+                writeln!(output, "### Result {status}").expect("write");
                 // Truncate long outputs for display
                 let out_str = serde_json::to_string_pretty(out).unwrap_or_default();
                 if out_str.len() > 500 {
-                    output.push_str(&format!(
-                        "```json\n{}...\n```\n\n",
-                        truncate_str(&out_str, 500)
-                    ));
+                    writeln!(output, "```json\n{}...\n```\n", truncate_str(&out_str, 500))
+                        .expect("write");
                 } else {
-                    output.push_str(&format!("```json\n{}\n```\n\n", out_str));
+                    writeln!(output, "```json\n{out_str}\n```\n").expect("write");
                 }
             }
             ThreadEvent::Interrupted { .. } => {
@@ -1307,9 +1345,12 @@ pub struct ThreadPersistenceOptions {
 impl ThreadPersistenceOptions {
     /// Resolves thread options into an optional Thread.
     ///
-    /// Returns None if no_save is true.
-    /// Returns existing thread if thread_id is provided.
+    /// Returns None if `no_save` is true.
+    /// Returns existing thread if `thread_id` is provided.
     /// Returns new thread otherwise.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn resolve(&self, root: &Path) -> Result<Option<Thread>> {
         if self.no_save {
             return Ok(None);
@@ -1350,7 +1391,7 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .subsec_nanos();
-        format!("{}-{}", prefix, nanos)
+        format!("{prefix}-{nanos}")
     }
 
     #[test]
@@ -1515,7 +1556,7 @@ mod tests {
                     Some(ChatContentBlock::Text(text)) if text == "Here is the answer."
                 ));
             }
-            _ => panic!("Expected assistant message with blocks"),
+            MessageContent::Text(_) => panic!("Expected assistant message with blocks"),
         }
     }
 

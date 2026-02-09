@@ -150,8 +150,7 @@ fn wrap_textarea(
             cursor_byte_pos = logical_line
                 .char_indices()
                 .nth(cursor_col)
-                .map(|(i, _)| i)
-                .unwrap_or(logical_line.len());
+                .map_or(logical_line.len(), |(i, _)| i);
         }
 
         for segment in segments {
@@ -256,7 +255,7 @@ fn wrap_textarea(
 
 /// Calculates the dynamic input height based on content and terminal size.
 ///
-/// - Minimum: INPUT_HEIGHT_MIN (5 lines with borders)
+/// - Minimum: `INPUT_HEIGHT_MIN` (5 lines with borders)
 /// - Maximum: 40% of terminal height
 /// - Expands when content has more than 3 lines
 pub fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
@@ -268,7 +267,7 @@ pub fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
     }
 
     // Calculate max height (40% of screen)
-    let max_height = ((terminal_height as f32) * INPUT_HEIGHT_MAX_PERCENT) as u16;
+    let max_height = (f32::from(terminal_height) * INPUT_HEIGHT_MAX_PERCENT) as u16;
 
     // Add 2 for borders (top and bottom)
     let desired_height = line_count + 2;
@@ -505,57 +504,54 @@ fn build_usage_display(
     // Try to find the model to get pricing and context limit
     let model = ModelOption::find_by_id(model_id);
 
-    match model {
-        Some(m) => {
-            let percentage = usage.context_percentage(m.context_limit);
+    if let Some(m) = model {
+        let percentage = usage.context_percentage(m.context_limit);
 
-            let mut spans = vec![
-                Span::styled(format!("{:.0}%", percentage), percentage_style),
-                Span::styled(
-                    format!(" of {}", ThreadUsage::format_context_limit(m.context_limit)),
-                    usage_style,
-                ),
-            ];
+        let mut spans = vec![
+            Span::styled(format!("{percentage:.0}%"), percentage_style),
+            Span::styled(
+                format!(" of {}", ThreadUsage::format_context_limit(m.context_limit)),
+                usage_style,
+            ),
+        ];
 
-            if show_subscription {
-                spans.push(Span::styled(" · (subscription)", cached_style));
-            }
-
-            if show_pricing {
-                let cost = usage.calculate_cost(&m.pricing);
-                let savings = usage.cache_savings(&m.pricing);
-
-                spans.push(Span::styled(" · ", usage_style));
-                spans.push(Span::styled(ThreadUsage::format_cost(cost), cost_style));
-
-                // Show cache savings indicator if there are cache hits
-                if savings > 0.001 {
-                    spans.push(Span::styled(
-                        format!(" (saved {})", ThreadUsage::format_cost(savings)),
-                        cached_style,
-                    ));
-                } else if usage.cache_read_tokens > 0 {
-                    spans.push(Span::styled(" (cached)", cached_style));
-                }
-            }
-
-            spans.push(Span::styled(" ", usage_style));
-            spans
+        if show_subscription {
+            spans.push(Span::styled(" · (subscription)", cached_style));
         }
-        None => {
-            // Fallback: show raw token counts if model not found
-            let total = usage.total_tokens();
-            vec![
-                Span::styled(ThreadUsage::format_tokens(total), usage_style),
-                Span::styled(" tokens ", usage_style),
-            ]
+
+        if show_pricing {
+            let cost = usage.calculate_cost(&m.pricing);
+            let savings = usage.cache_savings(&m.pricing);
+
+            spans.push(Span::styled(" · ", usage_style));
+            spans.push(Span::styled(ThreadUsage::format_cost(cost), cost_style));
+
+            // Show cache savings indicator if there are cache hits
+            if savings > 0.001 {
+                spans.push(Span::styled(
+                    format!(" (saved {})", ThreadUsage::format_cost(savings)),
+                    cached_style,
+                ));
+            } else if usage.cache_read_tokens > 0 {
+                spans.push(Span::styled(" (cached)", cached_style));
+            }
         }
+
+        spans.push(Span::styled(" ", usage_style));
+        spans
+    } else {
+        // Fallback: show raw token counts if model not found
+        let total = usage.total_tokens();
+        vec![
+            Span::styled(ThreadUsage::format_tokens(total), usage_style),
+            Span::styled(" tokens ", usage_style),
+        ]
     }
 }
 
 /// Builds the detailed token breakdown for bottom-left display.
 ///
-/// Format: "↑{input} ↓{output} R{cache_read} W{cache_write}"
+/// Format: "↑{input} ↓{output} `R{cache_read`} `W{cache_write`}"
 fn build_token_breakdown(usage: &ThreadUsage) -> Vec<Span<'static>> {
     let label_style = Style::default().fg(Color::DarkGray);
     let input_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);

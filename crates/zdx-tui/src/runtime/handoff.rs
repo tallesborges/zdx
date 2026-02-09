@@ -32,10 +32,10 @@ fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
 /// Loads and validates thread content for handoff.
 fn load_thread_content(thread_id: &str) -> Result<String, String> {
     let events = thread_persistence::load_thread_events(thread_id)
-        .map_err(|e| format!("Handoff failed: Could not load thread: {}", e))?;
+        .map_err(|e| format!("Handoff failed: Could not load thread: {e}"))?;
 
     if events.is_empty() {
-        return Err(format!("Handoff failed: Thread '{}' is empty", thread_id));
+        return Err(format!("Handoff failed: Thread '{thread_id}' is empty"));
     }
 
     Ok(thread_persistence::format_transcript(&events))
@@ -68,7 +68,7 @@ async fn run_subagent(
 ) -> Result<String, String> {
     let exe = match std::env::current_exe() {
         Ok(e) => e,
-        Err(e) => return Err(format!("Failed to get executable: {}", e)),
+        Err(e) => return Err(format!("Failed to get executable: {e}")),
     };
 
     let child = match Command::new(exe)
@@ -91,19 +91,19 @@ async fn run_subagent(
         .spawn()
     {
         Ok(c) => c,
-        Err(e) => return Err(format!("Failed to spawn subagent: {}", e)),
+        Err(e) => return Err(format!("Failed to spawn subagent: {e}")),
     };
 
     // Use select! to race cancellation against the subagent completion
     tokio::select! {
-        _ = cancel.cancelled() => Err("Handoff cancelled".to_string()),
+        () = cancel.cancelled() => Err("Handoff cancelled".to_string()),
         output = tokio::time::timeout(
             Duration::from_secs(HANDOFF_TIMEOUT_SECS),
             child.wait_with_output()
         ) => {
             output
-                .map_err(|_| format!("Handoff generation timed out after {} seconds", HANDOFF_TIMEOUT_SECS))
-                .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {}", e)))
+                .map_err(|_| format!("Handoff generation timed out after {HANDOFF_TIMEOUT_SECS} seconds"))
+                .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))
                 .and_then(process_subagent_output)
         }
     }
@@ -112,6 +112,9 @@ async fn run_subagent(
 /// Executes a handoff submit: creates a new thread with handoff source.
 ///
 /// Returns the new thread for the reducer to store, or an error string.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn execute_handoff_submit(
     config: &Config,
     root: &Path,
@@ -131,7 +134,7 @@ pub fn execute_handoff_submit(
 
 /// Runs handoff generation with cancellation support.
 ///
-/// Returns HandoffResult; cancellation is cooperative via token.
+/// Returns `HandoffResult`; cancellation is cooperative via token.
 pub async fn handoff_generation(
     thread_id: String,
     goal: String,

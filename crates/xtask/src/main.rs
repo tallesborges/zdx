@@ -16,11 +16,11 @@ struct Cli {
 
 #[derive(Debug, Default, Subcommand)]
 enum CommandName {
-    /// Update default_models.toml by running `zdx models update`.
+    /// Update `default_models.toml` by running `zdx models update`.
     UpdateDefaultModels,
-    /// Update default_config.toml by running `zdx config init`.
+    /// Update `default_config.toml` by running `zdx config init`.
     UpdateDefaultConfig,
-    /// Update both default_config.toml and default_models.toml.
+    /// Update both `default_config.toml` and `default_models.toml`.
     #[default]
     UpdateDefaults,
     /// Generate codebase.txt with all source files.
@@ -103,7 +103,7 @@ fn update_default_config() -> Result<()> {
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
-        bail!("config generate failed: {}", stderr);
+        bail!("config generate failed: {stderr}");
     }
 
     fs::write(&dest, &output.stdout)

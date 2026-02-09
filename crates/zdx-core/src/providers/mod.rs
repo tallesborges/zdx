@@ -87,7 +87,7 @@ impl ProviderKind {
         }
     }
 
-    /// Returns the ProviderKind for a given id string.
+    /// Returns the `ProviderKind` for a given id string.
     pub fn from_id(id: &str) -> Option<ProviderKind> {
         match id.to_lowercase().as_str() {
             "anthropic" => Some(ProviderKind::Anthropic),
@@ -138,7 +138,6 @@ impl ProviderKind {
     pub fn api_key_env_var(&self) -> Option<&'static str> {
         match self {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
-            ProviderKind::ClaudeCli => None,
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
             ProviderKind::Mimo => Some("MIMO_API_KEY"),
@@ -146,24 +145,23 @@ impl ProviderKind {
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
-            ProviderKind::OpenAICodex => None,
-            ProviderKind::GeminiCli => None,
+            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => None,
         }
     }
 
     pub fn auth_mode(&self) -> ProviderAuthMode {
         match self {
-            ProviderKind::Anthropic => ProviderAuthMode::ApiKey,
-            ProviderKind::ClaudeCli => ProviderAuthMode::OAuth,
-            ProviderKind::OpenAICodex => ProviderAuthMode::OAuth,
-            ProviderKind::GeminiCli => ProviderAuthMode::OAuth,
-            ProviderKind::OpenAI => ProviderAuthMode::ApiKey,
-            ProviderKind::OpenRouter => ProviderAuthMode::ApiKey,
-            ProviderKind::Mimo => ProviderAuthMode::ApiKey,
-            ProviderKind::Mistral => ProviderAuthMode::ApiKey,
-            ProviderKind::Moonshot => ProviderAuthMode::ApiKey,
-            ProviderKind::Stepfun => ProviderAuthMode::ApiKey,
-            ProviderKind::Gemini => ProviderAuthMode::ApiKey,
+            ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => {
+                ProviderAuthMode::OAuth
+            }
+            ProviderKind::Anthropic
+            | ProviderKind::OpenAI
+            | ProviderKind::OpenRouter
+            | ProviderKind::Mimo
+            | ProviderKind::Mistral
+            | ProviderKind::Moonshot
+            | ProviderKind::Stepfun
+            | ProviderKind::Gemini => ProviderAuthMode::ApiKey,
         }
     }
 }
@@ -197,7 +195,7 @@ pub fn provider_for_model(model: &str) -> ProviderKind {
     resolve_provider(model).kind
 }
 
-/// Returns the ProviderKind for a provider id string (e.g., "anthropic", "openai").
+/// Returns the `ProviderKind` for a provider id string (e.g., "anthropic", "openai").
 pub fn provider_kind_from_id(id: &str) -> Option<ProviderKind> {
     ProviderKind::from_id(id)
 }

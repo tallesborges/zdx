@@ -4,7 +4,7 @@
 //!
 //! ## Module Structure
 //!
-//! - `state.rs`: AuthStatus, AuthState - authentication type and login flow state
+//! - `state.rs`: `AuthStatus`, `AuthState` - authentication type and login flow state
 //! - `update.rs`: Login result handling, OAuth flow state transitions
 //! - `render.rs`: Login overlay rendering
 //!

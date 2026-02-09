@@ -62,7 +62,7 @@ impl Default for AuthState {
 }
 
 impl AuthState {
-    /// Creates a new AuthState by detecting the current auth type.
+    /// Creates a new `AuthState` by detecting the current auth type.
     pub fn new() -> Self {
         Self {
             auth_type: AuthStatus::detect(),

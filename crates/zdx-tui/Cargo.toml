@@ -5,6 +5,8 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[lints]
+workspace = true
 [dependencies]
 zdx-core = { path = "../zdx-core" }
 

@@ -57,7 +57,7 @@ pub fn handle_agent_event(
             // Mark all running/streaming cells as errored (stops spinner, shows error state)
             transcript.mark_errored();
 
-            transcript.push_cell(HistoryCell::system(format!("Error: {}", message)));
+            transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
             // Reset agent state - the turn is over due to the error
             *agent_state = AgentState::Idle;
             vec![]
@@ -195,7 +195,7 @@ fn handle_assistant_delta(
                 .cells()
                 .iter()
                 .find(|c| c.id() == *cell_id)
-                .map(|c| {
+                .is_none_or(|c| {
                     !matches!(
                         c,
                         HistoryCell::Assistant {
@@ -203,8 +203,7 @@ fn handle_assistant_delta(
                             ..
                         }
                     )
-                })
-                .unwrap_or(true);
+                });
 
             if needs_new_cell {
                 let new_cell = HistoryCell::assistant_streaming("");
@@ -244,19 +243,15 @@ fn handle_thinking_delta(
     }
 
     // Find the last cell and check if it's a streaming thinking cell
-    let should_create_new = transcript
-        .cells()
-        .last()
-        .map(|cell| {
-            !matches!(
-                cell,
-                HistoryCell::Thinking {
-                    is_streaming: true,
-                    ..
-                }
-            )
-        })
-        .unwrap_or(true);
+    let should_create_new = transcript.cells().last().is_none_or(|cell| {
+        !matches!(
+            cell,
+            HistoryCell::Thinking {
+                is_streaming: true,
+                ..
+            }
+        )
+    });
 
     if should_create_new {
         // Create a new streaming thinking cell

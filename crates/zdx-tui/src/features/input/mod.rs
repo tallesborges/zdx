@@ -4,7 +4,7 @@
 //!
 //! ## Module Structure
 //!
-//! - `state.rs`: InputState, HandoffState - all input-related state
+//! - `state.rs`: `InputState`, `HandoffState` - all input-related state
 //! - `update.rs`: Key handling, input submission, handoff result handling
 //! - `render.rs`: Input area rendering (normal and handoff modes)
 //!

@@ -4,6 +4,8 @@ version = "0.2.0"
 edition = "2024"
 publish = false
 
+[lints]
+workspace = true
 [dependencies]
 anyhow = { workspace = true }
 clap = { workspace = true }

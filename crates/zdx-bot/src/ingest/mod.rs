@@ -20,6 +20,9 @@ pub(crate) struct AllowlistConfig<'a> {
     pub chat_ids: &'a HashSet<i64>,
 }
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub(crate) async fn parse_incoming_message(
     client: &TelegramClient,
     allowlist: AllowlistConfig<'_>,
@@ -32,17 +35,17 @@ pub(crate) async fn parse_incoming_message(
     // For groups/supergroups, check if chat is in the allowlist
     if message.chat.is_group() {
         if !allowlist.chat_ids.contains(&chat_id) {
-            eprintln!("Ignoring non-allowlisted group chat {}", chat_id);
+            eprintln!("Ignoring non-allowlisted group chat {chat_id}");
             return Ok(None);
         }
     } else if !message.chat.is_private() {
         // Not a group, supergroup, or private chat - ignore
-        eprintln!("Ignoring unsupported chat type for chat {}", chat_id);
+        eprintln!("Ignoring unsupported chat type for chat {chat_id}");
         return Ok(None);
     }
 
     let Some(user) = message.from.as_ref() else {
-        eprintln!("Ignoring message without sender in chat {}", chat_id);
+        eprintln!("Ignoring message without sender in chat {chat_id}");
         return Ok(None);
     };
 
@@ -78,7 +81,7 @@ pub(crate) async fn parse_incoming_message(
             match load_photo_attachment(client, chat_id, message_id, photo).await {
                 Ok(Some(image)) => images.push(image),
                 Ok(None) => {}
-                Err(err) => eprintln!("Failed to load photo attachment: {}", err),
+                Err(err) => eprintln!("Failed to load photo attachment: {err}"),
             }
         }
     }
@@ -91,14 +94,14 @@ pub(crate) async fn parse_incoming_message(
             match load_document_image(client, chat_id, message_id, document).await {
                 Ok(Some(image)) => images.push(image),
                 Ok(None) => {}
-                Err(err) => eprintln!("Failed to load document image: {}", err),
+                Err(err) => eprintln!("Failed to load document image: {err}"),
             }
         } else if mime.starts_with("audio/") {
             had_attachments = true;
             match load_audio_attachment(client, config, chat_id, message_id, document).await {
                 Ok(Some(audio)) => audios.push(audio),
                 Ok(None) => {}
-                Err(err) => eprintln!("Failed to load document audio: {}", err),
+                Err(err) => eprintln!("Failed to load document audio: {err}"),
             }
         }
     }
@@ -108,7 +111,7 @@ pub(crate) async fn parse_incoming_message(
         match load_voice_attachment(client, config, chat_id, message_id, voice).await {
             Ok(Some(audio)) => audios.push(audio),
             Ok(None) => {}
-            Err(err) => eprintln!("Failed to load voice attachment: {}", err),
+            Err(err) => eprintln!("Failed to load voice attachment: {err}"),
         }
     }
 
@@ -117,13 +120,13 @@ pub(crate) async fn parse_incoming_message(
         match load_audio_message(client, config, chat_id, message_id, audio).await {
             Ok(Some(audio)) => audios.push(audio),
             Ok(None) => {}
-            Err(err) => eprintln!("Failed to load audio message: {}", err),
+            Err(err) => eprintln!("Failed to load audio message: {err}"),
         }
     }
 
     if text.is_none() && images.is_empty() && audios.is_empty() {
         if had_attachments {
-            eprintln!("Unsupported attachment in chat {}", chat_id);
+            eprintln!("Unsupported attachment in chat {chat_id}");
             let _ = client
                 .send_message(
                     chat_id,
@@ -133,7 +136,7 @@ pub(crate) async fn parse_incoming_message(
                 )
                 .await;
         } else {
-            eprintln!("Ignoring empty message in chat {}", chat_id);
+            eprintln!("Ignoring empty message in chat {chat_id}");
         }
         return Ok(None);
     }
@@ -180,7 +183,9 @@ fn extract_text(message: &Message) -> Option<String> {
 fn select_best_photo(photos: &[PhotoSize]) -> Option<&PhotoSize> {
     photos.iter().max_by_key(|photo| {
         let size = photo.file_size.unwrap_or(0);
-        let area = (photo.width.max(0) as u64) * (photo.height.max(0) as u64);
+        let width = u64::try_from(photo.width.max(0)).unwrap_or(0);
+        let height = u64::try_from(photo.height.max(0)).unwrap_or(0);
+        let area = width * height;
         (size, area)
     })
 }
@@ -192,29 +197,23 @@ async fn load_photo_attachment(
     photo: &PhotoSize,
 ) -> Result<Option<IncomingImage>> {
     if photo.file_size.unwrap_or(0) > MAX_IMAGE_BYTES {
-        eprintln!("Skipping photo > max image size in chat {}", chat_id);
+        eprintln!("Skipping photo > max image size in chat {chat_id}");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, &photo.file_id).await?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        eprintln!(
-            "Downloaded photo exceeds max image size in chat {}",
-            chat_id
-        );
+        eprintln!("Downloaded photo exceeds max image size in chat {chat_id}");
         return Ok(None);
     }
 
-    let mime_type = match detect_image_mime(&bytes) {
-        Some(mime) => mime,
-        None => {
-            eprintln!("Unsupported image type in chat {}", chat_id);
-            return Ok(None);
-        }
+    let Some(mime_type) = detect_image_mime(&bytes) else {
+        eprintln!("Unsupported image type in chat {chat_id}");
+        return Ok(None);
     };
 
     let filename =
-        file_name_from_path(&file_path).unwrap_or_else(|| format!("photo_{}.bin", message_id));
+        file_name_from_path(&file_path).unwrap_or_else(|| format!("photo_{message_id}.bin"));
     let local_path = save_media_bytes(chat_id, message_id, &filename, &bytes)?;
     let data = BASE64.encode(&bytes);
 
@@ -232,25 +231,19 @@ async fn load_document_image(
     document: &Document,
 ) -> Result<Option<IncomingImage>> {
     if document.file_size.unwrap_or(0) > MAX_IMAGE_BYTES {
-        eprintln!("Skipping document image > max size in chat {}", chat_id);
+        eprintln!("Skipping document image > max size in chat {chat_id}");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, &document.file_id).await?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        eprintln!(
-            "Downloaded document image exceeds max size in chat {}",
-            chat_id
-        );
+        eprintln!("Downloaded document image exceeds max size in chat {chat_id}");
         return Ok(None);
     }
 
-    let mime_type = match select_image_mime(document.mime_type.as_deref(), &bytes) {
-        Some(mime) => mime,
-        None => {
-            eprintln!("Unsupported document image type in chat {}", chat_id);
-            return Ok(None);
-        }
+    let Some(mime_type) = select_image_mime(document.mime_type.as_deref(), &bytes) else {
+        eprintln!("Unsupported document image type in chat {chat_id}");
+        return Ok(None);
     };
 
     let filename = document
@@ -258,7 +251,7 @@ async fn load_document_image(
         .as_deref()
         .and_then(file_name_from_path)
         .or_else(|| file_name_from_path(&file_path))
-        .unwrap_or_else(|| format!("image_{}.bin", message_id));
+        .unwrap_or_else(|| format!("image_{message_id}.bin"));
     let local_path = save_media_bytes(chat_id, message_id, &filename, &bytes)?;
     let data = BASE64.encode(&bytes);
 
@@ -328,8 +321,6 @@ async fn load_audio_attachment(
     )
     .await
 }
-
-#[allow(clippy::too_many_arguments)]
 async fn load_audio_by_id(
     client: &TelegramClient,
     config: &Config,
@@ -341,20 +332,20 @@ async fn load_audio_by_id(
     file_name_hint: Option<&str>,
 ) -> Result<Option<IncomingAudio>> {
     if file_size.unwrap_or(0) > MAX_AUDIO_BYTES {
-        eprintln!("Skipping audio > max size in chat {}", chat_id);
+        eprintln!("Skipping audio > max size in chat {chat_id}");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, file_id).await?;
     if bytes.len() as u64 > MAX_AUDIO_BYTES {
-        eprintln!("Downloaded audio exceeds max size in chat {}", chat_id);
+        eprintln!("Downloaded audio exceeds max size in chat {chat_id}");
         return Ok(None);
     }
 
     let filename = file_name_hint
         .and_then(file_name_from_path)
         .or_else(|| file_name_from_path(&file_path))
-        .unwrap_or_else(|| format!("audio_{}.bin", message_id));
+        .unwrap_or_else(|| format!("audio_{message_id}.bin"));
     let local_path = save_media_bytes(chat_id, message_id, &filename, &bytes)?;
 
     let transcript =
@@ -362,7 +353,7 @@ async fn load_audio_by_id(
         {
             Ok(transcript) => transcript,
             Err(err) => {
-                eprintln!("Audio transcription failed: {}", err);
+                eprintln!("Audio transcription failed: {err}");
                 None
             }
         };
@@ -405,7 +396,7 @@ fn file_name_from_path(path: &str) -> Option<String> {
     Path::new(path)
         .file_name()
         .and_then(|name| name.to_str())
-        .map(|name| name.to_string())
+        .map(std::string::ToString::to_string)
 }
 
 fn save_media_bytes(
@@ -420,7 +411,7 @@ fn save_media_bytes(
         .file_name()
         .and_then(|name| name.to_str())
         .unwrap_or(filename);
-    let path = dir.join(format!("{}_{}", message_id, safe_name));
+    let path = dir.join(format!("{message_id}_{safe_name}"));
     fs::write(&path, bytes).map_err(|_| anyhow!("Failed to write media file"))?;
     Ok(path)
 }

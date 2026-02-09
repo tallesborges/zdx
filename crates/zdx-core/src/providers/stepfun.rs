@@ -1,4 +1,4 @@
-//! StepFun provider (Step-3.5-Flash) using OpenAI-compatible API.
+//! `StepFun` provider (Step-3.5-Flash) using OpenAI-compatible API.
 
 use anyhow::Result;
 use reqwest::header::HeaderMap;
@@ -12,7 +12,7 @@ use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.stepfun.ai/v1";
 
-/// StepFun API configuration.
+/// `StepFun` API configuration.
 #[derive(Debug, Clone)]
 pub struct StepfunConfig {
     pub api_key: String,
@@ -33,6 +33,9 @@ impl StepfunConfig {
     /// Environment variables:
     /// - `STEPFUN_API_KEY` (fallback if not in config)
     /// - `STEPFUN_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -60,7 +63,7 @@ impl StepfunConfig {
     }
 }
 
-/// StepFun client using OpenAI-compatible API.
+/// `StepFun` client using OpenAI-compatible API.
 pub struct StepfunClient {
     inner: OpenAIChatCompletionsClient,
 }
@@ -84,6 +87,9 @@ impl StepfunClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[ChatMessage],

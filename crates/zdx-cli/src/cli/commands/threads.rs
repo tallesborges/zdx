@@ -29,7 +29,7 @@ pub fn show(id: &str) -> Result<()> {
     let events = thread_persistence::load_thread_events(id)
         .with_context(|| format!("load thread '{id}'"))?;
     if events.is_empty() {
-        println!("Thread '{}' is empty or not found.", id);
+        println!("Thread '{id}' is empty or not found.");
     } else {
         println!("{}", thread_persistence::format_transcript(&events));
     }
@@ -40,7 +40,7 @@ pub fn rename(id: &str, title: &str) -> Result<()> {
     let normalized = thread_persistence::set_thread_title(id, Some(title.to_string()))
         .with_context(|| format!("rename thread '{id}'"))?;
     let display_title = normalized.unwrap_or_else(|| thread_persistence::short_thread_id(id));
-    println!("Renamed thread {} → {}", id, display_title);
+    println!("Renamed thread {id} → {display_title}");
     Ok(())
 }
 

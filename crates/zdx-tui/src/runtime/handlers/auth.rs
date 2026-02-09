@@ -21,17 +21,15 @@ pub async fn token_exchange(
                 verifier,
                 challenge: String::new(),
             };
-            let redirect_uri = match redirect_uri {
-                Some(value) => value,
-                None => {
-                    return UiEvent::LoginResult {
-                        result: Err("Missing redirect URI for Claude CLI OAuth.".to_string()),
-                    };
-                }
+            let Some(redirect_uri) = redirect_uri else {
+                return UiEvent::LoginResult {
+                    result: Err("Missing redirect URI for Claude CLI OAuth.".to_string()),
+                };
             };
             match claude_cli::exchange_code(&code, &pkce, &redirect_uri).await {
-                Ok(creds) => claude_cli::save_credentials(&creds)
-                    .map_err(|e| format!("Failed to save: {}", e)),
+                Ok(creds) => {
+                    claude_cli::save_credentials(&creds).map_err(|e| format!("Failed to save: {e}"))
+                }
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -42,7 +40,7 @@ pub async fn token_exchange(
             };
             match openai_codex::exchange_code(&code, &pkce).await {
                 Ok(creds) => openai_codex::save_credentials(&creds)
-                    .map_err(|e| format!("Failed to save: {}", e)),
+                    .map_err(|e| format!("Failed to save: {e}")),
                 Err(e) => Err(e.to_string()),
             }
         }
@@ -58,9 +56,9 @@ pub async fn token_exchange(
                         Ok(project_id) => {
                             creds.account_id = Some(project_id);
                             gemini_cli::save_credentials(&creds)
-                                .map_err(|e| format!("Failed to save: {}", e))
+                                .map_err(|e| format!("Failed to save: {e}"))
                         }
-                        Err(e) => Err(format!("Failed to discover project: {}", e)),
+                        Err(e) => Err(format!("Failed to discover project: {e}")),
                     }
                 }
                 Err(e) => Err(e.to_string()),
@@ -79,6 +77,7 @@ pub async fn local_auth_callback(
     state: Option<String>,
     port: Option<u16>,
 ) -> UiEvent {
+    tokio::task::yield_now().await;
     let code = match provider {
         zdx_core::providers::ProviderKind::ClaudeCli => {
             use zdx_core::providers::oauth::claude_cli;
@@ -102,14 +101,13 @@ fn wait_for_local_code(
     callback_path: &str,
     expected_state: Option<&str>,
 ) -> Option<String> {
-    let listener = match TcpListener::bind(format!("127.0.0.1:{}", port)) {
-        Ok(listener) => listener,
-        Err(_) => return None,
+    let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{port}")) else {
+        return None;
     };
     let _ = listener.set_nonblocking(true);
 
     let (tx, rx) = std::sync::mpsc::channel::<Option<String>>();
-    let expected_state = expected_state.map(|s| s.to_string());
+    let expected_state = expected_state.map(std::string::ToString::to_string);
     let callback_path = callback_path.to_string();
 
     std::thread::spawn(move || {
@@ -125,9 +123,10 @@ fn wait_for_local_code(
                         &callback_path,
                         expected_state.as_deref(),
                     );
-                    let response = match code.is_some() {
-                        true => oauth_success_response(),
-                        false => oauth_error_response(),
+                    let response = if code.is_some() {
+                        oauth_success_response()
+                    } else {
+                        oauth_error_response()
                     };
                     let _ = stream.write_all(response.as_bytes());
                     let _ = tx.send(code);
@@ -162,7 +161,7 @@ fn extract_code_from_request(
     let _method = parts.next()?;
     let path = parts.next()?;
 
-    let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
+    let url = url::Url::parse(&format!("http://localhost{path}")).ok()?;
     if url.path() != callback_path {
         return None;
     }

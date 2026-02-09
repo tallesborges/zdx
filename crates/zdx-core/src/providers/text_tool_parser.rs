@@ -22,7 +22,7 @@
 
 use serde_json::{Value, json};
 
-/// A parsed tool call from StepFun's text format.
+/// A parsed tool call from `StepFun`'s text format.
 #[derive(Debug, Clone)]
 pub struct ParsedToolCall {
     pub name: String,
@@ -51,7 +51,7 @@ pub fn has_complete_tool_call(content: &str) -> bool {
     false
 }
 
-/// Parse tool calls from StepFun's text format.
+/// Parse tool calls from `StepFun`'s text format.
 ///
 /// Returns a vector of parsed tool calls and the remaining text (if any).
 pub fn parse_tool_calls(content: &str) -> (Vec<ParsedToolCall>, String) {
@@ -164,15 +164,13 @@ fn parse_single_tool_call(content: &str) -> Option<ParsedToolCall> {
             // Find the actual >
             content[param_name_end..]
                 .find('>')
-                .map(|p| param_name_end + p + 1)
-                .unwrap_or(value_start)
+                .map_or(value_start, |p| param_name_end + p + 1)
         };
 
         let value_end = content[value_start..]
             .find("</parameter>")
             .or_else(|| content[value_start..].find('<'))
-            .map(|p| value_start + p)
-            .unwrap_or(content.len());
+            .map_or(content.len(), |p| value_start + p);
 
         let param_value = content[value_start..value_end].trim();
 
@@ -184,8 +182,7 @@ fn parse_single_tool_call(content: &str) -> Option<ParsedToolCall> {
         // Move past this parameter
         search_start = content[value_end..]
             .find("</parameter>")
-            .map(|p| value_end + p + "</parameter>".len())
-            .unwrap_or(value_end + 1);
+            .map_or(value_end + 1, |p| value_end + p + "</parameter>".len());
     }
 
     if function_name.is_empty() {
@@ -226,13 +223,13 @@ mod tests {
 
     #[test]
     fn test_parse_simple_tool_call() {
-        let content = r#"<tool_call>
+        let content = r"<tool_call>
 <function=calculator>
 <parameter=expr>
 2+2
 </parameter>
 </function>
-</tool_call>"#;
+</tool_call>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
@@ -243,7 +240,7 @@ mod tests {
 
     #[test]
     fn test_parse_tool_call_with_multiple_params() {
-        let content = r#"<tool_call>
+        let content = r"<tool_call>
 <function=bash>
 <parameter=command>
 ls -la
@@ -252,7 +249,7 @@ ls -la
 30
 </parameter>
 </function>
-</tool_call>"#;
+</tool_call>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
@@ -264,7 +261,7 @@ ls -la
 
     #[test]
     fn test_parse_with_text_before() {
-        let content = r#"Let me calculate that for you.
+        let content = r"Let me calculate that for you.
 
 <tool_call>
 <function=calculator>
@@ -272,7 +269,7 @@ ls -la
 2+2
 </parameter>
 </function>
-</tool_call>"#;
+</tool_call>";
 
         let before = extract_text_before_tool_call(content);
         assert_eq!(before, Some("Let me calculate that for you."));
@@ -284,25 +281,25 @@ ls -la
     #[test]
     fn test_parse_minimal_format() {
         // Format without <tool_call> wrapper and missing </function>
-        let content = r#"<function=read>
+        let content = r"<function=read>
 <parameter=path>
 README.md
 </parameter>
-</tool_call>"#;
+</tool_call>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
         assert_eq!(calls[0].arguments["path"], "README.md");
-        assert!(remaining.is_empty(), "remaining: {}", remaining);
+        assert!(remaining.is_empty(), "remaining: {remaining}");
     }
 
     #[test]
     fn test_parse_minimal_format_no_tool_call_tag() {
         // Format with only function and parameter tags
-        let content = r#"<function=read>
+        let content = r"<function=read>
 <parameter=path>README.md</parameter>
-</function>"#;
+</function>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
@@ -314,13 +311,13 @@ README.md
     #[test]
     fn test_parse_inline_format() {
         // Compact inline format
-        let content = r#"<function=read> <parameter=path> README.md </parameter> </tool_call>"#;
+        let content = r"<function=read> <parameter=path> README.md </parameter> </tool_call>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
         assert_eq!(calls[0].arguments["path"], "README.md");
-        assert!(remaining.is_empty(), "remaining: '{}'", remaining);
+        assert!(remaining.is_empty(), "remaining: '{remaining}'");
     }
 
     #[test]

@@ -66,7 +66,7 @@ impl StreamState {
     }
 }
 
-/// SSE parser for OpenAI Responses API.
+/// SSE parser for `OpenAI` Responses API.
 pub struct ResponsesSseParser<S> {
     inner: EventStream<S>,
     model: String,
@@ -96,7 +96,7 @@ impl<S> ResponsesSseParser<S> {
         let value = serde_json::from_str::<Value>(trimmed).map_err(|err| {
             ProviderError::new(
                 ProviderErrorKind::Parse,
-                format!("Failed to parse SSE JSON: {}", err),
+                format!("Failed to parse SSE JSON: {err}"),
             )
         })?;
         let event = self.map_event(value)?;
@@ -104,6 +104,11 @@ impl<S> ResponsesSseParser<S> {
         Ok(())
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        clippy::needless_pass_by_value,
+        clippy::unnecessary_wraps
+    )]
     fn map_event(&mut self, value: Value) -> ProviderResult<StreamEvent> {
         let event_type = value.get_str("type");
 
@@ -135,9 +140,9 @@ impl<S> ResponsesSseParser<S> {
                         let id = item.get_str("id");
                         let name = item.get_str("name");
                         let tool_id = if !call_id.is_empty() && !id.is_empty() {
-                            format!("{}|{}", call_id, id)
+                            format!("{call_id}|{id}")
                         } else {
-                            format!("{}{}", call_id, id)
+                            format!("{call_id}{id}")
                         };
 
                         Ok(StreamEvent::ContentBlockStart {
@@ -296,16 +301,16 @@ impl<S> ResponsesSseParser<S> {
                 let cached = usage
                     .get("input_tokens_details")
                     .and_then(|v| v.get("cached_tokens"))
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
                 let input_tokens = usage
                     .get("input_tokens")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0)
                     .saturating_sub(cached);
                 let output_tokens = usage
                     .get("output_tokens")
-                    .and_then(|v| v.as_u64())
+                    .and_then(serde_json::Value::as_u64)
                     .unwrap_or(0);
 
                 let usage = Usage {
@@ -389,7 +394,7 @@ where
                 Poll::Ready(Some(Err(e))) => {
                     return Poll::Ready(Some(Err(ProviderError::new(
                         ProviderErrorKind::Parse,
-                        format!("SSE stream error: {}", e),
+                        format!("SSE stream error: {e}"),
                     ))));
                 }
                 Poll::Ready(None) => return Poll::Ready(None),

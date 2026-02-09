@@ -53,7 +53,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for read_thread tool",
-                Some(format!("Parse error: {}", e)),
+                Some(format!("Parse error: {e}")),
             );
         }
     };
@@ -73,8 +73,8 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(e) => {
             return ToolOutput::failure(
                 "thread_not_found",
-                format!("Thread '{}' not found", thread_id),
-                Some(format!("Load error: {}", e)),
+                format!("Thread '{thread_id}' not found"),
+                Some(format!("Load error: {e}")),
             );
         }
     };
@@ -82,7 +82,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     if events.is_empty() {
         return ToolOutput::failure(
             "thread_not_found",
-            format!("Thread '{}' not found", thread_id),
+            format!("Thread '{thread_id}' not found"),
             None,
         );
     }
@@ -103,7 +103,7 @@ fn build_read_thread_prompt(thread_content: &str, goal: &str) -> String {
 }
 
 async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {}", e))?;
+    let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {e}"))?;
 
     let mut command = Command::new(exe);
     command
@@ -122,26 +122,24 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
 
     let child = command
         .spawn()
-        .map_err(|e| format!("Failed to spawn subagent: {}", e))?;
+        .map_err(|e| format!("Failed to spawn subagent: {e}"))?;
 
     let output = if let Some(timeout) = ctx.timeout {
         tokio::time::timeout(timeout, child.wait_with_output())
             .await
             .map_err(|_| format!("Read thread timed out after {} seconds", timeout.as_secs()))
-            .and_then(|result| {
-                result.map_err(|e| format!("Failed to get subagent output: {}", e))
-            })?
+            .and_then(|result| result.map_err(|e| format!("Failed to get subagent output: {e}")))?
     } else {
         child
             .wait_with_output()
             .await
-            .map_err(|e| format!("Failed to get subagent output: {}", e))?
+            .map_err(|e| format!("Failed to get subagent output: {e}"))?
     };
 
-    process_subagent_output(output)
+    process_subagent_output(&output)
 }
 
-fn process_subagent_output(output: std::process::Output) -> Result<String, String> {
+fn process_subagent_output(output: &std::process::Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Read thread failed: {}", stderr.trim()));

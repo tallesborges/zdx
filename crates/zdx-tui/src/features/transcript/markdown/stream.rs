@@ -9,7 +9,7 @@ const MAX_BUFFER_BEFORE_FORCE_COMMIT: usize = 500;
 ///
 /// This collector buffers incoming markdown text and determines "commit points" where
 /// content can be safely rendered. A commit point is typically a newline, but we avoid
-/// committing in the middle of code blocks (where closing ``` hasn't arrived yet).
+/// committing in the middle of code blocks (where closing `` ``` `` hasn't arrived yet).
 ///
 /// # Usage
 ///
@@ -45,7 +45,7 @@ impl MarkdownStreamCollector {
     /// A safe commit point is:
     /// - The last newline, if we're not inside an unclosed code fence
     /// - Content before an unclosed code fence (if there's prior content)
-    /// - Or a forced commit after MAX_BUFFER_BEFORE_FORCE_COMMIT bytes without newline
+    /// - Or a forced commit after `MAX_BUFFER_BEFORE_FORCE_COMMIT` bytes without newline
     ///
     /// Returns the rendered styled lines for the committed portion.
     pub fn render_committed(&self, width: usize) -> Vec<StyledLine> {
@@ -141,7 +141,8 @@ impl MarkdownStreamCollector {
 
     /// Finds all fence positions in the buffer.
     ///
-    /// A fence is ``` or ~~~ at the start of a line (with up to 3 leading spaces).
+    /// A fence starts with three backticks or `~~~` at the start of a line
+    /// (with up to 3 leading spaces).
     fn find_fence_positions(&self) -> Vec<usize> {
         let mut positions = Vec::new();
         let mut line_start = 0;

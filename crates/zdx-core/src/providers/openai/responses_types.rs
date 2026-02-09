@@ -72,7 +72,7 @@ pub struct InputItem {
     pub arguments: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output: Option<String>,
-    /// Encrypted reasoning content for replay (OpenAI Responses API caching)
+    /// Encrypted reasoning content for replay (`OpenAI` Responses API caching)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub encrypted_content: Option<String>,
     /// Summary for reasoning items (required when replaying reasoning)
@@ -92,7 +92,7 @@ pub enum InputContent {
     /// Image content (base64 data URL or HTTP URL)
     InputImage {
         /// Image URL - can be:
-        /// - HTTP URL: "https://example.com/image.png"
+        /// - HTTP URL: "<https://example.com/image.png>"
         /// - Data URL: "data:image/png;base64,..."
         image_url: String,
         /// Detail level: "low", "high", or "auto"

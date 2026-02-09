@@ -54,7 +54,7 @@ async fn run_subagent(
     title_model: String,
     root: PathBuf,
 ) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {}", e))?;
+    let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {e}"))?;
 
     let child = Command::new(exe)
         .args([
@@ -73,20 +73,15 @@ async fn run_subagent(
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("Failed to spawn subagent: {}", e))?;
+        .map_err(|e| format!("Failed to spawn subagent: {e}"))?;
 
     let output = tokio::time::timeout(
         Duration::from_secs(TITLE_TIMEOUT_SECS),
         child.wait_with_output(),
     )
     .await
-    .map_err(|_| {
-        format!(
-            "Auto-title generation timed out after {} seconds",
-            TITLE_TIMEOUT_SECS
-        )
-    })
-    .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {}", e)))?;
+    .map_err(|_| format!("Auto-title generation timed out after {TITLE_TIMEOUT_SECS} seconds"))
+    .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))?;
 
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
@@ -98,7 +93,7 @@ async fn run_subagent(
 
 /// Generates a thread title and persists it (if still unset).
 ///
-/// Returns UiEvent::Thread(ThreadUiEvent::TitleSuggested) (title None on failure or skip).
+/// Returns `UiEvent::Thread(ThreadUiEvent::TitleSuggested)` (title None on failure or skip).
 pub async fn suggest_thread_title(
     thread_id: String,
     message: String,

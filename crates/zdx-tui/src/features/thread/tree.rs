@@ -26,6 +26,78 @@ pub struct ThreadDisplayItem<'a> {
     pub is_handoff: bool,
 }
 
+fn visit_owned<'a>(
+    threads: &'a [ThreadSummary],
+    idx: usize,
+    depth: usize,
+    children_by_parent: &HashMap<&str, Vec<usize>>,
+    visited: &mut std::collections::HashSet<usize>,
+    result: &mut Vec<ThreadDisplayItem<'a>>,
+) {
+    if visited.contains(&idx) {
+        return;
+    }
+    visited.insert(idx);
+
+    let thread = &threads[idx];
+    let is_handoff = thread.handoff_from.is_some();
+
+    result.push(ThreadDisplayItem {
+        summary: thread,
+        depth,
+        is_handoff,
+    });
+
+    if let Some(children) = children_by_parent.get(thread.id.as_str()) {
+        for &child_idx in children {
+            visit_owned(
+                threads,
+                child_idx,
+                depth + 1,
+                children_by_parent,
+                visited,
+                result,
+            );
+        }
+    }
+}
+
+fn visit_refs<'a>(
+    threads: &[&'a ThreadSummary],
+    idx: usize,
+    depth: usize,
+    children_by_parent: &HashMap<&str, Vec<usize>>,
+    visited: &mut std::collections::HashSet<usize>,
+    result: &mut Vec<ThreadDisplayItem<'a>>,
+) {
+    if visited.contains(&idx) {
+        return;
+    }
+    visited.insert(idx);
+
+    let thread = threads[idx];
+    let is_handoff = thread.handoff_from.is_some();
+
+    result.push(ThreadDisplayItem {
+        summary: thread,
+        depth,
+        is_handoff,
+    });
+
+    if let Some(children) = children_by_parent.get(thread.id.as_str()) {
+        for &child_idx in children {
+            visit_refs(
+                threads,
+                child_idx,
+                depth + 1,
+                children_by_parent,
+                visited,
+                result,
+            );
+        }
+    }
+}
+
 /// Transforms a flat list of threads into a depth-first flattened tree.
 ///
 /// Threads are organized by their `handoff_from` relationships:
@@ -88,47 +160,9 @@ pub fn flatten_as_tree(threads: &[ThreadSummary]) -> Vec<ThreadDisplayItem<'_>> 
     // Track visited to handle cycles (defensive)
     let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    fn visit<'a>(
-        threads: &'a [ThreadSummary],
-        idx: usize,
-        depth: usize,
-        children_by_parent: &HashMap<&str, Vec<usize>>,
-        visited: &mut std::collections::HashSet<usize>,
-        result: &mut Vec<ThreadDisplayItem<'a>>,
-    ) {
-        // Cycle detection
-        if visited.contains(&idx) {
-            return;
-        }
-        visited.insert(idx);
-
-        let thread = &threads[idx];
-        let is_handoff = thread.handoff_from.is_some();
-
-        result.push(ThreadDisplayItem {
-            summary: thread,
-            depth,
-            is_handoff,
-        });
-
-        // Visit children in their original order (preserves time sorting)
-        if let Some(children) = children_by_parent.get(thread.id.as_str()) {
-            for &child_idx in children {
-                visit(
-                    threads,
-                    child_idx,
-                    depth + 1,
-                    children_by_parent,
-                    visited,
-                    result,
-                );
-            }
-        }
-    }
-
     // Process roots in their original order
     for root_idx in root_indices {
-        visit(
+        visit_owned(
             threads,
             root_idx,
             0,
@@ -179,44 +213,8 @@ pub fn flatten_refs_as_tree<'a>(threads: &[&'a ThreadSummary]) -> Vec<ThreadDisp
     let mut result: Vec<ThreadDisplayItem<'a>> = Vec::with_capacity(threads.len());
     let mut visited: std::collections::HashSet<usize> = std::collections::HashSet::new();
 
-    fn visit<'a>(
-        threads: &[&'a ThreadSummary],
-        idx: usize,
-        depth: usize,
-        children_by_parent: &HashMap<&str, Vec<usize>>,
-        visited: &mut std::collections::HashSet<usize>,
-        result: &mut Vec<ThreadDisplayItem<'a>>,
-    ) {
-        if visited.contains(&idx) {
-            return;
-        }
-        visited.insert(idx);
-
-        let thread = threads[idx];
-        let is_handoff = thread.handoff_from.is_some();
-
-        result.push(ThreadDisplayItem {
-            summary: thread,
-            depth,
-            is_handoff,
-        });
-
-        if let Some(children) = children_by_parent.get(thread.id.as_str()) {
-            for &child_idx in children {
-                visit(
-                    threads,
-                    child_idx,
-                    depth + 1,
-                    children_by_parent,
-                    visited,
-                    result,
-                );
-            }
-        }
-    }
-
     for root_idx in root_indices {
-        visit(
+        visit_refs(
             threads,
             root_idx,
             0,
@@ -236,10 +234,10 @@ mod tests {
     fn make_thread(id: &str, handoff_from: Option<&str>) -> ThreadSummary {
         ThreadSummary {
             id: id.to_string(),
-            title: Some(format!("Thread {}", id)),
+            title: Some(format!("Thread {id}")),
             root_path: None,
             modified: None,
-            handoff_from: handoff_from.map(|s| s.to_string()),
+            handoff_from: handoff_from.map(std::string::ToString::to_string),
         }
     }
 

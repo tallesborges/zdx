@@ -10,6 +10,9 @@ const DELETE_FILE_PREFIX: &str = "*** Delete File: ";
 const UPDATE_FILE_PREFIX: &str = "*** Update File: ";
 const MOVE_TO_PREFIX: &str = "*** Move to: ";
 
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
     let lines: Vec<String> = patch
         .lines()
@@ -37,9 +40,9 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
             continue;
         }
 
-        if let Some(path) = line.strip_prefix(ADD_FILE_PREFIX) {
-            let path = path.trim();
-            if path.is_empty() {
+        if let Some(raw_path) = line.strip_prefix(ADD_FILE_PREFIX) {
+            let file_path = raw_path.trim();
+            if file_path.is_empty() {
                 return Err(ParseError::InvalidHunk {
                     message: "Add File path cannot be empty".to_string(),
                     line_number: idx + 1,
@@ -67,15 +70,15 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
                 });
             }
             hunks.push(Hunk::AddFile {
-                path: PathBuf::from(path),
+                path: PathBuf::from(file_path),
                 contents: contents.join("\n"),
             });
             continue;
         }
 
-        if let Some(path) = line.strip_prefix(DELETE_FILE_PREFIX) {
-            let path = path.trim();
-            if path.is_empty() {
+        if let Some(raw_path) = line.strip_prefix(DELETE_FILE_PREFIX) {
+            let file_path = raw_path.trim();
+            if file_path.is_empty() {
                 return Err(ParseError::InvalidHunk {
                     message: "Delete File path cannot be empty".to_string(),
                     line_number: idx + 1,
@@ -83,14 +86,14 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
             }
             idx += 1;
             hunks.push(Hunk::DeleteFile {
-                path: PathBuf::from(path),
+                path: PathBuf::from(file_path),
             });
             continue;
         }
 
-        if let Some(path) = line.strip_prefix(UPDATE_FILE_PREFIX) {
-            let path = path.trim();
-            if path.is_empty() {
+        if let Some(raw_path) = line.strip_prefix(UPDATE_FILE_PREFIX) {
+            let file_path = raw_path.trim();
+            if file_path.is_empty() {
                 return Err(ParseError::InvalidHunk {
                     message: "Update File path cannot be empty".to_string(),
                     line_number: idx + 1,
@@ -128,7 +131,7 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
                 let header = line.trim_start_matches("@@");
                 let change_context = header
                     .strip_prefix(' ')
-                    .map(|s| s.to_string())
+                    .map(std::string::ToString::to_string)
                     .filter(|s| !s.is_empty());
                 idx += 1;
 
@@ -191,7 +194,7 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
             }
 
             hunks.push(Hunk::UpdateFile {
-                path: PathBuf::from(path),
+                path: PathBuf::from(file_path),
                 move_path,
                 chunks,
             });
@@ -199,7 +202,7 @@ pub fn parse_patch(patch: &str) -> Result<Vec<Hunk>, ParseError> {
         }
 
         return Err(ParseError::InvalidHunk {
-            message: format!("Unexpected line: {}", line),
+            message: format!("Unexpected line: {line}"),
             line_number: idx + 1,
         });
     }

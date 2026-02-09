@@ -40,7 +40,7 @@ impl RenameState {
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
-        render_rename_overlay(frame, self, area, input_y)
+        render_rename_overlay(frame, self, area, input_y);
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {

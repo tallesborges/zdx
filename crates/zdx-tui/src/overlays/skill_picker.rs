@@ -1,3 +1,10 @@
+#![allow(
+    clippy::match_wildcard_for_single_variants,
+    clippy::too_many_lines,
+    clippy::cast_possible_truncation,
+    clippy::unnecessary_wraps
+)]
+
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
@@ -345,11 +352,7 @@ impl SkillPickerState {
             return Vec::new();
         };
 
-        let skills = self
-            .skills_by_repo
-            .get(repo)
-            .map(Vec::as_slice)
-            .unwrap_or(&[]);
+        let skills = self.skills_by_repo.get(repo).map_or(&[][..], Vec::as_slice);
 
         if self.filter.is_empty() {
             return skills.iter().collect();
@@ -651,7 +654,7 @@ fn format_repo_label(picker: &SkillPickerState, max_width: usize) -> String {
             picker.repos.len()
         )
     } else {
-        format!("Repo: {}", repo)
+        format!("Repo: {repo}")
     };
 
     crate::common::truncate_start_with_ellipsis(&label, max_width)
@@ -667,7 +670,7 @@ fn list_status_text(picker: &SkillPickerState) -> Option<Line<'static>> {
 
     if let Some(skill) = &picker.installing_skill {
         return Some(Line::from(Span::styled(
-            format!("Installing {}...", skill),
+            format!("Installing {skill}..."),
             Style::default().fg(Color::Yellow),
         )));
     }
@@ -696,7 +699,7 @@ fn detail_status_text(picker: &SkillPickerState, skill: &SkillItem) -> Option<Li
 
     if let Some(installing) = &picker.installing_skill {
         return Some(Line::from(Span::styled(
-            format!("Installing {}...", installing),
+            format!("Installing {installing}..."),
             Style::default().fg(Color::Yellow),
         )));
     }

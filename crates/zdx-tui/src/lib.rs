@@ -27,6 +27,9 @@ use zdx_core::skills::Skill;
 use crate::transcript::HistoryCell;
 
 /// Runs the interactive chat loop.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn run_interactive_chat(
     config: &Config,
     thread_handle: Option<Thread>,
@@ -36,12 +39,16 @@ pub async fn run_interactive_chat(
 }
 
 /// Runs the interactive chat loop with pre-loaded history.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub async fn run_interactive_chat_with_history(
     config: &Config,
     thread_handle: Option<Thread>,
     history: Vec<ChatMessage>,
     root: PathBuf,
 ) -> Result<()> {
+    tokio::task::yield_now().await;
     // Chat mode requires a terminal to render the TUI
     if !stderr().is_terminal() {
         anyhow::bail!(

@@ -9,12 +9,12 @@ use zdx_core::core::agent::ToolConfig;
 
 use crate::telegram::TelegramClient;
 
-/// Key for the per-turn cancellation map: (chat_id, user_message_id).
+/// Key for the per-turn cancellation map: (`chat_id`, `user_message_id`).
 /// User message IDs are per-chat unique, so stale buttons from previous turns
 /// cannot cancel a new turn.
 pub(crate) type CancelKey = (i64, i64);
 
-/// Key for queued-item cancellation: (chat_id, user_message_id).
+/// Key for queued-item cancellation: (`chat_id`, `user_message_id`).
 pub(crate) type QueueCancelKey = (i64, i64);
 
 /// Shared map of active agent turns that can be cancelled via inline button.
@@ -45,7 +45,6 @@ pub(crate) struct BotContext {
 }
 
 impl BotContext {
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn new(
         client: TelegramClient,
         config: Config,

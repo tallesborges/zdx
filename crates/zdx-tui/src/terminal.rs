@@ -27,6 +27,9 @@ use ratatui::backend::CrosstermBackend;
 /// - Creates the terminal instance
 ///
 /// Call `install_panic_hook()` before this to ensure terminal restore on panic.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
     enable_raw_mode().context("Failed to enable raw mode")?;
     let mut stdout = io::stdout();
@@ -44,6 +47,9 @@ pub fn setup_terminal() -> Result<Terminal<CrosstermBackend<Stdout>>> {
 /// These are enabled separately from `setup_terminal()` because they need to be
 /// disabled before `restore_terminal()` in normal exit paths, but `restore_terminal()`
 /// will also disable them to handle panic/ctrl-c cases.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn enable_input_features() -> Result<()> {
     execute!(io::stdout(), EnableBracketedPaste, EnableMouseCapture)
         .context("Failed to enable input features")?;
@@ -53,6 +59,9 @@ pub fn enable_input_features() -> Result<()> {
 /// Disables additional terminal features enabled by `enable_input_features()`.
 ///
 /// Call this before `restore_terminal()` in normal exit paths.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn disable_input_features() -> Result<()> {
     execute!(io::stdout(), DisableMouseCapture, DisableBracketedPaste)
         .context("Failed to disable input features")?;
@@ -67,6 +76,9 @@ pub fn disable_input_features() -> Result<()> {
 /// - Disables raw mode
 ///
 /// This function is idempotent and safe to call multiple times.
+///
+/// # Errors
+/// Returns an error if the operation fails.
 pub fn restore_terminal() -> Result<()> {
     // Disable mouse and bracketed paste first (safe even if not enabled)
     // These must be disabled before leaving raw mode

@@ -2,6 +2,12 @@
 //!
 //! Handles thread-related state transitions: loading, switching, creating, renaming.
 
+#![allow(
+    clippy::too_many_lines,
+    clippy::match_same_arms,
+    clippy::needless_pass_by_value
+)]
+
 use std::path::PathBuf;
 
 use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage, short_thread_id};
@@ -181,7 +187,6 @@ pub fn handle_thread_event(
 
 /// Handles thread list loaded - opens thread picker overlay.
 /// Handles thread loaded - switches to the thread.
-#[allow(clippy::too_many_arguments)]
 fn handle_thread_loaded(
     thread_handle: Option<Thread>,
     thread_id: &str,
@@ -219,7 +224,7 @@ fn handle_thread_loaded(
         thread_id.to_string()
     };
     mutations.push(StateMutation::Transcript(
-        TranscriptMutation::AppendSystemMessage(format!("Switched to thread {}", short_id)),
+        TranscriptMutation::AppendSystemMessage(format!("Switched to thread {short_id}")),
     ));
 }
 
@@ -256,8 +261,6 @@ fn handle_thread_created(
         ));
     }
 }
-
-#[allow(clippy::too_many_arguments)]
 fn handle_thread_forked(
     thread_handle: Thread,
     cells: Vec<HistoryCell>,
@@ -292,7 +295,7 @@ fn handle_thread_forked(
         mutations.push(StateMutation::Input(InputMutation::SetText(text)));
     }
     mutations.push(StateMutation::Transcript(
-        TranscriptMutation::AppendSystemMessage(format!("Forked from turn {}.", turn_number)),
+        TranscriptMutation::AppendSystemMessage(format!("Forked from turn {turn_number}.")),
     ));
 }
 
@@ -306,8 +309,7 @@ fn handle_thread_renamed(
     let display_title = title.clone().unwrap_or_else(|| short_id.clone());
     mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!(
-            "Thread {} renamed to \"{}\".",
-            short_id, display_title
+            "Thread {short_id} renamed to \"{display_title}\"."
         )),
     ));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(title)));

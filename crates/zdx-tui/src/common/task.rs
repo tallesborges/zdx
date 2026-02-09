@@ -62,7 +62,7 @@ pub struct TaskCompleted<E> {
     pub result: E,
 }
 
-/// Task lifecycle state (stored in AppState, mutated only by reducer).
+/// Task lifecycle state (stored in `AppState`, mutated only by reducer).
 #[derive(Debug, Default, Clone)]
 pub struct TaskState {
     pub active: Option<TaskId>,
@@ -77,8 +77,8 @@ impl TaskState {
 
     pub fn on_started(&mut self, started: &TaskStarted) {
         self.active = Some(started.id);
-        self.cancel = started.cancel.clone();
-        self.meta = started.meta.clone();
+        self.cancel.clone_from(&started.cancel);
+        self.meta.clone_from(&started.meta);
     }
 
     pub fn finish_if_active(&mut self, id: TaskId) -> bool {

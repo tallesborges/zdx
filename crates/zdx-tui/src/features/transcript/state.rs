@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::CellId;
-use super::selection::{PositionMap, SelectionState};
+use super::selection::{PositionMap, SelectionState, VisualPosition};
 use crate::mutations::TranscriptMutation;
 
 const DOUBLE_CLICK_MAX_DELAY: Duration = Duration::from_millis(400);
@@ -84,7 +84,7 @@ impl Default for ScrollState {
 }
 
 impl ScrollState {
-    /// Creates a new ScrollState in follow mode.
+    /// Creates a new `ScrollState` in follow mode.
     #[cfg(test)]
     pub fn new() -> Self {
         Self::default()
@@ -97,7 +97,7 @@ impl ScrollState {
 
     /// Returns the current scroll offset for rendering.
     ///
-    /// In FollowLatest mode, calculates offset to show bottom of content.
+    /// In `FollowLatest` mode, calculates offset to show bottom of content.
     /// In Anchored mode, returns the stored offset (clamped to valid range).
     pub fn get_offset(&self, viewport_height: usize) -> usize {
         match &self.mode {
@@ -125,7 +125,7 @@ impl ScrollState {
 
     /// Scrolls down by the given number of lines.
     ///
-    /// Transitions to FollowLatest mode when reaching the bottom.
+    /// Transitions to `FollowLatest` mode when reaching the bottom.
     pub fn scroll_down(&mut self, lines: usize, viewport_height: usize) {
         if matches!(self.mode, ScrollMode::FollowLatest) {
             return; // Already at bottom
@@ -165,8 +165,8 @@ impl ScrollState {
     /// Updates the cached line count.
     ///
     /// Call this after rendering to keep scroll calculations accurate.
-    /// Note: For production use, prefer update_cell_line_info() which
-    /// updates both cell info and cached_line_count.
+    /// Note: For production use, prefer `update_cell_line_info()` which
+    /// updates both cell info and `cached_line_count`.
     #[cfg(test)]
     pub fn update_line_count(&mut self, line_count: usize) {
         self.cached_line_count = line_count;
@@ -181,7 +181,7 @@ impl ScrollState {
 
     /// Calculates which cells are visible in the current viewport.
     ///
-    /// Returns `None` if cell_line_info is empty or not yet populated.
+    /// Returns `None` if `cell_line_info` is empty or not yet populated.
     /// Otherwise returns the range of cell indices to render and metadata
     /// for proper positioning.
     pub fn visible_range(&self, viewport_height: usize) -> Option<VisibleRange> {
@@ -223,8 +223,8 @@ impl ScrollState {
     /// Updates cell line info from rendered cells.
     ///
     /// Call this after rendering to update visibility calculations.
-    /// The `line_counts` iterator should yield (cell_id, line_count) pairs
-    /// in cell order. Also updates cached_line_count.
+    /// The `line_counts` iterator should yield (`cell_id`, `line_count`) pairs
+    /// in cell order. Also updates `cached_line_count`.
     pub fn update_cell_line_info<I>(&mut self, line_counts: I)
     where
         I: IntoIterator<Item = (CellId, usize)>,
@@ -296,15 +296,15 @@ impl ScrollAccumulator {
         let current_direction = raw_delta.signum() as i8;
 
         // Check if direction changed
-        if current_direction != self.last_direction {
+        if current_direction == self.last_direction {
+            self.consecutive_frames = self.consecutive_frames.saturating_add(1);
+        } else {
             self.consecutive_frames = 1;
             self.last_direction = current_direction;
-        } else {
-            self.consecutive_frames = self.consecutive_frames.saturating_add(1);
         }
 
         // Linear acceleration: 1, 2, 3, ... per consecutive frame.
-        let multiplier = self.consecutive_frames as u32;
+        let multiplier = u32::from(self.consecutive_frames);
 
         // Apply multiplier but cap at the raw delta magnitude
         let max_lines = raw_delta.unsigned_abs().max(1);
@@ -384,13 +384,13 @@ impl Default for TranscriptState {
 }
 
 impl TranscriptState {
-    /// Creates a new TranscriptState with default values.
+    /// Creates a new `TranscriptState` with default values.
     #[allow(dead_code)]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Creates a TranscriptState with pre-loaded cells.
+    /// Creates a `TranscriptState` with pre-loaded cells.
     pub fn with_cells(cells: Vec<super::HistoryCell>) -> Self {
         Self {
             cells,
@@ -444,7 +444,7 @@ impl TranscriptState {
     // Cell Mutation Methods (auto-invalidate line info)
     // ========================================================================
 
-    /// Sets tool result for a cell by tool_use_id.
+    /// Sets tool result for a cell by `tool_use_id`.
     pub fn set_tool_result_for(
         &mut self,
         tool_id: &str,
@@ -458,7 +458,7 @@ impl TranscriptState {
         }
     }
 
-    /// Sets tool input for a cell by tool_use_id.
+    /// Sets tool input for a cell by `tool_use_id`.
     pub fn set_tool_input_for(&mut self, tool_id: &str, input: serde_json::Value) {
         if let Some(cell) = self.cells.iter_mut().find(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
@@ -468,7 +468,7 @@ impl TranscriptState {
         }
     }
 
-    /// Sets tool input preview for a cell by tool_use_id.
+    /// Sets tool input preview for a cell by `tool_use_id`.
     pub fn set_tool_input_delta_for(&mut self, tool_id: &str, delta: String) {
         if let Some(cell) = self.cells.iter_mut().find(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
@@ -478,7 +478,7 @@ impl TranscriptState {
         }
     }
 
-    /// Finalizes an assistant cell by cell_id (streaming → complete).
+    /// Finalizes an assistant cell by `cell_id` (streaming → complete).
     pub fn finalize_assistant_cell(&mut self, cell_id: super::CellId) {
         if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
             cell.finalize_assistant();
@@ -486,7 +486,7 @@ impl TranscriptState {
         }
     }
 
-    /// Appends delta to a streaming assistant cell by cell_id.
+    /// Appends delta to a streaming assistant cell by `cell_id`.
     pub fn append_to_streaming_cell(&mut self, cell_id: super::CellId, delta: &str) {
         if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
             cell.append_assistant_delta(delta);
@@ -687,6 +687,9 @@ impl TranscriptState {
     /// Copies the selected text to the clipboard and schedules clear.
     ///
     /// Returns `Ok(())` if successful, or an error message if failed.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn copy_and_schedule_clear(&mut self) -> Result<(), String> {
         let text = self.get_selected_text().ok_or("No selection")?;
         if text.is_empty() {
@@ -761,7 +764,6 @@ impl TranscriptState {
             end += 1;
         }
 
-        use super::selection::VisualPosition;
         self.selection.start(VisualPosition::new(line, start));
         self.selection.extend(VisualPosition::new(line, end));
         self.selection.finish();

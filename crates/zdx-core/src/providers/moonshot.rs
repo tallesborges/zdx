@@ -33,6 +33,9 @@ impl MoonshotConfig {
     /// Environment variables:
     /// - `MOONSHOT_API_KEY` (fallback if not in config)
     /// - `MOONSHOT_BASE_URL` (optional)
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
         max_tokens: Option<u32>,
@@ -84,6 +87,9 @@ impl MoonshotClient {
         }
     }
 
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn send_messages_stream(
         &self,
         messages: &[crate::providers::ChatMessage],

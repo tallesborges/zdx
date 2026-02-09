@@ -25,7 +25,7 @@ pub async fn bash_execution(
         let cancel_clone = cancel.clone();
         tokio::select! {
             result = run_fut => result,
-            _ = cancel_clone.cancelled() => ToolOutput::canceled("Interrupted by user"),
+            () = cancel_clone.cancelled() => ToolOutput::canceled("Interrupted by user"),
         }
     } else {
         run_fut.await

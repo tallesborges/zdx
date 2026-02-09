@@ -26,7 +26,7 @@ pub const SPINNER_SPEED_DIVISOR: usize = 6;
 ///
 /// Also builds the position map for selection coordinate translation.
 ///
-/// Returns (lines, is_lazy) where is_lazy indicates if lazy rendering was used.
+/// Returns (lines, `is_lazy`) where `is_lazy` indicates if lazy rendering was used.
 /// When lazy rendering is used, lines are already scrolled and ready to display.
 pub fn render_transcript(state: &TuiState, width: usize) -> (Vec<Line<'static>>, bool) {
     // Try lazy rendering if we have cell line info
@@ -48,7 +48,7 @@ pub fn render_transcript(state: &TuiState, width: usize) -> (Vec<Line<'static>>,
 
 /// Full transcript rendering - iterates all cells.
 ///
-/// Used on first frame or when cell_line_info needs to be rebuilt.
+/// Used on first frame or when `cell_line_info` needs to be rebuilt.
 fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -188,8 +188,8 @@ fn render_transcript_lazy(
 
 /// Calculates cell line info and returns it for external application.
 ///
-/// Returns a Vec of (CellId, line_count) tuples that can be used to
-/// update ScrollState::cell_line_info.
+/// Returns a Vec of (`CellId`, `line_count`) tuples that can be used to
+/// update `ScrollState::cell_line_info`.
 pub fn calculate_cell_line_counts(
     state: &TuiState,
     terminal_width: usize,
@@ -217,7 +217,7 @@ pub fn calculate_cell_line_counts(
 // Style Conversion Helpers
 // ============================================================================
 
-/// Converts a transcript StyledLine to a ratatui Line.
+/// Converts a transcript `StyledLine` to a ratatui Line.
 fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
     let spans: Vec<Span<'static>> = styled_line
         .spans
@@ -230,7 +230,7 @@ fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
     Line::from(spans)
 }
 
-/// Converts a StyledLine to a ratatui Line with selection highlighting.
+/// Converts a `StyledLine` to a ratatui Line with selection highlighting.
 ///
 /// If the line (at `line_idx`) is within the selection range, the selected
 /// portion is rendered with a reversed background.

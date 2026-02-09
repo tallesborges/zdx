@@ -11,6 +11,7 @@ use zdx_core::providers::oauth::{
 };
 
 pub async fn login_anthropic() -> Result<()> {
+    tokio::task::yield_now().await;
     println!("Anthropic uses API keys.");
     println!("Set ANTHROPIC_API_KEY in your shell to authenticate.");
     Ok(())
@@ -50,7 +51,7 @@ pub async fn login_claude_cli() -> Result<()> {
     println!("  4. Otherwise, paste the authorization code or URL");
     println!();
     println!("Authorization URL:");
-    println!("  {}", auth_url);
+    println!("  {auth_url}");
     println!();
 
     // Try to open browser (best effort, skip in tests)
@@ -65,23 +66,22 @@ pub async fn login_claude_cli() -> Result<()> {
     } else {
         None
     };
-    let auth_code = match local_code {
-        Some(code) => format!("{}#{}", code, expected_state),
-        None => {
-            print!("Paste authorization code (or full redirect URL): ");
-            io::stdout().flush()?;
+    let auth_code = if let Some(code) = local_code {
+        format!("{code}#{expected_state}")
+    } else {
+        print!("Paste authorization code (or full redirect URL): ");
+        io::stdout().flush()?;
 
-            let mut input = String::new();
-            io::stdin().lock().read_line(&mut input)?;
-            let (code, provided_state) = oauth_claude_cli::parse_authorization_input(&input);
-            if let Some(provided) = provided_state
-                && provided != expected_state
-            {
-                anyhow::bail!("State mismatch");
-            }
-            let code = code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?;
-            format!("{}#{}", code, expected_state)
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+        let (code, provided_state) = oauth_claude_cli::parse_authorization_input(&input);
+        if let Some(provided) = provided_state
+            && provided != expected_state
+        {
+            anyhow::bail!("State mismatch");
         }
+        let code = code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?;
+        format!("{code}#{expected_state}")
     };
 
     // Exchange code for tokens
@@ -151,28 +151,27 @@ pub async fn login_openai_codex() -> Result<()> {
     println!("  4. Otherwise, paste the authorization code or URL");
     println!();
     println!("Authorization URL:");
-    println!("  {}", auth_url);
+    println!("  {auth_url}");
     println!();
 
     if std::env::var("ZDX_NO_BROWSER").is_err() {
         let _ = open::that(&auth_url);
     }
 
-    let code = match wait_for_local_code(&state) {
-        Some(code) => code,
-        None => {
-            print!("Paste authorization code (or full redirect URL): ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().lock().read_line(&mut input)?;
-            let (code, provided_state) = oauth_codex::parse_authorization_input(&input);
-            if let Some(provided) = provided_state
-                && provided != state
-            {
-                anyhow::bail!("State mismatch");
-            }
-            code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?
+    let code = if let Some(code) = wait_for_local_code(&state) {
+        code
+    } else {
+        print!("Paste authorization code (or full redirect URL): ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+        let (code, provided_state) = oauth_codex::parse_authorization_input(&input);
+        if let Some(provided) = provided_state
+            && provided != state
+        {
+            anyhow::bail!("State mismatch");
         }
+        code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?
     };
 
     println!("Exchanging code for tokens...");
@@ -233,28 +232,27 @@ pub async fn login_gemini_cli() -> Result<()> {
     println!("  4. Otherwise, paste the authorization code or URL");
     println!();
     println!("Authorization URL:");
-    println!("  {}", auth_url);
+    println!("  {auth_url}");
     println!();
 
     if std::env::var("ZDX_NO_BROWSER").is_err() {
         let _ = open::that(&auth_url);
     }
 
-    let code = match wait_for_gemini_cli_code(&state) {
-        Some(code) => code,
-        None => {
-            print!("Paste authorization code (or full redirect URL): ");
-            io::stdout().flush()?;
-            let mut input = String::new();
-            io::stdin().lock().read_line(&mut input)?;
-            let (code, provided_state) = oauth_gemini_cli::parse_authorization_input(&input);
-            if let Some(provided) = provided_state
-                && provided != state
-            {
-                anyhow::bail!("State mismatch");
-            }
-            code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?
+    let code = if let Some(code) = wait_for_gemini_cli_code(&state) {
+        code
+    } else {
+        print!("Paste authorization code (or full redirect URL): ");
+        io::stdout().flush()?;
+        let mut input = String::new();
+        io::stdin().lock().read_line(&mut input)?;
+        let (code, provided_state) = oauth_gemini_cli::parse_authorization_input(&input);
+        if let Some(provided) = provided_state
+            && provided != state
+        {
+            anyhow::bail!("State mismatch");
         }
+        code.ok_or_else(|| anyhow::anyhow!("Authorization code cannot be empty"))?
     };
 
     println!("Exchanging code for tokens...");
@@ -268,7 +266,7 @@ pub async fn login_gemini_cli() -> Result<()> {
 
     let cache_path = OAuthCache::cache_path();
     println!();
-    println!("✓ Logged in to Gemini CLI (project: {})", project_id);
+    println!("✓ Logged in to Gemini CLI (project: {project_id})");
     println!("  Credentials saved to: {}", cache_path.display());
 
     Ok(())
@@ -289,9 +287,8 @@ pub fn logout_gemini_cli() -> Result<()> {
 }
 
 fn wait_for_gemini_cli_code(state: &str) -> Option<String> {
-    let listener = match TcpListener::bind("127.0.0.1:8085") {
-        Ok(listener) => listener,
-        Err(_) => return None,
+    let Ok(listener) = TcpListener::bind("127.0.0.1:8085") else {
+        return None;
     };
     let _ = listener.set_nonblocking(true);
 
@@ -307,9 +304,10 @@ fn wait_for_gemini_cli_code(state: &str) -> Option<String> {
                     let _ = stream.read(&mut buffer);
                     let request = String::from_utf8_lossy(&buffer);
                     let code = extract_gemini_cli_code_from_request(&request, &state);
-                    let response = match code.is_some() {
-                        true => oauth_success_response(),
-                        false => oauth_error_response(),
+                    let response = if code.is_some() {
+                        oauth_success_response()
+                    } else {
+                        oauth_error_response()
                     };
                     let _ = stream.write_all(response.as_bytes());
                     let _ = tx.send(code);
@@ -340,7 +338,7 @@ fn extract_gemini_cli_code_from_request(request: &str, expected_state: &str) -> 
     let _method = parts.next()?;
     let path = parts.next()?;
 
-    let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
+    let url = url::Url::parse(&format!("http://localhost{path}")).ok()?;
     if url.path() != "/oauth2callback" {
         return None;
     }
@@ -357,9 +355,8 @@ fn extract_gemini_cli_code_from_request(request: &str, expected_state: &str) -> 
 }
 
 fn wait_for_claude_cli_code(state: &str, port: u16) -> Option<String> {
-    let listener = match TcpListener::bind(format!("127.0.0.1:{}", port)) {
-        Ok(listener) => listener,
-        Err(_) => return None,
+    let Ok(listener) = TcpListener::bind(format!("127.0.0.1:{port}")) else {
+        return None;
     };
     let _ = listener.set_nonblocking(true);
 
@@ -375,9 +372,10 @@ fn wait_for_claude_cli_code(state: &str, port: u16) -> Option<String> {
                     let _ = stream.read(&mut buffer);
                     let request = String::from_utf8_lossy(&buffer);
                     let code = extract_claude_cli_code_from_request(&request, &state);
-                    let response = match code.is_some() {
-                        true => oauth_success_response(),
-                        false => oauth_error_response(),
+                    let response = if code.is_some() {
+                        oauth_success_response()
+                    } else {
+                        oauth_error_response()
                     };
                     let _ = stream.write_all(response.as_bytes());
                     let _ = tx.send(code);
@@ -408,7 +406,7 @@ fn extract_claude_cli_code_from_request(request: &str, expected_state: &str) -> 
     let _method = parts.next()?;
     let path = parts.next()?;
 
-    let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
+    let url = url::Url::parse(&format!("http://localhost{path}")).ok()?;
     if url.path() != oauth_claude_cli::LOCAL_CALLBACK_PATH {
         return None;
     }
@@ -425,9 +423,8 @@ fn extract_claude_cli_code_from_request(request: &str, expected_state: &str) -> 
 }
 
 fn wait_for_local_code(state: &str) -> Option<String> {
-    let listener = match TcpListener::bind("127.0.0.1:1455") {
-        Ok(listener) => listener,
-        Err(_) => return None,
+    let Ok(listener) = TcpListener::bind("127.0.0.1:1455") else {
+        return None;
     };
     let _ = listener.set_nonblocking(true);
 
@@ -443,9 +440,10 @@ fn wait_for_local_code(state: &str) -> Option<String> {
                     let _ = stream.read(&mut buffer);
                     let request = String::from_utf8_lossy(&buffer);
                     let code = extract_code_from_request(&request, &state);
-                    let response = match code.is_some() {
-                        true => oauth_success_response(),
-                        false => oauth_error_response(),
+                    let response = if code.is_some() {
+                        oauth_success_response()
+                    } else {
+                        oauth_error_response()
                     };
                     let _ = stream.write_all(response.as_bytes());
                     let _ = tx.send(code);
@@ -476,7 +474,7 @@ fn extract_code_from_request(request: &str, expected_state: &str) -> Option<Stri
     let _method = parts.next()?;
     let path = parts.next()?;
 
-    let url = url::Url::parse(&format!("http://localhost{}", path)).ok()?;
+    let url = url::Url::parse(&format!("http://localhost{path}")).ok()?;
     if url.path() != "/auth/callback" {
         return None;
     }

@@ -17,6 +17,9 @@ impl Clipboard {
     /// 2. System clipboard via arboard
     ///
     /// Returns `Ok(())` if any method succeeded.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub fn copy(text: &str) -> Result<(), ClipboardError> {
         // Try OSC 52 first (best for terminal apps, works over SSH)
         if Self::copy_osc52(text).is_ok() {
@@ -39,7 +42,7 @@ impl Clipboard {
         // OSC 52 format: ESC ] 52 ; c ; <base64-data> ESC \
         // - 'c' specifies the clipboard selection (system clipboard)
         let mut stdout = std::io::stdout();
-        write!(stdout, "\x1b]52;c;{}\x1b\\", encoded)
+        write!(stdout, "\x1b]52;c;{encoded}\x1b\\")
             .map_err(|e| ClipboardError::Osc52(e.to_string()))?;
         stdout
             .flush()
@@ -73,8 +76,8 @@ pub enum ClipboardError {
 impl std::fmt::Display for ClipboardError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ClipboardError::Osc52(msg) => write!(f, "OSC 52 clipboard failed: {}", msg),
-            ClipboardError::System(msg) => write!(f, "System clipboard failed: {}", msg),
+            ClipboardError::Osc52(msg) => write!(f, "OSC 52 clipboard failed: {msg}"),
+            ClipboardError::System(msg) => write!(f, "System clipboard failed: {msg}"),
         }
     }
 }

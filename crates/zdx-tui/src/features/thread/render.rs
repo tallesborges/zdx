@@ -48,7 +48,7 @@ pub fn render_thread_picker(
 
     let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
     let title = match picker.scope {
-        ThreadScope::All => format!("Threads ({})", thread_count),
+        ThreadScope::All => format!("Threads ({thread_count})"),
         ThreadScope::Current => format!("Threads ({}/{})", tree_items.len(), thread_count),
     };
     render_overlay_container(frame, picker_area, &title, Color::Magenta);
@@ -64,7 +64,7 @@ pub fn render_thread_picker(
     let max_filter_len = inner_area.width.saturating_sub(4) as usize;
     let filter_display = if picker.filter.len() > max_filter_len {
         let truncated = &picker.filter[picker.filter.len() - max_filter_len..];
-        format!("…{}", truncated)
+        format!("…{truncated}")
     } else {
         picker.filter.clone()
     };
@@ -79,13 +79,13 @@ pub fn render_thread_picker(
     render_separator(frame, inner_area, 1);
 
     if tree_items.is_empty() {
-        let empty_msg = Paragraph::new(if !picker.filter.is_empty() {
-            "No matching threads"
-        } else {
+        let empty_msg = Paragraph::new(if picker.filter.is_empty() {
             match picker.scope {
                 ThreadScope::Current => "No threads in this workspace",
                 ThreadScope::All => "No threads found",
             }
+        } else {
+            "No matching threads"
         })
         .style(Style::default().fg(Color::DarkGray))
         .alignment(Alignment::Center);
@@ -171,7 +171,7 @@ pub fn render_thread_picker(
                 .is_some_and(|id| id == &thread.id);
             let current_label = if is_current { "(current) " } else { "" };
 
-            let tree_prefix = format!("{}{}", indent_str, branch_str);
+            let tree_prefix = format!("{indent_str}{branch_str}");
             let tree_prefix_width = tree_prefix.width();
             let handoff_label_width = handoff_label.width();
             let current_label_width = current_label.width();

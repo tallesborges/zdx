@@ -235,7 +235,7 @@ async fn dispatch(cli: Cli) -> Result<()> {
         let root_path = std::path::PathBuf::from(root);
         if let Some(id) = worktree {
             worktree::ensure_worktree(&root_path, id)
-                .with_context(|| format!("ensure worktree for '{}'", id))
+                .with_context(|| format!("ensure worktree for '{id}'"))
         } else {
             Ok(root_path)
         }
