@@ -2,7 +2,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize)]
 pub struct Update {
-    pub update_id: i64,
+    #[serde(rename = "update_id")]
+    pub id: i64,
     pub message: Option<Message>,
     pub callback_query: Option<CallbackQuery>,
 }
@@ -38,7 +39,8 @@ pub struct InlineKeyboardButton {
 
 #[derive(Debug, Deserialize)]
 pub struct Message {
-    pub message_id: i64,
+    #[serde(rename = "message_id")]
+    pub id: i64,
     pub chat: Chat,
     pub from: Option<User>,
     pub text: Option<String>,
@@ -53,11 +55,11 @@ pub struct Message {
     #[serde(default)]
     pub document: Option<Document>,
     /// Unique identifier of a message thread or forum topic.
-    #[serde(default)]
-    pub message_thread_id: Option<i64>,
+    #[serde(default, rename = "message_thread_id")]
+    pub thread_id: Option<i64>,
     /// Original message this message replies to.
-    #[serde(default)]
-    pub reply_to_message: Option<Box<Message>>,
+    #[serde(default, rename = "reply_to_message")]
+    pub reply_to: Option<Box<Message>>,
 }
 
 impl Message {
@@ -66,11 +68,8 @@ impl Message {
     /// Telegram usually sets `message_thread_id` on topic messages, but some
     /// clients/flows can omit it while still including it on `reply_to_message`.
     pub fn effective_thread_id(&self) -> Option<i64> {
-        self.message_thread_id.or_else(|| {
-            self.reply_to_message
-                .as_ref()
-                .and_then(|m| m.message_thread_id)
-        })
+        self.thread_id
+            .or_else(|| self.reply_to.as_ref().and_then(|m| m.thread_id))
     }
 }
 

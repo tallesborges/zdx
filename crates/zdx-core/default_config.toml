@@ -79,10 +79,10 @@ thinking_level = "minimal"
 # base_url: Optional base URL (for proxies or test rigs)
 # tools: Optional list of enabled tools. If set, overrides the default tool set.
 #
-# Available tools: bash, apply_patch, edit, read, read_thread, write
+# Available tools: bash, apply_patch, edit, fetch_webpage, read, read_thread, subagent, web_search, write
 # Default tool sets:
-#   - default:       ["bash", "edit", "read", "read_thread", "write"]
-#   - openai_codex:  ["bash", "apply_patch", "read", "read_thread"]
+#   - default:       ["bash", "edit", "fetch_webpage", "read", "read_thread", "subagent", "web_search", "write"]
+#   - openai_codex:  ["bash", "apply_patch", "fetch_webpage", "read", "read_thread", "subagent", "web_search"]
 
 [providers.anthropic]
 enabled = true

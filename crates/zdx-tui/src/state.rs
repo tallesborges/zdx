@@ -333,16 +333,17 @@ fn get_git_branch(root: &std::path::Path) -> Option<String> {
 fn shorten_path(path: &std::path::Path) -> String {
     // Canonicalize to resolve "." and ".." to absolute path
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(home) = dirs::home_dir()
+    if let Some(home) = zdx_core::config::paths::home_dir()
         && let Ok(relative) = path.strip_prefix(&home)
     {
         let display = format!("~/{}", relative.display());
-        return compact_path_segments(display, 5);
+        return compact_path_segments(&display, 5);
     }
-    compact_path_segments(path.display().to_string(), 5)
+    let display = path.display().to_string();
+    compact_path_segments(&display, 5)
 }
 
-fn compact_path_segments(path: String, keep_segments_each_side: usize) -> String {
+fn compact_path_segments(path: &str, keep_segments_each_side: usize) -> String {
     let has_leading_slash = path.starts_with('/');
     let segments: Vec<String> = path
         .split('/')

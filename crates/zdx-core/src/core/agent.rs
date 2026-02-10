@@ -504,7 +504,44 @@ pub async fn run_turn(
     tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
+    let setup = build_run_turn_setup(config, options, thread_id)?;
+    let mut messages = messages;
 
+    loop {
+        ensure_not_interrupted(&sender, None).await?;
+        let stream = request_stream(
+            &setup.client,
+            &messages,
+            &setup.tools,
+            system_prompt,
+            &sender,
+        )
+        .await?;
+        let mut stream_state = consume_stream(stream, setup.provider, &sender).await?;
+
+        if stream_state.needs_tool_execution() {
+            process_tool_turn(&mut messages, &mut stream_state.turn, &setup, &sender).await?;
+            continue;
+        }
+
+        return finalize_non_tool_turn(&mut messages, stream_state.turn, &sender).await;
+    }
+}
+
+struct RunTurnSetup {
+    provider: ProviderKind,
+    client: ProviderClient,
+    tools: Vec<ToolDefinition>,
+    enabled_tools: HashSet<String>,
+    tool_ctx: ToolContext,
+    tool_registry: ToolRegistry,
+}
+
+fn build_run_turn_setup(
+    config: &Config,
+    options: &AgentOptions,
+    thread_id: Option<&str>,
+) -> Result<RunTurnSetup> {
     let selection = resolve_provider(&config.model);
     let provider = selection.kind;
     let max_tokens = config.effective_max_tokens_for(&config.model);
@@ -513,632 +550,691 @@ pub async fn run_turn(
     } else {
         ThinkingLevel::Off
     };
-
-    // Get model output limit for budget calculation
     let model_output_limit = crate::models::ModelOption::find_by_id(&config.model)
         .map(|m| m.capabilities.output_limit)
         .filter(|&limit| limit > 0)
         .and_then(|limit| u32::try_from(limit).ok());
 
-    let client = match provider {
-        ProviderKind::Anthropic => {
-            // Translate ThinkingLevel to raw API values
-            let thinking_enabled = thinking_level.is_enabled();
-            let thinking_budget_tokens = thinking_level
-                .compute_reasoning_budget(max_tokens, model_output_limit)
-                .unwrap_or(0);
-            let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
-
-            let anthropic_config = AnthropicConfig::from_env(
-                selection.model.clone(),
-                max_tokens,
-                config.providers.anthropic.effective_base_url(),
-                config.providers.anthropic.effective_api_key(),
-                thinking_enabled,
-                thinking_budget_tokens,
-                thinking_effort,
-            )?;
-            ProviderClient::Anthropic(AnthropicClient::new(anthropic_config))
-        }
-        ProviderKind::ClaudeCli => {
-            let thinking_enabled = thinking_level.is_enabled();
-            let thinking_budget_tokens = thinking_level
-                .compute_reasoning_budget(max_tokens, model_output_limit)
-                .unwrap_or(0);
-            let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
-
-            let claude_cli_config = ClaudeCliConfig::new(
-                selection.model.clone(),
-                max_tokens,
-                config.providers.claude_cli.effective_base_url(),
-                thinking_enabled,
-                thinking_budget_tokens,
-                thinking_effort,
-            );
-            ProviderClient::ClaudeCli(ClaudeCliClient::new(claude_cli_config))
-        }
-        ProviderKind::OpenAICodex => {
-            let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-
-            let openai_config = OpenAICodexConfig::new(
-                selection.model.clone(),
-                max_tokens,
-                reasoning_effort,
-                cache_key,
-            );
-            ProviderClient::OpenAICodex(OpenAICodexClient::new(openai_config))
-        }
-        ProviderKind::OpenAI => {
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-
-            let openai_config = OpenAIConfig::from_env(
-                selection.model.clone(),
-                max_tokens,
-                config.providers.openai.effective_base_url(),
-                config.providers.openai.effective_api_key(),
-                cache_key,
-            )?;
-            ProviderClient::OpenAI(OpenAIClient::new(openai_config))
-        }
-        ProviderKind::OpenRouter => {
-            let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-            let openrouter_config = OpenRouterConfig::from_env(
-                selection.model.clone(),
-                config.max_tokens,
-                config.providers.openrouter.effective_base_url(),
-                config.providers.openrouter.effective_api_key(),
-                reasoning_effort,
-                cache_key,
-            )?;
-            ProviderClient::OpenRouter(OpenRouterClient::new(openrouter_config))
-        }
-        ProviderKind::Mimo => {
-            let thinking_enabled = thinking_level.is_enabled();
-            let mimo_config = MimoConfig::from_env(
-                selection.model.clone(),
-                config.max_tokens,
-                config.providers.mimo.effective_base_url(),
-                config.providers.mimo.effective_api_key(),
-                None,
-                thinking_enabled,
-            )?;
-            ProviderClient::Mimo(MimoClient::new(mimo_config))
-        }
-        ProviderKind::Mistral => {
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-            let thinking_enabled = thinking_level.is_enabled();
-            let mistral_config = MistralConfig::from_env(
-                selection.model.clone(),
-                config.max_tokens,
-                config.providers.mistral.effective_base_url(),
-                config.providers.mistral.effective_api_key(),
-                cache_key,
-                thinking_enabled,
-            )?;
-            ProviderClient::Mistral(MistralClient::new(mistral_config))
-        }
-        ProviderKind::Moonshot => {
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-            let thinking_enabled = thinking_level.is_enabled();
-            let moonshot_config = MoonshotConfig::from_env(
-                selection.model.clone(),
-                config.max_tokens,
-                config.providers.moonshot.effective_base_url(),
-                config.providers.moonshot.effective_api_key(),
-                cache_key,
-                thinking_enabled,
-            )?;
-            ProviderClient::Moonshot(MoonshotClient::new(moonshot_config))
-        }
-        ProviderKind::Stepfun => {
-            let cache_key = thread_id.map(std::string::ToString::to_string);
-            let thinking_enabled = thinking_level.is_enabled();
-            let stepfun_config = StepfunConfig::from_env(
-                selection.model.clone(),
-                config.max_tokens,
-                config.providers.stepfun.effective_base_url(),
-                config.providers.stepfun.effective_api_key(),
-                cache_key,
-                thinking_enabled,
-            )?;
-            ProviderClient::Stepfun(StepfunClient::new(stepfun_config))
-        }
-        ProviderKind::Gemini => {
-            // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)
-            let thinking_config = if thinking_level.is_enabled() {
-                Some(GeminiThinkingConfig::from_thinking_level(
-                    thinking_level,
-                    &selection.model,
-                ))
-            } else {
-                None
-            };
-
-            let gemini_config = GeminiConfig::from_env(
-                selection.model.clone(),
-                max_tokens,
-                config.providers.gemini.effective_base_url(),
-                config.providers.gemini.effective_api_key(),
-                thinking_config,
-            )?;
-            ProviderClient::Gemini(GeminiClient::new(gemini_config))
-        }
-        ProviderKind::GeminiCli => {
-            // Map thinking level to Gemini-specific config (level for Gemini 3, budget for Gemini 2.5)
-            let thinking_config = if thinking_level.is_enabled() {
-                Some(GeminiThinkingConfig::from_thinking_level(
-                    thinking_level,
-                    &selection.model,
-                ))
-            } else {
-                None
-            };
-
-            let gemini_cli_config =
-                GeminiCliConfig::new(selection.model.clone(), max_tokens, thinking_config);
-            ProviderClient::GeminiCli(GeminiCliClient::new(gemini_cli_config))
-        }
-    };
-
+    let client = build_provider_client(
+        config,
+        thread_id,
+        &selection.model,
+        provider,
+        max_tokens,
+        thinking_level,
+        model_output_limit,
+    )?;
     let tool_ctx = ToolContext::new(
         options.root.canonicalize().unwrap_or(options.root.clone()),
         config.tool_timeout(),
     )
     .with_config(config);
-
     let tool_registry = options.tool_config.registry.clone();
+    let tools = resolve_tools(config, options, provider, &tool_registry);
+    let enabled_tools = tools.iter().map(|t| t.name.clone()).collect();
 
-    // Cache tool definitions outside the loop (they're constant)
-    let tools = match &options.tool_config.selection {
+    Ok(RunTurnSetup {
+        provider,
+        client,
+        tools,
+        enabled_tools,
+        tool_ctx,
+        tool_registry,
+    })
+}
+
+fn build_provider_client(
+    config: &Config,
+    thread_id: Option<&str>,
+    model: &str,
+    provider: ProviderKind,
+    max_tokens: u32,
+    thinking_level: ThinkingLevel,
+    model_output_limit: Option<u32>,
+) -> Result<ProviderClient> {
+    let cache_key = thread_id.map(std::string::ToString::to_string);
+    let thinking_enabled = thinking_level.is_enabled();
+    let reasoning_effort = map_thinking_to_reasoning(thinking_level);
+    let thinking_budget_tokens = thinking_level
+        .compute_reasoning_budget(max_tokens, model_output_limit)
+        .unwrap_or(0);
+    let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
+    let gemini_thinking = thinking_enabled
+        .then(|| GeminiThinkingConfig::from_thinking_level(thinking_level, model));
+
+    match provider {
+        ProviderKind::Anthropic => build_anthropic_client(
+            config,
+            model,
+            max_tokens,
+            thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+        ),
+        ProviderKind::ClaudeCli => Ok(ProviderClient::ClaudeCli(ClaudeCliClient::new(
+            ClaudeCliConfig::new(
+                model.to_string(),
+                max_tokens,
+                config.providers.claude_cli.effective_base_url(),
+                thinking_enabled,
+                thinking_budget_tokens,
+                thinking_effort,
+            ),
+        ))),
+        ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
+            OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
+        ))),
+        ProviderKind::OpenAI => build_openai_client(config, model, max_tokens, cache_key),
+        ProviderKind::OpenRouter => build_openrouter_client(config, model, reasoning_effort, cache_key),
+        ProviderKind::Mimo => build_mimo_client(config, model, thinking_enabled),
+        ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Stepfun => build_stepfun_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Gemini => build_gemini_client(config, model, max_tokens, gemini_thinking),
+        ProviderKind::GeminiCli => Ok(ProviderClient::GeminiCli(GeminiCliClient::new(
+            GeminiCliConfig::new(model.to_string(), max_tokens, gemini_thinking),
+        ))),
+    }
+}
+
+fn build_anthropic_client(
+    config: &Config,
+    model: &str,
+    max_tokens: u32,
+    thinking_enabled: bool,
+    thinking_budget_tokens: u32,
+    thinking_effort: Option<AnthropicEffortLevel>,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Anthropic(AnthropicClient::new(
+        AnthropicConfig::from_env(
+            model.to_string(),
+            max_tokens,
+            config.providers.anthropic.effective_base_url(),
+            config.providers.anthropic.effective_api_key(),
+            thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+        )?,
+    )))
+}
+
+fn build_openai_client(
+    config: &Config,
+    model: &str,
+    max_tokens: u32,
+    cache_key: Option<String>,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::OpenAI(OpenAIClient::new(
+        OpenAIConfig::from_env(
+            model.to_string(),
+            max_tokens,
+            config.providers.openai.effective_base_url(),
+            config.providers.openai.effective_api_key(),
+            cache_key,
+        )?,
+    )))
+}
+
+fn build_openrouter_client(
+    config: &Config,
+    model: &str,
+    reasoning_effort: Option<String>,
+    cache_key: Option<String>,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::OpenRouter(OpenRouterClient::new(
+        OpenRouterConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.openrouter.effective_base_url(),
+            config.providers.openrouter.effective_api_key(),
+            reasoning_effort,
+            cache_key,
+        )?,
+    )))
+}
+
+fn build_mimo_client(config: &Config, model: &str, thinking_enabled: bool) -> Result<ProviderClient> {
+    Ok(ProviderClient::Mimo(MimoClient::new(MimoConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.mimo.effective_base_url(),
+        config.providers.mimo.effective_api_key(),
+        None,
+        thinking_enabled,
+    )?)))
+}
+
+fn build_mistral_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Mistral(MistralClient::new(
+        MistralConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.mistral.effective_base_url(),
+            config.providers.mistral.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_moonshot_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Moonshot(MoonshotClient::new(
+        MoonshotConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.moonshot.effective_base_url(),
+            config.providers.moonshot.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_stepfun_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Stepfun(StepfunClient::new(
+        StepfunConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.stepfun.effective_base_url(),
+            config.providers.stepfun.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_gemini_client(
+    config: &Config,
+    model: &str,
+    max_tokens: u32,
+    gemini_thinking: Option<GeminiThinkingConfig>,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Gemini(GeminiClient::new(
+        GeminiConfig::from_env(
+            model.to_string(),
+            max_tokens,
+            config.providers.gemini.effective_base_url(),
+            config.providers.gemini.effective_api_key(),
+            gemini_thinking,
+        )?,
+    )))
+}
+
+fn resolve_tools(
+    config: &Config,
+    options: &AgentOptions,
+    provider: ProviderKind,
+    tool_registry: &ToolRegistry,
+) -> Vec<ToolDefinition> {
+    match &options.tool_config.selection {
         ToolSelection::Auto { base, include } => {
             let provider_config = config.providers.get(provider);
             let base_tools = if provider_config.tools.is_some() {
                 tool_registry.tools_for_provider(provider_config)
             } else {
-                let tool_set =
-                    if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex) {
-                        ToolSet::OpenAICodex
-                    } else {
-                        *base
-                    };
+                let tool_set = if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex)
+                {
+                    ToolSet::OpenAICodex
+                } else {
+                    *base
+                };
                 tool_registry.tools_for_set(tool_set)
             };
-            merge_tool_defs(base_tools, include, &tool_registry)
+            merge_tool_defs(base_tools, include, tool_registry)
         }
         ToolSelection::ToolSet { base, include } => {
-            let base_tools = tool_registry.tools_for_set(*base);
-            merge_tool_defs(base_tools, include, &tool_registry)
+            merge_tool_defs(tool_registry.tools_for_set(*base), include, tool_registry)
         }
         ToolSelection::Explicit(names) => {
             tool_registry.tools_from_names(names.iter().map(String::as_str))
         }
         ToolSelection::All => tool_registry.definitions().to_vec(),
-    };
+    }
+}
 
-    // Build the set of enabled tool names for validation in execute_tool
-    // Keep canonical names (as defined) for proper display in error messages
-    let enabled_tools: HashSet<String> = tools.iter().map(|t| t.name.clone()).collect();
+struct StreamState {
+    turn: AssistantTurnBuilder,
+    stop_reason: Option<String>,
+}
 
-    let mut messages = messages;
+impl StreamState {
+    fn new() -> Self {
+        Self {
+            turn: AssistantTurnBuilder::new(),
+            stop_reason: None,
+        }
+    }
 
-    // Tool loop - keep going until we get a final response
-    loop {
-        if interrupt::is_interrupted() {
-            sender
-                .send_important(AgentEvent::Interrupted {
-                    partial_content: None,
-                })
-                .await;
+    fn needs_tool_execution(&self) -> bool {
+        self.stop_reason.as_deref() == Some("tool_use") && !self.turn.tool_uses.is_empty()
+    }
+}
+
+async fn ensure_not_interrupted(sender: &EventSender, partial_content: Option<String>) -> Result<()> {
+    if interrupt::is_interrupted() {
+        sender
+            .send_important(AgentEvent::Interrupted { partial_content })
+            .await;
+        return Err(InterruptedError.into());
+    }
+    Ok(())
+}
+
+async fn request_stream(
+    client: &ProviderClient,
+    messages: &[ChatMessage],
+    tools: &[ToolDefinition],
+    system_prompt: Option<&str>,
+    sender: &EventSender,
+) -> Result<ProviderStream> {
+    let stream_result = tokio::select! {
+        biased;
+        () = interrupt::wait_for_interrupt() => {
+            sender.send_important(AgentEvent::Interrupted { partial_content: None }).await;
             return Err(InterruptedError.into());
         }
+        result = client.send_messages_stream(messages, tools, system_prompt) => result,
+    };
+    match stream_result {
+        Ok(stream) => Ok(stream),
+        Err(err) => Err(emit_error_async(err, sender).await),
+    }
+}
 
-        // Use select! to make the API call interruptible (important for slow responses
-        // like Opus with extended thinking which can take 30+ seconds before first chunk)
-        let stream_result = tokio::select! {
-            biased;
-            () = interrupt::wait_for_interrupt() => {
-                sender.send_important(AgentEvent::Interrupted { partial_content: None }).await;
-                return Err(InterruptedError.into());
-            }
-            result = client.send_messages_stream(&messages, &tools, system_prompt) => result,
+async fn consume_stream(
+    mut stream: ProviderStream,
+    provider: ProviderKind,
+    sender: &EventSender,
+) -> Result<StreamState> {
+    let mut state = StreamState::new();
+
+    loop {
+        let partial = (!state.turn.text.is_empty()).then(|| state.turn.text.clone());
+        ensure_not_interrupted(sender, partial).await?;
+        let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
+            Ok(Some(result)) => result.map_err(anyhow::Error::new)?,
+            Ok(None) => return Ok(state),
+            Err(_) => continue,
         };
+        handle_stream_event(event, provider, sender, &mut state).await?;
+    }
+}
 
-        let mut stream = match stream_result {
-            Ok(s) => s,
-            Err(e) => {
-                return Err(emit_error_async(e, &sender).await);
-            }
-        };
-
-        // State for accumulating the current response
-        let mut turn = AssistantTurnBuilder::new();
-        let mut stop_reason: Option<String> = None;
-
-        // Process stream events with periodic interrupt checking
-        loop {
-            if interrupt::is_interrupted() {
-                sender
-                    .send_important(AgentEvent::Interrupted {
-                        partial_content: if turn.text.is_empty() {
-                            None
-                        } else {
-                            Some(turn.text.clone())
-                        },
-                    })
-                    .await;
-                return Err(InterruptedError.into());
-            }
-
-            // Use timeout to periodically check for interrupts even if stream stalls
-            let next = timeout(STREAM_POLL_TIMEOUT, stream.next()).await;
-            let event_result = match next {
-                Ok(Some(result)) => result,
-                Ok(None) => break,  // Stream ended
-                Err(_) => continue, // Timeout, loop to re-check interrupt
-            };
-
-            let event = match event_result {
-                Ok(e) => e,
-                Err(e) => {
-                    return Err(emit_error_async(anyhow::Error::new(e), &sender).await);
+async fn handle_stream_event(
+    event: StreamEvent,
+    provider: ProviderKind,
+    sender: &EventSender,
+    state: &mut StreamState,
+) -> Result<()> {
+    match event {
+        StreamEvent::TextDelta { text, .. } if !text.is_empty() => {
+            state.turn.text.push_str(&text);
+            sender.send_delta(AgentEvent::AssistantDelta { text });
+        }
+        StreamEvent::ContentBlockStart {
+            index,
+            block_type: ContentBlockType::ToolUse,
+            id,
+            name,
+        } => {
+            handle_tool_content_start(index, id, name, sender, &mut state.turn).await;
+        }
+        StreamEvent::ContentBlockStart {
+            index,
+            block_type: ContentBlockType::Reasoning,
+            ..
+        } => {
+            state.turn.thinking_blocks.push(ThinkingBuilder {
+                index,
+                text: String::new(),
+                signature: String::new(),
+                replay: None,
+                had_delta: false,
+            });
+        }
+        StreamEvent::InputJsonDelta {
+            index,
+            partial_json,
+        } => handle_input_json_delta(index, partial_json, sender, &mut state.turn).await,
+        StreamEvent::ReasoningDelta { index, reasoning } => {
+            if let Some(tb) = state.turn.find_thinking_mut(index) {
+                if !reasoning.is_empty() {
+                    tb.had_delta = true;
                 }
-            };
-
-            match event {
-                StreamEvent::TextDelta { text, .. } => {
-                    if !text.is_empty() {
-                        // Push to turn.text first, then move text into event (no clone)
-                        turn.text.push_str(&text);
-                        sender.send_delta(AgentEvent::AssistantDelta { text });
-                    }
-                }
-                StreamEvent::ContentBlockStart {
-                    index,
-                    block_type,
-                    id,
-                    name,
-                } => {
-                    if block_type == ContentBlockType::ToolUse {
-                        let tool_id = id.unwrap_or_default();
-                        let tool_name = name.unwrap_or_default().to_ascii_lowercase();
-
-                        // Emit ToolRequested immediately so UI shows the tool with a spinner
-                        // while the JSON input is still streaming. This is especially important
-                        // for tools like `write` where the content field can be very large.
-                        sender
-                            .send_important(AgentEvent::ToolRequested {
-                                id: tool_id.clone(),
-                                name: tool_name.clone(),
-                                input: serde_json::json!({}),
-                            })
-                            .await;
-
-                        turn.tool_uses.push(ToolUseBuilder {
-                            index,
-                            id: tool_id,
-                            name: tool_name,
-                            input_json: String::new(),
-                            input_preview_len: 0,
-                        });
-                    } else if block_type == ContentBlockType::Reasoning {
-                        turn.thinking_blocks.push(ThinkingBuilder {
-                            index,
-                            text: String::new(),
-                            signature: String::new(),
-                            replay: None,
-                            had_delta: false,
-                        });
-                    }
-                }
-                StreamEvent::InputJsonDelta {
-                    index,
-                    partial_json,
-                } => {
-                    if let Some(tu) = turn.find_tool_use_mut(index) {
-                        tu.input_json.push_str(&partial_json);
-                        if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
-                            && !delta.is_empty()
-                            && delta.len() > tu.input_preview_len
-                        {
-                            tu.input_preview_len = delta.len();
-                            sender
-                                .send_important(AgentEvent::ToolInputDelta {
-                                    id: tu.id.clone(),
-                                    name: tu.name.clone(),
-                                    delta,
-                                })
-                                .await;
-                        }
-                    }
-                }
-                StreamEvent::ReasoningDelta { index, reasoning } => {
-                    if let Some(tb) = turn.find_thinking_mut(index) {
-                        if !reasoning.is_empty() {
-                            tb.had_delta = true;
-                        }
-                        tb.text.push_str(&reasoning);
-                        sender.send_delta(AgentEvent::ReasoningDelta { text: reasoning });
-                    }
-                }
-                StreamEvent::ReasoningSignatureDelta { index, signature } => {
-                    if let Some(tb) = turn.find_thinking_mut(index) {
-                        tb.signature.push_str(&signature);
-                    }
-                }
-                StreamEvent::ContentBlockCompleted { index } => {
-                    // Check if this is a thinking block finishing
-                    if let Some(tb) = turn.find_thinking_mut(index) {
-                        if tb.replay.is_none() && !tb.signature.is_empty() {
-                            // Create provider-specific replay token
-                            tb.replay = Some(match provider {
-                                ProviderKind::Gemini | ProviderKind::GeminiCli => {
-                                    ReplayToken::Gemini {
-                                        signature: tb.signature.clone(),
-                                    }
-                                }
-                                // Anthropic and Claude CLI use Anthropic format
-                                _ => ReplayToken::Anthropic {
-                                    signature: tb.signature.clone(),
-                                },
-                            });
-                        }
-                        let text = if tb.text.is_empty() {
-                            None
-                        } else {
-                            Some(tb.text.clone())
-                        };
-                        let block = ReasoningBlock {
-                            text,
-                            replay: tb.replay.clone(),
-                        };
-                        sender
-                            .send_important(AgentEvent::ReasoningCompleted { block })
-                            .await;
-                    }
-
-                    // Check if this is a tool_use block finishing - emit ToolInputCompleted
-                    // with the complete input for thread persistence.
-                    if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
-                        // Try to parse the input JSON; if it fails, use empty object
-                        // (the full error will be handled later when finalizing)
-                        let input: Value = serde_json::from_str(&tu.input_json)
-                            .unwrap_or_else(|_| serde_json::json!({}));
-                        sender
-                            .send_important(AgentEvent::ToolInputCompleted {
-                                id: tu.id.clone(),
-                                name: tu.name.clone(),
-                                input,
-                            })
-                            .await;
-                    }
-                }
-                StreamEvent::MessageDelta {
-                    stop_reason: reason,
-                    usage,
-                } => {
-                    stop_reason = reason;
-                    // Emit final output token count (message_delta has the total)
-                    // Only emit output_tokens here to avoid double-counting with message_start
-                    if let Some(u) = usage {
-                        sender
-                            .send_important(AgentEvent::UsageUpdate {
-                                input_tokens: 0, // Already counted in message_start
-                                output_tokens: u.output_tokens,
-                                cache_read_input_tokens: 0, // Already counted in message_start
-                                cache_creation_input_tokens: 0, // Already counted in message_start
-                            })
-                            .await;
-                    }
-                }
-                StreamEvent::Error {
-                    error_type,
-                    message,
-                } => {
-                    let provider_err = ProviderError::api_error(&error_type, &message);
-                    sender
-                        .send_important(AgentEvent::Error {
-                            kind: ErrorKind::ApiError,
-                            message: provider_err.message.clone(),
-                            details: provider_err.details.clone(),
-                        })
-                        .await;
-                    return Err(anyhow::Error::new(provider_err));
-                }
-                StreamEvent::MessageStart { usage, .. } => {
-                    // Emit initial usage: input tokens and cache info only
-                    // Output tokens come from message_delta to avoid double-counting
-                    sender
-                        .send_important(AgentEvent::UsageUpdate {
-                            input_tokens: usage.input_tokens,
-                            output_tokens: 0, // Will be set by message_delta
-                            cache_read_input_tokens: usage.cache_read_input_tokens,
-                            cache_creation_input_tokens: usage.cache_creation_input_tokens,
-                        })
-                        .await;
-                }
-                StreamEvent::ReasoningCompleted {
-                    index,
-                    id,
-                    encrypted_content,
-                    summary,
-                } => {
-                    // Attach OpenAI replay data to the corresponding thinking builder
-                    if let Some(tb) = turn.find_thinking_mut(index) {
-                        // Use summary as fallback text if we didn't get any reasoning deltas
-                        if !tb.had_delta
-                            && tb.text.is_empty()
-                            && let Some(s) = summary
-                        {
-                            tb.text = s;
-                        }
-
-                        tb.replay = Some(ReplayToken::OpenAI {
-                            id: id.clone(),
-                            encrypted_content: encrypted_content.clone(),
-                        });
-                    }
-                }
-                // Ignore other events (Ping, MessageCompleted)
-                _ => {}
+                tb.text.push_str(&reasoning);
+                sender.send_delta(AgentEvent::ReasoningDelta { text: reasoning });
             }
         }
-
-        // Check if we have tool use to process
-        if stop_reason.as_deref() == Some("tool_use") && !turn.tool_uses.is_empty() {
-            // Finalize all tool uses (parse JSON once)
-            // Malformed tools get error results instead of bailing the entire turn
-            let mut finalized = Vec::with_capacity(turn.tool_uses.len());
-            let mut all_tool_uses = Vec::with_capacity(turn.tool_uses.len()); // For assistant_blocks
-            let mut malformed_results = Vec::new();
-            let mut malformed_tools = Vec::new(); // Track for later event emission
-
-            for tu in turn.tool_uses.drain(..) {
-                match tu.clone().finalize() {
-                    Ok(tool_use) => {
-                        all_tool_uses.push(tool_use.clone());
-                        finalized.push(tool_use);
-                    }
-                    Err(e) => {
-                        // Emit error event for observability
-                        sender
-                            .send_important(AgentEvent::Error {
-                                kind: ErrorKind::Parse,
-                                message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
-                                details: Some(truncate_for_error(&tu.input_json, 500)),
-                            })
-                            .await;
-
-                        // Create synthetic ToolUse with raw input as string value
-                        // This ensures assistant_blocks includes the tool_call for API compatibility
-                        let synthetic_tool = ToolUse {
-                            id: tu.id.clone(),
-                            name: tu.name.clone(),
-                            input: serde_json::json!({ "_raw_malformed": tu.input_json }),
-                        };
-                        all_tool_uses.push(synthetic_tool);
-
-                        // Create a failed tool result
-                        let error_output = ToolOutput::failure(
-                            "invalid_json",
-                            format!("Failed to parse tool arguments: {e}"),
-                            Some(truncate_for_error(&tu.input_json, 500)),
-                        );
-                        malformed_results
-                            .push(ToolResult::from_output(tu.id.clone(), &error_output));
-
-                        // Track for event emission after AssistantCompleted
-                        malformed_tools.push((tu.id, tu.name, error_output));
-                    }
-                }
+        StreamEvent::ReasoningSignatureDelta { index, signature } => {
+            if let Some(tb) = state.turn.find_thinking_mut(index) {
+                tb.signature.push_str(&signature);
             }
-
-            // Emit AssistantCompleted to signal this message is complete
-            // This allows the TUI to finalize the current streaming cell before tools
-            if !turn.text.is_empty() {
-                sender
-                    .send_important(AgentEvent::AssistantCompleted {
-                        text: turn.text.clone(),
-                    })
-                    .await;
-            }
-
-            // Emit tool lifecycle events for malformed tools AFTER AssistantCompleted
-            // to maintain consistent event ordering with normal tool execution
-            for (id, name, error_output) in malformed_tools {
-                sender
-                    .send_important(AgentEvent::ToolStarted {
-                        id: id.clone(),
-                        name,
-                    })
-                    .await;
-                sender
-                    .send_important(AgentEvent::ToolCompleted {
-                        id,
-                        result: error_output,
-                    })
-                    .await;
-            }
-
-            // Note: ToolRequested events are already emitted during streaming
-            // (at ContentBlockStart for each tool_use block) for immediate UI feedback.
-
-            // Build the assistant response with thinking + reasoning + tool_use blocks
-            // Use all_tool_uses to include malformed tools for API compatibility
-            let turn_text = turn.text.clone();
-            let assistant_blocks = turn.into_blocks(all_tool_uses);
-            messages.push(ChatMessage::assistant_blocks(assistant_blocks));
-
-            // Execute only valid tools and get results (may be partial on interrupt)
-            let mut tool_results = execute_tools_async(
-                &finalized,
-                &tool_ctx,
-                &enabled_tools,
-                &sender,
-                &tool_registry,
-            )
-            .await;
-
-            // Append malformed tool results (preserving original order would require
-            // more complex tracking; for now malformed results come after executed ones)
-            tool_results.extend(malformed_results);
-
-            messages.push(ChatMessage::tool_results(tool_results));
-
-            // Check if interrupted during tool execution
-            if interrupt::is_interrupted() {
-                // Emit TurnCompleted with partial messages before Interrupted
-                // This ensures the TUI has the complete thread state
-                sender
-                    .send_important(AgentEvent::TurnCompleted {
-                        final_text: turn_text.clone(),
-                        messages: messages.clone(),
-                    })
-                    .await;
-                // Include turn_text in Interrupted for non-TUI flows (exec/bot) that
-                // rely on ThreadEvent::from_agent for persistence
-                sender
-                    .send_important(AgentEvent::Interrupted {
-                        partial_content: if turn_text.is_empty() {
-                            None
-                        } else {
-                            Some(turn_text.clone())
-                        },
-                    })
-                    .await;
-                return Err(InterruptedError.into());
-            }
-
-            // Continue the loop for the next response
-            continue;
         }
-
-        // Emit final assistant text
-        if !turn.text.is_empty() {
+        StreamEvent::ContentBlockCompleted { index } => {
+            emit_reasoning_completion(provider, sender, &mut state.turn, index).await;
+            emit_tool_input_completion(sender, &state.turn, index).await;
+        }
+        StreamEvent::MessageDelta {
+            stop_reason,
+            usage,
+        } => {
+            state.stop_reason = stop_reason;
+            emit_message_delta_usage(sender, usage).await;
+        }
+        StreamEvent::Error {
+            error_type,
+            message,
+        } => {
+            let provider_err = ProviderError::api_error(&error_type, &message);
             sender
-                .send_important(AgentEvent::AssistantCompleted {
-                    text: turn.text.clone(),
+                .send_important(AgentEvent::Error {
+                    kind: ErrorKind::ApiError,
+                    message: provider_err.message.clone(),
+                    details: provider_err.details.clone(),
+                })
+                .await;
+            return Err(anyhow::Error::new(provider_err));
+        }
+        StreamEvent::MessageStart { usage, .. } => emit_message_start_usage(sender, usage).await,
+        StreamEvent::ReasoningCompleted {
+            index,
+            id,
+            encrypted_content,
+            summary,
+        } => apply_openai_reasoning_completion(&mut state.turn, index, id, encrypted_content, summary),
+        _ => {}
+    }
+    Ok(())
+}
+
+async fn handle_tool_content_start(
+    index: usize,
+    id: Option<String>,
+    name: Option<String>,
+    sender: &EventSender,
+    turn: &mut AssistantTurnBuilder,
+) {
+    let tool_id = id.unwrap_or_default();
+    let tool_name = name.unwrap_or_default().to_ascii_lowercase();
+    sender
+        .send_important(AgentEvent::ToolRequested {
+            id: tool_id.clone(),
+            name: tool_name.clone(),
+            input: serde_json::json!({}),
+        })
+        .await;
+    turn.tool_uses.push(ToolUseBuilder {
+        index,
+        id: tool_id,
+        name: tool_name,
+        input_json: String::new(),
+        input_preview_len: 0,
+    });
+}
+
+async fn handle_input_json_delta(
+    index: usize,
+    partial_json: String,
+    sender: &EventSender,
+    turn: &mut AssistantTurnBuilder,
+) {
+    if let Some(tu) = turn.find_tool_use_mut(index) {
+        tu.input_json.push_str(&partial_json);
+        if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
+            && !delta.is_empty()
+            && delta.len() > tu.input_preview_len
+        {
+            tu.input_preview_len = delta.len();
+            sender
+                .send_important(AgentEvent::ToolInputDelta {
+                    id: tu.id.clone(),
+                    name: tu.name.clone(),
+                    delta,
                 })
                 .await;
         }
+    }
+}
 
-        // Build final assistant message with thinking + reasoning + text blocks
-        let final_text = turn.text.clone();
-        let assistant_blocks = turn.into_blocks(vec![]);
-        if !assistant_blocks.is_empty() {
-            messages.push(ChatMessage::assistant_blocks(assistant_blocks));
+async fn emit_message_delta_usage(sender: &EventSender, usage: Option<crate::providers::Usage>) {
+    if let Some(u) = usage {
+        sender
+            .send_important(AgentEvent::UsageUpdate {
+                input_tokens: 0,
+                output_tokens: u.output_tokens,
+                cache_read_input_tokens: 0,
+                cache_creation_input_tokens: 0,
+            })
+            .await;
+    }
+}
+
+async fn emit_message_start_usage(sender: &EventSender, usage: crate::providers::Usage) {
+    sender
+        .send_important(AgentEvent::UsageUpdate {
+            input_tokens: usage.input_tokens,
+            output_tokens: 0,
+            cache_read_input_tokens: usage.cache_read_input_tokens,
+            cache_creation_input_tokens: usage.cache_creation_input_tokens,
+        })
+        .await;
+}
+
+fn apply_openai_reasoning_completion(
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+    id: String,
+    encrypted_content: String,
+    summary: Option<String>,
+) {
+    if let Some(tb) = turn.find_thinking_mut(index) {
+        if !tb.had_delta && tb.text.is_empty() && let Some(s) = summary {
+            tb.text = s;
         }
+        tb.replay = Some(ReplayToken::OpenAI {
+            id,
+            encrypted_content,
+        });
+    }
+}
 
-        // Emit turn complete with final result
+async fn emit_reasoning_completion(
+    provider: ProviderKind,
+    sender: &EventSender,
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+) {
+    if let Some(tb) = turn.find_thinking_mut(index) {
+        if tb.replay.is_none() && !tb.signature.is_empty() {
+            tb.replay = Some(match provider {
+                ProviderKind::Gemini | ProviderKind::GeminiCli => ReplayToken::Gemini {
+                    signature: tb.signature.clone(),
+                },
+                _ => ReplayToken::Anthropic {
+                    signature: tb.signature.clone(),
+                },
+            });
+        }
+        let block = ReasoningBlock {
+            text: (!tb.text.is_empty()).then(|| tb.text.clone()),
+            replay: tb.replay.clone(),
+        };
+        sender
+            .send_important(AgentEvent::ReasoningCompleted { block })
+            .await;
+    }
+}
+
+async fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder, index: usize) {
+    if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
+        let input: Value = serde_json::from_str(&tu.input_json).unwrap_or_else(|_| serde_json::json!({}));
+        sender
+            .send_important(AgentEvent::ToolInputCompleted {
+                id: tu.id.clone(),
+                name: tu.name.clone(),
+                input,
+            })
+            .await;
+    }
+}
+
+struct ToolTurnOutcome {
+    executable: Vec<ToolUse>,
+    assistant_tools: Vec<ToolUse>,
+    malformed_results: Vec<ToolResult>,
+    malformed_tools: Vec<(String, String, ToolOutput)>,
+}
+
+async fn process_tool_turn(
+    messages: &mut Vec<ChatMessage>,
+    turn: &mut AssistantTurnBuilder,
+    setup: &RunTurnSetup,
+    sender: &EventSender,
+) -> Result<()> {
+    let outcome = finalize_tool_calls(turn, sender).await;
+    emit_assistant_completed_if_present(sender, &turn.text).await;
+    emit_malformed_tool_events(sender, outcome.malformed_tools).await;
+
+    let turn_text = turn.text.clone();
+    messages.push(ChatMessage::assistant_blocks(
+        std::mem::take(turn).into_blocks(outcome.assistant_tools),
+    ));
+
+    let mut tool_results = execute_tools_async(
+        &outcome.executable,
+        &setup.tool_ctx,
+        &setup.enabled_tools,
+        sender,
+        &setup.tool_registry,
+    )
+    .await;
+    tool_results.extend(outcome.malformed_results);
+    messages.push(ChatMessage::tool_results(tool_results));
+
+    if interrupt::is_interrupted() {
         sender
             .send_important(AgentEvent::TurnCompleted {
-                final_text: final_text.clone(),
+                final_text: turn_text.clone(),
                 messages: messages.clone(),
             })
             .await;
+        sender
+            .send_important(AgentEvent::Interrupted {
+                partial_content: (!turn_text.is_empty()).then_some(turn_text),
+            })
+            .await;
+        return Err(InterruptedError.into());
+    }
 
-        return Ok((final_text, messages));
+    Ok(())
+}
+
+async fn finalize_non_tool_turn(
+    messages: &mut Vec<ChatMessage>,
+    turn: AssistantTurnBuilder,
+    sender: &EventSender,
+) -> Result<(String, Vec<ChatMessage>)> {
+    let final_text = turn.text.clone();
+    emit_assistant_completed_if_present(sender, &final_text).await;
+    let assistant_blocks = turn.into_blocks(Vec::new());
+    if !assistant_blocks.is_empty() {
+        messages.push(ChatMessage::assistant_blocks(assistant_blocks));
+    }
+    sender
+        .send_important(AgentEvent::TurnCompleted {
+            final_text: final_text.clone(),
+            messages: messages.clone(),
+        })
+        .await;
+    Ok((final_text, messages.clone()))
+}
+
+async fn emit_assistant_completed_if_present(sender: &EventSender, text: &str) {
+    if !text.is_empty() {
+        sender
+            .send_important(AgentEvent::AssistantCompleted {
+                text: text.to_string(),
+            })
+            .await;
+    }
+}
+
+async fn emit_malformed_tool_events(
+    sender: &EventSender,
+    malformed_tools: Vec<(String, String, ToolOutput)>,
+) {
+    for (id, name, error_output) in malformed_tools {
+        sender
+            .send_important(AgentEvent::ToolStarted {
+                id: id.clone(),
+                name,
+            })
+            .await;
+        sender
+            .send_important(AgentEvent::ToolCompleted {
+                id,
+                result: error_output,
+            })
+            .await;
+    }
+}
+
+async fn finalize_tool_calls(turn: &mut AssistantTurnBuilder, sender: &EventSender) -> ToolTurnOutcome {
+    let mut executable = Vec::with_capacity(turn.tool_uses.len());
+    let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
+    let mut malformed_results = Vec::new();
+    let mut malformed_tools = Vec::new();
+
+    for tu in turn.tool_uses.drain(..) {
+        match tu.clone().finalize() {
+            Ok(tool_use) => {
+                assistant_tools.push(tool_use.clone());
+                executable.push(tool_use);
+            }
+            Err(e) => {
+                sender
+                    .send_important(AgentEvent::Error {
+                        kind: ErrorKind::Parse,
+                        message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
+                        details: Some(truncate_for_error(&tu.input_json, 500)),
+                    })
+                    .await;
+                assistant_tools.push(ToolUse {
+                    id: tu.id.clone(),
+                    name: tu.name.clone(),
+                    input: serde_json::json!({ "_raw_malformed": tu.input_json }),
+                });
+                let error_output = ToolOutput::failure(
+                    "invalid_json",
+                    format!("Failed to parse tool arguments: {e}"),
+                    Some(truncate_for_error(&tu.input_json, 500)),
+                );
+                malformed_results.push(ToolResult::from_output(tu.id.clone(), &error_output));
+                malformed_tools.push((tu.id, tu.name, error_output));
+            }
+        }
+    }
+
+    ToolTurnOutcome {
+        executable,
+        assistant_tools,
+        malformed_results,
+        malformed_tools,
     }
 }
 

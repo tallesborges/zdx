@@ -109,87 +109,14 @@ impl ThreadPickerState {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            KeyCode::Char('t') if ctrl => {
-                self.scope = self.scope.toggle();
-                self.selected = 0;
-                self.offset = 0;
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
-            }
+            KeyCode::Char('t') if ctrl => self.toggle_scope(),
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
-                if self.mode.is_switch() {
-                    OverlayUpdate::close().with_mutations(vec![
-                        StateMutation::Transcript(TranscriptMutation::ReplaceCells(
-                            self.original_cells.clone(),
-                        )),
-                        StateMutation::Transcript(TranscriptMutation::ResetScroll),
-                        StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
-                    ])
-                } else {
-                    OverlayUpdate::close()
-                }
+                self.close_overlay()
             }
-            KeyCode::Up | KeyCode::Char('k') => {
-                let total = self.visible_tree_items().len();
-                if self.selected > 0 {
-                    self.selected -= 1;
-                    if self.selected < self.offset {
-                        self.offset = self.selected;
-                    }
-                }
-                self.selected = self.selected.min(total.saturating_sub(1));
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
-            }
-            KeyCode::Down | KeyCode::Char('j') => {
-                let total = self.visible_tree_items().len();
-                let visible_height = self.visible_height();
-                if self.selected < total.saturating_sub(1) {
-                    self.selected += 1;
-                    if self.selected >= self.offset + visible_height {
-                        self.offset = self.selected - visible_height + 1;
-                    }
-                }
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
-            }
-            KeyCode::Enter => match self.mode {
-                ThreadPickerMode::Switch => {
-                    if tui.agent_state.is_running() {
-                        return OverlayUpdate::stay().with_mutations(vec![
-                            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
-                                "Stop the current task first.".to_string(),
-                            )),
-                        ]);
-                    }
-
-                    if let Some(thread) = self.selected_thread() {
-                        if tui.tasks.state(TaskKind::ThreadLoad).is_running() {
-                            return OverlayUpdate::stay();
-                        }
-                        OverlayUpdate::close()
-                            .with_ui_effects(vec![UiEffect::LoadThread {
-                                thread_id: thread.id.clone(),
-                            }])
-                            .with_mutations(vec![])
-                    } else {
-                        OverlayUpdate::close()
-                    }
-                }
-                ThreadPickerMode::Insert { .. } => {
-                    let mut mutations = Vec::new();
-                    if let Some(mutation) = self.select_thread_and_insert(&tui.input) {
-                        mutations.push(StateMutation::Input(mutation));
-                    }
-                    OverlayUpdate::close().with_mutations(mutations)
-                }
-            },
-            KeyCode::Char('y') => {
-                if let Some(thread) = self.selected_thread() {
-                    OverlayUpdate::stay().with_ui_effects(vec![UiEffect::CopyToClipboard {
-                        text: thread.id.clone(),
-                    }])
-                } else {
-                    OverlayUpdate::stay()
-                }
-            }
+            KeyCode::Up | KeyCode::Char('k') => self.navigate_up(),
+            KeyCode::Down | KeyCode::Char('j') => self.navigate_down(),
+            KeyCode::Enter => self.handle_enter(tui),
+            KeyCode::Char('y') => self.copy_selected_thread_id(),
             // Ctrl+U: clear the filter
             KeyCode::Char('u') if ctrl && !shift && !alt => {
                 self.filter.clear();
@@ -211,6 +138,96 @@ impl ThreadPickerState {
                 OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
             }
             _ => OverlayUpdate::stay(),
+        }
+    }
+
+    fn toggle_scope(&mut self) -> OverlayUpdate {
+        self.scope = self.scope.toggle();
+        self.selected = 0;
+        self.offset = 0;
+        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+    }
+
+    fn close_overlay(&self) -> OverlayUpdate {
+        if self.mode.is_switch() {
+            OverlayUpdate::close().with_mutations(vec![
+                StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+                    self.original_cells.clone(),
+                )),
+                StateMutation::Transcript(TranscriptMutation::ResetScroll),
+                StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
+            ])
+        } else {
+            OverlayUpdate::close()
+        }
+    }
+
+    fn navigate_up(&mut self) -> OverlayUpdate {
+        let total = self.visible_tree_items().len();
+        if self.selected > 0 {
+            self.selected -= 1;
+            if self.selected < self.offset {
+                self.offset = self.selected;
+            }
+        }
+        self.selected = self.selected.min(total.saturating_sub(1));
+        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+    }
+
+    fn navigate_down(&mut self) -> OverlayUpdate {
+        let total = self.visible_tree_items().len();
+        let visible_height = self.visible_height();
+        if self.selected < total.saturating_sub(1) {
+            self.selected += 1;
+            if self.selected >= self.offset + visible_height {
+                self.offset = self.selected - visible_height + 1;
+            }
+        }
+        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+    }
+
+    fn handle_enter(&self, tui: &TuiState) -> OverlayUpdate {
+        match self.mode {
+            ThreadPickerMode::Switch => self.switch_to_selected_thread(tui),
+            ThreadPickerMode::Insert { .. } => self.insert_selected_thread(tui),
+        }
+    }
+
+    fn switch_to_selected_thread(&self, tui: &TuiState) -> OverlayUpdate {
+        if tui.agent_state.is_running() {
+            return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage("Stop the current task first.".to_string()),
+            )]);
+        }
+
+        if tui.tasks.state(TaskKind::ThreadLoad).is_running() {
+            return OverlayUpdate::stay();
+        }
+
+        if let Some(thread) = self.selected_thread() {
+            OverlayUpdate::close().with_ui_effects(vec![UiEffect::LoadThread {
+                thread_id: thread.id.clone(),
+            }])
+        } else {
+            OverlayUpdate::close()
+        }
+    }
+
+    fn insert_selected_thread(&self, tui: &TuiState) -> OverlayUpdate {
+        let mut mutations = Vec::new();
+        if let Some(mutation) = self.select_thread_and_insert(&tui.input) {
+            mutations.push(StateMutation::Input(mutation));
+        }
+        OverlayUpdate::close().with_mutations(mutations)
+    }
+
+    fn copy_selected_thread_id(&self) -> OverlayUpdate {
+        if let Some(thread) = self.selected_thread() {
+            OverlayUpdate::stay().with_ui_effects(vec![UiEffect::CopyToClipboard {
+                text: thread.id.clone(),
+            }])
+        } else {
+            OverlayUpdate::stay()
         }
     }
 

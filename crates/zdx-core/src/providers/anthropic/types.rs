@@ -207,100 +207,9 @@ impl ApiMessage {
                 content: ApiMessageContent::Text(text.clone()),
             },
             MessageContent::Blocks(blocks) => {
-                let api_blocks: Vec<ApiContentBlock> = blocks
+                let api_blocks = blocks
                     .iter()
-                    .filter_map(|b| match b {
-                        ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
-                            match replay.as_ref() {
-                                Some(ReplayToken::Anthropic { signature }) => {
-                                    let thinking = text.clone().unwrap_or_default();
-                                    // If signature is missing or empty (aborted thinking),
-                                    // convert to text block to avoid API rejection.
-                                    // This follows the pi-mono pattern.
-                                    if signature.is_empty() {
-                                        Some(ApiContentBlock::Text {
-                                            text: format!("<thinking>\n{thinking}\n</thinking>"),
-                                            cache_control: None,
-                                        })
-                                    } else if thinking.is_empty() {
-                                        None
-                                    } else {
-                                        Some(ApiContentBlock::Thinking {
-                                            thinking,
-                                            signature: signature.clone(),
-                                        })
-                                    }
-                                }
-                                // Skip OpenAI and Gemini reasoning blocks (provider-specific)
-                                Some(ReplayToken::OpenAI { .. } | ReplayToken::Gemini { .. }) => {
-                                    None
-                                }
-                                // No replay data; treat as text-only thinking for compatibility
-                                None => text.as_ref().map(|thinking| ApiContentBlock::Text {
-                                    text: format!("<thinking>\n{thinking}\n</thinking>"),
-                                    cache_control: None,
-                                }),
-                            }
-                        }
-                        ChatContentBlock::Text(text) => Some(ApiContentBlock::Text {
-                            text: text.clone(),
-                            cache_control: if use_cache_control {
-                                Some(CacheControl::ephemeral())
-                            } else {
-                                None
-                            },
-                        }),
-                        ChatContentBlock::Image { mime_type, data } => {
-                            Some(ApiContentBlock::Image {
-                                source: ApiImageSource {
-                                    source_type: "base64",
-                                    media_type: mime_type.clone(),
-                                    data: data.clone(),
-                                },
-                            })
-                        }
-                        ChatContentBlock::ToolUse { id, name, input } => {
-                            Some(ApiContentBlock::ToolUse {
-                                id: id.clone(),
-                                name: name.clone(),
-                                input: input.clone(),
-                            })
-                        }
-                        ChatContentBlock::ToolResult(result) => {
-                            let content = match &result.content {
-                                ToolResultContent::Text(text) => {
-                                    ApiToolResultContent::Text(text.clone())
-                                }
-                                ToolResultContent::Blocks(blocks) => {
-                                    let api_blocks = blocks
-                                        .iter()
-                                        .map(|block| match block {
-                                            ToolResultBlock::Text { text } => {
-                                                ApiToolResultBlock::Text { text: text.clone() }
-                                            }
-                                            ToolResultBlock::Image { mime_type, data } => {
-                                                ApiToolResultBlock::Image {
-                                                    source: ApiImageSource {
-                                                        source_type: "base64",
-                                                        media_type: mime_type.clone(),
-                                                        data: data.clone(),
-                                                    },
-                                                }
-                                            }
-                                        })
-                                        .collect();
-                                    ApiToolResultContent::Blocks(api_blocks)
-                                }
-                            };
-
-                            Some(ApiContentBlock::ToolResult {
-                                tool_use_id: result.tool_use_id.clone(),
-                                content,
-                                is_error: result.is_error,
-                                cache_control: None,
-                            })
-                        }
-                    })
+                    .filter_map(|block| api_content_block(block, use_cache_control))
                     .collect();
                 ApiMessage {
                     role: msg.role.clone(),
@@ -308,5 +217,85 @@ impl ApiMessage {
                 }
             }
         }
+    }
+}
+
+fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Option<ApiContentBlock> {
+    match block {
+        ChatContentBlock::Reasoning(reasoning) => api_reasoning_block(reasoning),
+        ChatContentBlock::Text(text) => Some(ApiContentBlock::Text {
+            text: text.clone(),
+            cache_control: use_cache_control.then(CacheControl::ephemeral),
+        }),
+        ChatContentBlock::Image { mime_type, data } => Some(ApiContentBlock::Image {
+            source: api_image_source(mime_type, data),
+        }),
+        ChatContentBlock::ToolUse { id, name, input } => Some(ApiContentBlock::ToolUse {
+            id: id.clone(),
+            name: name.clone(),
+            input: input.clone(),
+        }),
+        ChatContentBlock::ToolResult(result) => Some(ApiContentBlock::ToolResult {
+            tool_use_id: result.tool_use_id.clone(),
+            content: api_tool_result_content(&result.content),
+            is_error: result.is_error,
+            cache_control: None,
+        }),
+    }
+}
+
+fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
+    match reasoning.replay.as_ref() {
+        Some(ReplayToken::Anthropic { signature }) => {
+            let thinking = reasoning.text.clone().unwrap_or_default();
+            if signature.is_empty() {
+                Some(wrapped_thinking_text(&thinking))
+            } else if thinking.is_empty() {
+                None
+            } else {
+                Some(ApiContentBlock::Thinking {
+                    thinking,
+                    signature: signature.clone(),
+                })
+            }
+        }
+        Some(ReplayToken::OpenAI { .. } | ReplayToken::Gemini { .. }) => None,
+        None => reasoning
+            .text
+            .as_ref()
+            .map(|thinking| wrapped_thinking_text(thinking)),
+    }
+}
+
+fn wrapped_thinking_text(thinking: &str) -> ApiContentBlock {
+    ApiContentBlock::Text {
+        text: format!("<thinking>\n{thinking}\n</thinking>"),
+        cache_control: None,
+    }
+}
+
+fn api_image_source(mime_type: &str, data: &str) -> ApiImageSource {
+    ApiImageSource {
+        source_type: "base64",
+        media_type: mime_type.to_string(),
+        data: data.to_string(),
+    }
+}
+
+fn api_tool_result_content(content: &ToolResultContent) -> ApiToolResultContent {
+    match content {
+        ToolResultContent::Text(text) => ApiToolResultContent::Text(text.clone()),
+        ToolResultContent::Blocks(blocks) => {
+            ApiToolResultContent::Blocks(blocks.iter().map(api_tool_result_block).collect())
+        }
+    }
+}
+
+fn api_tool_result_block(block: &ToolResultBlock) -> ApiToolResultBlock {
+    match block {
+        ToolResultBlock::Text { text } => ApiToolResultBlock::Text { text: text.clone() },
+        ToolResultBlock::Image { mime_type, data } => ApiToolResultBlock::Image {
+            source: api_image_source(mime_type, data),
+        },
     }
 }

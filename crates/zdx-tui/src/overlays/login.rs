@@ -51,10 +51,6 @@ impl LoginState {
 
     fn open_with_provider(provider: ProviderKind, error: Option<String>) -> (Self, Vec<UiEffect>) {
         match provider {
-            ProviderKind::Anthropic => {
-                let env_var = provider.api_key_env_var().unwrap_or("API_KEY").to_string();
-                (LoginState::ApiKeyInfo { provider, env_var }, vec![])
-            }
             ProviderKind::ClaudeCli => {
                 use zdx_core::providers::oauth::claude_cli;
 
@@ -141,9 +137,9 @@ impl LoginState {
     pub fn selected_provider(&self) -> Option<ProviderKind> {
         match self {
             LoginState::SelectProvider { .. } => None,
-            LoginState::AwaitingCode { provider, .. } => Some(*provider),
-            LoginState::Exchanging { provider } => Some(*provider),
-            LoginState::ApiKeyInfo { provider, .. } => Some(*provider),
+            LoginState::AwaitingCode { provider, .. }
+            | LoginState::Exchanging { provider }
+            | LoginState::ApiKeyInfo { provider, .. } => Some(*provider),
         }
     }
 

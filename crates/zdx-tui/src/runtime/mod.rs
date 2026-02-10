@@ -545,7 +545,7 @@ impl TuiRuntime {
                 self.dispatch_event(root_display_event);
 
                 let config = self.state.tui.config.clone();
-                let prompt_event = handlers::refresh_system_prompt(config.clone(), root.clone());
+                let prompt_event = handlers::refresh_system_prompt(&config, &root);
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
@@ -558,7 +558,7 @@ impl TuiRuntime {
             }
             UiEffect::RefreshSystemPrompt { path } => {
                 let config = self.state.tui.config.clone();
-                let event = handlers::refresh_system_prompt(config, path);
+                let event = handlers::refresh_system_prompt(&config, &path);
                 self.dispatch_event(event);
             }
             UiEffect::PreviewThread { thread_id } => {

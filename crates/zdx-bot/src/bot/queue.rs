@@ -29,11 +29,11 @@ pub(crate) struct QueueState {
     pending: usize,
 }
 struct QueuedStatus {
-    chat_id: i64,
+    chat: i64,
     /// `message_id` of the "⏳ Queued" bot message.
-    status_message_id: i64,
+    status: i64,
     /// `message_id` of the user's original message (for deletion on cancel).
-    user_message_id: i64,
+    original: i64,
 }
 
 pub(crate) type ChatQueueMap = Arc<Mutex<HashMap<QueueKey, QueueState>>>;
@@ -86,7 +86,7 @@ pub(crate) async fn dispatch_message(
                     );
                     // Enqueue with the new topic ID so handler knows to use it
                     let mut message = message;
-                    message.message_thread_id = Some(topic_id);
+                    message.thread_id = Some(topic_id);
                     enqueue_message(&queues, &context, message).await;
                 }
                 Err(err) => {
@@ -219,7 +219,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
     if should_show_queued {
         let chat_id = message.chat.id;
         let topic_id = message.effective_thread_id();
-        let user_message_id = message.message_id;
+        let user_message_id = message.id;
         let cancel_data = format!("cancel_q:{chat_id}:{user_message_id}");
         let cancel_markup = InlineKeyboardMarkup {
             inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -242,9 +242,9 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
         {
             Ok(status_msg) => {
                 queued_status = Some(QueuedStatus {
-                    chat_id,
-                    status_message_id: status_msg.message_id,
-                    user_message_id,
+                    chat: chat_id,
+                    status: status_msg.id,
+                    original: user_message_id,
                 });
 
                 // Only register in queue cancel map when status message succeeded,
@@ -307,7 +307,7 @@ fn spawn_queue_worker(
 
             // Clean up queue cancel map entry
             if let Some(ref status) = queued_status {
-                let queue_cancel_key: QueueCancelKey = (status.chat_id, status.user_message_id);
+                let queue_cancel_key: QueueCancelKey = (status.chat, status.original);
                 let mut map = context.queue_cancel_map().lock().await;
                 map.remove(&queue_cancel_key);
             }
@@ -318,28 +318,23 @@ fn spawn_queue_worker(
                 if let Some(status) = queued_status {
                     if let Err(err) = context
                         .client()
-                        .edit_message_text(
-                            status.chat_id,
-                            status.status_message_id,
-                            "Cancelled ✓",
-                            None,
-                        )
+                        .edit_message_text(status.chat, status.status, "Cancelled ✓", None)
                         .await
                     {
                         eprintln!(
                             "Failed to edit cancelled queue status {}: {}",
-                            status.status_message_id, err
+                            status.status, err
                         );
                     }
                     // Best-effort: delete user's original message
                     if let Err(err) = context
                         .client()
-                        .delete_message(status.chat_id, status.user_message_id)
+                        .delete_message(status.chat, status.original)
                         .await
                     {
                         eprintln!(
                             "Failed to delete user message {} on queue cancel: {}",
-                            status.user_message_id, err
+                            status.original, err
                         );
                     }
                 }
@@ -351,12 +346,12 @@ fn spawn_queue_worker(
             if let Some(status) = queued_status
                 && let Err(err) = context
                     .client()
-                    .delete_message(status.chat_id, status.status_message_id)
+                    .delete_message(status.chat, status.status)
                     .await
             {
                 eprintln!(
                     "Failed to delete queued status message {}: {}",
-                    status.status_message_id, err
+                    status.status, err
                 );
             }
 

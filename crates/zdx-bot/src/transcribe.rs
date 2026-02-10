@@ -55,16 +55,16 @@ pub async fn transcribe_audio_if_configured(
         .map(str::trim)
         .filter(|s| !s.is_empty());
 
-    let transcript = transcribe_audio(
-        provider.label(),
-        &base_url,
-        &api_key,
-        &model,
+    let transcript = transcribe_audio(TranscriptionRequest {
+        provider_name: provider.label(),
+        base_url: &base_url,
+        api_key: &api_key,
+        model: &model,
         bytes,
         filename,
         mime_type,
         language,
-    )
+    })
     .await?;
 
     let trimmed = transcript.trim();
@@ -179,16 +179,30 @@ fn resolve_model(config: &Config, provider: ProviderKind) -> String {
         })
         .unwrap_or_else(|| default_model(provider).to_string())
 }
-async fn transcribe_audio(
-    provider_name: &str,
-    base_url: &str,
-    api_key: &str,
-    model: &str,
+
+struct TranscriptionRequest<'a> {
+    provider_name: &'a str,
+    base_url: &'a str,
+    api_key: &'a str,
+    model: &'a str,
     bytes: Vec<u8>,
-    filename: &str,
-    mime_type: Option<&str>,
-    language: Option<&str>,
-) -> Result<String> {
+    filename: &'a str,
+    mime_type: Option<&'a str>,
+    language: Option<&'a str>,
+}
+
+async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
+    let TranscriptionRequest {
+        provider_name,
+        base_url,
+        api_key,
+        model,
+        bytes,
+        filename,
+        mime_type,
+        language,
+    } = request;
+
     let client = reqwest::Client::new();
     let mut part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
     if let Some(mime) = mime_type

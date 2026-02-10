@@ -128,10 +128,7 @@ impl TelegramClient {
             );
         }
 
-        let bytes = response
-            .bytes()
-            .await
-            .context("read Telegram file bytes")?;
+        let bytes = response.bytes().await.context("read Telegram file bytes")?;
         Ok(bytes.to_vec())
     }
 
@@ -382,10 +379,7 @@ impl TelegramClient {
             .context("Telegram request")?;
 
         // Read raw bytes so we can deserialize twice if needed
-        let bytes = response
-            .bytes()
-            .await
-            .context("read Telegram response")?;
+        let bytes = response.bytes().await.context("read Telegram response")?;
 
         // First check if request succeeded
         let envelope: TelegramEnvelope =
@@ -393,8 +387,8 @@ impl TelegramClient {
 
         if !envelope.ok {
             // Parse error response (no result field)
-            let error: TelegramError = serde_json::from_slice(&bytes)
-                .context("decode Telegram error")?;
+            let error: TelegramError =
+                serde_json::from_slice(&bytes).context("decode Telegram error")?;
             let description = error
                 .description
                 .unwrap_or_else(|| "Telegram API error".to_string());
@@ -402,8 +396,8 @@ impl TelegramClient {
         }
 
         // Parse success response (has result field)
-        let success: TelegramSuccess<T> = serde_json::from_slice(&bytes)
-            .context("decode Telegram result")?;
+        let success: TelegramSuccess<T> =
+            serde_json::from_slice(&bytes).context("decode Telegram result")?;
 
         Ok(success.result)
     }

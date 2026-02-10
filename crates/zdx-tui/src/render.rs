@@ -49,104 +49,10 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 pub fn render(app: &AppState, frame: &mut Frame) {
     let area = frame.area();
     let state = &app.tui;
-
-    // Calculate dynamic input height based on content
-    let input_height = input::calculate_input_height(state, area.height);
-    let queue_summaries = state.input.queued_summaries(QUEUE_MAX_ITEMS);
-    let queue_total = state.input.queued.len();
-    let queue_height = if queue_summaries.is_empty() {
-        0
-    } else {
-        queue_summaries.len() as u16 + 2
-    };
-
-    // Debug status line height (only when enabled)
-    let debug_status_height = if state.show_debug_status {
-        DEBUG_STATUS_HEIGHT
-    } else {
-        0
-    };
-
-    // Get terminal size for transcript rendering (account for margins and scrollbar)
-    let transcript_width =
-        area.width
-            .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
-
-    // Calculate transcript pane height (no header now)
-    let transcript_height = area
-        .height
-        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
-        as usize;
-
-    // Pre-render transcript lines using transcript module
-    // is_lazy indicates whether lazy rendering was used (lines are already scrolled)
-    let (all_lines, is_lazy) = transcript::render_transcript(state, transcript_width);
-    let total_lines = if is_lazy {
-        // For lazy rendering, use cached total line count for scroll calculations
-        state.transcript.scroll.cached_line_count
-    } else {
-        all_lines.len()
-    };
-
-    // Get visible lines - handling differs based on rendering mode
-    let content_lines: Vec<Line<'static>> = if is_lazy {
-        // Lazy rendering already returned only visible lines, no slicing needed
-        all_lines
-    } else {
-        // Full rendering: apply scroll offset to slice visible portion
-        let scroll_offset = {
-            let max_offset = total_lines.saturating_sub(transcript_height);
-            if state.transcript.scroll.is_following() {
-                total_lines.saturating_sub(transcript_height)
-            } else {
-                state
-                    .transcript
-                    .scroll
-                    .get_offset(transcript_height)
-                    .min(max_offset)
-            }
-        };
-
-        let visible_end = (scroll_offset + transcript_height).min(total_lines);
-        all_lines
-            .into_iter()
-            .skip(scroll_offset)
-            .take(visible_end - scroll_offset)
-            .collect()
-    };
-
-    // Bottom-align: add padding at top when content doesn't fill the screen
-    let visible_lines: Vec<Line<'static>> = if content_lines.len() < transcript_height {
-        let padding_count = transcript_height - content_lines.len();
-        let mut padded = vec![Line::default(); padding_count];
-        padded.extend(content_lines);
-        padded
-    } else {
-        content_lines
-    };
-
-    // Create layout: transcript, queue, input, status, [debug status]
-    let constraints = if state.show_debug_status {
-        vec![
-            Constraint::Min(1),                      // Transcript
-            Constraint::Length(queue_height),        // Queue summary
-            Constraint::Length(input_height),        // Input (dynamic)
-            Constraint::Length(STATUS_HEIGHT),       // Status line
-            Constraint::Length(debug_status_height), // Debug status line
-        ]
-    } else {
-        vec![
-            Constraint::Min(1),                // Transcript
-            Constraint::Length(queue_height),  // Queue summary
-            Constraint::Length(input_height),  // Input (dynamic)
-            Constraint::Length(STATUS_HEIGHT), // Status line
-        ]
-    };
-
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints(constraints)
-        .split(area);
+    let metrics = compute_render_metrics(state, area);
+    let (visible_lines, total_lines, scroll_offset) =
+        build_visible_transcript_lines(state, metrics.transcript_width, metrics.transcript_height);
+    let chunks = split_main_layout(area, &metrics, state.show_debug_status);
 
     // Transcript area with horizontal margins (also accounts for scrollbar)
     // NOTE: No .wrap() here - content is already pre-wrapped by render_transcript()
@@ -162,28 +68,19 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     };
     frame.render_widget(transcript, transcript_area);
 
-    // Render scrollbar if there's content to scroll
-    // We recalculate offset here to ensure it matches total_lines (which might be fresher than
-    // the cached state during streaming/lazy-render fallback)
-    let scroll_offset = if state.transcript.scroll.is_following() {
-        total_lines.saturating_sub(transcript_height)
-    } else {
-        let max_offset = total_lines.saturating_sub(transcript_height);
-        state
-            .transcript
-            .scroll
-            .get_offset(transcript_height)
-            .min(max_offset)
-    };
-
     frame.render_widget(
-        Scrollbar::new(total_lines, transcript_height, scroll_offset),
+        Scrollbar::new(total_lines, metrics.transcript_height, scroll_offset),
         chunks[0],
     );
 
     // Input area with model on top-left border and path on bottom-right
-    if queue_height > 0 {
-        render_queue_panel(frame, chunks[1], &queue_summaries, queue_total);
+    if metrics.queue_height > 0 {
+        render_queue_panel(
+            frame,
+            chunks[1],
+            &metrics.queue_summaries,
+            metrics.queue_total,
+        );
     }
 
     // Input area with model on top-left border and path on bottom-right
@@ -200,6 +97,125 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Render overlay (last, so it appears on top)
     app.overlay.render(frame, area, chunks[2].y);
+}
+
+struct RenderMetrics {
+    input_height: u16,
+    queue_summaries: Vec<String>,
+    queue_total: usize,
+    queue_height: u16,
+    transcript_width: usize,
+    transcript_height: usize,
+}
+
+fn compute_render_metrics(state: &TuiState, area: Rect) -> RenderMetrics {
+    let input_height = input::calculate_input_height(state, area.height);
+    let queue_summaries = state.input.queued_summaries(QUEUE_MAX_ITEMS);
+    let queue_total = state.input.queued.len();
+    let queue_height = if queue_summaries.is_empty() {
+        0
+    } else {
+        queue_summaries.len() as u16 + 2
+    };
+    let debug_status_height = if state.show_debug_status {
+        DEBUG_STATUS_HEIGHT
+    } else {
+        0
+    };
+    let transcript_width =
+        area.width
+            .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
+    let transcript_height = area
+        .height
+        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
+        as usize;
+
+    RenderMetrics {
+        input_height,
+        queue_summaries,
+        queue_total,
+        queue_height,
+        transcript_width,
+        transcript_height,
+    }
+}
+
+fn split_main_layout(area: Rect, metrics: &RenderMetrics, show_debug_status: bool) -> Vec<Rect> {
+    let constraints = if show_debug_status {
+        vec![
+            Constraint::Min(1),
+            Constraint::Length(metrics.queue_height),
+            Constraint::Length(metrics.input_height),
+            Constraint::Length(STATUS_HEIGHT),
+            Constraint::Length(DEBUG_STATUS_HEIGHT),
+        ]
+    } else {
+        vec![
+            Constraint::Min(1),
+            Constraint::Length(metrics.queue_height),
+            Constraint::Length(metrics.input_height),
+            Constraint::Length(STATUS_HEIGHT),
+        ]
+    };
+
+    Layout::default()
+        .direction(Direction::Vertical)
+        .constraints(constraints)
+        .split(area)
+        .to_vec()
+}
+
+fn build_visible_transcript_lines(
+    state: &TuiState,
+    transcript_width: usize,
+    transcript_height: usize,
+) -> (Vec<Line<'static>>, usize, usize) {
+    let (all_lines, is_lazy) = transcript::render_transcript(state, transcript_width);
+    let total_lines = if is_lazy {
+        state.transcript.scroll.cached_line_count
+    } else {
+        all_lines.len()
+    };
+    let scroll_offset = compute_scroll_offset(state, total_lines, transcript_height);
+    let visible = if is_lazy {
+        all_lines
+    } else {
+        let visible_end = (scroll_offset + transcript_height).min(total_lines);
+        all_lines
+            .into_iter()
+            .skip(scroll_offset)
+            .take(visible_end - scroll_offset)
+            .collect()
+    };
+
+    (
+        bottom_align_lines(visible, transcript_height),
+        total_lines,
+        scroll_offset,
+    )
+}
+
+fn compute_scroll_offset(state: &TuiState, total_lines: usize, transcript_height: usize) -> usize {
+    if state.transcript.scroll.is_following() {
+        total_lines.saturating_sub(transcript_height)
+    } else {
+        let max_offset = total_lines.saturating_sub(transcript_height);
+        state
+            .transcript
+            .scroll
+            .get_offset(transcript_height)
+            .min(max_offset)
+    }
+}
+
+fn bottom_align_lines(lines: Vec<Line<'static>>, transcript_height: usize) -> Vec<Line<'static>> {
+    if lines.len() >= transcript_height {
+        return lines;
+    }
+
+    let mut padded = vec![Line::default(); transcript_height - lines.len()];
+    padded.extend(lines);
+    padded
 }
 
 /// Formats a duration for the status line display.

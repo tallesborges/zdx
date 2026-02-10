@@ -75,7 +75,7 @@ impl AuthState {
     }
 
     /// Applies a cross-slice auth mutation.
-    pub fn apply(&mut self, mutation: AuthMutation) {
+    pub fn apply(&mut self, mutation: &AuthMutation) {
         match mutation {
             AuthMutation::RefreshStatus => self.refresh(),
         }

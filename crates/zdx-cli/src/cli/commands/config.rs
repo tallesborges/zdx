@@ -3,9 +3,8 @@
 use anyhow::{Context, Result};
 use zdx_core::config;
 
-pub fn path() -> Result<()> {
+pub fn path() {
     println!("{}", config::paths::config_path().display());
-    Ok(())
 }
 
 pub fn init() -> Result<()> {

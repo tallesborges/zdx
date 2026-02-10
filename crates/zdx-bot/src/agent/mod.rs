@@ -14,10 +14,9 @@ use crate::types::IncomingMessage;
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMessage>)> {
-    let thread =
-        Thread::with_id(thread_id.to_string()).context("open thread log")?;
-    let messages = thread_persistence::load_thread_as_messages(thread_id)
-        .context("load thread history")?;
+    let thread = Thread::with_id(thread_id.to_string()).context("open thread log")?;
+    let messages =
+        thread_persistence::load_thread_as_messages(thread_id).context("load thread history")?;
     Ok((thread, messages))
 }
 
@@ -25,8 +24,7 @@ pub(crate) fn load_thread_state(thread_id: &str) -> Result<(Thread, Vec<ChatMess
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) fn clear_thread_history(thread_id: &str) -> Result<()> {
-    let thread = Thread::with_id(thread_id.to_string())
-        .context("resolve thread log")?;
+    let thread = Thread::with_id(thread_id.to_string()).context("resolve thread log")?;
     let path = thread.path();
     if path.exists() {
         std::fs::remove_file(path).context("clear thread history")?;
@@ -97,8 +95,8 @@ pub(crate) fn spawn_agent_turn(
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
     // Build effective system prompt from config + AGENTS.md + skills
-    let effective = build_effective_system_prompt_with_paths(config, root)
-        .context("build system prompt")?;
+    let effective =
+        build_effective_system_prompt_with_paths(config, root).context("build system prompt")?;
 
     // Append bot-specific prompt if provided
     let system_prompt = match (effective.prompt, bot_system_prompt) {

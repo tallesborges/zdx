@@ -8,8 +8,8 @@ use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::tools::{ToolRegistry, ToolSet};
 
 use crate::bot::{
-    BotContext, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map, new_chat_queues,
-    new_queue_cancel_map,
+    BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
+    new_chat_queues, new_queue_cancel_map,
 };
 use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
@@ -82,13 +82,15 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
-        settings.allowlist_user_ids,
-        settings.allowlist_chat_ids,
-        root,
-        bot_system_prompt,
-        tool_config,
-        cancel_map,
-        queue_cancel_map,
+        BotContextDeps {
+            allowlist_user_ids: settings.allowlist_user_ids,
+            allowlist_chat_ids: settings.allowlist_chat_ids,
+            root,
+            bot_system_prompt,
+            tool_config,
+            cancel_map,
+            queue_cancel_map,
+        },
     ));
     let chat_queues = new_chat_queues();
 
@@ -126,7 +128,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                     eprintln!("Received {} update(s)", updates.len());
                 }
                 for update in updates {
-                    offset = Some(update.update_id + 1);
+                    offset = Some(update.id + 1);
                     if let Some(message) = update.message {
                         dispatch_message(&chat_queues, &context, message).await;
                     }

@@ -2,6 +2,7 @@
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use std::path::PathBuf;
 use zdx_core::config;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
 use zdx_core::core::{interrupt, worktree};
@@ -219,27 +220,7 @@ pub fn run() -> Result<()> {
 
 async fn dispatch(cli: Cli) -> Result<()> {
     let mut config = config::Config::load().context("load config")?;
-
-    if let Some(sp) = cli.system_prompt.as_deref() {
-        let trimmed = sp.trim();
-        if trimmed.is_empty() {
-            config.system_prompt = None;
-            config.system_prompt_file = None;
-        } else {
-            config.system_prompt = Some(trimmed.to_string());
-            config.system_prompt_file = None;
-        }
-    }
-
-    let resolve_root = |root: &str, worktree: Option<&str>| -> Result<std::path::PathBuf> {
-        let root_path = std::path::PathBuf::from(root);
-        if let Some(id) = worktree {
-            worktree::ensure_worktree(&root_path, id)
-                .with_context(|| format!("ensure worktree for '{id}'"))
-        } else {
-            Ok(root_path)
-        }
-    };
+    apply_system_prompt_override(&mut config, cli.system_prompt.as_deref());
 
     let Cli {
         command,
@@ -250,17 +231,92 @@ async fn dispatch(cli: Cli) -> Result<()> {
         ..
     } = cli;
 
-    // default to chat mode
     let Some(command) = command else {
-        let thread_opts: ThreadPersistenceOptions = (&thread_args).into();
-        let root_path = resolve_root(&root, worktree.as_deref())?;
-        let root_string = root_path.to_string_lossy().to_string();
-        return commands::chat::run(&root_string, &thread_opts, &config).await;
+        return run_chat_command(&root, worktree.as_deref(), &thread_args, &config).await;
     };
 
+    let context = DispatchContext {
+        root: &root,
+        worktree_id: worktree.as_deref(),
+        thread_args: &thread_args,
+        config: &config,
+    };
+
+    dispatch_command(command, &context).await
+}
+
+fn apply_system_prompt_override(config: &mut config::Config, system_prompt: Option<&str>) {
+    let Some(sp) = system_prompt else {
+        return;
+    };
+
+    let trimmed = sp.trim();
+    if trimmed.is_empty() {
+        config.system_prompt = None;
+        config.system_prompt_file = None;
+    } else {
+        config.system_prompt = Some(trimmed.to_string());
+        config.system_prompt_file = None;
+    }
+}
+
+fn resolve_root(root: &str, worktree_id: Option<&str>) -> Result<PathBuf> {
+    let root_path = PathBuf::from(root);
+    if let Some(id) = worktree_id {
+        worktree::ensure_worktree(&root_path, id).with_context(|| format!("ensure worktree for '{id}'"))
+    } else {
+        Ok(root_path)
+    }
+}
+
+async fn run_chat_command(
+    root: &str,
+    worktree_id: Option<&str>,
+    thread_args: &ThreadArgs,
+    config: &config::Config,
+) -> Result<()> {
+    let thread_opts: ThreadPersistenceOptions = thread_args.into();
+    let root_path = resolve_root(root, worktree_id)?;
+    let root_string = root_path.to_string_lossy().to_string();
+    commands::chat::run(&root_string, &thread_opts, config).await
+}
+
+struct DispatchContext<'a> {
+    root: &'a str,
+    worktree_id: Option<&'a str>,
+    thread_args: &'a ThreadArgs,
+    config: &'a config::Config,
+}
+
+struct ExecCommandInput {
+    prompt: String,
+    model: Option<String>,
+    thinking: Option<String>,
+    tools: Option<String>,
+    no_tools: bool,
+}
+
+async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput) -> Result<()> {
+    let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    let root_string = root_path.to_string_lossy().to_string();
+    commands::exec::run(commands::exec::ExecRunOptions {
+        root: &root_string,
+        thread_opts: &thread_opts,
+        prompt: &input.prompt,
+        config: context.config,
+        model_override: input.model.as_deref(),
+        thinking_override: input.thinking.as_deref(),
+        tools_override: input.tools.as_deref(),
+        no_tools: input.no_tools,
+    })
+    .await
+}
+
+async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         Commands::Bot => {
-            let root_path = resolve_root(&root, worktree.as_deref())?;
+            let root_path = resolve_root(context.root, context.worktree_id)?;
             zdx_bot::run_with_root(root_path).await
         }
         Commands::Exec {
@@ -270,71 +326,96 @@ async fn dispatch(cli: Cli) -> Result<()> {
             tools,
             no_tools,
         } => {
-            let thread_opts: ThreadPersistenceOptions = (&thread_args).into();
-            let root_path = resolve_root(&root, worktree.as_deref())?;
-            let root_string = root_path.to_string_lossy().to_string();
-            commands::exec::run(commands::exec::ExecRunOptions {
-                root: &root_string,
-                thread_opts: &thread_opts,
-                prompt: &prompt,
-                config: &config,
-                model_override: model.as_deref(),
-                thinking_override: thinking.as_deref(),
-                tools_override: tools.as_deref(),
-                no_tools,
-            })
+            run_exec_command(
+                context,
+                ExecCommandInput {
+                    prompt,
+                    model,
+                    thinking,
+                    tools,
+                    no_tools,
+                },
+            )
             .await
         }
-
         Commands::Threads { command } => match command {
             ThreadCommands::List => commands::threads::list(),
             ThreadCommands::Show { id } => commands::threads::show(&id),
-            ThreadCommands::Resume { id } => commands::threads::resume(id, &config).await,
+            ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
             ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         },
-
         Commands::Config { command } => match command {
-            ConfigCommands::Path => commands::config::path(),
+            ConfigCommands::Path => {
+                commands::config::path();
+                Ok(())
+            }
             ConfigCommands::Init => commands::config::init(),
             ConfigCommands::Generate => commands::config::generate(),
         },
-
         Commands::Login {
             anthropic,
             claude_cli,
             openai_codex,
             gemini_cli,
-        } => match (anthropic, claude_cli, openai_codex, gemini_cli) {
-            (true, false, false, false) => commands::auth::login_anthropic().await,
-            (false, true, false, false) => commands::auth::login_claude_cli().await,
-            (false, false, true, false) => commands::auth::login_openai_codex().await,
-            (false, false, false, true) => commands::auth::login_gemini_cli().await,
-            _ => anyhow::bail!(
-                "Please specify a provider: --anthropic, --claude-cli, --openai-codex, or --gemini-cli"
-            ),
-        },
-
+        } => {
+            let provider = select_auth_provider((anthropic, claude_cli, openai_codex, gemini_cli))?;
+            login_provider(provider).await
+        }
         Commands::Logout {
             anthropic,
             claude_cli,
             openai_codex,
             gemini_cli,
-        } => match (anthropic, claude_cli, openai_codex, gemini_cli) {
-            (true, false, false, false) => commands::auth::logout_anthropic(),
-            (false, true, false, false) => commands::auth::logout_claude_cli(),
-            (false, false, true, false) => commands::auth::logout_openai_codex(),
-            (false, false, false, true) => commands::auth::logout_gemini_cli(),
-            _ => anyhow::bail!(
-                "Please specify a provider: --anthropic, --claude-cli, --openai-codex, or --gemini-cli"
-            ),
-        },
-
+        } => {
+            let provider = select_auth_provider((anthropic, claude_cli, openai_codex, gemini_cli))?;
+            logout_provider(provider)
+        }
         Commands::Models { command } => match command {
-            ModelsCommands::Update => commands::models::update(&config).await,
+            ModelsCommands::Update => commands::models::update(context.config).await,
         },
-
         Commands::Worktree { command } => match command {
-            WorktreeCommands::Ensure { id } => commands::worktree::ensure(&root, &id),
+            WorktreeCommands::Ensure { id } => commands::worktree::ensure(context.root, &id),
         },
+    }
+}
+
+#[derive(Clone, Copy)]
+enum AuthProvider {
+    Anthropic,
+    ClaudeCli,
+    OpenaiCodex,
+    GeminiCli,
+}
+
+fn select_auth_provider(flags: (bool, bool, bool, bool)) -> Result<AuthProvider> {
+    match flags {
+        (true, false, false, false) => Ok(AuthProvider::Anthropic),
+        (false, true, false, false) => Ok(AuthProvider::ClaudeCli),
+        (false, false, true, false) => Ok(AuthProvider::OpenaiCodex),
+        (false, false, false, true) => Ok(AuthProvider::GeminiCli),
+        _ => anyhow::bail!(
+            "Please specify a provider: --anthropic, --claude-cli, --openai-codex, or --gemini-cli"
+        ),
+    }
+}
+
+async fn login_provider(provider: AuthProvider) -> Result<()> {
+    match provider {
+        AuthProvider::Anthropic => commands::auth::login_anthropic().await,
+        AuthProvider::ClaudeCli => commands::auth::login_claude_cli().await,
+        AuthProvider::OpenaiCodex => commands::auth::login_openai_codex().await,
+        AuthProvider::GeminiCli => commands::auth::login_gemini_cli().await,
+    }
+}
+
+fn logout_provider(provider: AuthProvider) -> Result<()> {
+    match provider {
+        AuthProvider::Anthropic => {
+            commands::auth::logout_anthropic();
+            Ok(())
+        }
+        AuthProvider::ClaudeCli => commands::auth::logout_claude_cli(),
+        AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(),
+        AuthProvider::GeminiCli => commands::auth::logout_gemini_cli(),
     }
 }

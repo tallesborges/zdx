@@ -760,7 +760,7 @@ fn load_installed_skills() -> HashSet<String> {
     add_installed_from_dir(&zdx_skills, &mut installed);
 
     // Also check ~/.codex/skills for Codex-installed skills
-    if let Some(home) = dirs::home_dir() {
+    if let Some(home) = zdx_core::config::paths::home_dir() {
         add_installed_from_dir(&home.join(".codex").join("skills"), &mut installed);
     }
 

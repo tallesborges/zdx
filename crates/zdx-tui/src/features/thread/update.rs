@@ -72,13 +72,15 @@ pub fn handle_thread_event(
                 effects.push(UiEffect::RefreshSystemPrompt { path });
             }
             handle_thread_loaded(
-                thread_handle,
-                &thread_id,
-                cells,
-                messages,
-                history,
-                title,
-                usage,
+                ThreadLoaded {
+                    thread_handle,
+                    thread_id,
+                    cells,
+                    messages,
+                    history,
+                    title,
+                    usage,
+                },
                 &mut mutations,
             );
             effects
@@ -116,13 +118,15 @@ pub fn handle_thread_event(
             turn_number,
         } => {
             handle_thread_forked(
-                thread_handle,
-                cells,
-                messages,
-                history,
-                usage,
-                user_input,
-                turn_number,
+                ThreadForked {
+                    thread_handle,
+                    cells,
+                    messages,
+                    history,
+                    usage,
+                    user_input,
+                    turn_number,
+                },
                 &mut mutations,
             );
             vec![]
@@ -187,16 +191,16 @@ pub fn handle_thread_event(
 
 /// Handles thread list loaded - opens thread picker overlay.
 /// Handles thread loaded - switches to the thread.
-fn handle_thread_loaded(
-    thread_handle: Option<Thread>,
-    thread_id: &str,
-    cells: Vec<HistoryCell>,
-    messages: Vec<ChatMessage>,
-    history: Vec<String>,
-    title: Option<String>,
-    usage: (Usage, Usage),
-    mutations: &mut Vec<StateMutation>,
-) {
+fn handle_thread_loaded(loaded: ThreadLoaded, mutations: &mut Vec<StateMutation>) {
+    let ThreadLoaded {
+        thread_handle,
+        thread_id,
+        cells,
+        messages,
+        history,
+        title,
+        usage,
+    } = loaded;
     let (cumulative, latest) = usage;
     mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
         cells,
@@ -221,7 +225,7 @@ fn handle_thread_loaded(
     let short_id = if thread_id.len() > 8 {
         format!("{}…", &thread_id[..8])
     } else {
-        thread_id.to_string()
+        thread_id
     };
     mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!("Switched to thread {short_id}")),
@@ -261,16 +265,16 @@ fn handle_thread_created(
         ));
     }
 }
-fn handle_thread_forked(
-    thread_handle: Thread,
-    cells: Vec<HistoryCell>,
-    messages: Vec<ChatMessage>,
-    history: Vec<String>,
-    usage: (Usage, Usage),
-    user_input: Option<String>,
-    turn_number: usize,
-    mutations: &mut Vec<StateMutation>,
-) {
+fn handle_thread_forked(forked: ThreadForked, mutations: &mut Vec<StateMutation>) {
+    let ThreadForked {
+        thread_handle,
+        cells,
+        messages,
+        history,
+        usage,
+        user_input,
+        turn_number,
+    } = forked;
     let (cumulative, latest) = usage;
     mutations.push(StateMutation::Transcript(TranscriptMutation::ReplaceCells(
         cells,
@@ -297,6 +301,26 @@ fn handle_thread_forked(
     mutations.push(StateMutation::Transcript(
         TranscriptMutation::AppendSystemMessage(format!("Forked from turn {turn_number}.")),
     ));
+}
+
+struct ThreadLoaded {
+    thread_handle: Option<Thread>,
+    thread_id: String,
+    cells: Vec<HistoryCell>,
+    messages: Vec<ChatMessage>,
+    history: Vec<String>,
+    title: Option<String>,
+    usage: (Usage, Usage),
+}
+
+struct ThreadForked {
+    thread_handle: Thread,
+    cells: Vec<HistoryCell>,
+    messages: Vec<ChatMessage>,
+    history: Vec<String>,
+    usage: (Usage, Usage),
+    user_input: Option<String>,
+    turn_number: usize,
 }
 
 /// Handles thread rename success.

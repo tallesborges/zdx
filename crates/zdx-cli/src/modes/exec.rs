@@ -265,9 +265,12 @@ impl ExecRenderer {
                 // Print interruption message to stderr (per SPEC §10)
                 let _ = writeln!(self.stderr, "\n^C Interrupted.");
             }
-            AgentEvent::TurnCompleted { .. } => {
-                // Turn complete - no action needed in exec mode.
-                // The caller handles the final result from run_turn.
+            AgentEvent::TurnCompleted { .. }
+            | AgentEvent::UsageUpdate { .. }
+            | AgentEvent::TurnStarted
+            | AgentEvent::ToolOutputDelta { .. }
+            | AgentEvent::ToolInputDelta { .. } => {
+                // No-op in exec mode.
             }
             AgentEvent::ReasoningDelta { text } => {
                 // In exec mode, stream thinking text to stderr (no styling)
@@ -280,19 +283,6 @@ impl ExecRenderer {
                 // Reasoning complete - ensure newline after reasoning output
                 let _ = writeln!(self.stderr);
                 let _ = self.stderr.flush();
-            }
-            AgentEvent::UsageUpdate { .. } => {
-                // Usage tracking not displayed in exec mode
-            }
-            AgentEvent::TurnStarted => {
-                // Turn start not displayed in exec mode
-            }
-            AgentEvent::ToolOutputDelta { .. } => {
-                // TODO: Stream tool output in real-time
-                // For now, we only show final output in ToolCompleted
-            }
-            AgentEvent::ToolInputDelta { .. } => {
-                // Ignored in exec mode
             }
         }
     }

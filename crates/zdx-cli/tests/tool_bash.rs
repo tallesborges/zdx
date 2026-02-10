@@ -33,9 +33,9 @@ async fn test_bash_executes_command() {
     let mock_server = MockServer::start().await;
 
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse(
         "toolu_bash_001",
@@ -105,9 +105,9 @@ async fn test_bash_runs_in_root_directory() {
     let mock_server = MockServer::start().await;
 
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse("toolu_bash_002", "bash", r#"{"command": "ls"}"#);
     let second_response = fixtures::text_sse("Listed files.");
@@ -167,9 +167,9 @@ async fn test_bash_times_out_when_configured() {
     let mock_server = MockServer::start().await;
 
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse("toolu_bash_timeout", "bash", r#"{"command": "sleep 2"}"#);
     let second_response = fixtures::text_sse("Done.");

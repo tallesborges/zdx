@@ -21,7 +21,24 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
     let popup_height = 12;
     let popup_area = calculate_overlay_area(area, area.height, popup_width, popup_height);
 
-    let title = match login_state.selected_provider() {
+    let title = login_overlay_title(login_state);
+    render_overlay_container(frame, popup_area, title, Color::Cyan);
+
+    let inner = Rect::new(
+        popup_area.x + 2,
+        popup_area.y + 1,
+        popup_area.width.saturating_sub(4),
+        popup_area.height.saturating_sub(2),
+    );
+
+    let lines = render_login_overlay_lines(login_state, inner.width);
+
+    let para = Paragraph::new(lines);
+    frame.render_widget(para, inner);
+}
+
+fn login_overlay_title(login_state: &LoginState) -> &'static str {
+    match login_state.selected_provider() {
         None => "Choose Login Provider",
         Some(provider) => match provider {
             zdx_core::providers::ProviderKind::Anthropic => "Anthropic API Key",
@@ -36,76 +53,16 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
             zdx_core::providers::ProviderKind::Gemini => "Gemini Login",
             zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
         },
-    };
-    render_overlay_container(frame, popup_area, title, Color::Cyan);
+    }
+}
 
-    let inner = Rect::new(
-        popup_area.x + 2,
-        popup_area.y + 1,
-        popup_area.width.saturating_sub(4),
-        popup_area.height.saturating_sub(2),
-    );
-
-    let lines: Vec<Line> = match login_state {
+fn render_login_overlay_lines(login_state: &LoginState, inner_width: u16) -> Vec<Line<'static>> {
+    match login_state {
         LoginState::SelectProvider { selected } => {
-            let entries = render_cli_provider_entries(inner.width, *selected);
-            let mut l = vec![
-                Line::from(Span::styled(
-                    "Select a CLI provider to log in:",
-                    Style::default().fg(Color::White),
-                )),
-                Line::from(""),
-            ];
-            l.extend(entries);
-            l.push(Line::from(""));
-            l.push(Line::from(Span::styled(
-                "Enter to continue, Esc to cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            l
+            render_provider_selection_lines(inner_width, *selected)
         }
         LoginState::AwaitingCode { url, error, .. } => {
-            let display_url = truncate_middle(url, inner.width.saturating_sub(2) as usize);
-
-            let status_message = if error.is_some() {
-                "Visit URL to retry authentication:"
-            } else {
-                "Browser opened for authentication."
-            };
-            let status_color = if error.is_some() {
-                Color::Yellow
-            } else {
-                Color::Green
-            };
-
-            let mut l = vec![
-                Line::from(Span::styled(
-                    status_message,
-                    Style::default().fg(status_color),
-                )),
-                Line::from(Span::styled(
-                    display_url,
-                    Style::default().fg(Color::DarkGray),
-                )),
-                Line::from(""),
-                Line::from(Span::styled(
-                    "Waiting for browser login callback...",
-                    Style::default().fg(Color::White),
-                )),
-            ];
-            if let Some(e) = error {
-                l.push(Line::from(""));
-                l.push(Line::from(Span::styled(
-                    e.as_str(),
-                    Style::default().fg(Color::Red),
-                )));
-            }
-            l.push(Line::from(""));
-            l.push(Line::from(Span::styled(
-                "Esc to cancel",
-                Style::default().fg(Color::DarkGray),
-            )));
-            l
+            render_awaiting_code_lines(url, error.as_deref(), inner_width)
         }
         LoginState::Exchanging { .. } => vec![
             Line::from(""),
@@ -135,10 +92,73 @@ pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: R
                 Style::default().fg(Color::DarkGray),
             )),
         ],
+    }
+}
+
+fn render_provider_selection_lines(inner_width: u16, selected: usize) -> Vec<Line<'static>> {
+    let entries = render_cli_provider_entries(inner_width, selected);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            "Select a CLI provider to log in:",
+            Style::default().fg(Color::White),
+        )),
+        Line::from(""),
+    ];
+    lines.extend(entries);
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Enter to continue, Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
+}
+
+fn render_awaiting_code_lines(
+    url: &str,
+    error: Option<&str>,
+    inner_width: u16,
+) -> Vec<Line<'static>> {
+    let display_url = truncate_middle(url, inner_width.saturating_sub(2) as usize);
+    let has_error = error.is_some();
+    let status_message = if has_error {
+        "Visit URL to retry authentication:"
+    } else {
+        "Browser opened for authentication."
+    };
+    let status_color = if has_error {
+        Color::Yellow
+    } else {
+        Color::Green
     };
 
-    let para = Paragraph::new(lines);
-    frame.render_widget(para, inner);
+    let mut lines = vec![
+        Line::from(Span::styled(
+            status_message,
+            Style::default().fg(status_color),
+        )),
+        Line::from(Span::styled(
+            display_url,
+            Style::default().fg(Color::DarkGray),
+        )),
+        Line::from(""),
+        Line::from(Span::styled(
+            "Waiting for browser login callback...",
+            Style::default().fg(Color::White),
+        )),
+    ];
+    if let Some(error) = error {
+        lines.push(Line::from(""));
+        lines.push(Line::from(Span::styled(
+            error.to_string(),
+            Style::default().fg(Color::Red),
+        )));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "Esc to cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines
 }
 
 /// Truncates a string in the middle with "..." if it exceeds `max_len`.
