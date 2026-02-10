@@ -336,7 +336,8 @@ fn drain_line_remainder(
 fn format_truncated_line(buffer: &[u8], read: &LineRead) -> String {
     let line_str = String::from_utf8_lossy(buffer);
     let line_str = line_str.as_ref();
-    let (line_body, line_ending) = split_line_ending(line_str, read.bytes_read, read.drained_line_ending);
+    let (line_body, line_ending) =
+        split_line_ending(line_str, read.bytes_read, read.drained_line_ending);
     let mut truncated_line: String = line_body.chars().take(MAX_LINE_LENGTH).collect();
     truncated_line.push_str(line_ending);
     truncated_line

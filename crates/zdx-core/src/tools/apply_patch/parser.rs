@@ -121,8 +121,9 @@ impl PatchParser {
         let move_path = self.parse_move_to_path()?;
         let chunks = self.parse_update_chunks()?;
         if chunks.is_empty() {
-            return Err(self
-                .invalid_hunk("Update File section requires at least one @@ chunk".to_string()));
+            return Err(
+                self.invalid_hunk("Update File section requires at least one @@ chunk".to_string())
+            );
         }
 
         self.hunks.push(Hunk::UpdateFile {
