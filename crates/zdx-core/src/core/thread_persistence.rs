@@ -1003,7 +1003,9 @@ impl MessageReplay {
     fn handle_message(&mut self, role: String, text: String) {
         use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-        if role == "assistant" && !self.pending_reasoning.is_empty() && self.pending_tool_uses.is_empty()
+        if role == "assistant"
+            && !self.pending_reasoning.is_empty()
+            && self.pending_tool_uses.is_empty()
         {
             self.flush_tool_results();
             let mut blocks = self.take_assistant_blocks();
@@ -1038,7 +1040,9 @@ impl MessageReplay {
 
         self.flush_tool_results();
         let mut blocks = self.take_assistant_blocks();
-        if let Some(content) = partial_content && !content.is_empty() {
+        if let Some(content) = partial_content
+            && !content.is_empty()
+        {
             blocks.push(ChatContentBlock::Text(content));
         }
         if !blocks.is_empty() {
@@ -1057,9 +1061,10 @@ impl MessageReplay {
 
     fn flush_tool_results(&mut self) {
         if !self.pending_tool_results.is_empty() {
-            self.messages.push(crate::providers::ChatMessage::tool_results(
-                std::mem::take(&mut self.pending_tool_results),
-            ));
+            self.messages
+                .push(crate::providers::ChatMessage::tool_results(std::mem::take(
+                    &mut self.pending_tool_results,
+                )));
         }
     }
 

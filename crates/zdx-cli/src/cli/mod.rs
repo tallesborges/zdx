@@ -1,8 +1,9 @@
 //! CLI entry and dispatch.
 
+use std::path::PathBuf;
+
 use anyhow::{Context, Result};
 use clap::Parser;
-use std::path::PathBuf;
 use zdx_core::config;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
 use zdx_core::core::{interrupt, worktree};
@@ -263,7 +264,8 @@ fn apply_system_prompt_override(config: &mut config::Config, system_prompt: Opti
 fn resolve_root(root: &str, worktree_id: Option<&str>) -> Result<PathBuf> {
     let root_path = PathBuf::from(root);
     if let Some(id) = worktree_id {
-        worktree::ensure_worktree(&root_path, id).with_context(|| format!("ensure worktree for '{id}'"))
+        worktree::ensure_worktree(&root_path, id)
+            .with_context(|| format!("ensure worktree for '{id}'"))
     } else {
         Ok(root_path)
     }

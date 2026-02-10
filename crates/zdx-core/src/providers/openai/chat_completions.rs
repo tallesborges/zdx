@@ -282,10 +282,13 @@ impl ChatCompletionRequest {
             model: config.model.clone(),
             stream: true,
             messages: out_messages,
-            tools: (!tools.is_empty()).then(|| tools.iter().map(ChatToolDefinition::from).collect()),
+            tools: (!tools.is_empty())
+                .then(|| tools.iter().map(ChatToolDefinition::from).collect()),
             max_tokens: config.max_tokens,
             max_completion_tokens: config.max_completion_tokens,
-            stream_options: config.include_usage.then_some(StreamOptions { include_usage: true }),
+            stream_options: config.include_usage.then_some(StreamOptions {
+                include_usage: true,
+            }),
             reasoning: config
                 .reasoning_effort
                 .clone()
@@ -314,7 +317,10 @@ fn append_chat_message(
 ) {
     match (&msg.role[..], &msg.content) {
         ("user", MessageContent::Text(text)) => {
-            out_messages.push(simple_message("user", ChatMessageContent::Text(text.clone())));
+            out_messages.push(simple_message(
+                "user",
+                ChatMessageContent::Text(text.clone()),
+            ));
         }
         ("assistant", MessageContent::Text(text)) => {
             out_messages.push(simple_message(
@@ -323,7 +329,9 @@ fn append_chat_message(
             ));
         }
         ("assistant", MessageContent::Blocks(blocks)) => {
-            if let Some(message) = assistant_blocks_message(blocks, config.include_reasoning_content) {
+            if let Some(message) =
+                assistant_blocks_message(blocks, config.include_reasoning_content)
+            {
                 out_messages.push(message);
             }
         }
@@ -367,9 +375,7 @@ fn assistant_blocks_message(
                 });
             }
             ChatContentBlock::Reasoning(reasoning) => {
-                if include_reasoning_content
-                    && let Some(text) = &reasoning.text
-                {
+                if include_reasoning_content && let Some(text) = &reasoning.text {
                     reasoning_content.push_str(text);
                 }
             }

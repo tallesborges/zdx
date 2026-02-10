@@ -135,9 +135,12 @@ fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
 fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
     let mut input = Vec::new();
     if let Some(prompt) = system {
-        input.push(message_item("developer", vec![InputContent::InputText {
-            text: prompt.to_string(),
-        }]));
+        input.push(message_item(
+            "developer",
+            vec![InputContent::InputText {
+                text: prompt.to_string(),
+            }],
+        ));
     }
 
     for msg in messages {
@@ -237,7 +240,10 @@ fn append_tool_result(result: &crate::tools::ToolResult, input: &mut Vec<InputIt
 
     input.push(function_call_output_item(call_id, output));
     if let Some((mime_type, data)) = has_image {
-        input.push(message_item("user", vec![input_image_content(&mime_type, &data)]));
+        input.push(message_item(
+            "user",
+            vec![input_image_content(&mime_type, &data)],
+        ));
     }
 }
 

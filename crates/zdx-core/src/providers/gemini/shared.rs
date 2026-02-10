@@ -192,7 +192,11 @@ impl GeminiContentsBuilder {
         }
     }
 
-    fn append_assistant_blocks(&mut self, add_thought_signature: bool, blocks: &[ChatContentBlock]) {
+    fn append_assistant_blocks(
+        &mut self,
+        add_thought_signature: bool,
+        blocks: &[ChatContentBlock],
+    ) {
         let mut parts = Vec::new();
         let mut added_signature = false;
         let real_signature = gemini_signature(blocks);
