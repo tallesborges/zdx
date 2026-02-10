@@ -28,6 +28,13 @@ thinking_level = "off"
 handoff_model = "gemini-cli:gemini-3-flash-preview"
 title_model = "gemini-cli:gemini-2.5-flash"
 
+# Subagent delegation configuration
+# enabled: Expose invoke_subagent tool to the model.
+# supported_models: Allowed model overrides for invoke_subagent (empty means any).
+[subagents]
+enabled = true
+supported_models = ["codex:gpt-5.3-codex"]
+
 # Model used for handoff generation subagent.
 # Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
 # handoff_model = "gemini-cli:gemini-2.5-flash"
@@ -40,13 +47,13 @@ title_model = "gemini-cli:gemini-2.5-flash"
 # Enable/disable skill sources (all enabled by default)
 [skills]
 [skills.sources]
-zdx_user = "on"
-zdx_project = "on"
-codex_user = "on"
-claude_user = "on"
-claude_project = "on"
-agents_user = "on"
-agents_project = "on"
+zdx_user = true
+zdx_project = true
+codex_user = true
+claude_user = true
+claude_project = true
+agents_user = true
+agents_project = true
 # GitHub repositories containing skills (owner/repo/path)
 skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]
 # ignored_skills = ["test-*", "wip-*"]
@@ -79,10 +86,10 @@ thinking_level = "minimal"
 # base_url: Optional base URL (for proxies or test rigs)
 # tools: Optional list of enabled tools. If set, overrides the default tool set.
 #
-# Available tools: bash, apply_patch, edit, fetch_webpage, read, read_thread, subagent, web_search, write
+# Available tools: bash, apply_patch, edit, fetch_webpage, invoke_subagent, read, read_thread, web_search, write
 # Default tool sets:
-#   - default:       ["bash", "edit", "fetch_webpage", "read", "read_thread", "subagent", "web_search", "write"]
-#   - openai_codex:  ["bash", "apply_patch", "fetch_webpage", "read", "read_thread", "subagent", "web_search"]
+#   - default:       ["bash", "edit", "fetch_webpage", "invoke_subagent", "read", "read_thread", "web_search", "write"]
+#   - openai_codex:  ["bash", "apply_patch", "fetch_webpage", "invoke_subagent", "read", "read_thread", "web_search"]
 
 [providers.anthropic]
 enabled = true

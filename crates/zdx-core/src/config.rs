@@ -9,33 +9,18 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use serde::{Deserialize, Serialize};
 
-/// Binary toggle for config options.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Toggle {
-    #[default]
-    On,
-    Off,
-}
-
-impl Toggle {
-    #[must_use]
-    pub fn is_on(self) -> bool {
-        matches!(self, Self::On)
-    }
-}
-
 /// Skill source toggles grouped by source/type.
+#[allow(clippy::struct_excessive_bools)]
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct SkillSourceToggles {
-    pub zdx_user: Toggle,
-    pub zdx_project: Toggle,
-    pub codex_user: Toggle,
-    pub claude_user: Toggle,
-    pub claude_project: Toggle,
-    pub agents_user: Toggle,
-    pub agents_project: Toggle,
+    pub zdx_user: bool,
+    pub zdx_project: bool,
+    pub codex_user: bool,
+    pub claude_user: bool,
+    pub claude_project: bool,
+    pub agents_user: bool,
+    pub agents_project: bool,
 }
 
 /// Thinking level for extended thinking feature.
@@ -68,6 +53,10 @@ fn default_skill_repositories() -> Vec<String> {
     ]
 }
 
+fn default_subagents_enabled() -> bool {
+    true
+}
+
 /// Skill discovery configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -88,17 +77,40 @@ impl Default for SkillsConfig {
     fn default() -> Self {
         Self {
             sources: SkillSourceToggles {
-                zdx_user: Toggle::On,
-                zdx_project: Toggle::On,
-                codex_user: Toggle::On,
-                claude_user: Toggle::On,
-                claude_project: Toggle::On,
-                agents_user: Toggle::On,
-                agents_project: Toggle::On,
+                zdx_user: true,
+                zdx_project: true,
+                codex_user: true,
+                claude_user: true,
+                claude_project: true,
+                agents_user: true,
+                agents_project: true,
             },
             skill_repositories: default_skill_repositories(),
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
+        }
+    }
+}
+
+/// Subagent delegation configuration.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
+pub struct SubagentsConfig {
+    /// Enables/disables subagent delegation tool exposure.
+    #[serde(default = "default_subagents_enabled")]
+    pub enabled: bool,
+    /// Allowed models for `invoke_subagent`.
+    ///
+    /// If empty, any model is allowed.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub supported_models: Vec<String>,
+}
+
+impl Default for SubagentsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_subagents_enabled(),
+            supported_models: vec!["codex:gpt-5.3-codex".to_string()],
         }
     }
 }
@@ -428,6 +440,10 @@ pub struct Config {
     #[serde(default)]
     pub skills: SkillsConfig,
 
+    /// Subagent delegation configuration
+    #[serde(default)]
+    pub subagents: SubagentsConfig,
+
     /// Telegram bot configuration
     #[serde(default)]
     pub telegram: TelegramConfig,
@@ -689,6 +705,7 @@ impl Default for Config {
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
+            subagents: SubagentsConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
@@ -995,6 +1012,31 @@ mod tests {
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
         assert_eq!(config.max_tokens, None);
+    }
+
+    #[test]
+    fn test_skill_source_toggles_accept_bool_values_only() {
+        #[derive(Deserialize)]
+        struct Wrapper {
+            value: bool,
+        }
+
+        let parsed_true: Wrapper = toml::from_str("value = true").unwrap();
+        let parsed_false: Wrapper = toml::from_str("value = false").unwrap();
+        let parsed_on = toml::from_str::<Wrapper>("value = \"on\"");
+
+        assert!(parsed_true.value);
+        assert!(!parsed_false.value);
+        assert!(parsed_on.is_err());
+    }
+
+    #[test]
+    fn test_generate_uses_boolean_skill_source_flags() {
+        let generated = Config::generate().unwrap();
+
+        assert!(generated.contains("[skills.sources]"));
+        assert!(generated.contains("zdx_user = true"));
+        assert!(!generated.contains("zdx_user = \"on\""));
     }
 
     /// Config init: creates file with defaults, creates parent dirs (SPEC §9).
@@ -1593,5 +1635,36 @@ max_tokens = 4096
         assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.language.is_none());
+    }
+
+    /// `SubagentsConfig`: defaults are enabled with supported model list.
+    #[test]
+    fn test_subagents_config_defaults() {
+        let config = SubagentsConfig::default();
+        assert!(config.enabled);
+        assert_eq!(config.supported_models, vec!["codex:gpt-5.3-codex"]);
+    }
+
+    /// Subagents config loads from file.
+    #[test]
+    fn test_subagents_config_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"[subagents]
+enabled = true
+supported_models = ["codex:gpt-5.3-codex"]
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert!(config.subagents.enabled);
+        assert_eq!(
+            config.subagents.supported_models,
+            vec!["codex:gpt-5.3-codex"]
+        );
     }
 }
