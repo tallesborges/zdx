@@ -254,7 +254,10 @@ fn collect_provider_records(
     };
 
     let Some(models_map) = provider_entry.models.as_ref() else {
-        bail!("Provider '{}' has no models in models.dev response", spec.api_id);
+        bail!(
+            "Provider '{}' has no models in models.dev response",
+            spec.api_id
+        );
     };
 
     let all_selected = selected_candidates(spec, models_map);
@@ -286,7 +289,11 @@ fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
             );
             continue;
         }
-        fallback.push(create_default_candidate(spec.provider_id, spec.prefix, pattern));
+        fallback.push(create_default_candidate(
+            spec.provider_id,
+            spec.prefix,
+            pattern,
+        ));
     }
     fallback
 }

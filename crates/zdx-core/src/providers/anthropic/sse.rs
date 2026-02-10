@@ -2,8 +2,8 @@ use std::pin::Pin;
 
 use eventsource_stream::{EventStream, Eventsource};
 use futures_util::Stream;
-use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use serde::de::DeserializeOwned;
 
 use crate::providers::shared::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
