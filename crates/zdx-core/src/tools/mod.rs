@@ -9,6 +9,7 @@ pub mod edit;
 pub mod fetch_webpage;
 pub mod read;
 pub mod read_thread;
+pub mod subagent;
 pub mod web_search;
 pub mod write;
 
@@ -271,6 +272,12 @@ pub struct ToolContext {
 
     /// Optional thinking level for tool subagents.
     pub thinking_level: Option<crate::config::ThinkingLevel>,
+
+    /// Whether subagent delegation is enabled.
+    pub subagents_enabled: bool,
+
+    /// Allowed model list for subagent delegation (empty means any).
+    pub subagent_allowed_models: Vec<String>,
 }
 
 impl ToolContext {
@@ -280,6 +287,8 @@ impl ToolContext {
             timeout,
             model: None,
             thinking_level: None,
+            subagents_enabled: true,
+            subagent_allowed_models: Vec::new(),
         }
     }
 
@@ -287,6 +296,9 @@ impl ToolContext {
     pub fn with_config(mut self, config: &crate::config::Config) -> Self {
         self.model = Some(config.model.clone());
         self.thinking_level = Some(config.thinking_level);
+        self.subagents_enabled = config.subagents.enabled;
+        self.subagent_allowed_models
+            .clone_from(&config.subagents.allowed_models);
         self
     }
 }
@@ -305,6 +317,7 @@ impl ToolSet {
                 "bash",
                 "edit",
                 "fetch_webpage",
+                "invoke_subagent",
                 "read",
                 "read_thread",
                 "web_search",
@@ -314,6 +327,7 @@ impl ToolSet {
                 "bash",
                 "apply_patch",
                 "fetch_webpage",
+                "invoke_subagent",
                 "read",
                 "read_thread",
                 "web_search",
@@ -501,6 +515,15 @@ impl ToolRegistry {
                 let input = input.clone();
                 let ctx = ctx.clone();
                 Box::pin(async move { read_thread::execute(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            subagent::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { subagent::execute(&input, &ctx).await })
             }),
         );
 
@@ -763,6 +786,7 @@ mod tests {
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
+        assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
         assert!(names.contains(&"web_search".to_string()));
@@ -779,6 +803,7 @@ mod tests {
         assert!(names.contains(&"apply_patch".to_string()));
         assert!(names.contains(&"edit".to_string()));
         assert!(names.contains(&"fetch_webpage".to_string()));
+        assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
         assert!(names.contains(&"web_search".to_string()));

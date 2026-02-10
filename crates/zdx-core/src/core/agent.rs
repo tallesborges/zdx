@@ -599,8 +599,8 @@ fn build_provider_client(
         .compute_reasoning_budget(max_tokens, model_output_limit)
         .unwrap_or(0);
     let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
-    let gemini_thinking = thinking_enabled
-        .then(|| GeminiThinkingConfig::from_thinking_level(thinking_level, model));
+    let gemini_thinking =
+        thinking_enabled.then(|| GeminiThinkingConfig::from_thinking_level(thinking_level, model));
 
     match provider {
         ProviderKind::Anthropic => build_anthropic_client(
@@ -625,7 +625,9 @@ fn build_provider_client(
             OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
         ))),
         ProviderKind::OpenAI => build_openai_client(config, model, max_tokens, cache_key),
-        ProviderKind::OpenRouter => build_openrouter_client(config, model, reasoning_effort, cache_key),
+        ProviderKind::OpenRouter => {
+            build_openrouter_client(config, model, reasoning_effort, cache_key)
+        }
         ProviderKind::Mimo => build_mimo_client(config, model, thinking_enabled),
         ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
@@ -693,7 +695,11 @@ fn build_openrouter_client(
     )))
 }
 
-fn build_mimo_client(config: &Config, model: &str, thinking_enabled: bool) -> Result<ProviderClient> {
+fn build_mimo_client(
+    config: &Config,
+    model: &str,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
     Ok(ProviderClient::Mimo(MimoClient::new(MimoConfig::from_env(
         model.to_string(),
         config.max_tokens,
@@ -781,18 +787,18 @@ fn resolve_tools(
     provider: ProviderKind,
     tool_registry: &ToolRegistry,
 ) -> Vec<ToolDefinition> {
-    match &options.tool_config.selection {
+    let mut tools = match &options.tool_config.selection {
         ToolSelection::Auto { base, include } => {
             let provider_config = config.providers.get(provider);
             let base_tools = if provider_config.tools.is_some() {
                 tool_registry.tools_for_provider(provider_config)
             } else {
-                let tool_set = if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex)
-                {
-                    ToolSet::OpenAICodex
-                } else {
-                    *base
-                };
+                let tool_set =
+                    if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex) {
+                        ToolSet::OpenAICodex
+                    } else {
+                        *base
+                    };
                 tool_registry.tools_for_set(tool_set)
             };
             merge_tool_defs(base_tools, include, tool_registry)
@@ -804,7 +810,13 @@ fn resolve_tools(
             tool_registry.tools_from_names(names.iter().map(String::as_str))
         }
         ToolSelection::All => tool_registry.definitions().to_vec(),
+    };
+
+    if !config.subagents.enabled {
+        tools.retain(|tool| !tool.name.eq_ignore_ascii_case("Invoke_Subagent"));
     }
+
+    tools
 }
 
 struct StreamState {
@@ -825,7 +837,10 @@ impl StreamState {
     }
 }
 
-async fn ensure_not_interrupted(sender: &EventSender, partial_content: Option<String>) -> Result<()> {
+async fn ensure_not_interrupted(
+    sender: &EventSender,
+    partial_content: Option<String>,
+) -> Result<()> {
     if interrupt::is_interrupted() {
         sender
             .send_important(AgentEvent::Interrupted { partial_content })
@@ -929,10 +944,7 @@ async fn handle_stream_event(
             emit_reasoning_completion(provider, sender, &mut state.turn, index).await;
             emit_tool_input_completion(sender, &state.turn, index).await;
         }
-        StreamEvent::MessageDelta {
-            stop_reason,
-            usage,
-        } => {
+        StreamEvent::MessageDelta { stop_reason, usage } => {
             state.stop_reason = stop_reason;
             emit_message_delta_usage(sender, usage).await;
         }
@@ -956,7 +968,13 @@ async fn handle_stream_event(
             id,
             encrypted_content,
             summary,
-        } => apply_openai_reasoning_completion(&mut state.turn, index, id, encrypted_content, summary),
+        } => apply_openai_reasoning_completion(
+            &mut state.turn,
+            index,
+            id,
+            encrypted_content,
+            summary,
+        ),
         _ => {}
     }
     Ok(())
@@ -1043,7 +1061,10 @@ fn apply_openai_reasoning_completion(
     summary: Option<String>,
 ) {
     if let Some(tb) = turn.find_thinking_mut(index) {
-        if !tb.had_delta && tb.text.is_empty() && let Some(s) = summary {
+        if !tb.had_delta
+            && tb.text.is_empty()
+            && let Some(s) = summary
+        {
             tb.text = s;
         }
         tb.replay = Some(ReplayToken::OpenAI {
@@ -1080,9 +1101,14 @@ async fn emit_reasoning_completion(
     }
 }
 
-async fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder, index: usize) {
+async fn emit_tool_input_completion(
+    sender: &EventSender,
+    turn: &AssistantTurnBuilder,
+    index: usize,
+) {
     if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
-        let input: Value = serde_json::from_str(&tu.input_json).unwrap_or_else(|_| serde_json::json!({}));
+        let input: Value =
+            serde_json::from_str(&tu.input_json).unwrap_or_else(|_| serde_json::json!({}));
         sender
             .send_important(AgentEvent::ToolInputCompleted {
                 id: tu.id.clone(),
@@ -1194,7 +1220,10 @@ async fn emit_malformed_tool_events(
     }
 }
 
-async fn finalize_tool_calls(turn: &mut AssistantTurnBuilder, sender: &EventSender) -> ToolTurnOutcome {
+async fn finalize_tool_calls(
+    turn: &mut AssistantTurnBuilder,
+    sender: &EventSender,
+) -> ToolTurnOutcome {
     let mut executable = Vec::with_capacity(turn.tool_uses.len());
     let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
     let mut malformed_results = Vec::new();

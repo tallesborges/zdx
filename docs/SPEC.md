@@ -172,7 +172,7 @@ Error:
 
 - Location: `<base>/config.toml`
 - Format: TOML
-- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `thinking_level`
+- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `thinking_level`, `subagents.*`
   - `max_tokens` is optional; when unset, requests use the model output limit (exclusive, minus 1).
 - Provider base URLs:
   - `[providers.anthropic].base_url`
@@ -186,18 +186,21 @@ Error:
   - `[providers.gemini_cli].base_url` (unused; reserved)
 - Provider tool configuration:
   - `[providers.<provider>].tools` — list of enabled tools
-  - Available tools: `bash`, `apply_patch`, `edit`, `fetch_webpage`, `read`, `read_thread`, `subagent`, `web_search`, `write`
+  - Available tools: `bash`, `apply_patch`, `edit`, `fetch_webpage`, `invoke_subagent`, `read`, `read_thread`, `web_search`, `write`
   - Default tool sets:
-    - Most providers: `["bash", "edit", "fetch_webpage", "read", "read_thread", "subagent", "web_search", "write"]`
-    - OpenAI Codex: `["bash", "apply_patch", "fetch_webpage", "read", "read_thread", "subagent", "web_search"]`
+    - Most providers: `["bash", "edit", "fetch_webpage", "invoke_subagent", "read", "read_thread", "web_search", "write"]`
+    - OpenAI Codex: `["bash", "apply_patch", "fetch_webpage", "invoke_subagent", "read", "read_thread", "web_search"]`
 - Models registry:
   - `[providers.<provider>]` (`enabled`, `models`)
   - `models` entries support `*` wildcards for `zdx models update`.
   - Registry path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
 - Skills:
-  - `[skills]` enable flags for sources (`enable_zdx_user`, `enable_zdx_project`, `enable_codex_user`, `enable_claude_user`, `enable_claude_project`, `enable_agents_user`, `enable_agents_project`).
+  - `[skills.sources]` source flags (`zdx_user`, `zdx_project`, `codex_user`, `claude_user`, `claude_project`, `agents_user`, `agents_project`).
   - `skill_repositories`: list of GitHub repo paths (`owner/repo/path`) used by the skill installer overlay.
   - Optional glob filters: `ignored_skills`, `include_skills`.
+- Subagents:
+  - `[subagents].enabled` — enable/disable `invoke_subagent` tool exposure.
+  - `[subagents].allowed_models` — allowed models for `invoke_subagent` (empty means any).
 
 ---
 
