@@ -946,242 +946,169 @@ pub fn set_thread_title(id: &str, title: Option<String>) -> Result<Option<String
 
 /// Converts thread events to chat messages for API replay.
 pub fn thread_events_to_messages(events: Vec<ThreadEvent>) -> Vec<crate::providers::ChatMessage> {
-    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent, ReasoningBlock};
-
-    let mut messages: Vec<ChatMessage> = Vec::new();
-
-    // Track pending assistant content to group into single messages
-    // (reasoning blocks + tool uses belong to the same assistant turn)
-    let mut pending_reasoning: Vec<ReasoningBlock> = Vec::new();
-    let mut pending_tool_uses: Vec<(String, String, Value)> = Vec::new(); // (id, name, input)
-    let mut pending_tool_results: Vec<crate::tools::ToolResult> = Vec::new();
-    let mut open_tool_uses: Vec<String> = Vec::new();
-
-    // Flush tool results before starting a new assistant turn.
-    let flush_tool_results =
-        |messages: &mut Vec<ChatMessage>, pending: &mut Vec<crate::tools::ToolResult>| {
-            if !pending.is_empty() {
-                messages.push(ChatMessage::tool_results(std::mem::take(pending)));
-            }
-        };
-
-    let flush_pending_assistant =
-        |messages: &mut Vec<ChatMessage>,
-         pending_reasoning: &mut Vec<ReasoningBlock>,
-         pending_tool_uses: &mut Vec<(String, String, Value)>,
-         pending_tool_results: &mut Vec<crate::tools::ToolResult>| {
-            // First, flush any pending thinking/tool_use as an assistant message
-            if !pending_reasoning.is_empty() || !pending_tool_uses.is_empty() {
-                let mut blocks: Vec<ChatContentBlock> = Vec::new();
-
-                // Add reasoning blocks first
-                for reasoning in std::mem::take(pending_reasoning) {
-                    blocks.push(ChatContentBlock::Reasoning(reasoning));
-                }
-
-                // Add tool_use blocks
-                for (id, name, input) in std::mem::take(pending_tool_uses) {
-                    blocks.push(ChatContentBlock::ToolUse { id, name, input });
-                }
-
-                if !blocks.is_empty() {
-                    messages.push(ChatMessage::assistant_blocks(blocks));
-                }
-            }
-
-            // Then, flush any pending tool results as a user message
-            // (This is separate because tool_results may need to be flushed
-            // even when thinking/tool_use have already been flushed)
-            if !pending_tool_results.is_empty() {
-                messages.push(ChatMessage::tool_results(std::mem::take(
-                    pending_tool_results,
-                )));
-            }
-        };
-
+    let mut replay = MessageReplay::new();
     for event in events {
+        replay.handle_event(event);
+    }
+    replay.finalize()
+}
+
+struct MessageReplay {
+    messages: Vec<crate::providers::ChatMessage>,
+    pending_reasoning: Vec<crate::providers::ReasoningBlock>,
+    pending_tool_uses: Vec<(String, String, Value)>,
+    pending_tool_results: Vec<crate::tools::ToolResult>,
+    open_tool_uses: Vec<String>,
+}
+
+impl MessageReplay {
+    fn new() -> Self {
+        Self {
+            messages: Vec::new(),
+            pending_reasoning: Vec::new(),
+            pending_tool_uses: Vec::new(),
+            pending_tool_results: Vec::new(),
+            open_tool_uses: Vec::new(),
+        }
+    }
+
+    fn handle_event(&mut self, event: ThreadEvent) {
         match event {
-            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {
-                // Skip meta/usage events
-            }
-            ThreadEvent::Message { role, text, .. } => {
-                // For assistant messages with pending reasoning (but no pending tool uses),
-                // combine them into one message. The API requires reasoning blocks and
-                // subsequent content in the same turn.
-                //
-                // If there are pending tool uses, the reasoning belongs with those,
-                // so we flush normally (reasoning + tool_use go together).
-                if role == "assistant"
-                    && !pending_reasoning.is_empty()
-                    && pending_tool_uses.is_empty()
-                {
-                    flush_tool_results(&mut messages, &mut pending_tool_results);
-
-                    let mut blocks: Vec<ChatContentBlock> = Vec::new();
-
-                    // Add reasoning blocks first
-                    for reasoning in std::mem::take(&mut pending_reasoning) {
-                        blocks.push(ChatContentBlock::Reasoning(reasoning));
-                    }
-
-                    // Add the text block
-                    if !text.is_empty() {
-                        blocks.push(ChatContentBlock::Text(text));
-                    }
-
-                    messages.push(ChatMessage::assistant_blocks(blocks));
-                } else {
-                    // Flush any pending assistant content before adding a new message
-                    flush_pending_assistant(
-                        &mut messages,
-                        &mut pending_reasoning,
-                        &mut pending_tool_uses,
-                        &mut pending_tool_results,
-                    );
-
-                    messages.push(ChatMessage {
-                        role,
-                        content: MessageContent::Text(text),
-                    });
-                }
-            }
+            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {}
+            ThreadEvent::Message { role, text, .. } => self.handle_message(role, text),
             ThreadEvent::Reasoning { text, replay, .. } => {
-                flush_tool_results(&mut messages, &mut pending_tool_results);
-                pending_reasoning.push(ReasoningBlock { text, replay });
+                self.flush_tool_results();
+                self.pending_reasoning
+                    .push(crate::providers::ReasoningBlock { text, replay });
             }
             ThreadEvent::ToolUse {
                 id, name, input, ..
             } => {
-                flush_tool_results(&mut messages, &mut pending_tool_results);
-                open_tool_uses.push(id.clone());
-                pending_tool_uses.push((id, name, input));
+                self.flush_tool_results();
+                self.open_tool_uses.push(id.clone());
+                self.pending_tool_uses.push((id, name, input));
             }
             ThreadEvent::ToolResult {
                 tool_use_id,
                 output,
                 ok,
                 ..
-            } => {
-                open_tool_uses.retain(|id| id != &tool_use_id);
-                // Flush pending assistant content (reasoning + tool_use) before adding results.
-                // This ensures the tool_use assistant message is closed, so any subsequent
-                // thinking blocks belong to the next assistant turn, not the tool_use turn.
-                flush_pending_assistant(
-                    &mut messages,
-                    &mut pending_reasoning,
-                    &mut pending_tool_uses,
-                    &mut pending_tool_results,
-                );
-
-                pending_tool_results.push(crate::tools::ToolResult {
-                    tool_use_id,
-                    content: crate::tools::ToolResultContent::Text(
-                        serde_json::to_string(&output).unwrap_or_default(),
-                    ),
-                    is_error: !ok,
-                });
-            }
+            } => self.handle_tool_result(tool_use_id, &output, ok),
             ThreadEvent::Interrupted {
                 partial_content, ..
-            } => {
-                // 1. Flush pending tool results FIRST (from completed tools)
-                // This ensures correct ordering: tool_results → assistant(partial) → abort marker
-                if !pending_tool_results.is_empty() {
-                    messages.push(ChatMessage::tool_results(std::mem::take(
-                        &mut pending_tool_results,
-                    )));
-                }
+            } => self.handle_interrupted(partial_content),
+        }
+    }
 
-                // 2. Build single assistant message with pending reasoning + tool_use + partial text
-                let mut blocks: Vec<ChatContentBlock> = Vec::new();
+    fn handle_message(&mut self, role: String, text: String) {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
-                // Add reasoning blocks
-                for reasoning in std::mem::take(&mut pending_reasoning) {
-                    blocks.push(ChatContentBlock::Reasoning(reasoning));
-                }
-
-                // Add tool_use blocks
-                for (id, name, input) in std::mem::take(&mut pending_tool_uses) {
-                    blocks.push(ChatContentBlock::ToolUse { id, name, input });
-                }
-
-                // Add partial text if present
-                if let Some(ref content) = partial_content
-                    && !content.is_empty()
-                {
-                    blocks.push(ChatContentBlock::Text(content.clone()));
-                }
-
-                // Emit merged assistant message if non-empty
-                if !blocks.is_empty() {
-                    messages.push(ChatMessage {
-                        role: "assistant".to_string(),
-                        content: MessageContent::Blocks(blocks),
-                    });
-                }
-
-                // 3. Synthesize error results for open tool uses
-                for tool_use_id in std::mem::take(&mut open_tool_uses) {
-                    let output = serde_json::json!({
-                        "ok": false,
-                        "error": {
-                            "code": "cancelled",
-                            "message": "Tool call was cancelled by user."
-                        }
-                    });
-                    pending_tool_results.push(crate::tools::ToolResult {
-                        tool_use_id,
-                        content: crate::tools::ToolResultContent::Text(
-                            serde_json::to_string(&output).unwrap_or_default(),
-                        ),
-                        is_error: true,
-                    });
-                }
-                if !pending_tool_results.is_empty() {
-                    messages.push(ChatMessage::tool_results(std::mem::take(
-                        &mut pending_tool_results,
-                    )));
-                }
+        if role == "assistant" && !self.pending_reasoning.is_empty() && self.pending_tool_uses.is_empty()
+        {
+            self.flush_tool_results();
+            let mut blocks = self.take_assistant_blocks();
+            if !text.is_empty() {
+                blocks.push(ChatContentBlock::Text(text));
             }
+            self.messages.push(ChatMessage::assistant_blocks(blocks));
+            return;
+        }
+
+        self.flush_pending_assistant();
+        self.messages.push(ChatMessage {
+            role,
+            content: MessageContent::Text(text),
+        });
+    }
+
+    fn handle_tool_result(&mut self, tool_use_id: String, output: &Value, ok: bool) {
+        self.open_tool_uses.retain(|id| id != &tool_use_id);
+        self.flush_pending_assistant();
+        self.pending_tool_results.push(crate::tools::ToolResult {
+            tool_use_id,
+            content: crate::tools::ToolResultContent::Text(
+                serde_json::to_string(output).unwrap_or_default(),
+            ),
+            is_error: !ok,
+        });
+    }
+
+    fn handle_interrupted(&mut self, partial_content: Option<String>) {
+        use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+        self.flush_tool_results();
+        let mut blocks = self.take_assistant_blocks();
+        if let Some(content) = partial_content && !content.is_empty() {
+            blocks.push(ChatContentBlock::Text(content));
+        }
+        if !blocks.is_empty() {
+            self.messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(blocks),
+            });
+        }
+
+        for tool_use_id in std::mem::take(&mut self.open_tool_uses) {
+            self.pending_tool_results
+                .push(cancelled_tool_result(tool_use_id));
+        }
+        self.flush_tool_results();
+    }
+
+    fn flush_tool_results(&mut self) {
+        if !self.pending_tool_results.is_empty() {
+            self.messages.push(crate::providers::ChatMessage::tool_results(
+                std::mem::take(&mut self.pending_tool_results),
+            ));
         }
     }
 
-    // Flush any remaining pending assistant content
-    flush_pending_assistant(
-        &mut messages,
-        &mut pending_reasoning,
-        &mut pending_tool_uses,
-        &mut pending_tool_results,
-    );
-
-    // If the thread ends with open tool uses, synthesize error results for resume.
-    if !open_tool_uses.is_empty() {
-        for tool_use_id in open_tool_uses.drain(..) {
-            let output = serde_json::json!({
-                "ok": false,
-                "error": {
-                    "code": "cancelled",
-                    "message": "Tool call was cancelled by user."
-                }
-            });
-            pending_tool_results.push(crate::tools::ToolResult {
-                tool_use_id,
-                content: crate::tools::ToolResultContent::Text(
-                    serde_json::to_string(&output).unwrap_or_default(),
-                ),
-                is_error: true,
-            });
+    fn take_assistant_blocks(&mut self) -> Vec<crate::providers::ChatContentBlock> {
+        let mut blocks = Vec::new();
+        for reasoning in std::mem::take(&mut self.pending_reasoning) {
+            blocks.push(crate::providers::ChatContentBlock::Reasoning(reasoning));
         }
-
-        flush_pending_assistant(
-            &mut messages,
-            &mut pending_reasoning,
-            &mut pending_tool_uses,
-            &mut pending_tool_results,
-        );
+        for (id, name, input) in std::mem::take(&mut self.pending_tool_uses) {
+            blocks.push(crate::providers::ChatContentBlock::ToolUse { id, name, input });
+        }
+        blocks
     }
 
-    messages
+    fn flush_pending_assistant(&mut self) {
+        let blocks = self.take_assistant_blocks();
+        if !blocks.is_empty() {
+            self.messages
+                .push(crate::providers::ChatMessage::assistant_blocks(blocks));
+        }
+        self.flush_tool_results();
+    }
+
+    fn finalize(mut self) -> Vec<crate::providers::ChatMessage> {
+        self.flush_pending_assistant();
+        for tool_use_id in self.open_tool_uses.drain(..) {
+            self.pending_tool_results
+                .push(cancelled_tool_result(tool_use_id));
+        }
+        self.flush_pending_assistant();
+        self.messages
+    }
+}
+
+fn cancelled_tool_result(tool_use_id: String) -> crate::tools::ToolResult {
+    let output = serde_json::json!({
+        "ok": false,
+        "error": {
+            "code": "cancelled",
+            "message": "Tool call was cancelled by user."
+        }
+    });
+    crate::tools::ToolResult {
+        tool_use_id,
+        content: crate::tools::ToolResultContent::Text(
+            serde_json::to_string(&output).unwrap_or_default(),
+        ),
+        is_error: true,
+    }
 }
 
 /// Extracts usage from thread events for thread restore.

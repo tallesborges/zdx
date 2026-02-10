@@ -115,150 +115,199 @@ pub async fn update(config: &config::Config) -> Result<()> {
     let url = std::env::var("MODELS_DEV_URL").unwrap_or_else(|_| MODELS_DEV_URL.to_string());
     let api = fetch_api(&url).await?;
 
-    let providers = [
-        ("anthropic", "anthropic", None, &config.providers.anthropic),
-        (
-            "claude-cli",
-            "anthropic",
-            Some("claude-cli"),
-            &config.providers.claude_cli,
-        ),
-        ("openai", "openai", Some("openai"), &config.providers.openai),
-        (
-            "openai-codex",
-            "openai",
-            None,
-            &config.providers.openai_codex,
-        ),
-        (
-            "openrouter",
-            "openrouter",
-            Some("openrouter"),
-            &config.providers.openrouter,
-        ),
-        (
-            "moonshot",
-            "moonshotai",
-            Some("moonshot"),
-            &config.providers.moonshot,
-        ),
-        (
-            "stepfun",
-            "stepfun",
-            Some("stepfun"),
-            &config.providers.stepfun,
-        ),
-        ("mimo", "xiaomi", Some("mimo"), &config.providers.mimo),
-        ("gemini", "google", Some("gemini"), &config.providers.gemini),
-        (
-            "gemini-cli",
-            "google",
-            Some("gemini-cli"),
-            &config.providers.gemini_cli,
-        ),
-    ];
-
-    let mut records = Vec::new();
-    let mut seen_keys = HashSet::new();
-
-    for (provider_id, api_id, prefix, provider_cfg) in providers {
-        // Include all providers in the registry regardless of enabled status.
-        // The registry is used for model lookups (e.g., checking reasoning support)
-        // which should work even if the provider isn't currently enabled.
-        if provider_cfg.models.is_empty() {
-            eprintln!("Warning: providers.{provider_id}.models is empty; skipping.");
-            continue;
-        }
-
-        let Some(provider_entry) = api.providers.get(api_id) else {
-            eprintln!(
-                "Warning: provider '{api_id}' not found in models.dev response; falling back to defaults"
-            );
-            let mut fallback = Vec::new();
-            for pattern in &provider_cfg.models {
-                let pattern = pattern.trim();
-                if pattern.is_empty() {
-                    continue;
-                }
-                if is_pure_wildcard(pattern) {
-                    eprintln!(
-                        "Warning: wildcard pattern '{pattern}' for provider '{provider_id}' requires models.dev data"
-                    );
-                    continue;
-                }
-                fallback.push(create_default_candidate(provider_id, prefix, pattern));
-            }
-
-            if fallback.is_empty() {
-                continue;
-            }
-
-            for candidate in fallback {
-                let record = ModelRecord {
-                    id: candidate.full_id,
-                    provider: provider_id.to_string(),
-                    display_name: candidate.display_name,
-                    context_limit: candidate.context_limit,
-                    pricing: candidate.pricing,
-                    capabilities: candidate.capabilities,
-                };
-                let key = record_key(&record);
-                if !seen_keys.insert(key) {
-                    continue;
-                }
-                records.push(record);
-            }
-            continue;
-        };
-
-        let Some(models_map) = provider_entry.models.as_ref() else {
-            bail!("Provider '{api_id}' has no models in models.dev response");
-        };
-
-        let candidates = build_candidates(provider_id, prefix, models_map);
-        let select_result = select_candidates(provider_id, &provider_cfg.models, &candidates);
-
-        // Create default candidates for unmatched patterns
-        let mut all_selected: Vec<ModelCandidate> = select_result.matched;
-        for pattern in &select_result.unmatched_patterns {
-            let default_candidate = create_default_candidate(provider_id, prefix, pattern);
-            eprintln!(
-                "Info: creating default entry for '{}' (not found in models.dev)",
-                default_candidate.full_id
-            );
-            all_selected.push(default_candidate);
-        }
-
-        if all_selected.is_empty() {
-            eprintln!("Warning: no models matched providers.{provider_id}.models");
-            continue;
-        }
-
-        for candidate in all_selected {
-            let record = ModelRecord {
-                id: candidate.full_id,
-                provider: provider_id.to_string(),
-                display_name: candidate.display_name,
-                context_limit: candidate.context_limit,
-                pricing: candidate.pricing,
-                capabilities: candidate.capabilities,
-            };
-            let key = record_key(&record);
-            if !seen_keys.insert(key) {
-                continue;
-            }
-            records.push(record);
-        }
+    let mut state = UpdateState::default();
+    for spec in provider_specs(config) {
+        collect_provider_records(&spec, &api, &mut state)?;
     }
 
-    if records.is_empty() {
+    if state.records.is_empty() {
         bail!("No models matched configured providers/models.");
     }
 
     let out_path = config.models_path();
-    write_models_file(&out_path, &records)?;
+    write_models_file(&out_path, &state.records)?;
     println!("Updated models at {}", out_path.display());
     Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct ProviderSpec<'a> {
+    provider_id: &'static str,
+    api_id: &'static str,
+    prefix: Option<&'static str>,
+    provider_cfg: &'a config::ProviderConfig,
+}
+
+#[derive(Default)]
+struct UpdateState {
+    records: Vec<ModelRecord>,
+    seen_keys: HashSet<String>,
+}
+
+impl UpdateState {
+    fn push_candidate(&mut self, provider_id: &str, candidate: ModelCandidate) {
+        let record = ModelRecord {
+            id: candidate.full_id,
+            provider: provider_id.to_string(),
+            display_name: candidate.display_name,
+            context_limit: candidate.context_limit,
+            pricing: candidate.pricing,
+            capabilities: candidate.capabilities,
+        };
+        let key = record_key(&record);
+        if self.seen_keys.insert(key) {
+            self.records.push(record);
+        }
+    }
+}
+
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 10] {
+    [
+        ProviderSpec {
+            provider_id: "anthropic",
+            api_id: "anthropic",
+            prefix: None,
+            provider_cfg: &config.providers.anthropic,
+        },
+        ProviderSpec {
+            provider_id: "claude-cli",
+            api_id: "anthropic",
+            prefix: Some("claude-cli"),
+            provider_cfg: &config.providers.claude_cli,
+        },
+        ProviderSpec {
+            provider_id: "openai",
+            api_id: "openai",
+            prefix: Some("openai"),
+            provider_cfg: &config.providers.openai,
+        },
+        ProviderSpec {
+            provider_id: "openai-codex",
+            api_id: "openai",
+            prefix: None,
+            provider_cfg: &config.providers.openai_codex,
+        },
+        ProviderSpec {
+            provider_id: "openrouter",
+            api_id: "openrouter",
+            prefix: Some("openrouter"),
+            provider_cfg: &config.providers.openrouter,
+        },
+        ProviderSpec {
+            provider_id: "moonshot",
+            api_id: "moonshotai",
+            prefix: Some("moonshot"),
+            provider_cfg: &config.providers.moonshot,
+        },
+        ProviderSpec {
+            provider_id: "stepfun",
+            api_id: "stepfun",
+            prefix: Some("stepfun"),
+            provider_cfg: &config.providers.stepfun,
+        },
+        ProviderSpec {
+            provider_id: "mimo",
+            api_id: "xiaomi",
+            prefix: Some("mimo"),
+            provider_cfg: &config.providers.mimo,
+        },
+        ProviderSpec {
+            provider_id: "gemini",
+            api_id: "google",
+            prefix: Some("gemini"),
+            provider_cfg: &config.providers.gemini,
+        },
+        ProviderSpec {
+            provider_id: "gemini-cli",
+            api_id: "google",
+            prefix: Some("gemini-cli"),
+            provider_cfg: &config.providers.gemini_cli,
+        },
+    ]
+}
+
+fn collect_provider_records(
+    spec: &ProviderSpec<'_>,
+    api: &ApiResponse,
+    state: &mut UpdateState,
+) -> Result<()> {
+    // Include all providers in the registry regardless of enabled status.
+    // The registry is used for model lookups (e.g., checking reasoning support)
+    // which should work even if the provider isn't currently enabled.
+    if spec.provider_cfg.models.is_empty() {
+        eprintln!(
+            "Warning: providers.{}.models is empty; skipping.",
+            spec.provider_id
+        );
+        return Ok(());
+    }
+
+    let Some(provider_entry) = api.providers.get(spec.api_id) else {
+        eprintln!(
+            "Warning: provider '{}' not found in models.dev response; falling back to defaults",
+            spec.api_id
+        );
+        for candidate in fallback_candidates(spec) {
+            state.push_candidate(spec.provider_id, candidate);
+        }
+        return Ok(());
+    };
+
+    let Some(models_map) = provider_entry.models.as_ref() else {
+        bail!("Provider '{}' has no models in models.dev response", spec.api_id);
+    };
+
+    let all_selected = selected_candidates(spec, models_map);
+    if all_selected.is_empty() {
+        eprintln!(
+            "Warning: no models matched providers.{}.models",
+            spec.provider_id
+        );
+        return Ok(());
+    }
+
+    for candidate in all_selected {
+        state.push_candidate(spec.provider_id, candidate);
+    }
+    Ok(())
+}
+
+fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
+    let mut fallback = Vec::new();
+    for pattern in &spec.provider_cfg.models {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+        if is_pure_wildcard(pattern) {
+            eprintln!(
+                "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
+                pattern, spec.provider_id
+            );
+            continue;
+        }
+        fallback.push(create_default_candidate(spec.provider_id, spec.prefix, pattern));
+    }
+    fallback
+}
+
+fn selected_candidates(
+    spec: &ProviderSpec<'_>,
+    models_map: &std::collections::BTreeMap<String, ModelEntry>,
+) -> Vec<ModelCandidate> {
+    let candidates = build_candidates(spec.provider_id, spec.prefix, models_map);
+    let select_result = select_candidates(spec.provider_id, &spec.provider_cfg.models, &candidates);
+
+    let mut all_selected = select_result.matched;
+    for pattern in &select_result.unmatched_patterns {
+        let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
+        eprintln!(
+            "Info: creating default entry for '{}' (not found in models.dev)",
+            default_candidate.full_id
+        );
+        all_selected.push(default_candidate);
+    }
+    all_selected
 }
 
 async fn fetch_api(url: &str) -> Result<ApiResponse> {

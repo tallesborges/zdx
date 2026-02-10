@@ -321,6 +321,25 @@ pub mod paths {
 
     use std::path::PathBuf;
 
+    /// Returns the current user's home directory, if available.
+    pub fn home_dir() -> Option<PathBuf> {
+        if let Some(home) = std::env::var_os("HOME") {
+            let path = PathBuf::from(home);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+
+        if let Some(user_profile) = std::env::var_os("USERPROFILE") {
+            let path = PathBuf::from(user_profile);
+            if !path.as_os_str().is_empty() {
+                return Some(path);
+            }
+        }
+
+        None
+    }
+
     /// Returns the ZDX home directory.
     ///
     /// Checks `ZDX_HOME` env var first, falls back to ~/.zdx
@@ -332,7 +351,7 @@ pub mod paths {
             return PathBuf::from(home);
         }
 
-        dirs::home_dir()
+        home_dir()
             .map(|h| h.join(".zdx"))
             .expect("Could not determine home directory")
     }

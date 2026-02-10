@@ -42,7 +42,7 @@ fn load_thread_content(thread_id: &str) -> Result<String, String> {
 }
 
 /// Processes subagent output into a Result.
-fn process_subagent_output(output: std::process::Output) -> Result<String, String> {
+fn process_subagent_output(output: &std::process::Output) -> Result<String, String> {
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!("Handoff generation failed: {}", stderr.trim()));
@@ -104,7 +104,7 @@ async fn run_subagent(
             output
                 .map_err(|_elapsed| format!("Handoff generation timed out after {HANDOFF_TIMEOUT_SECS} seconds"))
                 .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))
-                .and_then(process_subagent_output)
+                .and_then(|output| process_subagent_output(&output))
         }
     }
 }

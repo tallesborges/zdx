@@ -229,13 +229,7 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
 fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let file = match File::open(path) {
         Ok(f) => f,
-        Err(e) => {
-            return ToolOutput::failure(
-                "read_error",
-                format!("Failed to read file '{}'", path.display()),
-                Some(format!("OS error: {e}")),
-            );
-        }
+        Err(e) => return read_text_error(path, &e),
     };
 
     let mut reader = BufReader::new(file);
@@ -244,106 +238,21 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let mut accumulated_bytes: usize = 0;
     let mut byte_limited = false;
     let mut buffer = Vec::with_capacity(MAX_LINE_BYTES);
-
-    // Convert 1-indexed offset to 0-indexed for comparison
     let start_line = offset.saturating_sub(1);
 
     loop {
-        buffer.clear();
-        let mut drained_line_ending_for_line: Option<&'static str> = None;
-
-        // Read up to MAX_LINE_BYTES or until newline
-        let bytes_read = match reader
-            .by_ref()
-            .take(MAX_LINE_BYTES as u64)
-            .read_until(b'\n', &mut buffer)
-        {
-            Ok(n) => n,
-            Err(e) => {
-                return ToolOutput::failure(
-                    "read_error",
-                    format!("Failed to read file '{}'", path.display()),
-                    Some(format!("OS error: {e}")),
-                );
-            }
+        let read = match read_next_line(&mut reader, &mut buffer, path) {
+            Ok(None) => break,
+            Ok(Some(read)) => read,
+            Err(output) => return output,
         };
-
-        if bytes_read == 0 {
-            break; // EOF
-        }
-
         total_lines += 1;
-
-        // Check if we hit MAX_LINE_BYTES without finding newline (huge line)
-        // Need to drain remainder of line to count properly
-        let found_newline = buffer.last() == Some(&b'\n');
-        if !found_newline && bytes_read == MAX_LINE_BYTES {
-            // Drain rest of this line without discarding bytes after newline.
-            let mut drained_line_ending = None;
-            loop {
-                let available = match reader.fill_buf() {
-                    Ok(buf) => buf,
-                    Err(e) => {
-                        return ToolOutput::failure(
-                            "read_error",
-                            format!("Failed to read file '{}'", path.display()),
-                            Some(format!("OS error: {e}")),
-                        );
-                    }
-                };
-
-                if available.is_empty() {
-                    break; // EOF
-                }
-
-                if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-                    drained_line_ending = Some(if pos > 0 && available[pos - 1] == b'\r' {
-                        "\r\n"
-                    } else {
-                        "\n"
-                    });
-                    reader.consume(pos + 1);
-                    break;
-                }
-
-                let len = available.len();
-                reader.consume(len);
-            }
-            drained_line_ending_for_line = drained_line_ending;
-        }
-
-        // Current line index (0-indexed)
         let current_line_idx = total_lines - 1;
-
-        // Collect line if within range [start_line, start_line + limit)
-        // AND we haven't hit the byte limit yet
         if current_line_idx >= start_line && collected_lines.len() < limit && !byte_limited {
-            // Convert to string (lossy for invalid UTF-8)
-            let line_str = String::from_utf8_lossy(&buffer);
-            let line_str = line_str.as_ref();
-            let (line_body, line_ending) = if let Some(stripped) = line_str.strip_suffix("\r\n") {
-                (stripped, "\r\n")
-            } else if let Some(stripped) = line_str.strip_suffix('\n') {
-                (stripped, "\n")
-            } else {
-                let ending = if bytes_read == MAX_LINE_BYTES {
-                    // We drained the rest of this line; preserve detected line ending.
-                    drained_line_ending_for_line.unwrap_or("")
-                } else {
-                    ""
-                };
-                (line_str, ending)
-            };
-
-            // Truncate at MAX_LINE_LENGTH chars (silent, no marker), preserve line ending.
-            let mut truncated_line: String = line_body.chars().take(MAX_LINE_LENGTH).collect();
-            truncated_line.push_str(line_ending);
-
-            // Check if adding this line would exceed the byte limit
+            let truncated_line = format_truncated_line(&buffer, &read);
             let line_bytes = truncated_line.len();
             if accumulated_bytes + line_bytes > MAX_PAGE_BYTES {
                 byte_limited = true;
-                // Don't add this line; we've hit the byte limit
             } else {
                 accumulated_bytes += line_bytes;
                 collected_lines.push(truncated_line);
@@ -352,10 +261,7 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
     }
 
     let lines_shown = collected_lines.len();
-    // Truncated if there are more lines after our window OR we hit byte limit
     let truncated = (start_line + lines_shown) < total_lines || byte_limited;
-
-    // Join lines (they already include trailing newlines if present in original)
     let content = collected_lines.concat();
 
     ToolOutput::success(json!({
@@ -367,6 +273,98 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
         "truncated": truncated,
         "byte_limited": byte_limited
     }))
+}
+
+struct LineRead {
+    bytes_read: usize,
+    drained_line_ending: Option<&'static str>,
+}
+
+fn read_next_line(
+    reader: &mut BufReader<File>,
+    buffer: &mut Vec<u8>,
+    path: &Path,
+) -> Result<Option<LineRead>, ToolOutput> {
+    buffer.clear();
+    let bytes_read = reader
+        .by_ref()
+        .take(MAX_LINE_BYTES as u64)
+        .read_until(b'\n', buffer)
+        .map_err(|e| read_text_error(path, &e))?;
+    if bytes_read == 0 {
+        return Ok(None);
+    }
+
+    let found_newline = buffer.last() == Some(&b'\n');
+    let drained_line_ending = if !found_newline && bytes_read == MAX_LINE_BYTES {
+        drain_line_remainder(reader, path)?
+    } else {
+        None
+    };
+
+    Ok(Some(LineRead {
+        bytes_read,
+        drained_line_ending,
+    }))
+}
+
+fn drain_line_remainder(
+    reader: &mut BufReader<File>,
+    path: &Path,
+) -> Result<Option<&'static str>, ToolOutput> {
+    let mut drained_line_ending = None;
+    loop {
+        let available = reader.fill_buf().map_err(|e| read_text_error(path, &e))?;
+        if available.is_empty() {
+            break;
+        }
+        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
+            drained_line_ending = Some(if pos > 0 && available[pos - 1] == b'\r' {
+                "\r\n"
+            } else {
+                "\n"
+            });
+            reader.consume(pos + 1);
+            break;
+        }
+        let len = available.len();
+        reader.consume(len);
+    }
+    Ok(drained_line_ending)
+}
+
+fn format_truncated_line(buffer: &[u8], read: &LineRead) -> String {
+    let line_str = String::from_utf8_lossy(buffer);
+    let line_str = line_str.as_ref();
+    let (line_body, line_ending) = split_line_ending(line_str, read.bytes_read, read.drained_line_ending);
+    let mut truncated_line: String = line_body.chars().take(MAX_LINE_LENGTH).collect();
+    truncated_line.push_str(line_ending);
+    truncated_line
+}
+
+fn split_line_ending<'a>(
+    line_str: &'a str,
+    bytes_read: usize,
+    drained_line_ending: Option<&'static str>,
+) -> (&'a str, &'static str) {
+    if let Some(stripped) = line_str.strip_suffix("\r\n") {
+        return (stripped, "\r\n");
+    }
+    if let Some(stripped) = line_str.strip_suffix('\n') {
+        return (stripped, "\n");
+    }
+    if bytes_read == MAX_LINE_BYTES {
+        return (line_str, drained_line_ending.unwrap_or(""));
+    }
+    (line_str, "")
+}
+
+fn read_text_error(path: &Path, e: &std::io::Error) -> ToolOutput {
+    ToolOutput::failure(
+        "read_error",
+        format!("Failed to read file '{}'", path.display()),
+        Some(format!("OS error: {e}")),
+    )
 }
 
 #[cfg(test)]

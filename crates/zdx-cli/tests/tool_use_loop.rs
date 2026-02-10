@@ -41,7 +41,7 @@ async fn test_tool_use_loop_reads_file() {
 
     let mock_server = MockServer::start().await;
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
 
     let first_response = text_and_tool_use_sse(
         "I'll read that file for you.",
@@ -100,9 +100,9 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
 
     let mock_server = MockServer::start().await;
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse("toolu_abc123", "read", r#"{"path": "data.txt"}"#);
     let second_response = text_sse("Done!");
@@ -168,9 +168,9 @@ async fn test_tool_read_outside_root_allowed() {
 
     let mock_server = MockServer::start().await;
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let input_json = format!(r#"{{"path": "{outside_path}"}}"#);
     let first_response = tool_use_sse("toolu_evil", "read", &input_json);
@@ -231,7 +231,7 @@ async fn test_tool_shows_activity_indicator() {
     let second_response = text_sse("Done.");
 
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))
@@ -268,9 +268,9 @@ async fn test_tool_use_loop_writes_file() {
 
     let mock_server = MockServer::start().await;
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse(
         "toolu_write001",
@@ -349,9 +349,9 @@ async fn test_tool_use_loop_edits_file() {
 
     let mock_server = MockServer::start().await;
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
-    let second_request_body_clone = second_request_body.clone();
+    let second_request_body_clone = Arc::clone(&second_request_body);
 
     let first_response = tool_use_sse(
         "toolu_edit001",
@@ -431,7 +431,7 @@ async fn test_bash_tool_shows_debug_lines() {
     let second_response = text_sse("Command executed.");
 
     let call_count = Arc::new(AtomicUsize::new(0));
-    let call_count_clone = call_count.clone();
+    let call_count_clone = Arc::clone(&call_count);
 
     Mock::given(method("POST"))
         .and(path("/v1/messages"))

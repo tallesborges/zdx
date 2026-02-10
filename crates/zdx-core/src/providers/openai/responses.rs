@@ -131,294 +131,204 @@ fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
         ProviderError::new(ProviderErrorKind::HttpStatus, format!("Network error: {e}"))
     }
 }
-fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
-    use crate::providers::MessageContent;
 
+fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem> {
     let mut input = Vec::new();
     if let Some(prompt) = system {
-        input.push(InputItem {
-            id: None,
-            item_type: "message".to_string(),
-            role: Some("developer".to_string()),
-            content: Some(vec![InputContent::InputText {
-                text: prompt.to_string(),
-            }]),
-            call_id: None,
-            name: None,
-            arguments: None,
-            output: None,
-            encrypted_content: None,
-            summary: None,
-        });
+        input.push(message_item("developer", vec![InputContent::InputText {
+            text: prompt.to_string(),
+        }]));
     }
 
     for msg in messages {
-        match (&msg.role[..], &msg.content) {
-            ("user", MessageContent::Text(text)) => {
-                input.push(InputItem {
-                    id: None,
-                    item_type: "message".to_string(),
-                    role: Some("user".to_string()),
-                    content: Some(vec![InputContent::InputText { text: text.clone() }]),
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    output: None,
-                    encrypted_content: None,
-                    summary: None,
-                });
+        append_input_for_message(msg, &mut input);
+    }
+
+    input
+}
+
+fn append_input_for_message(msg: &ChatMessage, input: &mut Vec<InputItem>) {
+    use crate::providers::MessageContent;
+
+    match (&msg.role[..], &msg.content) {
+        ("user", MessageContent::Text(text)) => {
+            input.push(message_item(
+                "user",
+                vec![InputContent::InputText { text: text.clone() }],
+            ));
+        }
+        ("assistant", MessageContent::Text(text)) => {
+            input.push(message_item(
+                "assistant",
+                vec![InputContent::OutputText { text: text.clone() }],
+            ));
+        }
+        ("assistant", MessageContent::Blocks(blocks)) => {
+            append_assistant_blocks(blocks, input);
+        }
+        ("user", MessageContent::Blocks(blocks)) => append_user_blocks(blocks, input),
+        _ => {}
+    }
+}
+
+fn append_assistant_blocks(blocks: &[ChatContentBlock], input: &mut Vec<InputItem>) {
+    for block in blocks {
+        match block {
+            ChatContentBlock::Text(text) => {
+                input.push(message_item(
+                    "assistant",
+                    vec![InputContent::OutputText { text: text.clone() }],
+                ));
             }
-            ("assistant", MessageContent::Text(text)) => {
-                input.push(InputItem {
-                    id: None,
-                    item_type: "message".to_string(),
-                    role: Some("assistant".to_string()),
-                    content: Some(vec![InputContent::OutputText { text: text.clone() }]),
-                    call_id: None,
-                    name: None,
-                    arguments: None,
-                    output: None,
-                    encrypted_content: None,
-                    summary: None,
-                });
-            }
-            ("assistant", MessageContent::Blocks(blocks)) => {
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Text(text) => {
-                            input.push(InputItem {
-                                id: None,
-                                item_type: "message".to_string(),
-                                role: Some("assistant".to_string()),
-                                content: Some(vec![InputContent::OutputText {
-                                    text: text.clone(),
-                                }]),
-                                call_id: None,
-                                name: None,
-                                arguments: None,
-                                output: None,
-                                encrypted_content: None,
-                                summary: None,
-                            });
-                        }
-                        // Only replay reasoning blocks with OpenAI replay tokens
-                        ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
-                            if let Some(ReplayToken::OpenAI {
-                                id,
-                                encrypted_content,
-                            }) = replay.as_ref()
-                            {
-                                // Summary is REQUIRED when replaying reasoning items.
-                                // Use the text if available and non-empty, otherwise use a placeholder.
-                                let summary_text = text
-                                    .as_ref()
-                                    .filter(|t| !t.trim().is_empty())
-                                    .cloned()
-                                    .unwrap_or_else(|| "(reasoning)".to_string());
-                                let summary_items = vec![SummaryItem {
-                                    item_type: "summary_text",
-                                    text: summary_text,
-                                }];
-                                input.push(InputItem {
-                                    id: Some(id.clone()),
-                                    item_type: "reasoning".to_string(),
-                                    role: None,
-                                    content: None,
-                                    call_id: None,
-                                    name: None,
-                                    arguments: None,
-                                    output: None,
-                                    encrypted_content: Some(encrypted_content.clone()),
-                                    summary: Some(summary_items),
-                                });
-                            }
-                        }
-                        ChatContentBlock::ToolUse {
-                            id,
-                            name,
-                            input: arguments,
-                        } => {
-                            let arguments = serde_json::to_string(arguments)
-                                .unwrap_or_else(|_| "{}".to_string());
-                            let mut parts = id.split('|');
-                            let call_id = parts.next().unwrap_or("");
-                            let tool_id = parts.next().unwrap_or("");
-                            let call_id = (!call_id.is_empty()).then_some(call_id.to_string());
-                            let tool_id = (!tool_id.is_empty()).then_some(tool_id.to_string());
-
-                            input.push(InputItem {
-                                id: tool_id,
-                                item_type: "function_call".to_string(),
-                                role: None,
-                                content: None,
-                                call_id,
-                                name: Some(name.clone()),
-                                arguments: Some(arguments),
-                                output: None,
-                                encrypted_content: None,
-                                summary: None,
-                            });
-                        }
-                        ChatContentBlock::ToolResult(result) => {
-                            let (output, has_image) =
-                                extract_tool_result_with_image(&result.content);
-
-                            let call_id = result
-                                .tool_use_id
-                                .split('|')
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
-
-                            if call_id.is_empty() {
-                                continue;
-                            }
-
-                            // Add the function call output (text part)
-                            input.push(InputItem {
-                                id: None,
-                                item_type: "function_call_output".to_string(),
-                                role: None,
-                                content: None,
-                                call_id: Some(call_id),
-                                name: None,
-                                arguments: None,
-                                output: Some(output),
-                                encrypted_content: None,
-                                summary: None,
-                            });
-
-                            // If there's an image, add it as a separate user message
-                            // OpenAI Responses API doesn't support images in function_call_output
-                            if let Some((mime_type, data)) = has_image {
-                                let image_url = format!("data:{mime_type};base64,{data}");
-                                input.push(InputItem {
-                                    id: None,
-                                    item_type: "message".to_string(),
-                                    role: Some("user".to_string()),
-                                    content: Some(vec![InputContent::InputImage {
-                                        image_url,
-                                        detail: Some("auto".to_string()),
-                                    }]),
-                                    call_id: None,
-                                    name: None,
-                                    arguments: None,
-                                    output: None,
-                                    encrypted_content: None,
-                                    summary: None,
-                                });
-                            }
-                        }
-                        ChatContentBlock::Image { .. } => {}
-                    }
+            ChatContentBlock::Reasoning(ReasoningBlock { text, replay }) => {
+                if let Some(item) = reasoning_replay_item(text.as_deref(), replay.as_ref()) {
+                    input.push(item);
                 }
             }
-            ("user", MessageContent::Blocks(blocks)) => {
-                // Collect all content for this user message
-                let mut content_parts: Vec<InputContent> = Vec::new();
+            ChatContentBlock::ToolUse {
+                id,
+                name,
+                input: arguments,
+            } => input.push(function_call_item(id, name, arguments)),
+            ChatContentBlock::ToolResult(result) => append_tool_result(result, input),
+            ChatContentBlock::Image { .. } => {}
+        }
+    }
+}
 
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Text(text) => {
-                            content_parts.push(InputContent::InputText { text: text.clone() });
-                        }
-                        ChatContentBlock::Image { mime_type, data } => {
-                            let image_url = format!("data:{mime_type};base64,{data}");
-                            content_parts.push(InputContent::InputImage {
-                                image_url,
-                                detail: Some("auto".to_string()),
-                            });
-                        }
-                        ChatContentBlock::ToolResult(result) => {
-                            // First, flush any pending content as a user message
-                            if !content_parts.is_empty() {
-                                input.push(InputItem {
-                                    id: None,
-                                    item_type: "message".to_string(),
-                                    role: Some("user".to_string()),
-                                    content: Some(content_parts),
-                                    call_id: None,
-                                    name: None,
-                                    arguments: None,
-                                    output: None,
-                                    encrypted_content: None,
-                                    summary: None,
-                                });
-                                content_parts = Vec::new();
-                            }
-
-                            let (output, has_image) =
-                                extract_tool_result_with_image(&result.content);
-
-                            let call_id = result
-                                .tool_use_id
-                                .split('|')
-                                .next()
-                                .unwrap_or("")
-                                .to_string();
-
-                            if call_id.is_empty() {
-                                continue;
-                            }
-
-                            input.push(InputItem {
-                                id: None,
-                                item_type: "function_call_output".to_string(),
-                                role: None,
-                                content: None,
-                                call_id: Some(call_id),
-                                name: None,
-                                arguments: None,
-                                output: Some(output),
-                                encrypted_content: None,
-                                summary: None,
-                            });
-
-                            // If there's an image, add it as a separate user message
-                            if let Some((mime_type, data)) = has_image {
-                                let image_url = format!("data:{mime_type};base64,{data}");
-                                input.push(InputItem {
-                                    id: None,
-                                    item_type: "message".to_string(),
-                                    role: Some("user".to_string()),
-                                    content: Some(vec![InputContent::InputImage {
-                                        image_url,
-                                        detail: Some("auto".to_string()),
-                                    }]),
-                                    call_id: None,
-                                    name: None,
-                                    arguments: None,
-                                    output: None,
-                                    encrypted_content: None,
-                                    summary: None,
-                                });
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-
-                // Flush any remaining content
-                if !content_parts.is_empty() {
-                    input.push(InputItem {
-                        id: None,
-                        item_type: "message".to_string(),
-                        role: Some("user".to_string()),
-                        content: Some(content_parts),
-                        call_id: None,
-                        name: None,
-                        arguments: None,
-                        output: None,
-                        encrypted_content: None,
-                        summary: None,
-                    });
-                }
+fn append_user_blocks(blocks: &[ChatContentBlock], input: &mut Vec<InputItem>) {
+    let mut content_parts = Vec::new();
+    for block in blocks {
+        match block {
+            ChatContentBlock::Text(text) => {
+                content_parts.push(InputContent::InputText { text: text.clone() });
+            }
+            ChatContentBlock::Image { mime_type, data } => {
+                content_parts.push(input_image_content(mime_type, data));
+            }
+            ChatContentBlock::ToolResult(result) => {
+                flush_user_content_parts(input, &mut content_parts);
+                append_tool_result(result, input);
             }
             _ => {}
         }
     }
+    flush_user_content_parts(input, &mut content_parts);
+}
 
-    input
+fn flush_user_content_parts(input: &mut Vec<InputItem>, content_parts: &mut Vec<InputContent>) {
+    if content_parts.is_empty() {
+        return;
+    }
+    input.push(message_item("user", std::mem::take(content_parts)));
+}
+
+fn append_tool_result(result: &crate::tools::ToolResult, input: &mut Vec<InputItem>) {
+    let (output, has_image) = extract_tool_result_with_image(&result.content);
+    let call_id = result
+        .tool_use_id
+        .split('|')
+        .next()
+        .unwrap_or("")
+        .to_string();
+    if call_id.is_empty() {
+        return;
+    }
+
+    input.push(function_call_output_item(call_id, output));
+    if let Some((mime_type, data)) = has_image {
+        input.push(message_item("user", vec![input_image_content(&mime_type, &data)]));
+    }
+}
+
+fn reasoning_replay_item(text: Option<&str>, replay: Option<&ReplayToken>) -> Option<InputItem> {
+    let ReplayToken::OpenAI {
+        id,
+        encrypted_content,
+    } = replay?
+    else {
+        return None;
+    };
+
+    let summary_text = text
+        .filter(|value| !value.trim().is_empty())
+        .map_or_else(|| "(reasoning)".to_string(), str::to_owned);
+    Some(InputItem {
+        id: Some(id.clone()),
+        item_type: "reasoning".to_string(),
+        role: None,
+        content: None,
+        call_id: None,
+        name: None,
+        arguments: None,
+        output: None,
+        encrypted_content: Some(encrypted_content.clone()),
+        summary: Some(vec![SummaryItem {
+            item_type: "summary_text",
+            text: summary_text,
+        }]),
+    })
+}
+
+fn function_call_item(id: &str, name: &str, arguments: &serde_json::Value) -> InputItem {
+    let arguments = serde_json::to_string(arguments).unwrap_or_else(|_| "{}".to_string());
+    let mut parts = id.split('|');
+    let call_id = parts.next().and_then(non_empty_owned);
+    let tool_id = parts.next().and_then(non_empty_owned);
+
+    InputItem {
+        id: tool_id,
+        item_type: "function_call".to_string(),
+        role: None,
+        content: None,
+        call_id,
+        name: Some(name.to_string()),
+        arguments: Some(arguments),
+        output: None,
+        encrypted_content: None,
+        summary: None,
+    }
+}
+
+fn function_call_output_item(call_id: String, output: String) -> InputItem {
+    InputItem {
+        id: None,
+        item_type: "function_call_output".to_string(),
+        role: None,
+        content: None,
+        call_id: Some(call_id),
+        name: None,
+        arguments: None,
+        output: Some(output),
+        encrypted_content: None,
+        summary: None,
+    }
+}
+
+fn message_item(role: &str, content: Vec<InputContent>) -> InputItem {
+    InputItem {
+        id: None,
+        item_type: "message".to_string(),
+        role: Some(role.to_string()),
+        content: Some(content),
+        call_id: None,
+        name: None,
+        arguments: None,
+        output: None,
+        encrypted_content: None,
+        summary: None,
+    }
+}
+
+fn input_image_content(mime_type: &str, data: &str) -> InputContent {
+    InputContent::InputImage {
+        image_url: format!("data:{mime_type};base64,{data}"),
+        detail: Some("auto".to_string()),
+    }
+}
+
+fn non_empty_owned(value: &str) -> Option<String> {
+    (!value.is_empty()).then_some(value.to_string())
 }
 
 /// Extracts text and optional image from tool result content.

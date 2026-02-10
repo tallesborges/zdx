@@ -95,7 +95,7 @@ pub fn collect_agents_paths_with_zdx_home(root: &Path, zdx_home: &Path) -> Vec<P
     let canonical_root = root.canonicalize().ok();
 
     // 2-3. User home and ancestors (only if root is under home)
-    if let Some(home) = dirs::home_dir()
+    if let Some(home) = paths::home_dir()
         && let Some(ref cr) = canonical_root
         && let Ok(canonical_home) = home.canonicalize()
     {
@@ -420,7 +420,7 @@ mod tests {
         // Test that paths are collected in correct order when under home
         let zdx_home = tempdir().unwrap();
 
-        if let Some(home) = dirs::home_dir() {
+        if let Some(home) = paths::home_dir() {
             // Create a path that's conceptually under home
             // (we just verify the function produces ordered paths)
             let paths = collect_agents_paths_with_zdx_home(&home, zdx_home.path());

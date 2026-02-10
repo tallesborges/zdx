@@ -273,200 +273,19 @@ impl ChatCompletionRequest {
         system: Option<&str>,
     ) -> Self {
         let mut out_messages = Vec::new();
-
-        if let Some(prompt) = system
-            && !prompt.trim().is_empty()
-        {
-            out_messages.push(ChatCompletionMessage {
-                role: "system".to_string(),
-                content: Some(ChatMessageContent::Text(prompt.to_string())),
-                reasoning_content: None,
-                tool_calls: None,
-                tool_call_id: None,
-            });
-        }
-
+        push_system_message(system, &mut out_messages);
         for msg in messages {
-            match (&msg.role[..], &msg.content) {
-                ("user", MessageContent::Text(text)) => {
-                    out_messages.push(ChatCompletionMessage {
-                        role: "user".to_string(),
-                        content: Some(ChatMessageContent::Text(text.clone())),
-                        reasoning_content: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
-                }
-                ("assistant", MessageContent::Text(text)) => {
-                    out_messages.push(ChatCompletionMessage {
-                        role: "assistant".to_string(),
-                        content: Some(ChatMessageContent::Text(text.clone())),
-                        reasoning_content: None,
-                        tool_calls: None,
-                        tool_call_id: None,
-                    });
-                }
-                ("assistant", MessageContent::Blocks(blocks)) => {
-                    let mut text = String::new();
-                    let mut reasoning_content = String::new();
-                    let mut tool_calls = Vec::new();
-
-                    for block in blocks {
-                        match block {
-                            ChatContentBlock::Text(value) => text.push_str(value),
-                            ChatContentBlock::ToolUse { id, name, input } => {
-                                let args = serde_json::to_string(input)
-                                    .unwrap_or_else(|_| "{}".to_string());
-                                tool_calls.push(ChatToolCall {
-                                    id: id.clone(),
-                                    tool_type: "function",
-                                    function: ChatToolCallFunction {
-                                        name: name.clone(),
-                                        arguments: args,
-                                    },
-                                });
-                            }
-                            ChatContentBlock::Reasoning(reasoning) => {
-                                if config.include_reasoning_content
-                                    && let Some(text) = &reasoning.text
-                                {
-                                    reasoning_content.push_str(text);
-                                }
-                            }
-                            // Assistant images are not supported in chat-completions payloads.
-                            ChatContentBlock::ToolResult(_) | ChatContentBlock::Image { .. } => {}
-                        }
-                    }
-
-                    if text.is_empty() && tool_calls.is_empty() && reasoning_content.is_empty() {
-                        continue;
-                    }
-
-                    out_messages.push(ChatCompletionMessage {
-                        role: "assistant".to_string(),
-                        content: (!text.is_empty()).then_some(ChatMessageContent::Text(text)),
-                        reasoning_content: (!reasoning_content.is_empty())
-                            .then_some(reasoning_content),
-                        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
-                        tool_call_id: None,
-                    });
-                }
-                ("user", MessageContent::Blocks(blocks)) => {
-                    let mut content_parts: Vec<ChatContentPart> = Vec::new();
-                    let mut tool_results: Vec<&ToolResult> = Vec::new();
-
-                    for block in blocks {
-                        match block {
-                            ChatContentBlock::Text(value) => {
-                                content_parts.push(ChatContentPart::Text {
-                                    text: value.clone(),
-                                });
-                            }
-                            ChatContentBlock::Image { mime_type, data } => {
-                                // Convert to data URL format
-                                let url = format!("data:{mime_type};base64,{data}");
-                                content_parts.push(ChatContentPart::ImageUrl {
-                                    image_url: ImageUrlData { url },
-                                });
-                            }
-                            ChatContentBlock::ToolResult(result) => tool_results.push(result),
-                            _ => {}
-                        }
-                    }
-
-                    // Add user message with content parts (text and images)
-                    if !content_parts.is_empty() {
-                        // If only text parts (no images), collapse to simple string for compatibility
-                        // with non-multimodal models and legacy OpenAI-compatible endpoints
-                        let has_images = content_parts
-                            .iter()
-                            .any(|p| matches!(p, ChatContentPart::ImageUrl { .. }));
-
-                        let content = if !has_images && content_parts.len() == 1 {
-                            // Single text part - use string format
-                            if let ChatContentPart::Text { text } = &content_parts[0] {
-                                ChatMessageContent::Text(text.clone())
-                            } else {
-                                ChatMessageContent::Parts(content_parts)
-                            }
-                        } else if !has_images {
-                            // Multiple text parts - concatenate into single string
-                            let combined: String = content_parts
-                                .iter()
-                                .filter_map(|p| match p {
-                                    ChatContentPart::Text { text } => Some(text.as_str()),
-                                    ChatContentPart::ImageUrl { .. } => None,
-                                })
-                                .collect::<Vec<_>>()
-                                .join("");
-                            ChatMessageContent::Text(combined)
-                        } else {
-                            // Has images - use array format
-                            ChatMessageContent::Parts(content_parts)
-                        };
-
-                        out_messages.push(ChatCompletionMessage {
-                            role: "user".to_string(),
-                            content: Some(content),
-                            reasoning_content: None,
-                            tool_calls: None,
-                            tool_call_id: None,
-                        });
-                    }
-
-                    // Add tool results as separate tool messages
-                    for result in tool_results {
-                        // Extract text and optional image from tool result
-                        let (text, image) = extract_tool_result_with_image(&result.content);
-
-                        out_messages.push(ChatCompletionMessage {
-                            role: "tool".to_string(),
-                            content: Some(ChatMessageContent::Text(text)),
-                            reasoning_content: None,
-                            tool_calls: None,
-                            tool_call_id: Some(result.tool_use_id.clone()),
-                        });
-
-                        // If there's an image in the tool result, add it as a follow-up user message
-                        // (OpenAI-compatible chat completions don't support images in tool responses)
-                        if let Some((mime_type, data)) = image {
-                            let url = format!("data:{mime_type};base64,{data}");
-                            out_messages.push(ChatCompletionMessage {
-                                role: "user".to_string(),
-                                content: Some(ChatMessageContent::Parts(vec![
-                                    ChatContentPart::ImageUrl {
-                                        image_url: ImageUrlData { url },
-                                    },
-                                ])),
-                                reasoning_content: None,
-                                tool_calls: None,
-                                tool_call_id: None,
-                            });
-                        }
-                    }
-                }
-                _ => {}
-            }
+            append_chat_message(config, msg, &mut out_messages);
         }
-
-        let tool_defs = if tools.is_empty() {
-            None
-        } else {
-            Some(tools.iter().map(ChatToolDefinition::from).collect())
-        };
-
-        let stream_options = config.include_usage.then_some(StreamOptions {
-            include_usage: true,
-        });
 
         Self {
             model: config.model.clone(),
             stream: true,
             messages: out_messages,
-            tools: tool_defs,
+            tools: (!tools.is_empty()).then(|| tools.iter().map(ChatToolDefinition::from).collect()),
             max_tokens: config.max_tokens,
             max_completion_tokens: config.max_completion_tokens,
-            stream_options,
+            stream_options: config.include_usage.then_some(StreamOptions { include_usage: true }),
             reasoning: config
                 .reasoning_effort
                 .clone()
@@ -475,6 +294,182 @@ impl ChatCompletionRequest {
             prompt_cache_key: config.prompt_cache_key.clone(),
         }
     }
+}
+
+fn push_system_message(system: Option<&str>, out_messages: &mut Vec<ChatCompletionMessage>) {
+    if let Some(prompt) = system
+        && !prompt.trim().is_empty()
+    {
+        out_messages.push(simple_message(
+            "system",
+            ChatMessageContent::Text(prompt.to_string()),
+        ));
+    }
+}
+
+fn append_chat_message(
+    config: &OpenAIChatCompletionsConfig,
+    msg: &ChatMessage,
+    out_messages: &mut Vec<ChatCompletionMessage>,
+) {
+    match (&msg.role[..], &msg.content) {
+        ("user", MessageContent::Text(text)) => {
+            out_messages.push(simple_message("user", ChatMessageContent::Text(text.clone())));
+        }
+        ("assistant", MessageContent::Text(text)) => {
+            out_messages.push(simple_message(
+                "assistant",
+                ChatMessageContent::Text(text.clone()),
+            ));
+        }
+        ("assistant", MessageContent::Blocks(blocks)) => {
+            if let Some(message) = assistant_blocks_message(blocks, config.include_reasoning_content) {
+                out_messages.push(message);
+            }
+        }
+        ("user", MessageContent::Blocks(blocks)) => {
+            out_messages.extend(user_blocks_messages(blocks));
+        }
+        _ => {}
+    }
+}
+
+fn simple_message(role: &str, content: ChatMessageContent) -> ChatCompletionMessage {
+    ChatCompletionMessage {
+        role: role.to_string(),
+        content: Some(content),
+        reasoning_content: None,
+        tool_calls: None,
+        tool_call_id: None,
+    }
+}
+
+fn assistant_blocks_message(
+    blocks: &[ChatContentBlock],
+    include_reasoning_content: bool,
+) -> Option<ChatCompletionMessage> {
+    let mut text = String::new();
+    let mut reasoning_content = String::new();
+    let mut tool_calls = Vec::new();
+
+    for block in blocks {
+        match block {
+            ChatContentBlock::Text(value) => text.push_str(value),
+            ChatContentBlock::ToolUse { id, name, input } => {
+                let arguments = serde_json::to_string(input).unwrap_or_else(|_| "{}".to_string());
+                tool_calls.push(ChatToolCall {
+                    id: id.clone(),
+                    tool_type: "function",
+                    function: ChatToolCallFunction {
+                        name: name.clone(),
+                        arguments,
+                    },
+                });
+            }
+            ChatContentBlock::Reasoning(reasoning) => {
+                if include_reasoning_content
+                    && let Some(text) = &reasoning.text
+                {
+                    reasoning_content.push_str(text);
+                }
+            }
+            ChatContentBlock::ToolResult(_) | ChatContentBlock::Image { .. } => {}
+        }
+    }
+
+    if text.is_empty() && tool_calls.is_empty() && reasoning_content.is_empty() {
+        return None;
+    }
+
+    Some(ChatCompletionMessage {
+        role: "assistant".to_string(),
+        content: (!text.is_empty()).then_some(ChatMessageContent::Text(text)),
+        reasoning_content: (!reasoning_content.is_empty()).then_some(reasoning_content),
+        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+        tool_call_id: None,
+    })
+}
+
+fn user_blocks_messages(blocks: &[ChatContentBlock]) -> Vec<ChatCompletionMessage> {
+    let mut messages = Vec::new();
+    let mut content_parts = Vec::new();
+    let mut tool_results: Vec<&ToolResult> = Vec::new();
+
+    for block in blocks {
+        match block {
+            ChatContentBlock::Text(value) => {
+                content_parts.push(ChatContentPart::Text {
+                    text: value.clone(),
+                });
+            }
+            ChatContentBlock::Image { mime_type, data } => {
+                let url = format!("data:{mime_type};base64,{data}");
+                content_parts.push(ChatContentPart::ImageUrl {
+                    image_url: ImageUrlData { url },
+                });
+            }
+            ChatContentBlock::ToolResult(result) => tool_results.push(result),
+            _ => {}
+        }
+    }
+
+    if !content_parts.is_empty() {
+        messages.push(simple_message(
+            "user",
+            collapse_user_content_parts(content_parts),
+        ));
+    }
+
+    for result in tool_results {
+        let (text, image) = extract_tool_result_with_image(&result.content);
+        messages.push(ChatCompletionMessage {
+            role: "tool".to_string(),
+            content: Some(ChatMessageContent::Text(text)),
+            reasoning_content: None,
+            tool_calls: None,
+            tool_call_id: Some(result.tool_use_id.clone()),
+        });
+
+        if let Some((mime_type, data)) = image {
+            let url = format!("data:{mime_type};base64,{data}");
+            messages.push(simple_message(
+                "user",
+                ChatMessageContent::Parts(vec![ChatContentPart::ImageUrl {
+                    image_url: ImageUrlData { url },
+                }]),
+            ));
+        }
+    }
+
+    messages
+}
+
+fn collapse_user_content_parts(content_parts: Vec<ChatContentPart>) -> ChatMessageContent {
+    let has_images = content_parts
+        .iter()
+        .any(|part| matches!(part, ChatContentPart::ImageUrl { .. }));
+    if has_images {
+        return ChatMessageContent::Parts(content_parts);
+    }
+
+    let mut text_parts = content_parts.iter().filter_map(|part| match part {
+        ChatContentPart::Text { text } => Some(text.as_str()),
+        ChatContentPart::ImageUrl { .. } => None,
+    });
+    let Some(first) = text_parts.next() else {
+        return ChatMessageContent::Parts(content_parts);
+    };
+    let Some(second) = text_parts.next() else {
+        return ChatMessageContent::Text(first.to_string());
+    };
+
+    let mut combined = String::with_capacity(first.len() + second.len());
+    combined.push_str(first);
+    combined.push_str(second);
+    for text in text_parts {
+        combined.push_str(text);
+    }
+    ChatMessageContent::Text(combined)
 }
 
 /// Extracts text and optional image from tool result content.

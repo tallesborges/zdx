@@ -44,18 +44,27 @@ pub(crate) struct BotContext {
     queue_cancel_map: QueueCancelMap,
 }
 
+pub(crate) struct BotContextDeps {
+    pub allowlist_user_ids: HashSet<i64>,
+    pub allowlist_chat_ids: HashSet<i64>,
+    pub root: PathBuf,
+    pub bot_system_prompt: Option<String>,
+    pub tool_config: ToolConfig,
+    pub cancel_map: CancelMap,
+    pub queue_cancel_map: QueueCancelMap,
+}
+
 impl BotContext {
-    pub(crate) fn new(
-        client: TelegramClient,
-        config: Config,
-        allowlist_user_ids: HashSet<i64>,
-        allowlist_chat_ids: HashSet<i64>,
-        root: PathBuf,
-        bot_system_prompt: Option<String>,
-        tool_config: ToolConfig,
-        cancel_map: CancelMap,
-        queue_cancel_map: QueueCancelMap,
-    ) -> Self {
+    pub(crate) fn new(client: TelegramClient, config: Config, deps: BotContextDeps) -> Self {
+        let BotContextDeps {
+            allowlist_user_ids,
+            allowlist_chat_ids,
+            root,
+            bot_system_prompt,
+            tool_config,
+            cancel_map,
+            queue_cancel_map,
+        } = deps;
         Self {
             client,
             config,

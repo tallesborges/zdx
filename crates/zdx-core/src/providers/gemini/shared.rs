@@ -152,161 +152,159 @@ pub fn classify_reqwest_error(e: &reqwest::Error) -> ProviderError {
 ///
 /// Returns the contents array and a tool name map for resolving tool results.
 pub fn build_contents(messages: &[ChatMessage]) -> (Vec<Value>, HashMap<String, String>) {
-    let active_loop_start = active_loop_start_index(messages);
-    let mut contents = Vec::new();
-    let mut tool_name_map: HashMap<String, String> = HashMap::new();
-
+    let mut builder = GeminiContentsBuilder::new(active_loop_start_index(messages));
     for (idx, msg) in messages.iter().enumerate() {
-        let add_thought_signature = idx >= active_loop_start;
+        builder.append_message(idx, msg);
+    }
+    (builder.contents, builder.tool_name_map)
+}
+
+struct GeminiContentsBuilder {
+    active_loop_start: usize,
+    contents: Vec<Value>,
+    tool_name_map: HashMap<String, String>,
+}
+
+impl GeminiContentsBuilder {
+    fn new(active_loop_start: usize) -> Self {
+        Self {
+            active_loop_start,
+            contents: Vec::new(),
+            tool_name_map: HashMap::new(),
+        }
+    }
+
+    fn append_message(&mut self, idx: usize, msg: &ChatMessage) {
         match (&msg.role[..], &msg.content) {
             ("user", MessageContent::Text(text)) => {
-                contents.push(json!({
-                    "role": "user",
-                    "parts": [{"text": text}]
-                }));
+                let parts = vec![text_part(text)];
+                self.push_message("user", &parts);
             }
             ("assistant", MessageContent::Text(text)) => {
-                contents.push(json!({
-                    "role": "model",
-                    "parts": [{"text": text}]
-                }));
+                let parts = vec![text_part(text)];
+                self.push_message("model", &parts);
             }
             ("assistant", MessageContent::Blocks(blocks)) => {
-                let mut parts = Vec::new();
-                let mut added_signature = false;
-
-                // Extract real thought signature from Gemini reasoning blocks (if present).
-                // This is used for multi-turn function calling to satisfy Gemini's signature
-                // validation requirement. Falls back to synthetic signature if no real one exists.
-                let real_signature: Option<String> = blocks.iter().find_map(|block| match block {
-                    ChatContentBlock::Reasoning(reasoning) => {
-                        reasoning.replay.as_ref().and_then(|replay| match replay {
-                            ReplayToken::Gemini { signature } => Some(signature.clone()),
-                            _ => None,
-                        })
-                    }
-                    _ => None,
-                });
-
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Text(text) => {
-                            parts.push(json!({"text": text}));
-                        }
-                        ChatContentBlock::Image { mime_type, data } => {
-                            parts.push(json!({
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": data
-                                }
-                            }));
-                        }
-                        ChatContentBlock::ToolUse { id, name, input } => {
-                            tool_name_map.insert(id.clone(), name.clone());
-                            let mut part = json!({
-                                "functionCall": {
-                                    "name": name,
-                                    "args": input
-                                }
-                            });
-                            if add_thought_signature && !added_signature {
-                                // Use real signature if available, fall back to synthetic
-                                let sig = real_signature
-                                    .as_deref()
-                                    .unwrap_or(SYNTHETIC_THOUGHT_SIGNATURE);
-                                part["thoughtSignature"] = json!(sig);
-                                added_signature = true;
-                            }
-                            parts.push(part);
-                        }
-                        // Skip reasoning/tool_result blocks (signature extracted above)
-                        ChatContentBlock::Reasoning(_) | ChatContentBlock::ToolResult(_) => {}
-                    }
-                }
-
-                if !parts.is_empty() {
-                    contents.push(json!({
-                        "role": "model",
-                        "parts": parts
-                    }));
-                }
+                self.append_assistant_blocks(idx >= self.active_loop_start, blocks);
             }
-            ("user", MessageContent::Blocks(blocks)) => {
-                let mut parts = Vec::new();
-                let mut tool_results = Vec::new();
-                let mut pending_images: Vec<(String, String)> = Vec::new();
-
-                for block in blocks {
-                    match block {
-                        ChatContentBlock::Text(text) => parts.push(json!({"text": text})),
-                        ChatContentBlock::Image { mime_type, data } => {
-                            parts.push(json!({
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": data
-                                }
-                            }));
-                        }
-                        ChatContentBlock::ToolResult(result) => tool_results.push(result),
-                        _ => {}
-                    }
-                }
-
-                for result in tool_results {
-                    if let Some(name) = tool_name_map.get(&result.tool_use_id) {
-                        // Get text and optional image from tool result
-                        let (text, image) = extract_tool_result_with_image(&result.content);
-
-                        parts.push(json!({
-                            "functionResponse": {
-                                "name": name,
-                                "response": {
-                                    "content": text,
-                                    "is_error": result.is_error
-                                }
-                            }
-                        }));
-
-                        // Collect images to add as separate message after function responses
-                        // (Gemini may not process inlineData mixed with functionResponse)
-                        if let Some((mime_type, data)) = image {
-                            pending_images.push((mime_type, data));
-                        }
-                    }
-                }
-
-                if !parts.is_empty() {
-                    contents.push(json!({
-                        "role": "user",
-                        "parts": parts
-                    }));
-                }
-
-                // Add tool result images as a separate user message
-                // This ensures Gemini processes them as visual input
-                if !pending_images.is_empty() {
-                    let image_parts: Vec<Value> = pending_images
-                        .into_iter()
-                        .map(|(mime_type, data)| {
-                            json!({
-                                "inlineData": {
-                                    "mimeType": mime_type,
-                                    "data": data
-                                }
-                            })
-                        })
-                        .collect();
-                    contents.push(json!({
-                        "role": "user",
-                        "parts": image_parts
-                    }));
-                }
-            }
+            ("user", MessageContent::Blocks(blocks)) => self.append_user_blocks(blocks),
             _ => {}
         }
     }
 
-    (contents, tool_name_map)
+    fn append_assistant_blocks(&mut self, add_thought_signature: bool, blocks: &[ChatContentBlock]) {
+        let mut parts = Vec::new();
+        let mut added_signature = false;
+        let real_signature = gemini_signature(blocks);
+
+        for block in blocks {
+            match block {
+                ChatContentBlock::Text(text) => parts.push(text_part(text)),
+                ChatContentBlock::Image { mime_type, data } => {
+                    parts.push(inline_data_part(mime_type, data));
+                }
+                ChatContentBlock::ToolUse { id, name, input } => {
+                    self.tool_name_map.insert(id.clone(), name.clone());
+                    let mut part = json!({
+                        "functionCall": {
+                            "name": name,
+                            "args": input
+                        }
+                    });
+                    if add_thought_signature && !added_signature {
+                        let signature = real_signature
+                            .as_deref()
+                            .unwrap_or(SYNTHETIC_THOUGHT_SIGNATURE);
+                        part["thoughtSignature"] = json!(signature);
+                        added_signature = true;
+                    }
+                    parts.push(part);
+                }
+                ChatContentBlock::Reasoning(_) | ChatContentBlock::ToolResult(_) => {}
+            }
+        }
+
+        if !parts.is_empty() {
+            self.push_message("model", &parts);
+        }
+    }
+
+    fn append_user_blocks(&mut self, blocks: &[ChatContentBlock]) {
+        let mut parts = Vec::new();
+        let mut tool_results = Vec::new();
+
+        for block in blocks {
+            match block {
+                ChatContentBlock::Text(text) => parts.push(text_part(text)),
+                ChatContentBlock::Image { mime_type, data } => {
+                    parts.push(inline_data_part(mime_type, data));
+                }
+                ChatContentBlock::ToolResult(result) => tool_results.push(result),
+                _ => {}
+            }
+        }
+
+        let mut pending_images = Vec::new();
+        for result in tool_results {
+            let Some(name) = self.tool_name_map.get(&result.tool_use_id) else {
+                continue;
+            };
+
+            let (text, image) = extract_tool_result_with_image(&result.content);
+            parts.push(json!({
+                "functionResponse": {
+                    "name": name,
+                    "response": {
+                        "content": text,
+                        "is_error": result.is_error
+                    }
+                }
+            }));
+            if let Some(image) = image {
+                pending_images.push(image);
+            }
+        }
+
+        if !parts.is_empty() {
+            self.push_message("user", &parts);
+        }
+        if !pending_images.is_empty() {
+            let image_parts = pending_images
+                .into_iter()
+                .map(|(mime_type, data)| inline_data_part(&mime_type, &data))
+                .collect::<Vec<_>>();
+            self.push_message("user", &image_parts);
+        }
+    }
+
+    fn push_message(&mut self, role: &str, parts: &[Value]) {
+        self.contents.push(json!({ "role": role, "parts": parts }));
+    }
+}
+
+fn gemini_signature(blocks: &[ChatContentBlock]) -> Option<String> {
+    blocks.iter().find_map(|block| match block {
+        ChatContentBlock::Reasoning(reasoning) => reasoning.replay.as_ref().and_then(|replay| {
+            let ReplayToken::Gemini { signature } = replay else {
+                return None;
+            };
+            Some(signature.clone())
+        }),
+        _ => None,
+    })
+}
+
+fn text_part(text: &str) -> Value {
+    json!({ "text": text })
+}
+
+fn inline_data_part(mime_type: &str, data: &str) -> Value {
+    json!({
+        "inlineData": {
+            "mimeType": mime_type,
+            "data": data
+        }
+    })
 }
 
 /// Builds the tools array for Gemini API.

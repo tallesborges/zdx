@@ -35,7 +35,7 @@ pub fn render_transcript(state: &TuiState, width: usize) -> (Vec<Line<'static>>,
         .scroll
         .visible_range(state.transcript.viewport_height)
     {
-        return (render_transcript_lazy(state, width, visible), true);
+        return (render_transcript_lazy(state, width, &visible), true);
     }
 
     // Fall back to full rendering (first frame or after changes)
@@ -108,7 +108,7 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
 fn render_transcript_lazy(
     state: &TuiState,
     width: usize,
-    visible: VisibleRange,
+    visible: &VisibleRange,
 ) -> Vec<Line<'static>> {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -299,10 +299,10 @@ fn convert_styled_line_with_selection(
 fn convert_style(style: TranscriptStyle) -> Style {
     match style {
         TranscriptStyle::Plain => Style::default(),
-        TranscriptStyle::UserPrefix => Style::default()
+        TranscriptStyle::UserPrefix | TranscriptStyle::ToolSuccess => Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::BOLD),
-        TranscriptStyle::User => Style::default()
+        TranscriptStyle::User | TranscriptStyle::BlockQuote => Style::default()
             .fg(Color::Green)
             .add_modifier(Modifier::ITALIC),
         TranscriptStyle::Assistant => Style::default().fg(Color::White),
@@ -312,32 +312,26 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::SystemPrefix => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
-        TranscriptStyle::System => Style::default().fg(Color::DarkGray),
-        TranscriptStyle::ToolBracket => Style::default()
-            .fg(Color::Yellow)
-            .add_modifier(Modifier::DIM),
+        TranscriptStyle::System | TranscriptStyle::ToolOutput | TranscriptStyle::CodeFence => {
+            Style::default().fg(Color::DarkGray)
+        }
         TranscriptStyle::ToolStatus => Style::default()
             .fg(Color::White)
             .add_modifier(Modifier::BOLD),
         TranscriptStyle::ToolError => Style::default().fg(Color::Red),
-        TranscriptStyle::ToolRunning => Style::default().fg(Color::Cyan),
-        TranscriptStyle::ToolSuccess => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::BOLD),
+        TranscriptStyle::ToolRunning | TranscriptStyle::CodeInline | TranscriptStyle::CodeBlock => {
+            Style::default().fg(Color::Cyan)
+        }
         TranscriptStyle::ToolCancelled => Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::CROSSED_OUT | Modifier::BOLD),
-        TranscriptStyle::ToolOutput => Style::default().fg(Color::DarkGray),
-        TranscriptStyle::ToolTruncation => Style::default()
+        TranscriptStyle::ToolTruncation | TranscriptStyle::ToolBracket => Style::default()
             .fg(Color::Yellow)
             .add_modifier(Modifier::DIM),
         TranscriptStyle::ThinkingPrefix => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::DIM),
-        TranscriptStyle::Thinking => Style::default()
-            .fg(Color::DarkGray)
-            .add_modifier(Modifier::DIM | Modifier::ITALIC),
-        TranscriptStyle::Timing => Style::default()
+        TranscriptStyle::Thinking | TranscriptStyle::Timing => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::DIM | Modifier::ITALIC),
         TranscriptStyle::Interrupted => Style::default()
@@ -345,23 +339,19 @@ fn convert_style(style: TranscriptStyle) -> Style {
             .add_modifier(Modifier::DIM),
 
         // Markdown styles
-        TranscriptStyle::CodeInline => Style::default().fg(Color::Cyan),
-        TranscriptStyle::CodeBlock => Style::default().fg(Color::Cyan),
-        TranscriptStyle::CodeFence => Style::default().fg(Color::DarkGray),
         TranscriptStyle::Emphasis => Style::default().add_modifier(Modifier::ITALIC),
-        TranscriptStyle::Strong => Style::default().add_modifier(Modifier::BOLD),
+        TranscriptStyle::Strong | TranscriptStyle::H2 => {
+            Style::default().add_modifier(Modifier::BOLD)
+        }
         TranscriptStyle::H1 => Style::default().add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
-        TranscriptStyle::H2 => Style::default().add_modifier(Modifier::BOLD),
         TranscriptStyle::H3 => Style::default()
             .add_modifier(Modifier::ITALIC)
             .fg(Color::White),
         TranscriptStyle::Link => Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::UNDERLINED),
-        TranscriptStyle::BlockQuote => Style::default()
-            .fg(Color::Green)
-            .add_modifier(Modifier::ITALIC),
-        TranscriptStyle::ListBullet => Style::default().fg(Color::Yellow),
-        TranscriptStyle::ListNumber => Style::default().fg(Color::Yellow),
+        TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
+            Style::default().fg(Color::Yellow)
+        }
     }
 }

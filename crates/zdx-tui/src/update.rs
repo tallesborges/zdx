@@ -37,221 +37,16 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
-        UiEvent::Agent(agent_event) => {
-            let has_thread = app.tui.thread.thread_handle.is_some();
-            let (mut effects, mutations) = transcript::handle_agent_event(
-                &mut app.tui.transcript,
-                &mut app.tui.agent_state,
-                has_thread,
-                &agent_event,
-            );
-            apply_mutations(&mut app.tui, mutations);
-
-            // Mark tool used for turn timing (only show "Worked for Xs" if tools were used)
-            if matches!(
-                &agent_event,
-                zdx_core::core::events::AgentEvent::ToolRequested { .. }
-            ) {
-                app.tui.status_line.mark_tool_used();
-            }
-
-            // Save usage to thread after each request completes.
-            // A request is complete when we receive output tokens (MessageDelta with usage).
-            // This ensures tool-use turns with multiple requests save all usage, not just the last.
-            if let zdx_core::core::events::AgentEvent::UsageUpdate { output_tokens, .. } =
-                &agent_event
-                && *output_tokens > 0
-                && has_thread
-            {
-                // Save per-request delta values (not cumulative) for event-sourcing
-                let usage = app.tui.thread.usage.turn_usage();
-                effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
-                });
-                // Mark as saved to prevent duplicate saves on TurnCompleted/Interrupted
-                app.tui.thread.usage.mark_saved();
-            }
-
-            // Also save any unsaved usage on turn completion or interruption.
-            // This handles the case where a request is interrupted before output tokens arrive -
-            // we still want to save the input tokens that were consumed.
-            if matches!(
-                &agent_event,
-                zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-                    | zdx_core::core::events::AgentEvent::Interrupted { .. }
-            ) && has_thread
-                && app.tui.thread.usage.has_unsaved_usage()
-            {
-                let usage = app.tui.thread.usage.turn_usage();
-                effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
-                });
-                app.tui.thread.usage.mark_saved();
-            }
-
-            let should_dequeue = matches!(
-                &agent_event,
-                zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-                    | zdx_core::core::events::AgentEvent::Interrupted { .. }
-                    | zdx_core::core::events::AgentEvent::Error { .. }
-            );
-
-            // End turn timer and push timing cell when turn completes
-            if should_dequeue && let Some((duration, tool_count)) = app.tui.status_line.end_turn() {
-                // Only show timing for turns that ran for at least 1 second
-                if duration.as_secs_f64() >= 1.0 {
-                    app.tui
-                        .transcript
-                        .push_cell(HistoryCell::timing(duration, tool_count));
-                }
-            }
-
-            if should_dequeue
-                && !app.tui.agent_state.is_running()
-                && !app.tui.tasks.state(TaskKind::Bash).is_running()
-                && !app.tui.transcript.has_pending_user_cell()
-                && let Some(text) = app.tui.input.pop_queued_prompt()
-            {
-                let thread_id = app
-                    .tui
-                    .thread
-                    .thread_handle
-                    .as_ref()
-                    .map(|log| log.id.clone());
-                let should_suggest_title = thread_id.is_some()
-                    && app.tui.thread.title.is_none()
-                    && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
-                let (queue_effects, queue_mutations) =
-                    input::build_send_effects(&text, thread_id, should_suggest_title);
-                apply_mutations(&mut app.tui, queue_mutations);
-                effects.extend(queue_effects);
-            }
-
-            effects
-        }
+        UiEvent::Agent(agent_event) => handle_agent_event(app, &agent_event),
         UiEvent::AgentSpawned { rx } => {
             app.tui.agent_state = AgentState::Waiting { rx };
             app.tui.transcript.activate_pending_user_cell();
             app.tui.status_line.start_turn();
             vec![]
         }
-        UiEvent::LoginResult { result } => {
-            let provider = match &app.overlay {
-                Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => {
-                    *provider
-                }
-                Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode {
-                    provider,
-                    ..
-                })) => *provider,
-                _ => zdx_core::providers::provider_for_model(&app.tui.config.model),
-            };
-            let (mutations, overlay_action) =
-                auth::handle_login_result(&mut app.tui.auth, result, provider);
-            apply_mutations(&mut app.tui, mutations);
-
-            match overlay_action {
-                auth::LoginOverlayAction::Close => {
-                    app.overlay = None;
-                }
-                auth::LoginOverlayAction::Reopen { error } => {
-                    app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
-                        provider, error,
-                    )));
-                }
-            }
-            vec![]
-        }
-        UiEvent::LoginCallbackResult(code) => {
-            let mut effects = Vec::new();
-            if let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay {
-                match login_state {
-                    overlays::LoginState::AwaitingCode {
-                        provider,
-                        pkce_verifier,
-                        oauth_state,
-                        redirect_uri,
-                        error,
-                        ..
-                    } if matches!(
-                        *provider,
-                        zdx_core::providers::ProviderKind::ClaudeCli
-                            | zdx_core::providers::ProviderKind::OpenAICodex
-                            | zdx_core::providers::ProviderKind::GeminiCli
-                    ) =>
-                    {
-                        match code {
-                            Some(code) => {
-                                *error = None;
-                                let verifier = pkce_verifier.clone();
-                                let provider = *provider;
-                                let code =
-                                    if provider == zdx_core::providers::ProviderKind::ClaudeCli {
-                                        let state =
-                                            oauth_state.clone().unwrap_or_else(|| verifier.clone());
-                                        format!("{code}#{state}")
-                                    } else {
-                                        code
-                                    };
-                                let redirect_uri =
-                                    if provider == zdx_core::providers::ProviderKind::ClaudeCli {
-                                        redirect_uri.clone()
-                                    } else {
-                                        None
-                                    };
-                                *login_state = overlays::LoginState::Exchanging { provider };
-                                push_token_exchange(
-                                    &mut effects,
-                                    provider,
-                                    code,
-                                    verifier,
-                                    redirect_uri,
-                                );
-                            }
-                            None => {
-                                *error = Some(
-                                    "Local login timed out. Paste the code or URL.".to_string(),
-                                );
-                            }
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            effects
-        }
-        UiEvent::TaskStarted { kind, started } => {
-            app.tui.tasks.state_mut(kind).on_started(&started);
-            match kind {
-                TaskKind::Handoff => {
-                    if matches!(&started.meta, TaskMeta::Handoff { .. }) {
-                        app.tui.input.handoff = HandoffState::Generating;
-                    }
-                }
-                TaskKind::Bash => {
-                    if let TaskMeta::Bash { id, command } = &started.meta {
-                        // Create a running tool cell immediately (shows spinner)
-                        let input = serde_json::json!({ "command": command });
-                        let cell = HistoryCell::tool_running(id, "bash", input);
-                        app.tui.transcript.push_cell(cell);
-                    }
-                }
-                TaskKind::FileDiscovery
-                | TaskKind::SkillsFetch
-                | TaskKind::SkillInstall
-                | TaskKind::ThreadList
-                | TaskKind::ThreadLoad
-                | TaskKind::ThreadRename
-                | TaskKind::ThreadTitle
-                | TaskKind::ThreadPreview
-                | TaskKind::ThreadCreate
-                | TaskKind::ThreadFork
-                | TaskKind::ThreadWorktree
-                | TaskKind::LoginExchange
-                | TaskKind::LoginCallback => {}
-            }
-            vec![]
-        }
+        UiEvent::LoginResult { result } => handle_login_result_event(app, result),
+        UiEvent::LoginCallbackResult(code) => handle_login_callback_result(app, code),
+        UiEvent::TaskStarted { kind, started } => handle_task_started_event(app, kind, &started),
         UiEvent::TaskCompleted { kind, completed } => {
             let ok = {
                 let state = app.tui.tasks.state_mut(kind);
@@ -264,7 +59,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
         }
         UiEvent::HandoffResult { goal, result } => {
-            let mutations = input::handle_handoff_result(&mut app.tui.input, goal, result);
+            let mutations = input::handle_handoff_result(&mut app.tui.input, &goal, result);
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }
@@ -294,79 +89,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             vec![]
         }
 
-        UiEvent::Skill(skill_event) => match skill_event {
-            SkillUiEvent::ListLoaded { repo, skills } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    let items = skills
-                        .into_iter()
-                        .map(|skill| overlays::skill_picker::SkillItem {
-                            name: skill.name,
-                            path: skill.path,
-                            description: skill.description,
-                        })
-                        .collect();
-                    picker.set_skills(&repo, items);
-                }
-                vec![]
-            }
-            SkillUiEvent::ListFailed { repo, error } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_error(&repo, format!("Failed to load skills: {error}"));
-                }
-                vec![]
-            }
-            SkillUiEvent::Installed { repo: _, skill } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_installing(None);
-                    picker.mark_installed(&skill);
-                }
-                app.overlay = None;
-                apply_mutations(
-                    &mut app.tui,
-                    vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(format!(
-                            "Installed skill \"{skill}\". Restart ZDX to pick up new skills."
-                        )),
-                    )],
-                );
-                vec![]
-            }
-            SkillUiEvent::InstallFailed { repo, skill, error } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_installing(None);
-                    picker.set_error(&repo, format!("Install failed: {error}"));
-                }
-                apply_mutations(
-                    &mut app.tui,
-                    vec![StateMutation::Transcript(
-                        TranscriptMutation::AppendSystemMessage(format!(
-                            "Failed to install {skill}: {error}"
-                        )),
-                    )],
-                );
-                vec![]
-            }
-            SkillUiEvent::InstructionsLoaded {
-                repo: _,
-                skill_path,
-                content,
-            } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_instructions(&skill_path, content);
-                }
-                vec![]
-            }
-            SkillUiEvent::InstructionsFailed {
-                repo: _,
-                skill_path,
-                error,
-            } => {
-                if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
-                    picker.set_instructions_error(&skill_path, error);
-                }
-                vec![]
-            }
-        },
+        UiEvent::Skill(skill_event) => handle_skill_event(app, skill_event),
 
         // Clipboard copy succeeded - show brief feedback in thread picker
         UiEvent::ClipboardCopied => {
@@ -381,37 +104,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             id,
             command,
             result,
-        } => {
-            // Find the existing tool cell and set the result
-            app.tui.transcript.set_tool_result_for(&id, result.clone());
-
-            // Persist to thread and add to messages for LLM context
-            let mut effects = vec![];
-            if app.tui.thread.thread_handle.is_some() {
-                // Format as a user message describing what the user did
-                // This makes it clear to the LLM that the USER ran the command
-                let user_message = format!(
-                    "[I executed a bash command]\n$ {}\n\nResult:\n{}",
-                    command,
-                    result.to_json_string()
-                );
-
-                // Save as user message event to thread log
-                effects.push(UiEffect::SaveThread {
-                    event: zdx_core::core::thread_persistence::ThreadEvent::user_message(
-                        &user_message,
-                    ),
-                });
-
-                // Add user message for LLM context
-                app.tui
-                    .thread
-                    .messages
-                    .push(zdx_core::providers::ChatMessage::user(&user_message));
-            }
-
-            effects
-        }
+        } => handle_bash_executed_event(app, &id, &command, &result),
         UiEvent::RootDisplayResolved {
             path,
             git_branch,
@@ -427,342 +120,390 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             );
             vec![]
         }
-        UiEvent::SystemPromptRefreshed { result } => {
-            let mut mutations = Vec::new();
-            match result {
-                Ok(prompt) => mutations.push(StateMutation::SetSystemPrompt(prompt)),
-                Err(error) => mutations.push(StateMutation::Transcript(
-                    TranscriptMutation::AppendSystemMessage(error),
-                )),
-            }
-            apply_mutations(&mut app.tui, mutations);
-            vec![]
-        }
+        UiEvent::SystemPromptRefreshed { result } => handle_system_prompt_refreshed(app, result),
 
         // Thread async result events - delegate to thread feature
-        UiEvent::Thread(thread_event) => match thread_event {
-            ThreadUiEvent::ListLoaded {
-                threads,
-                original_cells,
-                mode,
-            } => {
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::ListLoaded {
-                        threads,
-                        original_cells,
-                        mode,
-                    });
-                apply_mutations(&mut app.tui, mutations);
+        UiEvent::Thread(thread_event) => handle_thread_ui_event(app, thread_event),
+    }
+}
 
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                    mode,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let current_thread_id = app
-                        .tui
-                        .thread
-                        .thread_handle
-                        .as_ref()
-                        .map(|log| log.id.clone());
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                        threads,
-                        original_cells,
-                        &app.tui.agent_opts.root,
-                        current_thread_id,
-                        mode,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+fn handle_agent_event(
+    app: &mut AppState,
+    agent_event: &zdx_core::core::events::AgentEvent,
+) -> Vec<UiEffect> {
+    let has_thread = app.tui.thread.thread_handle.is_some();
+    let (mut effects, mutations) = transcript::handle_agent_event(
+        &mut app.tui.transcript,
+        &mut app.tui.agent_state,
+        has_thread,
+        agent_event,
+    );
+    apply_mutations(&mut app.tui, mutations);
 
-                effects
-            }
-            ThreadUiEvent::ListFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::ListFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::Loaded {
-                thread_id,
-                cells,
-                messages,
-                history,
-                stored_root,
-                thread_handle,
-                title,
-                usage,
-            } => {
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::Loaded {
-                        thread_id,
-                        cells,
-                        messages,
-                        history,
-                        stored_root,
-                        thread_handle,
-                        title,
-                        usage,
-                    });
-                apply_mutations(&mut app.tui, mutations);
+    if matches!(
+        agent_event,
+        zdx_core::core::events::AgentEvent::ToolRequested { .. }
+    ) {
+        app.tui.status_line.mark_tool_used();
+    }
 
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                    mode,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let current_thread_id = app
-                        .tui
-                        .thread
-                        .thread_handle
-                        .as_ref()
-                        .map(|log| log.id.clone());
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                        threads,
-                        original_cells,
-                        &app.tui.agent_opts.root,
-                        current_thread_id,
-                        mode,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+    if let zdx_core::core::events::AgentEvent::UsageUpdate { output_tokens, .. } = agent_event
+        && *output_tokens > 0
+        && has_thread
+    {
+        save_current_turn_usage(app, &mut effects);
+    }
 
-                effects
-            }
-            ThreadUiEvent::LoadFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::LoadFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::PreviewLoaded { cells } => {
-                let allow = matches!(
-                    app.overlay.as_ref(),
-                    Some(overlays::Overlay::ThreadPicker(_))
-                );
-                if allow {
-                    let (mut effects, mutations, overlay_action) =
-                        thread::handle_thread_event(ThreadUiEvent::PreviewLoaded { cells });
-                    apply_mutations(&mut app.tui, mutations);
+    if matches!(
+        agent_event,
+        zdx_core::core::events::AgentEvent::TurnCompleted { .. }
+            | zdx_core::core::events::AgentEvent::Interrupted { .. }
+    ) && has_thread
+        && app.tui.thread.usage.has_unsaved_usage()
+    {
+        save_current_turn_usage(app, &mut effects);
+    }
 
-                    if let thread::ThreadOverlayAction::OpenThreadPicker {
-                        threads,
-                        original_cells,
-                        mode,
-                    } = overlay_action
-                        && app.overlay.is_none()
-                    {
-                        let current_thread_id = app
-                            .tui
-                            .thread
-                            .thread_handle
-                            .as_ref()
-                            .map(|log| log.id.clone());
-                        let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                            threads,
-                            original_cells,
-                            &app.tui.agent_opts.root,
-                            current_thread_id,
-                            mode,
-                        );
-                        app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                        effects.extend(overlay_effects);
-                    }
+    let should_dequeue = matches!(
+        agent_event,
+        zdx_core::core::events::AgentEvent::TurnCompleted { .. }
+            | zdx_core::core::events::AgentEvent::Interrupted { .. }
+            | zdx_core::core::events::AgentEvent::Error { .. }
+    );
+    maybe_push_timing_cell(app, should_dequeue);
+    maybe_send_next_queued_prompt(app, should_dequeue, &mut effects);
 
-                    effects
+    effects
+}
+
+fn save_current_turn_usage(app: &mut AppState, effects: &mut Vec<UiEffect>) {
+    let usage = app.tui.thread.usage.turn_usage();
+    effects.push(UiEffect::SaveThread {
+        event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
+    });
+    app.tui.thread.usage.mark_saved();
+}
+
+fn maybe_push_timing_cell(app: &mut AppState, should_dequeue: bool) {
+    if should_dequeue
+        && let Some((duration, tool_count)) = app.tui.status_line.end_turn()
+        && duration.as_secs_f64() >= 1.0
+    {
+        app.tui
+            .transcript
+            .push_cell(HistoryCell::timing(duration, tool_count));
+    }
+}
+
+fn maybe_send_next_queued_prompt(
+    app: &mut AppState,
+    should_dequeue: bool,
+    effects: &mut Vec<UiEffect>,
+) {
+    if !should_dequeue
+        || app.tui.agent_state.is_running()
+        || app.tui.tasks.state(TaskKind::Bash).is_running()
+        || app.tui.transcript.has_pending_user_cell()
+    {
+        return;
+    }
+
+    let Some(text) = app.tui.input.pop_queued_prompt() else {
+        return;
+    };
+
+    let thread_id = app
+        .tui
+        .thread
+        .thread_handle
+        .as_ref()
+        .map(|log| log.id.clone());
+    let should_suggest_title = thread_id.is_some()
+        && app.tui.thread.title.is_none()
+        && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
+    let (queue_effects, queue_mutations) =
+        input::build_send_effects(&text, thread_id, should_suggest_title);
+    apply_mutations(&mut app.tui, queue_mutations);
+    effects.extend(queue_effects);
+}
+
+fn handle_login_result_event(app: &mut AppState, result: Result<(), String>) -> Vec<UiEffect> {
+    let provider = match &app.overlay {
+        Some(overlays::Overlay::Login(overlays::LoginState::Exchanging { provider })) => *provider,
+        Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode { provider, .. })) => {
+            *provider
+        }
+        _ => zdx_core::providers::provider_for_model(&app.tui.config.model),
+    };
+    let (mutations, overlay_action) =
+        auth::handle_login_result(&mut app.tui.auth, result, provider);
+    apply_mutations(&mut app.tui, mutations);
+
+    match overlay_action {
+        auth::LoginOverlayAction::Close => app.overlay = None,
+        auth::LoginOverlayAction::Reopen { error } => {
+            app.overlay = Some(overlays::Overlay::Login(overlays::LoginState::reopen(
+                provider, error,
+            )));
+        }
+    }
+    vec![]
+}
+
+fn handle_login_callback_result(app: &mut AppState, code: Option<String>) -> Vec<UiEffect> {
+    let mut effects = Vec::new();
+    if let Some(overlays::Overlay::Login(login_state)) = &mut app.overlay {
+        process_login_callback(login_state, code, &mut effects);
+    }
+    effects
+}
+
+fn process_login_callback(
+    login_state: &mut overlays::LoginState,
+    code: Option<String>,
+    effects: &mut Vec<UiEffect>,
+) {
+    if let overlays::LoginState::AwaitingCode {
+        provider,
+        pkce_verifier,
+        oauth_state,
+        redirect_uri,
+        error,
+        ..
+    } = login_state
+        && matches!(
+            *provider,
+            zdx_core::providers::ProviderKind::ClaudeCli
+                | zdx_core::providers::ProviderKind::OpenAICodex
+                | zdx_core::providers::ProviderKind::GeminiCli
+        )
+    {
+        match code {
+            Some(code) => {
+                *error = None;
+                let verifier = pkce_verifier.clone();
+                let provider = *provider;
+                let code = if provider == zdx_core::providers::ProviderKind::ClaudeCli {
+                    let state = oauth_state.clone().unwrap_or_else(|| verifier.clone());
+                    format!("{code}#{state}")
                 } else {
-                    vec![]
-                }
-            }
-            ThreadUiEvent::PreviewFailed => {
-                let allow = matches!(
-                    app.overlay.as_ref(),
-                    Some(overlays::Overlay::ThreadPicker(_))
-                );
-                if allow {
-                    let (effects, mutations, _) =
-                        thread::handle_thread_event(ThreadUiEvent::PreviewFailed);
-                    apply_mutations(&mut app.tui, mutations);
-                    effects
+                    code
+                };
+                let redirect_uri = if provider == zdx_core::providers::ProviderKind::ClaudeCli {
+                    redirect_uri.clone()
                 } else {
-                    vec![]
-                }
+                    None
+                };
+                *login_state = overlays::LoginState::Exchanging { provider };
+                push_token_exchange(effects, provider, code, verifier, redirect_uri);
             }
-            ThreadUiEvent::Created {
-                thread_handle,
-                context_paths,
-                skills,
-            } => {
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::Created {
-                        thread_handle,
-                        context_paths,
-                        skills,
-                    });
-                apply_mutations(&mut app.tui, mutations);
+            None => {
+                *error = Some("Local login timed out. Paste the code or URL.".to_string());
+            }
+        }
+    }
+}
 
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                    mode,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let current_thread_id = app
-                        .tui
-                        .thread
-                        .thread_handle
-                        .as_ref()
-                        .map(|log| log.id.clone());
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                        threads,
-                        original_cells,
-                        &app.tui.agent_opts.root,
-                        current_thread_id,
-                        mode,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+fn handle_task_started_event(
+    app: &mut AppState,
+    kind: TaskKind,
+    started: &crate::common::TaskStarted,
+) -> Vec<UiEffect> {
+    app.tui.tasks.state_mut(kind).on_started(started);
+    match kind {
+        TaskKind::Handoff => {
+            if matches!(&started.meta, TaskMeta::Handoff { .. }) {
+                app.tui.input.handoff = HandoffState::Generating;
+            }
+        }
+        TaskKind::Bash => {
+            if let TaskMeta::Bash { id, command } = &started.meta {
+                let input = serde_json::json!({ "command": command });
+                app.tui
+                    .transcript
+                    .push_cell(HistoryCell::tool_running(id, "bash", input));
+            }
+        }
+        TaskKind::FileDiscovery
+        | TaskKind::SkillsFetch
+        | TaskKind::SkillInstall
+        | TaskKind::ThreadList
+        | TaskKind::ThreadLoad
+        | TaskKind::ThreadRename
+        | TaskKind::ThreadTitle
+        | TaskKind::ThreadPreview
+        | TaskKind::ThreadCreate
+        | TaskKind::ThreadFork
+        | TaskKind::ThreadWorktree
+        | TaskKind::LoginExchange
+        | TaskKind::LoginCallback => {}
+    }
+    vec![]
+}
 
-                effects
+fn handle_skill_event(app: &mut AppState, skill_event: SkillUiEvent) -> Vec<UiEffect> {
+    match skill_event {
+        SkillUiEvent::ListLoaded { repo, skills } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                let items = skills
+                    .into_iter()
+                    .map(|skill| overlays::skill_picker::SkillItem {
+                        name: skill.name,
+                        path: skill.path,
+                        description: skill.description,
+                    })
+                    .collect();
+                picker.set_skills(&repo, items);
             }
-            ThreadUiEvent::ForkedLoaded {
-                thread_id,
-                cells,
-                messages,
-                history,
-                thread_handle,
-                usage,
-                user_input,
-                turn_number,
-            } => {
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::ForkedLoaded {
-                        thread_id,
-                        cells,
-                        messages,
-                        history,
-                        thread_handle,
-                        usage,
-                        user_input,
-                        turn_number,
-                    });
-                apply_mutations(&mut app.tui, mutations);
+        }
+        SkillUiEvent::ListFailed { repo, error } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                picker.set_error(&repo, format!("Failed to load skills: {error}"));
+            }
+        }
+        SkillUiEvent::Installed { repo: _, skill } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                picker.set_installing(None);
+                picker.mark_installed(&skill);
+            }
+            app.overlay = None;
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(format!(
+                        "Installed skill \"{skill}\". Restart ZDX to pick up new skills."
+                    )),
+                )],
+            );
+        }
+        SkillUiEvent::InstallFailed { repo, skill, error } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                picker.set_installing(None);
+                picker.set_error(&repo, format!("Install failed: {error}"));
+            }
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(format!(
+                        "Failed to install {skill}: {error}"
+                    )),
+                )],
+            );
+        }
+        SkillUiEvent::InstructionsLoaded {
+            repo: _,
+            skill_path,
+            content,
+        } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                picker.set_instructions(&skill_path, content);
+            }
+        }
+        SkillUiEvent::InstructionsFailed {
+            repo: _,
+            skill_path,
+            error,
+        } => {
+            if let Some(overlays::Overlay::SkillPicker(picker)) = &mut app.overlay {
+                picker.set_instructions_error(&skill_path, error);
+            }
+        }
+    }
+    vec![]
+}
 
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                    mode,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let current_thread_id = app
-                        .tui
-                        .thread
-                        .thread_handle
-                        .as_ref()
-                        .map(|log| log.id.clone());
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                        threads,
-                        original_cells,
-                        &app.tui.agent_opts.root,
-                        current_thread_id,
-                        mode,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+fn handle_bash_executed_event(
+    app: &mut AppState,
+    id: &str,
+    command: &str,
+    result: &zdx_core::core::events::ToolOutput,
+) -> Vec<UiEffect> {
+    app.tui.transcript.set_tool_result_for(id, result.clone());
+    if app.tui.thread.thread_handle.is_none() {
+        return vec![];
+    }
 
-                effects
-            }
-            ThreadUiEvent::CreateFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::CreateFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::ForkFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::ForkFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::Renamed { thread_id, title } => {
-                let (mut effects, mutations, overlay_action) =
-                    thread::handle_thread_event(ThreadUiEvent::Renamed { thread_id, title });
-                apply_mutations(&mut app.tui, mutations);
+    let user_message = format!(
+        "[I executed a bash command]\n$ {}\n\nResult:\n{}",
+        command,
+        result.to_json_string()
+    );
+    app.tui
+        .thread
+        .messages
+        .push(zdx_core::providers::ChatMessage::user(&user_message));
+    vec![UiEffect::SaveThread {
+        event: zdx_core::core::thread_persistence::ThreadEvent::user_message(&user_message),
+    }]
+}
 
-                if let thread::ThreadOverlayAction::OpenThreadPicker {
-                    threads,
-                    original_cells,
-                    mode,
-                } = overlay_action
-                    && app.overlay.is_none()
-                {
-                    let current_thread_id = app
-                        .tui
-                        .thread
-                        .thread_handle
-                        .as_ref()
-                        .map(|log| log.id.clone());
-                    let (state, overlay_effects) = overlays::ThreadPickerState::open(
-                        threads,
-                        original_cells,
-                        &app.tui.agent_opts.root,
-                        current_thread_id,
-                        mode,
-                    );
-                    app.overlay = Some(overlays::Overlay::ThreadPicker(state));
-                    effects.extend(overlay_effects);
-                }
+fn handle_system_prompt_refreshed(
+    app: &mut AppState,
+    result: Result<Option<String>, String>,
+) -> Vec<UiEffect> {
+    let mutation = match result {
+        Ok(prompt) => StateMutation::SetSystemPrompt(prompt),
+        Err(error) => StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(error)),
+    };
+    apply_mutations(&mut app.tui, vec![mutation]);
+    vec![]
+}
 
-                effects
-            }
-            ThreadUiEvent::TitleSuggested { thread_id, title } => {
-                let is_current = app
-                    .tui
-                    .thread
-                    .thread_handle
-                    .as_ref()
-                    .is_some_and(|log| log.id == thread_id);
-                if is_current {
-                    let (effects, mutations, _) =
-                        thread::handle_thread_event(ThreadUiEvent::TitleSuggested {
-                            thread_id,
-                            title,
-                        });
-                    apply_mutations(&mut app.tui, mutations);
-                    effects
-                } else {
-                    vec![]
-                }
-            }
-            ThreadUiEvent::RenameFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::RenameFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::WorktreeReady { path } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::WorktreeReady { path });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-            ThreadUiEvent::WorktreeFailed { error } => {
-                let (effects, mutations, _) =
-                    thread::handle_thread_event(ThreadUiEvent::WorktreeFailed { error });
-                apply_mutations(&mut app.tui, mutations);
-                effects
-            }
-        },
+fn handle_thread_ui_event(app: &mut AppState, thread_event: ThreadUiEvent) -> Vec<UiEffect> {
+    let allow_preview = matches!(
+        app.overlay.as_ref(),
+        Some(overlays::Overlay::ThreadPicker(_))
+    );
+    match thread_event {
+        ThreadUiEvent::PreviewLoaded { .. } | ThreadUiEvent::PreviewFailed if !allow_preview => {
+            vec![]
+        }
+        ThreadUiEvent::TitleSuggested { thread_id, .. }
+            if app
+                .tui
+                .thread
+                .thread_handle
+                .as_ref()
+                .is_none_or(|log| log.id != thread_id) =>
+        {
+            vec![]
+        }
+        event => {
+            let (mut effects, mutations, overlay_action) = thread::handle_thread_event(event);
+            apply_mutations(&mut app.tui, mutations);
+            maybe_open_thread_picker_overlay(app, overlay_action, &mut effects);
+            effects
+        }
+    }
+}
+
+fn maybe_open_thread_picker_overlay(
+    app: &mut AppState,
+    overlay_action: thread::ThreadOverlayAction,
+    effects: &mut Vec<UiEffect>,
+) {
+    if let thread::ThreadOverlayAction::OpenThreadPicker {
+        threads,
+        original_cells,
+        mode,
+    } = overlay_action
+        && app.overlay.is_none()
+    {
+        let current_thread_id = app
+            .tui
+            .thread
+            .thread_handle
+            .as_ref()
+            .map(|log| log.id.clone());
+        let (state, overlay_effects) = overlays::ThreadPickerState::open(
+            threads,
+            original_cells,
+            &app.tui.agent_opts.root,
+            current_thread_id,
+            mode,
+        );
+        app.overlay = Some(overlays::Overlay::ThreadPicker(state));
+        effects.extend(overlay_effects);
     }
 }
 
@@ -776,7 +517,7 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
             StateMutation::Transcript(mutation) => tui.transcript.apply(mutation),
             StateMutation::Input(mutation) => tui.input.apply(mutation),
             StateMutation::Thread(mutation) => tui.thread.apply(mutation),
-            StateMutation::Auth(mutation) => tui.auth.apply(mutation),
+            StateMutation::Auth(mutation) => tui.auth.apply(&mutation),
             StateMutation::Config(mutation) => apply_config_mutation(tui, mutation),
             StateMutation::SetRootDisplay {
                 path,
@@ -873,13 +614,13 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
                     token: None,
                 });
             }
-            effects.extend(open_overlay_request(app, request));
+            effects.extend(open_overlay_request(app, &request));
         }
     }
     effects
 }
 
-fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -> Vec<UiEffect> {
+fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
         overlays::OverlayRequest::CommandPalette => {
             let provider = zdx_core::providers::provider_for_model(&app.tui.config.model);
@@ -919,7 +660,7 @@ fn open_overlay_request(app: &mut AppState, request: overlays::OverlayRequest) -
             effects
         }
         overlays::OverlayRequest::FilePicker { trigger_pos } => {
-            let (state, effects) = overlays::FilePickerState::open(trigger_pos);
+            let (state, effects) = overlays::FilePickerState::open(*trigger_pos);
             app.overlay = Some(overlays::Overlay::FilePicker(state));
             effects
         }
@@ -1066,7 +807,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     if let Some(request) = overlay_request
         && app.overlay.is_none()
     {
-        let mut overlay_effects = open_overlay_request(app, request);
+        let mut overlay_effects = open_overlay_request(app, &request);
         overlay_effects.extend(effects);
         return overlay_effects;
     }

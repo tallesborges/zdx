@@ -189,7 +189,7 @@ impl SkillFilters {
 /// Returns an error if the operation fails.
 pub fn load_skills(options: &LoadSkillsOptions) -> LoadSkillsResult {
     let zdx_home = paths::zdx_home();
-    let home_dir = dirs::home_dir();
+    let home_dir = paths::home_dir();
     let sources = build_skill_sources(options, &zdx_home, home_dir.as_deref());
     let mut warnings = Vec::new();
     let filters = build_skill_filters(

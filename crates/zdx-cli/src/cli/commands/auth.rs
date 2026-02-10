@@ -102,10 +102,9 @@ pub async fn login_claude_cli() -> Result<()> {
     Ok(())
 }
 
-pub fn logout_anthropic() -> Result<()> {
+pub fn logout_anthropic() {
     println!("Anthropic uses API keys.");
     println!("Unset ANTHROPIC_API_KEY to remove authentication.");
-    Ok(())
 }
 
 pub fn logout_claude_cli() -> Result<()> {

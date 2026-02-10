@@ -81,37 +81,43 @@ pub fn handle_main_key(input: &mut InputState, ctx: &InputContext<'_>, key: KeyE
 }
 
 /// Parsed key modifiers for cleaner pattern matching.
-struct Modifiers {
-    ctrl: bool,
-    shift: bool,
-    alt: bool,
-    super_key: bool,
-}
+struct Modifiers(CrosstermKeyModifiers);
 
 impl Modifiers {
     fn from(key: &KeyEvent) -> Self {
-        Self {
-            ctrl: key.modifiers.contains(CrosstermKeyModifiers::CONTROL),
-            shift: key.modifiers.contains(CrosstermKeyModifiers::SHIFT),
-            alt: key.modifiers.contains(CrosstermKeyModifiers::ALT),
-            super_key: key.modifiers.contains(CrosstermKeyModifiers::SUPER),
-        }
+        Self(key.modifiers)
     }
 
     fn none(&self) -> bool {
-        !self.ctrl && !self.shift && !self.alt && !self.super_key
+        self.0.is_empty()
+    }
+
+    fn ctrl(&self) -> bool {
+        self.0.contains(CrosstermKeyModifiers::CONTROL)
+    }
+
+    fn shift(&self) -> bool {
+        self.0.contains(CrosstermKeyModifiers::SHIFT)
+    }
+
+    fn alt(&self) -> bool {
+        self.0.contains(CrosstermKeyModifiers::ALT)
+    }
+
+    fn super_key(&self) -> bool {
+        self.0.contains(CrosstermKeyModifiers::SUPER)
     }
 
     fn only_ctrl(&self) -> bool {
-        self.ctrl && !self.shift && !self.alt && !self.super_key
+        self.ctrl() && !self.shift() && !self.alt() && !self.super_key()
     }
 
     fn only_alt(&self) -> bool {
-        self.alt && !self.ctrl && !self.shift && !self.super_key
+        self.alt() && !self.ctrl() && !self.shift() && !self.super_key()
     }
 
     fn only_super(&self) -> bool {
-        self.super_key && !self.ctrl && !self.shift && !self.alt
+        self.super_key() && !self.ctrl() && !self.shift() && !self.alt()
     }
 }
 
@@ -238,13 +244,13 @@ fn handle_navigation(input: &mut InputState, key: KeyEvent, mods: &Modifiers) ->
             None,
         )),
         // Ctrl+Home: scroll to top
-        KeyCode::Home if mods.ctrl => Some((
+        KeyCode::Home if mods.ctrl() => Some((
             vec![],
             vec![StateMutation::Transcript(TranscriptMutation::ScrollToTop)],
             None,
         )),
         // Ctrl+End: scroll to bottom
-        KeyCode::End if mods.ctrl => Some((
+        KeyCode::End if mods.ctrl() => Some((
             vec![],
             vec![StateMutation::Transcript(
                 TranscriptMutation::ScrollToBottom,
@@ -323,7 +329,7 @@ fn handle_control_keys(
 ) -> Option<KeyResult> {
     match code {
         // Ctrl+C: interrupt agent, clear input, or quit
-        KeyCode::Char('c') if mods.ctrl => {
+        KeyCode::Char('c') if mods.ctrl() => {
             if ctx.agent_state.is_running() {
                 Some((vec![UiEffect::InterruptAgent], vec![], None))
             } else if ctx.tasks.state(TaskKind::Bash).is_running() {
@@ -414,7 +420,7 @@ fn handle_submission(
     mods: &Modifiers,
 ) -> Option<KeyResult> {
     match code {
-        KeyCode::Enter if !mods.shift && !mods.alt => Some(submit_input(
+        KeyCode::Enter if !mods.shift() && !mods.alt() => Some(submit_input(
             input,
             ctx.agent_state,
             ctx.tasks,
@@ -764,7 +770,7 @@ pub fn build_send_effects(
 /// Returns an error if the operation fails.
 pub fn handle_handoff_result(
     input: &mut InputState,
-    goal: String,
+    goal: &str,
     result: Result<String, String>,
 ) -> Vec<StateMutation> {
     let was_generating = input.handoff.is_generating();
@@ -788,7 +794,7 @@ pub fn handle_handoff_result(
 
             // Restore goal for retry (spec requirement)
             if was_generating {
-                input.set_text(&goal);
+                input.set_text(goal);
                 input.handoff = HandoffState::Pending;
                 mutations.push(StateMutation::Transcript(
                     TranscriptMutation::AppendSystemMessage(

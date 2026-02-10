@@ -426,66 +426,7 @@ pub fn render_command_palette(
         list_height,
     );
 
-    let items: Vec<ListItem> = if commands.is_empty() {
-        vec![ListItem::new(Line::from(Span::styled(
-            "  No matching commands",
-            Style::default().fg(Color::DarkGray),
-        )))]
-    } else {
-        // Calculate column widths
-        let max_category_len = commands.iter().map(|c| c.category.len()).max().unwrap_or(0);
-        let max_name_len = commands.iter().map(|c| c.name.len()).max().unwrap_or(0);
-
-        commands
-            .iter()
-            .enumerate()
-            .map(|(idx, cmd)| {
-                let is_selected = idx == palette.selected;
-                let name_style = if is_selected {
-                    Style::default()
-                        .fg(Color::White)
-                        .add_modifier(Modifier::BOLD)
-                } else {
-                    Style::default().fg(Color::DarkGray)
-                };
-
-                let mut spans = vec![
-                    // Category column (dimmed, right-aligned)
-                    Span::styled(
-                        format!("{:>width$}  ", cmd.category, width = max_category_len),
-                        Style::default()
-                            .fg(if is_selected {
-                                Color::Black
-                            } else {
-                                Color::DarkGray
-                            })
-                            .add_modifier(Modifier::DIM),
-                    ),
-                    // Command name column
-                    Span::styled(
-                        format!("{:<width$}", cmd.name, width = max_name_len),
-                        name_style,
-                    ),
-                ];
-
-                // Shortcut column (dimmed, right side)
-                if let Some(shortcut) = cmd.shortcut {
-                    // Calculate remaining space for right-alignment
-                    let used = max_category_len + 2 + max_name_len;
-                    let available = list_area.width.saturating_sub(4) as usize;
-                    let shortcut_len = shortcut.len();
-                    let padding = available.saturating_sub(used + shortcut_len);
-
-                    spans.push(Span::styled(
-                        format!("{:>width$}", shortcut, width = padding + shortcut_len),
-                        Style::default().fg(Color::DarkGray),
-                    ));
-                }
-
-                ListItem::new(Line::from(spans))
-            })
-            .collect()
-    };
+    let items = build_command_items(&commands, palette.selected, list_area.width);
 
     let list = List::new(items)
         .highlight_style(Style::default().bg(Color::Magenta))
@@ -499,22 +440,87 @@ pub fn render_command_palette(
 
     render_separator(frame, layout.body, 2 + list_height);
 
-    // Render selected command description (centered)
-    let description = commands
-        .get(palette.selected)
-        .map_or("", |cmd| cmd.description);
-    let desc_area = Rect::new(
-        layout.body.x,
-        layout.body.y + 3 + list_height,
-        layout.body.width,
-        1,
+    render_command_description(frame, &commands, palette.selected, layout.body, list_height);
+}
+
+fn build_command_items(
+    commands: &[&'static Command],
+    selected: usize,
+    list_width: u16,
+) -> Vec<ListItem<'static>> {
+    if commands.is_empty() {
+        return vec![ListItem::new(Line::from(Span::styled(
+            "  No matching commands",
+            Style::default().fg(Color::DarkGray),
+        )))];
+    }
+
+    let max_category_len = commands.iter().map(|c| c.category.len()).max().unwrap_or(0);
+    let max_name_len = commands.iter().map(|c| c.name.len()).max().unwrap_or(0);
+    commands
+        .iter()
+        .enumerate()
+        .map(|(idx, cmd)| {
+            let is_selected = idx == selected;
+            let mut spans = vec![
+                Span::styled(
+                    format!("{:>width$}  ", cmd.category, width = max_category_len),
+                    Style::default()
+                        .fg(if is_selected {
+                            Color::Black
+                        } else {
+                            Color::DarkGray
+                        })
+                        .add_modifier(Modifier::DIM),
+                ),
+                Span::styled(
+                    format!("{:<width$}", cmd.name, width = max_name_len),
+                    command_name_style(is_selected),
+                ),
+            ];
+
+            if let Some(shortcut) = cmd.shortcut {
+                let used = max_category_len + 2 + max_name_len;
+                let available = list_width.saturating_sub(4) as usize;
+                let padding = available.saturating_sub(used + shortcut.len());
+                spans.push(Span::styled(
+                    format!("{:>width$}", shortcut, width = padding + shortcut.len()),
+                    Style::default().fg(Color::DarkGray),
+                ));
+            }
+
+            ListItem::new(Line::from(spans))
+        })
+        .collect()
+}
+
+fn command_name_style(is_selected: bool) -> Style {
+    if is_selected {
+        Style::default()
+            .fg(Color::White)
+            .add_modifier(Modifier::BOLD)
+    } else {
+        Style::default().fg(Color::DarkGray)
+    }
+}
+
+fn render_command_description(
+    frame: &mut Frame,
+    commands: &[&'static Command],
+    selected: usize,
+    body: Rect,
+    list_height: u16,
+) {
+    let description = commands.get(selected).map_or("", |cmd| cmd.description);
+    let desc_area = Rect::new(body.x, body.y + 3 + list_height, body.width, 1);
+    frame.render_widget(
+        Paragraph::new(Line::from(Span::styled(
+            description,
+            Style::default().fg(Color::DarkGray),
+        )))
+        .alignment(Alignment::Center),
+        desc_area,
     );
-    let desc_paragraph = Paragraph::new(Line::from(Span::styled(
-        description,
-        Style::default().fg(Color::DarkGray),
-    )))
-    .alignment(Alignment::Center);
-    frame.render_widget(desc_paragraph, desc_area);
 }
 
 #[cfg(test)]

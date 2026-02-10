@@ -23,8 +23,8 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
 
     for event in events {
         match event {
-            ThreadEvent::Meta { .. } => {
-                // Skip meta events
+            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {
+                // Skip non-display events when building transcript
             }
             ThreadEvent::Message { role, text, .. } => {
                 let cell = match role.as_str() {
@@ -88,9 +88,6 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                         is_interrupted: true,
                     });
                 }
-            }
-            ThreadEvent::Usage { .. } => {
-                // Skip usage events when building transcript (they're for tracking only)
             }
         }
     }

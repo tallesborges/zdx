@@ -27,51 +27,14 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     };
 
-    // Always reply to the original message - this shows the original message
-    // context in the topic, which is useful for reference
     let reply_to_message_id = Some(incoming.message_id);
-
-    // Handle commands that are blocked in General (topic wasn't created for these)
-    if incoming.is_forum
-        && incoming.message_thread_id.is_none()
-        && incoming.images.is_empty()
-        && incoming.audios.is_empty()
-        && let Some(text) = incoming.text.as_deref()
-        && (is_new_command(text) || is_worktree_create_command(text))
-    {
-        let message = if is_new_command(text) {
-            "/new is not allowed in General."
-        } else {
-            "/worktree must be used inside a topic, not General."
-        };
-        context
-            .client()
-            .send_message(incoming.chat_id, message, reply_to_message_id, None)
-            .await?;
-        return Ok(());
-    }
-
-    // Handle /rebuild command (allowed from any context)
-    if incoming.images.is_empty()
-        && incoming.audios.is_empty()
-        && let Some(text) = incoming.text.as_deref()
-        && is_rebuild_command(text)
-    {
-        context
-            .client()
-            .send_message(
-                incoming.chat_id,
-                "♻️ Rebuilding bot… coming back shortly.",
-                reply_to_message_id,
-                incoming.message_thread_id,
-            )
-            .await?;
-        context.request_rebuild();
-        return Ok(());
-    }
-
-    // Use the topic_id from the message (set by dispatch_message for General messages)
     let topic_id = incoming.message_thread_id;
+
+    if handle_general_forum_commands(context, &incoming, reply_to_message_id).await?
+        || handle_rebuild_command(context, &incoming, reply_to_message_id).await?
+    {
+        return Ok(());
+    }
 
     eprintln!(
         "Accepted message from user {} in chat {}{}",
@@ -83,104 +46,240 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     );
 
     let thread_id = thread_id_for_chat(incoming.chat_id, topic_id);
-    if incoming.images.is_empty()
-        && incoming.audios.is_empty()
-        && let Some(text) = incoming.text.as_deref()
+    if handle_thread_commands(
+        context,
+        &incoming,
+        &thread_id,
+        reply_to_message_id,
+        topic_id,
+    )
+    .await?
     {
-        if is_new_command(text) {
-            if incoming.is_forum && topic_id.is_some() {
-                context
-                    .client()
-                    .send_message(
-                        incoming.chat_id,
-                        "/new is not allowed in topics.",
-                        reply_to_message_id,
-                        topic_id,
-                    )
-                    .await?;
-                return Ok(());
-            }
-            agent::clear_thread_history(&thread_id)?;
-            context
-                .client()
-                .send_message(
-                    incoming.chat_id,
-                    "History cleared. Start a new conversation anytime.",
-                    reply_to_message_id,
-                    topic_id,
-                )
-                .await?;
-            return Ok(());
-        }
-
-        if is_worktree_create_command(text) {
-            let worktree_root = match worktree::ensure_worktree(context.root(), &thread_id) {
-                Ok(path) => path,
-                Err(err) => {
-                    let msg = format!(
-                        "Failed to enable worktree: {err}\n\nTip: start the bot from inside a git repo (or a subdirectory of one)."
-                    );
-                    context
-                        .client()
-                        .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
-                        .await?;
-                    return Ok(());
-                }
-            };
-            let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.clone())
-                .context("open thread log")?;
-            if let Err(err) = thread.set_root_path(&worktree_root) {
-                context
-                    .client()
-                    .send_message(
-                        incoming.chat_id,
-                        &format!("Failed to persist worktree root: {err}"),
-                        reply_to_message_id,
-                        topic_id,
-                    )
-                    .await?;
-                return Ok(());
-            }
-            context
-                .client()
-                .send_message(
-                    incoming.chat_id,
-                    &format!("Worktree enabled: {}", worktree_root.display()),
-                    reply_to_message_id,
-                    topic_id,
-                )
-                .await?;
-            return Ok(());
-        }
+        return Ok(());
     }
 
-    let worktree_root = thread_persistence::read_thread_root_path(&thread_id)?
-        .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
-    let (mut thread, mut messages) = agent::load_thread_state(&thread_id)?;
-    agent::record_user_message(&mut thread, &mut messages, &incoming)?;
+    run_agent_turn(context, incoming, reply_to_message_id, topic_id, &thread_id).await
+}
 
-    // Keep Telegram native typing indicator alongside the Thinking status.
+struct TurnStatus {
+    key: (i64, i64),
+    token: CancellationToken,
+    markup: InlineKeyboardMarkup,
+    message_id: Option<i64>,
+}
+
+struct TurnResult {
+    final_text: String,
+    got_result: bool,
+    had_error: bool,
+}
+
+async fn handle_general_forum_commands(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.is_forum
+        || incoming.message_thread_id.is_some()
+        || !incoming.images.is_empty()
+        || !incoming.audios.is_empty()
+    {
+        return Ok(false);
+    }
+
+    let Some(text) = incoming.text.as_deref() else {
+        return Ok(false);
+    };
+    if !is_new_command(text) && !is_worktree_create_command(text) {
+        return Ok(false);
+    }
+
+    let message = if is_new_command(text) {
+        "/new is not allowed in General."
+    } else {
+        "/worktree must be used inside a topic, not General."
+    };
+    context
+        .client()
+        .send_message(incoming.chat_id, message, reply_to_message_id, None)
+        .await?;
+    Ok(true)
+}
+
+async fn handle_rebuild_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    let Some(text) = incoming.text.as_deref() else {
+        return Ok(false);
+    };
+    if !is_rebuild_command(text) {
+        return Ok(false);
+    }
+
+    context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            "♻️ Rebuilding bot… coming back shortly.",
+            reply_to_message_id,
+            incoming.message_thread_id,
+        )
+        .await?;
+    context.request_rebuild();
+    Ok(true)
+}
+
+async fn handle_thread_commands(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    let Some(text) = incoming.text.as_deref() else {
+        return Ok(false);
+    };
+
+    if is_new_command(text) {
+        if incoming.is_forum && topic_id.is_some() {
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    "/new is not allowed in topics.",
+                    reply_to_message_id,
+                    topic_id,
+                )
+                .await?;
+            return Ok(true);
+        }
+        agent::clear_thread_history(thread_id)?;
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                "History cleared. Start a new conversation anytime.",
+                reply_to_message_id,
+                topic_id,
+            )
+            .await?;
+        return Ok(true);
+    }
+
+    if !is_worktree_create_command(text) {
+        return Ok(false);
+    }
+
+    let worktree_root = match worktree::ensure_worktree(context.root(), thread_id) {
+        Ok(path) => path,
+        Err(err) => {
+            let msg = format!(
+                "Failed to enable worktree: {err}\n\nTip: start the bot from inside a git repo (or a subdirectory of one)."
+            );
+            context
+                .client()
+                .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
+                .await?;
+            return Ok(true);
+        }
+    };
+
+    let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+        .context("open thread log")?;
+    if let Err(err) = thread.set_root_path(&worktree_root) {
+        context
+            .client()
+            .send_message(
+                incoming.chat_id,
+                &format!("Failed to persist worktree root: {err}"),
+                reply_to_message_id,
+                topic_id,
+            )
+            .await?;
+        return Ok(true);
+    }
+
+    context
+        .client()
+        .send_message(
+            incoming.chat_id,
+            &format!("Worktree enabled: {}", worktree_root.display()),
+            reply_to_message_id,
+            topic_id,
+        )
+        .await?;
+    Ok(true)
+}
+
+async fn run_agent_turn(
+    context: &BotContext,
+    incoming: crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+    thread_id: &str,
+) -> Result<()> {
+    let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
+        .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
+    let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
+    agent::record_user_message(&mut thread, &mut messages, &incoming)?;
     let typing = context.client().start_typing(incoming.chat_id, topic_id);
 
-    // Send "Thinking..." status message with Cancel button.
-    let cancel_key = (incoming.chat_id, incoming.message_id);
-    let cancel_data = format!("cancel:{}:{}", cancel_key.0, cancel_key.1);
+    let status = setup_turn_status(context, &incoming, reply_to_message_id, topic_id).await;
+    let mut handle = spawn_or_fail(
+        context,
+        &incoming,
+        &worktree_root,
+        thread_id,
+        &thread,
+        messages,
+        &status,
+    )
+    .await?;
+    let result = stream_turn_events(context, &incoming, &mut handle, &status).await;
+    drop(typing);
+    cleanup_turn_status(context, &status).await;
+    finalize_turn(
+        context,
+        &incoming,
+        reply_to_message_id,
+        topic_id,
+        &mut thread,
+        &status,
+        result,
+    )
+    .await
+}
+
+async fn setup_turn_status(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> TurnStatus {
+    let key = (incoming.chat_id, incoming.message_id);
     let cancel_markup = InlineKeyboardMarkup {
         inline_keyboard: vec![vec![InlineKeyboardButton {
             text: "⏹ Cancel".to_string(),
-            callback_data: Some(cancel_data),
+            callback_data: Some(format!("cancel:{}:{}", key.0, key.1)),
             url: None,
         }]],
     };
 
-    // Register cancellation token before sending status
-    let cancel_token = CancellationToken::new();
+    let token = CancellationToken::new();
     {
         let mut map = context.cancel_map().lock().await;
-        map.insert(cancel_key, cancel_token.clone());
+        map.insert(key, token.clone());
     }
 
-    let status_msg = context
+    let message_id = context
         .client()
         .send_message_with_markup(
             incoming.chat_id,
@@ -189,26 +288,42 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
             topic_id,
             &cancel_markup,
         )
-        .await;
+        .await
+        .ok()
+        .map(|m| m.id);
 
-    let status_message_id = status_msg.as_ref().ok().map(|m| m.message_id);
+    TurnStatus {
+        key,
+        token,
+        markup: cancel_markup,
+        message_id,
+    }
+}
 
-    // Spawn the agent turn — returns a handle with streaming events
+async fn spawn_or_fail(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    worktree_root: &std::path::Path,
+    thread_id: &str,
+    thread: &zdx_core::core::thread_persistence::Thread,
+    messages: Vec<zdx_core::providers::ChatMessage>,
+    status: &TurnStatus,
+) -> Result<agent::AgentTurnHandle> {
     let handle = agent::spawn_agent_turn(
         messages,
         context.config(),
-        &worktree_root,
+        worktree_root,
         context.bot_system_prompt(),
-        &thread_id,
-        &thread,
+        thread_id,
+        thread,
         context.tool_config(),
     );
 
-    let mut handle = match handle {
-        Ok(h) => h,
+    match handle {
+        Ok(handle) => Ok(handle),
         Err(err) => {
             eprintln!("Failed to spawn agent turn: {err}");
-            if let Some(msg_id) = status_message_id {
+            if let Some(msg_id) = status.message_id {
                 let _ = context
                     .client()
                     .edit_message_text(
@@ -219,18 +334,22 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                     )
                     .await;
             }
-            // Clean up cancellation token
-            let mut map = context.cancel_map().lock().await;
-            map.remove(&cancel_key);
-            return Err(err);
+            cleanup_turn_status(context, status).await;
+            Err(err)
         }
-    };
+    }
+}
 
-    // Consume streaming events, updating Telegram status with live activity
+async fn stream_turn_events(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    handle: &mut agent::AgentTurnHandle,
+    status: &TurnStatus,
+) -> TurnResult {
     let mut current_status = "🧠 Thinking...".to_string();
     let mut last_edit = std::time::Instant::now()
         .checked_sub(STATUS_DEBOUNCE)
-        .unwrap(); // Allow immediate first edit
+        .expect("debounce subtraction should always succeed");
     let mut final_text = String::new();
     let mut got_result = false;
     let mut had_error = false;
@@ -238,22 +357,16 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     loop {
         tokio::select! {
             biased;
-            () = cancel_token.cancelled() => {
-                // User pressed Cancel — abort the agent task
+            () = status.token.cancelled() => {
                 handle.task.abort();
                 break;
             }
             event = handle.rx.recv() => {
-                let Some(event) = event else {
-                    // Channel closed — agent finished (or crashed)
-                    break;
-                };
-
+                let Some(event) = event else { break; };
                 match &*event {
                     AgentEvent::TurnCompleted { final_text: text, .. } => {
                         final_text.clone_from(text);
                         got_result = true;
-                        // Don't break yet — drain remaining events
                     }
                     AgentEvent::Error { message, .. } => {
                         eprintln!("Agent error event: {message}");
@@ -264,50 +377,65 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                             final_text.clone_from(partial);
                         }
                     }
-                    other => {
-                        // Update status based on event
-                        if let Some(new_status) = agent::event_to_status(other)
-                            && new_status != current_status
-                        {
-                            current_status = new_status;
-                            // Debounce edits to avoid Telegram rate limits
-                            if let Some(msg_id) = status_message_id {
-                                let now = std::time::Instant::now();
-                                if now.duration_since(last_edit) >= STATUS_DEBOUNCE {
-                                    last_edit = now;
-                                    let _ = context
-                                        .client()
-                                        .edit_message_text(
-                                            incoming.chat_id,
-                                            msg_id,
-                                            &current_status,
-                                            Some(&cancel_markup),
-                                        )
-                                        .await;
-                                }
-                            }
-                        }
-                    }
+                    other => update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await,
                 }
-
-                if got_result {
-                    break;
-                }
+                if got_result { break; }
             }
         }
     }
 
-    // Stop Telegram typing indicator
-    drop(typing);
+    TurnResult {
+        final_text,
+        got_result,
+        had_error,
+    }
+}
 
-    // Clean up cancellation token
-    {
-        let mut map = context.cancel_map().lock().await;
-        map.remove(&cancel_key);
+async fn update_status(
+    context: &BotContext,
+    chat_id: i64,
+    status: &TurnStatus,
+    event: &AgentEvent,
+    current_status: &mut String,
+    last_edit: &mut std::time::Instant,
+) {
+    let Some(new_status) = agent::event_to_status(event) else {
+        return;
+    };
+    if new_status == *current_status {
+        return;
     }
 
-    // Check if cancelled
-    if cancel_token.is_cancelled() {
+    *current_status = new_status;
+    let Some(msg_id) = status.message_id else {
+        return;
+    };
+    let now = std::time::Instant::now();
+    if now.duration_since(*last_edit) < STATUS_DEBOUNCE {
+        return;
+    }
+    *last_edit = now;
+    let _ = context
+        .client()
+        .edit_message_text(chat_id, msg_id, current_status, Some(&status.markup))
+        .await;
+}
+
+async fn cleanup_turn_status(context: &BotContext, status: &TurnStatus) {
+    let mut map = context.cancel_map().lock().await;
+    map.remove(&status.key);
+}
+
+async fn finalize_turn(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+    thread: &mut zdx_core::core::thread_persistence::Thread,
+    status: &TurnStatus,
+    result: TurnResult,
+) -> Result<()> {
+    if status.token.is_cancelled() {
         eprintln!(
             "Agent turn cancelled for chat {}{}",
             incoming.chat_id,
@@ -315,7 +443,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
                 .map(|id| format!(" topic {id}"))
                 .unwrap_or_default()
         );
-        if let Some(msg_id) = status_message_id {
+        if let Some(msg_id) = status.message_id {
             let _ = context
                 .client()
                 .edit_message_text(incoming.chat_id, msg_id, "Cancelled ✓", None)
@@ -324,9 +452,8 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
-    // Handle result
-    if had_error && !got_result {
-        if let Some(msg_id) = status_message_id {
+    if result.had_error && !result.got_result {
+        if let Some(msg_id) = status.message_id {
             let _ = context
                 .client()
                 .edit_message_text(
@@ -340,54 +467,71 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
-    // Persist assistant message and send final response
-    if got_result {
+    if result.got_result {
         thread
-            .append(&ThreadEvent::assistant_message(&final_text))
+            .append(&ThreadEvent::assistant_message(&result.final_text))
             .context("append assistant message")?;
     }
 
-    if !final_text.trim().is_empty() {
-        eprintln!("Sending reply for chat {}", incoming.chat_id);
-        if let Some(msg_id) = status_message_id {
-            let edit_result = context
+    send_final_response(
+        context,
+        incoming,
+        reply_to_message_id,
+        topic_id,
+        status.message_id,
+        &result.final_text,
+    )
+    .await
+}
+
+async fn send_final_response(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+    status_message_id: Option<i64>,
+    final_text: &str,
+) -> Result<()> {
+    if final_text.trim().is_empty() {
+        if let Some(msg_id) = status_message_id
+            && let Err(err) = context
                 .client()
-                .edit_message_text(incoming.chat_id, msg_id, &final_text, None)
-                .await;
-            if let Err(ref err) = edit_result {
-                eprintln!(
-                    "Failed to edit status message {} in chat {}: {}",
-                    msg_id, incoming.chat_id, err
-                );
-                // Delete the old status message to remove stale cancel button
-                if let Err(del_err) = context
-                    .client()
-                    .delete_message(incoming.chat_id, msg_id)
-                    .await
-                {
-                    eprintln!("Failed to delete stale status message {msg_id}: {del_err}");
-                }
-                // Fallback: send as a new message
-                context
-                    .client()
-                    .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
-                    .await?;
-            }
-        } else {
-            context
-                .client()
-                .send_message(incoming.chat_id, &final_text, reply_to_message_id, topic_id)
-                .await?;
-        }
-    } else if let Some(msg_id) = status_message_id {
-        // Empty response — remove the thinking message
-        if let Err(err) = context
-            .client()
-            .delete_message(incoming.chat_id, msg_id)
-            .await
+                .delete_message(incoming.chat_id, msg_id)
+                .await
         {
             eprintln!("Failed to delete empty status message {msg_id}: {err}");
         }
+        return Ok(());
+    }
+
+    eprintln!("Sending reply for chat {}", incoming.chat_id);
+    if let Some(msg_id) = status_message_id {
+        let edit_result = context
+            .client()
+            .edit_message_text(incoming.chat_id, msg_id, final_text, None)
+            .await;
+        if let Err(ref err) = edit_result {
+            eprintln!(
+                "Failed to edit status message {} in chat {}: {}",
+                msg_id, incoming.chat_id, err
+            );
+            if let Err(del_err) = context
+                .client()
+                .delete_message(incoming.chat_id, msg_id)
+                .await
+            {
+                eprintln!("Failed to delete stale status message {msg_id}: {del_err}");
+            }
+            context
+                .client()
+                .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
+                .await?;
+        }
+    } else {
+        context
+            .client()
+            .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
+            .await?;
     }
 
     Ok(())
