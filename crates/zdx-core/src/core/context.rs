@@ -268,7 +268,9 @@ pub fn build_effective_system_prompt_with_paths(
     }
 
     if config.subagents.enabled {
-        let subagents_block = format_subagents_for_prompt(&config.subagents);
+        let available_models = config.subagent_available_models();
+        let subagents_block =
+            format_subagents_for_prompt(config.subagents.enabled, &available_models);
         let combined = match system_prompt {
             Some(sp) => format!("{sp}\n\n{subagents_block}"),
             None => subagents_block,
@@ -298,12 +300,11 @@ pub fn build_effective_system_prompt_with_paths(
     })
 }
 
-fn format_subagents_for_prompt(config: &crate::config::SubagentsConfig) -> String {
-    let allowed_models = if config.allowed_models.is_empty() {
-        "(any)".to_string()
+fn format_subagents_for_prompt(enabled: bool, available_models: &[String]) -> String {
+    let available_models = if available_models.is_empty() {
+        "(none)".to_string()
     } else {
-        config
-            .allowed_models
+        available_models
             .iter()
             .map(String::as_str)
             .collect::<Vec<_>>()
@@ -311,8 +312,7 @@ fn format_subagents_for_prompt(config: &crate::config::SubagentsConfig) -> Strin
     };
 
     format!(
-        "<subagents>\n  <enabled>{}</enabled>\n  <allowed_models>{allowed_models}</allowed_models>\n</subagents>",
-        config.enabled
+        "<subagents>\n  <enabled>{enabled}</enabled>\n  <available_models>{available_models}</available_models>\n</subagents>",
     )
 }
 
@@ -587,16 +587,18 @@ mod tests {
 
     #[test]
     fn test_subagents_block_includes_config_values() {
-        let config = crate::config::SubagentsConfig {
-            enabled: true,
-            allowed_models: vec!["codex:gpt-5.3-codex".to_string()],
-        };
-
-        let block = format_subagents_for_prompt(&config);
+        let block = format_subagents_for_prompt(
+            true,
+            &[
+                "codex:gpt-5.3-codex".to_string(),
+                "openai:gpt-5.2".to_string(),
+            ],
+        );
         assert!(block.contains("<subagents>"));
         assert!(block.contains("<enabled>true</enabled>"));
-        assert!(block.contains("<allowed_models>"));
+        assert!(block.contains("<available_models>"));
         assert!(block.contains("codex:gpt-5.3-codex"));
+        assert!(block.contains("openai:gpt-5.2"));
     }
 
     #[test]

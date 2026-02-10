@@ -276,8 +276,8 @@ pub struct ToolContext {
     /// Whether subagent delegation is enabled.
     pub subagents_enabled: bool,
 
-    /// Allowed model list for subagent delegation (empty means any).
-    pub subagent_allowed_models: Vec<String>,
+    /// Available model list for subagent delegation.
+    pub subagent_available_models: Vec<String>,
 }
 
 impl ToolContext {
@@ -288,7 +288,7 @@ impl ToolContext {
             model: None,
             thinking_level: None,
             subagents_enabled: true,
-            subagent_allowed_models: Vec::new(),
+            subagent_available_models: Vec::new(),
         }
     }
 
@@ -297,8 +297,7 @@ impl ToolContext {
         self.model = Some(config.model.clone());
         self.thinking_level = Some(config.thinking_level);
         self.subagents_enabled = config.subagents.enabled;
-        self.subagent_allowed_models
-            .clone_from(&config.subagents.allowed_models);
+        self.subagent_available_models = config.subagent_available_models();
         self
     }
 }
