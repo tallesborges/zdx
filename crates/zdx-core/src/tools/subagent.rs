@@ -14,7 +14,7 @@ use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Invoke_Subagent".to_string(),
-        description: "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Optional model override is available when needed. Available model restrictions are listed in <allowed_models> inside the <subagents> system prompt block. Returns response text only.".to_string(),
+        description: "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Optional model override is available when needed. Available model overrides are listed in <available_models> inside the <subagents> system prompt block. Returns response text only.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
@@ -24,7 +24,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "model": {
                     "type": "string",
-                    "description": "Optional model override for this subagent run. When <allowed_models> is present, use a model from that list."
+                    "description": "Optional model override for this subagent run. Use a model from <available_models> in the <subagents> system prompt block."
                 }
             },
             "required": ["prompt"],
@@ -107,33 +107,32 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 }
 
 fn validate_model_supported(model: &str, ctx: &ToolContext) -> Option<ToolOutput> {
-    if ctx.subagent_allowed_models.is_empty() {
-        return None;
-    }
-
-    let supported: Vec<String> = ctx
-        .subagent_allowed_models
+    let available: Vec<String> = ctx
+        .subagent_available_models
         .iter()
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect();
 
-    if supported.is_empty() {
-        return None;
-    }
-
-    let allowed = supported
+    let allowed = available
         .iter()
-        .any(|allowed| allowed.eq_ignore_ascii_case(model));
+        .any(|available| available.eq_ignore_ascii_case(model));
     if allowed {
         return None;
     }
 
+    let details = if available.is_empty() {
+        "No available subagent models. Enable at least one provider with models in config."
+            .to_string()
+    } else {
+        format!("Available models: {}", available.join(", "))
+    };
+
     Some(ToolOutput::failure(
         "model_not_supported",
         format!("Model '{model}' is not supported for invoke_subagent"),
-        Some(format!("Supported models: {}", supported.join(", "))),
+        Some(details),
     ))
 }
 
@@ -196,7 +195,7 @@ mod tests {
         };
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.model = Some("openai:gpt-5.2".to_string());
-        ctx.subagent_allowed_models = vec!["codex:gpt-5.3-codex".to_string()];
+        ctx.subagent_available_models = vec!["codex:gpt-5.3-codex".to_string()];
 
         let requested_model = normalize_optional(input.model.clone());
         assert!(requested_model.is_none());
@@ -210,9 +209,15 @@ mod tests {
     #[test]
     fn test_validate_model_supported() {
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
-        ctx.subagent_allowed_models = vec!["codex:gpt-5.3-codex".to_string()];
+        ctx.subagent_available_models = vec!["codex:gpt-5.3-codex".to_string()];
 
         assert!(validate_model_supported("codex:gpt-5.3-codex", &ctx).is_none());
+        assert!(validate_model_supported("openai:gpt-5.2", &ctx).is_some());
+    }
+
+    #[test]
+    fn test_validate_model_supported_fails_when_available_models_empty() {
+        let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         assert!(validate_model_supported("openai:gpt-5.2", &ctx).is_some());
     }
 }

@@ -99,19 +99,19 @@ pub struct SubagentsConfig {
     /// Enables/disables subagent delegation tool exposure.
     #[serde(default = "default_subagents_enabled")]
     pub enabled: bool,
-    /// Allowed models for `invoke_subagent`.
+    /// Available models for `invoke_subagent`.
     ///
-    /// If empty, any model is allowed.
-    #[serde(alias = "supported_models")]
+    /// This list is derived at runtime from enabled providers and the model
+    /// registry (same source used by the TUI model picker).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub allowed_models: Vec<String>,
+    pub available_models: Vec<String>,
 }
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             enabled: default_subagents_enabled(),
-            allowed_models: vec!["codex:gpt-5.3-codex".to_string()],
+            available_models: Vec::new(),
         }
     }
 }
@@ -594,6 +594,32 @@ impl Config {
     pub fn models_path(&self) -> std::path::PathBuf {
         let base = paths::zdx_home();
         base.join("models.toml")
+    }
+
+    /// Returns all model ids available for subagent model overrides.
+    ///
+    /// Mirrors the TUI model picker source of truth:
+    /// - model registry from `models.toml` / `default_models.toml`
+    /// - filtered by enabled providers in config
+    #[must_use]
+    pub fn subagent_available_models(&self) -> Vec<String> {
+        use std::collections::HashSet;
+
+        let enabled_providers: HashSet<&str> = crate::providers::ProviderKind::all()
+            .iter()
+            .filter(|kind| self.providers.is_enabled(kind.id()))
+            .map(crate::providers::ProviderKind::id)
+            .collect();
+
+        let mut seen = HashSet::new();
+        crate::models::available_models()
+            .iter()
+            .filter(|model| enabled_providers.contains(model.provider))
+            .filter_map(|model| {
+                let id = format!("{}:{}", model.provider, model.id);
+                seen.insert(id.to_ascii_lowercase()).then_some(id)
+            })
+            .collect()
     }
 
     /// Returns the effective `max_tokens` to use in API requests for a model.
@@ -1638,12 +1664,12 @@ max_tokens = 4096
         assert!(config.language.is_none());
     }
 
-    /// `SubagentsConfig`: defaults are enabled with supported model list.
+    /// `SubagentsConfig`: defaults are enabled with dynamic model list resolution.
     #[test]
     fn test_subagents_config_defaults() {
         let config = SubagentsConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.allowed_models, vec!["codex:gpt-5.3-codex"]);
+        assert!(config.available_models.is_empty());
     }
 
     /// Subagents config loads from file.
@@ -1656,13 +1682,70 @@ max_tokens = 4096
             &config_path,
             r#"[subagents]
 enabled = true
-allowed_models = ["codex:gpt-5.3-codex"]
+available_models = ["codex:gpt-5.3-codex"]
 "#,
         )
         .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
         assert!(config.subagents.enabled);
-        assert_eq!(config.subagents.allowed_models, vec!["codex:gpt-5.3-codex"]);
+        assert_eq!(
+            config.subagents.available_models,
+            vec!["codex:gpt-5.3-codex"]
+        );
+    }
+
+    #[test]
+    fn test_subagent_available_models_filters_disabled_providers() {
+        let config = Config {
+            providers: ProvidersConfig {
+                anthropic: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_anthropic_provider()
+                },
+                claude_cli: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_claude_cli_provider()
+                },
+                openai_codex: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_openai_codex_provider()
+                },
+                openrouter: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_openrouter_provider()
+                },
+                moonshot: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_moonshot_provider()
+                },
+                stepfun: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_stepfun_provider()
+                },
+                mimo: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_mimo_provider()
+                },
+                gemini: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_gemini_provider()
+                },
+                gemini_cli: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_gemini_cli_provider()
+                },
+                mistral: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_mistral_provider()
+                },
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let models = config.subagent_available_models();
+        assert!(!models.is_empty());
+        assert!(models.iter().all(|id| id.starts_with("openai:")));
     }
 }

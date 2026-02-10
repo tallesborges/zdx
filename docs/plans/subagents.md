@@ -46,7 +46,7 @@
 - **Behavior**: Spawns isolated child `zdx exec` process, inherits parent tools/thinking/config
 - **Config**:
   - `[subagents].enabled = true` controls whether the tool is exposed
-  - `[subagents].allowed_models = [...]` restricts explicit `model` overrides
+  - `[subagents].available_models` is derived from enabled providers + model registry and restricts explicit `model` overrides
   - No `default_model`: when `model` is omitted, use current parent model
 
 ## Scope checklist
@@ -78,9 +78,9 @@ In a normal agent run, ask "review my auth module" — agent calls `invoke_subag
 - MVP schema: just `prompt` + optional `model`. No `system_prompt`, `no_tools`, or `profile`.
 - Subagent inherits parent defaults (tools, thinking level, provider config).
 - Enabled by default in all provider tool sets.
-- Subagent config is explicit: `[subagents].enabled` + `[subagents].allowed_models`.
+- Subagent config is explicit: `[subagents].enabled` + derived `[subagents].available_models`.
 - If `model` is omitted, `invoke_subagent` uses current parent model.
-- `allowed_models` applies only when `model` override is explicitly passed.
+- `available_models` applies only when `model` override is explicitly passed.
 - Parallel execution: automatic via existing `tokio::JoinSet` in `execute_tools_async`.
 
 # Testing

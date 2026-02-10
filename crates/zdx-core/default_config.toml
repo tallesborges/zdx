@@ -30,10 +30,9 @@ title_model = "gemini-cli:gemini-2.5-flash"
 
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
-# allowed_models: Allowed model overrides for invoke_subagent (empty means any).
+# available_models: Auto-populated from enabled providers + model registry (TUI picker source).
 [subagents]
 enabled = true
-allowed_models = ["codex:gpt-5.3-codex"]
 
 # Model used for handoff generation subagent.
 # Examples: "gemini-cli:gemini-2.5-flash", "openai:gpt-5.2"
