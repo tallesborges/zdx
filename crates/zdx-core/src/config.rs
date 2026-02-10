@@ -102,15 +102,16 @@ pub struct SubagentsConfig {
     /// Allowed models for `invoke_subagent`.
     ///
     /// If empty, any model is allowed.
+    #[serde(alias = "supported_models")]
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub supported_models: Vec<String>,
+    pub allowed_models: Vec<String>,
 }
 
 impl Default for SubagentsConfig {
     fn default() -> Self {
         Self {
             enabled: default_subagents_enabled(),
-            supported_models: vec!["codex:gpt-5.3-codex".to_string()],
+            allowed_models: vec!["codex:gpt-5.3-codex".to_string()],
         }
     }
 }
@@ -1642,7 +1643,7 @@ max_tokens = 4096
     fn test_subagents_config_defaults() {
         let config = SubagentsConfig::default();
         assert!(config.enabled);
-        assert_eq!(config.supported_models, vec!["codex:gpt-5.3-codex"]);
+        assert_eq!(config.allowed_models, vec!["codex:gpt-5.3-codex"]);
     }
 
     /// Subagents config loads from file.
@@ -1655,16 +1656,13 @@ max_tokens = 4096
             &config_path,
             r#"[subagents]
 enabled = true
-supported_models = ["codex:gpt-5.3-codex"]
+allowed_models = ["codex:gpt-5.3-codex"]
 "#,
         )
         .unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
         assert!(config.subagents.enabled);
-        assert_eq!(
-            config.subagents.supported_models,
-            vec!["codex:gpt-5.3-codex"]
-        );
+        assert_eq!(config.subagents.allowed_models, vec!["codex:gpt-5.3-codex"]);
     }
 }

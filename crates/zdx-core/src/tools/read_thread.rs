@@ -2,14 +2,12 @@
 //!
 //! Answers a goal based on a saved thread transcript.
 
-use std::process::Stdio;
-
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::process::Command;
 
 use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
+use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::core::thread_persistence as tp;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 
@@ -103,52 +101,14 @@ fn build_read_thread_prompt(thread_content: &str, goal: &str) -> String {
 }
 
 async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|e| format!("Failed to get executable: {e}"))?;
-
-    let mut command = Command::new(exe);
-    command
-        .arg("--root")
-        .arg(&ctx.root)
-        .args(["--no-thread", "exec", "-p", &prompt, "--no-tools"])
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-
-    command.args(["-m", READ_THREAD_MODEL]);
-
-    if let Some(level) = ctx.thinking_level {
-        command.args(["-t", level.display_name()]);
-    }
-
-    let child = command
-        .spawn()
-        .map_err(|e| format!("Failed to spawn subagent: {e}"))?;
-
-    let output = if let Some(timeout) = ctx.timeout {
-        tokio::time::timeout(timeout, child.wait_with_output())
-            .await
-            .map_err(|_elapsed| format!("Read thread timed out after {} seconds", timeout.as_secs()))
-            .and_then(|result| result.map_err(|e| format!("Failed to get subagent output: {e}")))?
-    } else {
-        child
-            .wait_with_output()
-            .await
-            .map_err(|e| format!("Failed to get subagent output: {e}"))?
+    let options = ExecSubagentOptions {
+        model: Some(READ_THREAD_MODEL.to_string()),
+        thinking_level: ctx.thinking_level,
+        no_tools: true,
+        timeout: ctx.timeout,
     };
 
-    process_subagent_output(&output)
-}
-
-fn process_subagent_output(output: &std::process::Output) -> Result<String, String> {
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Read thread failed: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        return Err("Read thread returned empty output".to_string());
-    }
-
-    Ok(stdout)
+    run_exec_subagent(&ctx.root, &prompt, &options)
+        .await
+        .map_err(|err| format!("Read thread failed: {err}"))
 }

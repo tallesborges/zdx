@@ -267,6 +267,15 @@ pub fn build_effective_system_prompt_with_paths(
         system_prompt = Some(combined);
     }
 
+    if config.subagents.enabled {
+        let subagents_block = format_subagents_for_prompt(&config.subagents);
+        let combined = match system_prompt {
+            Some(sp) => format!("{sp}\n\n{subagents_block}"),
+            None => subagents_block,
+        };
+        system_prompt = Some(combined);
+    }
+
     if skills.len() > 20 {
         warnings.push(ContextWarning {
             path: None,
@@ -289,6 +298,24 @@ pub fn build_effective_system_prompt_with_paths(
     })
 }
 
+fn format_subagents_for_prompt(config: &crate::config::SubagentsConfig) -> String {
+    let allowed_models = if config.allowed_models.is_empty() {
+        "(any)".to_string()
+    } else {
+        config
+            .allowed_models
+            .iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+
+    format!(
+        "<subagents>\n  <enabled>{}</enabled>\n  <allowed_models>{allowed_models}</allowed_models>\n</subagents>",
+        config.enabled
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -296,6 +323,7 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+    use crate::config::SkillSourceToggles;
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
@@ -555,5 +583,39 @@ mod tests {
         assert!(truncated.path.is_some());
         assert!(truncated.message.contains("Truncated"));
         assert!(truncated.message.contains("100000"));
+    }
+
+    #[test]
+    fn test_subagents_block_includes_config_values() {
+        let config = crate::config::SubagentsConfig {
+            enabled: true,
+            allowed_models: vec!["codex:gpt-5.3-codex".to_string()],
+        };
+
+        let block = format_subagents_for_prompt(&config);
+        assert!(block.contains("<subagents>"));
+        assert!(block.contains("<enabled>true</enabled>"));
+        assert!(block.contains("<allowed_models>"));
+        assert!(block.contains("codex:gpt-5.3-codex"));
+    }
+
+    #[test]
+    fn test_subagents_block_not_appended_when_disabled() {
+        let dir = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+        assert!(!prompt.contains("<subagents>"));
     }
 }
