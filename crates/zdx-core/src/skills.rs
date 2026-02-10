@@ -8,7 +8,7 @@ use std::{fmt, fs};
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
 
-use crate::config::{SkillSourceToggles, Toggle, paths};
+use crate::config::{SkillSourceToggles, paths};
 
 /// Skill source location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -89,13 +89,13 @@ impl LoadSkillsOptions {
         Self {
             cwd: cwd.into(),
             sources: SkillSourceToggles {
-                zdx_user: Toggle::On,
-                zdx_project: Toggle::On,
-                codex_user: Toggle::On,
-                claude_user: Toggle::On,
-                claude_project: Toggle::On,
-                agents_user: Toggle::On,
-                agents_project: Toggle::On,
+                zdx_user: true,
+                zdx_project: true,
+                codex_user: true,
+                claude_user: true,
+                claude_project: true,
+                agents_user: true,
+                agents_project: true,
             },
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
@@ -222,7 +222,7 @@ fn build_skill_sources(
 ) -> Vec<SkillSourceSpec> {
     let mut sources = Vec::new();
 
-    if options.sources.zdx_user.is_on() {
+    if options.sources.zdx_user {
         if let Some(home) = home_dir {
             sources.push(SkillSourceSpec::recursive(
                 SkillSource::ZdxUser,
@@ -235,14 +235,14 @@ fn build_skill_sources(
         ));
     }
 
-    if options.sources.zdx_project.is_on() {
+    if options.sources.zdx_project {
         sources.push(SkillSourceSpec::recursive(
             SkillSource::ZdxProject,
             options.cwd.join(".zdx").join("skills"),
         ));
     }
 
-    if options.sources.codex_user.is_on()
+    if options.sources.codex_user
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::recursive(
@@ -251,7 +251,7 @@ fn build_skill_sources(
         ));
     }
 
-    if options.sources.claude_user.is_on()
+    if options.sources.claude_user
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::claude(
@@ -260,14 +260,14 @@ fn build_skill_sources(
         ));
     }
 
-    if options.sources.claude_project.is_on() {
+    if options.sources.claude_project {
         sources.push(SkillSourceSpec::claude(
             SkillSource::ClaudeProject,
             options.cwd.join(".claude").join("skills"),
         ));
     }
 
-    if options.sources.agents_user.is_on()
+    if options.sources.agents_user
         && let Some(home) = home_dir
     {
         sources.push(SkillSourceSpec::recursive(
@@ -276,7 +276,7 @@ fn build_skill_sources(
         ));
     }
 
-    if options.sources.agents_project.is_on() {
+    if options.sources.agents_project {
         sources.push(SkillSourceSpec::recursive(
             SkillSource::AgentsProject,
             options.cwd.join(".agents").join("skills"),
@@ -940,13 +940,13 @@ mod tests {
         let options = LoadSkillsOptions {
             cwd: root.path().to_path_buf(),
             sources: SkillSourceToggles {
-                zdx_user: Toggle::On,
-                zdx_project: Toggle::On,
-                codex_user: Toggle::Off,
-                claude_user: Toggle::Off,
-                claude_project: Toggle::On,
-                agents_user: Toggle::Off,
-                agents_project: Toggle::On,
+                zdx_user: true,
+                zdx_project: true,
+                codex_user: false,
+                claude_user: false,
+                claude_project: true,
+                agents_user: false,
+                agents_project: true,
             },
             ignored_skills: Vec::new(),
             include_skills: Vec::new(),
