@@ -1,71 +1,67 @@
 ---
 name: automations
-description: Create, update, validate, and run ZDX automations defined as markdown files with YAML frontmatter. Use when users ask to add/edit scheduled automations, morning reports, recurring jobs, or automation prompts.
+description: Create, edit, validate, and test ZDX automations stored in `$ZDX_HOME/automations/*.md`. Use when users ask to add or modify automation files, recurring jobs, scheduled prompts, or YAML-frontmatter automation definitions.
 ---
 
 # Automations Skill
 
-Create and maintain automations for this repository using the existing Automations CLI.
-
-## About
-
-Automations are markdown files that package repeatable prompts with optional schedule/model/retry settings.
-
-Treat this skill as a focused "automation authoring workflow": create one valid file, validate it, optionally run it, and report exactly what changed.
-
-## Core Principles
-
-### Keep it concise
-
-The automation prompt should include only the instructions needed to execute the task.
-
-### Keep it deterministic
-
-Use explicit expected output shape (sections/bullets/constraints) so runs are easy to review.
-
-### Keep scope disciplined
-
-Only touch automation files and only fields required by the request.
+Create and maintain automation files using the Automations CLI.
 
 ## Contract (must follow)
 
-- One automation = one file in `$ZDX_HOME/automations/` (usually `~/.zdx/automations/`).
-- File name stem is the automation name (no `id` field).
-  - Example: `~/.zdx/automations/morning-report.md` -> name `morning-report`.
-- File format must be markdown with YAML frontmatter.
-- Prompt body is the markdown content after frontmatter.
+- Keep automations global-only in `$ZDX_HOME/automations/` (usually `~/.zdx/automations/`).
+- Treat one file as one automation.
+- Derive automation identity from file stem (no `id` field).
+  - Example: `~/.zdx/automations/morning-report.md` -> `morning-report`.
+- Require markdown with YAML frontmatter delimited by `---`.
+- Keep prompt body as non-empty markdown after frontmatter.
+- Never use deprecated `enabled`.
 
 ### Allowed frontmatter keys
 
-- `schedule` (string, optional; if missing, automation is manual-only)
+- `schedule` (string, optional cron)
 - `model` (string, optional)
-- `timeout_secs` (int, optional, must be > 0)
+- `timeout_secs` (int, optional, must be `> 0`)
 - `max_retries` (int, optional, default `0`)
 
-Do not add extra frontmatter fields unless explicitly requested.
+Do not add extra keys unless explicitly requested.
 
-## Creation/Update Process
+## Core principles
 
-1. Determine automation file name from user intent (kebab-case).
+### Keep prompts concise
+
+The automation prompt should include only the instructions needed to execute the task.
+
+### Keep prompts deterministic
+
+Use explicit expected output shape (sections/bullets/constraints) so runs are easy to review.
+
+### Keep scope tight
+
+Only modify automation files and only the fields needed for the request.
+
+## Workflow
+
+1. Infer automation file name from user intent (kebab-case).
 2. Create or edit `$ZDX_HOME/automations/<name>.md`.
-3. If file already exists and user did not ask to replace it, update in place (preserve useful prompt content).
-4. Ensure frontmatter includes only required/asked fields.
+3. If file exists and user did not request replacement, edit in place.
+4. Keep frontmatter minimal and valid.
 5. Run validation:
 
-```bash
-zdx automations validate
-```
+   ```bash
+   zdx automations validate
+   ```
 
-6. If the user asked to test it, run:
+6. If user asks to test, run:
 
-```bash
-zdx automations run <name>
-```
+   ```bash
+   zdx automations run <name>
+   ```
 
 7. Report:
-   - file path changed
-   - whether validation passed
-   - whether run test was executed
+   - changed file path
+   - validation status
+   - test-run status (if executed)
 
 ## Templates
 
@@ -102,7 +98,7 @@ schedule: "0 8 * * *"
 - Include scope boundaries (what to include/exclude) when relevant.
 - Avoid ambiguous goals like "improve everything".
 
-## Safety / hygiene
+## Safety
 
 - Do not create extra documentation files.
 - Do not create automation files outside `$ZDX_HOME/automations/` unless explicitly requested.
@@ -116,4 +112,4 @@ Before finishing, ensure:
 - frontmatter is valid and minimal
 - body prompt is non-empty and specific
 - `zdx automations validate` was run
-- final response includes path + validation status (+ run status if tested)
+- final response includes file path, validation status, and run status (if tested)
