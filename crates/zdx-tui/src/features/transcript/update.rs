@@ -304,6 +304,12 @@ pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcr
             if let Some((line, col)) =
                 screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
+                // If user clicks on the tool args disclosure row, toggle expand/collapse
+                // and skip selection behavior.
+                if transcript.toggle_tool_args_for_line(line) {
+                    return;
+                }
+
                 if transcript.register_click(line, col) {
                     if !transcript.select_word_at(line, col) {
                         transcript.start_selection(line, col);

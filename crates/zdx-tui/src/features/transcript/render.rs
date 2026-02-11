@@ -12,7 +12,8 @@ use ratatui::text::{Line, Span};
 
 use crate::state::TuiState;
 use crate::transcript::{
-    CellId, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine, VisibleRange,
+    CellId, LineInteraction, LineMapping, SelectionState, Style as TranscriptStyle, StyledLine,
+    VisibleRange,
 };
 
 /// Spinner speed divisor (render frames per spinner frame).
@@ -65,15 +66,16 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
         );
 
         for styled_line in styled_lines {
+            let interaction = detect_line_interaction(&styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
 
             // Add to position map
-            state
-                .transcript
-                .position_map
-                .push(LineMapping { text: line_text });
+            state.transcript.position_map.push(LineMapping {
+                text: line_text,
+                interaction,
+            });
 
             // Convert and add the line
             let line_idx = lines.len();
@@ -89,6 +91,7 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
         // Add blank line between cells (also tracked in position map)
         state.transcript.position_map.push(LineMapping {
             text: String::new(),
+            interaction: None,
         });
         lines.push(Line::default());
     }
@@ -149,15 +152,16 @@ fn render_transcript_lazy(
                 continue;
             }
 
+            let interaction = detect_line_interaction(&styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
 
             // Add to position map - stores text for selection extraction
-            state
-                .transcript
-                .position_map
-                .push(LineMapping { text: line_text });
+            state.transcript.position_map.push(LineMapping {
+                text: line_text,
+                interaction,
+            });
 
             // Convert with global line index for selection highlighting
             let converted = convert_styled_line_with_selection(
@@ -174,6 +178,7 @@ fn render_transcript_lazy(
         // This keeps line counts consistent between full and lazy render
         state.transcript.position_map.push(LineMapping {
             text: String::new(),
+            interaction: None,
         });
         lines.push(Line::default());
         global_line_idx += 1;
@@ -228,6 +233,23 @@ fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
         })
         .collect();
     Line::from(spans)
+}
+
+fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> {
+    let has_label = styled_line
+        .spans
+        .iter()
+        .any(|span| span.text == "args (json) ");
+    let has_disclosure = styled_line
+        .spans
+        .iter()
+        .any(|span| span.text == "▶" || span.text == "▼");
+
+    if has_label && has_disclosure {
+        Some(LineInteraction::ToggleToolArgs)
+    } else {
+        None
+    }
 }
 
 /// Converts a `StyledLine` to a ratatui Line with selection highlighting.

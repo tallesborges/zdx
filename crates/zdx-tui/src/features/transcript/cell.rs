@@ -17,7 +17,7 @@ use zdx_core::providers::ReplayToken;
 
 use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};
-use crate::common::sanitize_for_display;
+use crate::common::{sanitize_for_display, truncate_with_ellipsis};
 
 /// Formats a byte truncation warning with human-readable byte counts.
 fn format_byte_truncation(stream: &str, total_bytes: u64) -> String {
@@ -39,30 +39,133 @@ fn extract_u64(value: &Value) -> Option<u64> {
     }
 }
 
-fn format_read_preview(input: &Value) -> Option<String> {
-    let path = input.get("path")?.as_str()?;
-    let mut params = Vec::new();
-
-    if let Some(offset) = input.get("offset").and_then(extract_u64) {
-        params.push(format!("offset={offset}"));
-    }
-    if let Some(limit) = input.get("limit").and_then(extract_u64) {
-        params.push(format!("limit={limit}"));
-    }
-
-    if params.is_empty() {
-        Some(path.to_string())
-    } else {
-        Some(format!("{} ({})", path, params.join(", ")))
-    }
-}
-
 fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
     match name {
         "write" => input.get("content")?.as_str(),
         "edit" => input.get("new")?.as_str(),
         _ => None,
     }
+}
+
+const TOOL_ARG_SUMMARY_MAX_WIDTH: usize = 180;
+const TOOL_ARG_INLINE_VALUE_MAX_WIDTH: usize = 72;
+const TOOL_ARG_DETAIL_MAX_LINES: usize = 200;
+
+fn format_tool_arg_inline_value(value: &Value, max_width: usize) -> (String, bool) {
+    let raw = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
+    let truncated = raw.width() > max_width;
+    (truncate_with_ellipsis(&raw, max_width), truncated)
+}
+
+fn sorted_object_entries(input: &Value) -> Option<Vec<(&str, &Value)>> {
+    let Value::Object(map) = input else {
+        return None;
+    };
+
+    let mut entries: Vec<(&str, &Value)> = map.iter().map(|(k, v)| (k.as_str(), v)).collect();
+    entries.sort_unstable_by(|(left, _), (right, _)| left.cmp(right));
+    Some(entries)
+}
+
+fn build_tool_args_summary(input: &Value, max_width: usize) -> (String, bool, bool) {
+    let max_width = max_width.max(24);
+
+    if let Some(entries) = sorted_object_entries(input) {
+        if entries.is_empty() {
+            return ("{}".to_string(), false, false);
+        }
+
+        let mut parts = Vec::with_capacity(entries.len());
+        let mut has_nested = false;
+        let mut value_truncated = false;
+
+        for (key, value) in entries {
+            has_nested |= matches!(value, Value::Object(_) | Value::Array(_));
+            let (inline_value, truncated) =
+                format_tool_arg_inline_value(value, TOOL_ARG_INLINE_VALUE_MAX_WIDTH);
+            value_truncated |= truncated;
+            parts.push(format!("{key}={inline_value}"));
+        }
+
+        let mut summary = String::new();
+        let mut summary_truncated = value_truncated;
+        for part in parts {
+            let sep = if summary.is_empty() { "" } else { ", " };
+            let next_width = summary.width() + sep.width() + part.width();
+            if next_width <= max_width {
+                summary.push_str(sep);
+                summary.push_str(&part);
+                continue;
+            }
+
+            summary_truncated = true;
+            if summary.is_empty() {
+                summary = truncate_with_ellipsis(&part, max_width);
+            } else {
+                summary = truncate_with_ellipsis(&format!("{summary}, …"), max_width);
+            }
+            break;
+        }
+
+        return (summary, summary_truncated, has_nested);
+    }
+
+    let raw = serde_json::to_string(input).unwrap_or_else(|_| input.to_string());
+    let truncated = raw.width() > max_width;
+    (
+        truncate_with_ellipsis(&raw, max_width),
+        truncated,
+        matches!(input, Value::Object(_) | Value::Array(_)),
+    )
+}
+
+fn should_show_tool_arg_details(input: &Value, summary_truncated: bool, has_nested: bool) -> bool {
+    if summary_truncated || has_nested {
+        return true;
+    }
+
+    match input {
+        Value::Object(map) => map.len() > 3,
+        Value::Array(items) => items.len() > 2,
+        _ => false,
+    }
+}
+
+fn should_render_tool_args(name: &str, input: &Value) -> bool {
+    if name != "bash" {
+        return true;
+    }
+
+    match input {
+        Value::Object(map) => !(map.len() == 1 && map.contains_key("command")),
+        _ => true,
+    }
+}
+
+fn render_tool_arg_detail_rows(
+    input: &Value,
+    width: usize,
+    max_rows: usize,
+) -> (Vec<String>, usize) {
+    let pretty = serde_json::to_string_pretty(input).unwrap_or_else(|_| input.to_string());
+    let mut rows = Vec::new();
+
+    for line in pretty.lines() {
+        let safe_line = sanitize_for_display(line);
+        let wrapped: Vec<String> = if safe_line.width() > width {
+            wrap_chars(&safe_line, width)
+        } else {
+            vec![safe_line.into_owned()]
+        };
+        rows.extend(wrapped);
+    }
+
+    let total_rows = rows.len();
+    if rows.len() > max_rows {
+        rows.truncate(max_rows);
+    }
+
+    (rows, total_rows)
 }
 
 fn tail_rendered_rows(text: &str, width: usize, max_rows: usize) -> (Vec<String>, usize) {
@@ -176,6 +279,7 @@ pub enum HistoryCell {
         name: String,
         input: Value,
         input_delta: Option<String>,
+        tool_args_expanded: bool,
         state: ToolState,
         started_at: DateTime<Utc>,
         /// Some when tool has finished (Done or Error).
@@ -275,6 +379,7 @@ impl HistoryCell {
             name: name.into(),
             input,
             input_delta: None,
+            tool_args_expanded: false,
             state: ToolState::Running,
             started_at: now,
             result: None,
@@ -400,6 +505,21 @@ impl HistoryCell {
                 *input_delta = Some(delta);
             }
             _ => panic!("set_tool_input_delta called on non-tool cell"),
+        }
+    }
+
+    /// Toggles expanded/collapsed tool args details.
+    ///
+    /// Returns true if toggled, false for non-tool cells.
+    pub fn toggle_tool_args_expanded(&mut self) -> bool {
+        match self {
+            HistoryCell::Tool {
+                tool_args_expanded, ..
+            } => {
+                *tool_args_expanded = !*tool_args_expanded;
+                true
+            }
+            _ => false,
         }
     }
 
@@ -565,6 +685,7 @@ impl HistoryCell {
                 state,
                 input,
                 input_delta,
+                tool_args_expanded,
                 result,
                 ..
             } => {
@@ -602,6 +723,9 @@ impl HistoryCell {
                     ),
                 };
 
+                let prefix_width = prefix.width();
+                let content_width = width.saturating_sub(prefix_width).max(10);
+
                 // Show command for bash tool, or tool name for others
                 let display_text = if name == "bash" {
                     input
@@ -609,31 +733,10 @@ impl HistoryCell {
                         .and_then(|v| v.as_str())
                         .map(std::string::ToString::to_string)
                 } else {
-                    // For other tools, show tool name and key input
-                    let input_preview = match name.as_str() {
-                        "read" => format_read_preview(input),
-                        "write" => input
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .map(std::string::ToString::to_string),
-                        "edit" => input
-                            .get("path")
-                            .and_then(|v| v.as_str())
-                            .map(std::string::ToString::to_string),
-                        _ => None,
-                    };
-                    Some(if let Some(preview) = input_preview {
-                        format!("{name}: {preview}")
-                    } else {
-                        name.to_string()
-                    })
+                    Some(name.to_string())
                 };
 
                 if let Some(text) = display_text {
-                    // Calculate available width for content (after prefix)
-                    let prefix_width = prefix.width();
-                    let content_width = width.saturating_sub(prefix_width).max(10);
-
                     // Wrap the command/tool text
                     let wrapped = wrap_text(&text, content_width);
 
@@ -670,6 +773,98 @@ impl HistoryCell {
                             text: suf.to_string(),
                             style: Style::Interrupted,
                         });
+                    }
+                }
+
+                if should_render_tool_args(name, input) {
+                    let args_summary_max =
+                        TOOL_ARG_SUMMARY_MAX_WIDTH.min(content_width.saturating_mul(3));
+                    let (args_summary, args_summary_truncated, args_has_nested) =
+                        build_tool_args_summary(input, args_summary_max);
+                    for row in wrap_text(&format!("args: {args_summary}"), content_width) {
+                        lines.push(StyledLine {
+                            spans: vec![
+                                StyledSpan {
+                                    text: " ".repeat(prefix_width),
+                                    style: Style::Plain,
+                                },
+                                StyledSpan {
+                                    text: row,
+                                    style: Style::ToolOutput,
+                                },
+                            ],
+                        });
+                    }
+
+                    if should_show_tool_arg_details(input, args_summary_truncated, args_has_nested)
+                    {
+                        let disclosure = if *tool_args_expanded { '▼' } else { '▶' };
+                        lines.push(StyledLine {
+                            spans: vec![
+                                StyledSpan {
+                                    text: " ".repeat(prefix_width),
+                                    style: Style::Plain,
+                                },
+                                StyledSpan {
+                                    text: "args (json) ".to_string(),
+                                    style: Style::ToolOutput,
+                                },
+                                StyledSpan {
+                                    text: disclosure.to_string(),
+                                    style: Style::ToolBracket,
+                                },
+                            ],
+                        });
+
+                        if *tool_args_expanded {
+                            let detail_width = content_width.saturating_sub(2).max(8);
+                            let (detail_rows, total_rows) = render_tool_arg_detail_rows(
+                                input,
+                                detail_width,
+                                TOOL_ARG_DETAIL_MAX_LINES,
+                            );
+
+                            for row in detail_rows {
+                                lines.push(StyledLine {
+                                    spans: vec![
+                                        StyledSpan {
+                                            text: " ".repeat(prefix_width),
+                                            style: Style::Plain,
+                                        },
+                                        StyledSpan {
+                                            text: "│ ".to_string(),
+                                            style: Style::ToolBracket,
+                                        },
+                                        StyledSpan {
+                                            text: row,
+                                            style: Style::ToolOutput,
+                                        },
+                                    ],
+                                });
+                            }
+
+                            if total_rows > TOOL_ARG_DETAIL_MAX_LINES {
+                                lines.push(StyledLine {
+                                    spans: vec![
+                                        StyledSpan {
+                                            text: " ".repeat(prefix_width),
+                                            style: Style::Plain,
+                                        },
+                                        StyledSpan {
+                                            text: "╰ ".to_string(),
+                                            style: Style::ToolBracket,
+                                        },
+                                        StyledSpan {
+                                            text: format!(
+                                                "{} more arg lines ...",
+                                                total_rows - TOOL_ARG_DETAIL_MAX_LINES
+                                            ),
+                                            style: Style::ToolBracket,
+                                        },
+                                    ],
+                                });
+                            }
+                        }
                     }
                 }
 
@@ -710,6 +905,16 @@ impl HistoryCell {
                     let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
                     let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
                     let all_lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
+
+                    if !all_lines.is_empty() {
+                        lines.push(StyledLine {
+                            spans: vec![StyledSpan {
+                                text: "─ output ─".to_string(),
+                                style: Style::ToolBracket,
+                            }],
+                        });
+                    }
+
                     let max_preview_lines = 5;
                     let truncated = all_lines.len() > max_preview_lines;
 
@@ -991,9 +1196,13 @@ impl HistoryCell {
                 // Include is_interrupted in discriminator
                 content.len() + usize::from(*is_interrupted)
             }
-            HistoryCell::Tool { result, .. } => {
-                // Use result presence as cache discriminator
-                usize::from(result.is_some())
+            HistoryCell::Tool {
+                result,
+                tool_args_expanded,
+                ..
+            } => {
+                // Include expanded/collapsed state so toggles invalidate cache.
+                usize::from(result.is_some()) + usize::from(*tool_args_expanded)
             }
             HistoryCell::System { content, .. } => content.len(),
             HistoryCell::Thinking {
@@ -1135,6 +1344,116 @@ mod tests {
             HistoryCell::Tool { state, .. } => assert_eq!(state, ToolState::Running),
             _ => panic!("Expected tool cell"),
         }
+    }
+
+    #[test]
+    fn test_tool_args_summary_shows_param_names_and_values() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "read",
+            serde_json::json!({
+                "path": "test.txt",
+                "offset": 10,
+                "limit": 25
+            }),
+        );
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("args:"));
+        assert!(all_text.contains("path=\"test.txt\""));
+        assert!(all_text.contains("offset=10"));
+        assert!(all_text.contains("limit=25"));
+    }
+
+    #[test]
+    fn test_tool_args_complex_values_show_json_preview() {
+        let mut cell = HistoryCell::tool_running(
+            "123",
+            "apply_patch",
+            serde_json::json!({
+                "patch": "*** Begin Patch\n*** End Patch",
+                "metadata": {
+                    "author": "zdx",
+                    "reviewers": ["alice", "bob"]
+                }
+            }),
+        );
+        cell.toggle_tool_args_expanded();
+
+        let lines = cell.display_lines(80, 0);
+        let all_text: String = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("args (json) ▼"));
+        assert!(all_text.contains("\"metadata\""));
+        assert!(all_text.contains("\"reviewers\""));
+    }
+
+    #[test]
+    fn test_tool_args_json_collapsed_by_default() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "apply_patch",
+            serde_json::json!({
+                "patch": "*** Begin Patch\n*** End Patch",
+                "metadata": {"author": "zdx"}
+            }),
+        );
+
+        let all_text: String = cell
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("args (json) ▶"));
+        assert!(!all_text.contains("\"metadata\""));
+    }
+
+    #[test]
+    fn test_tool_args_json_expand_toggle_shows_details() {
+        let mut cell = HistoryCell::tool_running(
+            "123",
+            "apply_patch",
+            serde_json::json!({
+                "patch": "*** Begin Patch\n*** End Patch",
+                "metadata": {"author": "zdx", "reviewers": ["alice"]}
+            }),
+        );
+
+        assert!(cell.toggle_tool_args_expanded());
+
+        let all_text: String = cell
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("args (json) ▼"));
+        assert!(all_text.contains("\"metadata\""));
+        assert!(all_text.contains("\"reviewers\""));
+    }
+
+    #[test]
+    fn test_bash_command_only_hides_args_section() {
+        let cell =
+            HistoryCell::tool_running("123", "bash", serde_json::json!({"command": "echo hi"}));
+
+        let all_text: String = cell
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("echo hi"));
+        assert!(!all_text.contains("args:"));
+        assert!(!all_text.contains("args (json)"));
     }
 
     #[test]
