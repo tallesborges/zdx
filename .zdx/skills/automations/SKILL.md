@@ -40,28 +40,43 @@ Use explicit expected output shape (sections/bullets/constraints) so runs are ea
 
 Only modify automation files and only the fields needed for the request.
 
+### Always define output destination
+
+Every automation prompt must state where results go.
+
+- Default destination: persistent automation thread `automation-<name>`.
+- Optional delivery destination: email, WhatsApp, Telegram, Slack, file, PR, etc.
+- If destination is missing, ask one focused question before finalizing.
+
+When updating an existing automation, preserve its destination rules unless user asks to change them.
+
 ## Workflow
 
 1. Infer automation file name from user intent (kebab-case).
 2. Create or edit `$ZDX_HOME/automations/<name>.md`.
 3. If file exists and user did not request replacement, edit in place.
-4. Keep frontmatter minimal and valid.
-5. Run validation:
-
+4. Define destination behavior in the prompt body:
+   - always include default thread destination (`automation-<name>`)
+   - include delivery target(s) requested by user (email/WhatsApp/etc.)
+5. Keep frontmatter minimal and valid.
+6. If delivery target/tooling is unclear, ask one focused clarification question.
+7. For channel-specific delivery, instruct the automation to use the relevant skill/tooling when available (for example: `gog` for Google email, `wacli` for WhatsApp).
+8. Run validation:
    ```bash
    zdx automations validate
    ```
 
-6. If user asks to test, run:
+9. If user asks to test, run:
 
    ```bash
    zdx automations run <name>
    ```
 
-7. Report:
+10. Report:
    - changed file path
    - validation status
    - test-run status (if executed)
+   - destination summary
 
 ## Templates
 
@@ -76,6 +91,11 @@ schedule: "0 8 * * *"
 ---
 
 <clear prompt for what should run>
+
+## Destination
+
+- Primary: save full result in thread `automation-<name>`.
+- Secondary: <optional channel + target>
 ```
 
 ### Manual-only automation template
@@ -88,6 +108,11 @@ schedule: "0 8 * * *"
 ---
 
 <clear prompt for what should run>
+
+## Destination
+
+- Primary: save full result in thread `automation-<name>`.
+- Secondary: <optional channel + target>
 ```
 
 ## Writing guidance for prompt body
@@ -97,6 +122,18 @@ schedule: "0 8 * * *"
 - Keep prompt concise and task-focused.
 - Include scope boundaries (what to include/exclude) when relevant.
 - Avoid ambiguous goals like "improve everything".
+
+### Destination block (include in prompt body)
+
+Use an explicit destination block in automation prompts:
+
+```md
+## Destination
+
+- Primary: save full result in thread `automation-<name>`.
+- Secondary: send concise summary to <channel> (<recipient/target>).
+- If channel send fails, keep result in thread and report the error clearly.
+```
 
 ## Safety
 
@@ -111,5 +148,6 @@ Before finishing, ensure:
 - automation file exists at `$ZDX_HOME/automations/<name>.md`
 - frontmatter is valid and minimal
 - body prompt is non-empty and specific
+- destination behavior is explicitly documented in the prompt body
 - `zdx automations validate` was run
-- final response includes file path, validation status, and run status (if tested)
+- final response includes file path, validation status, run status (if tested), and destination summary
