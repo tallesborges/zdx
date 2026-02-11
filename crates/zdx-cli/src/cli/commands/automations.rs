@@ -39,6 +39,8 @@ struct AutomationRunRecord {
     model: Option<String>,
 }
 
+const ERROR_SUMMARY_MAX_LEN: usize = 400;
+
 /// Prints automation run history from JSONL.
 pub fn runs(name: Option<&str>) -> Result<()> {
     let path = runs_log_path();
@@ -241,9 +243,8 @@ fn print_validation_line(automation: &AutomationDefinition) {
 
 fn summarize_error(err: &anyhow::Error) -> String {
     let text = format!("{err:#}").replace('\n', " | ");
-    const MAX_LEN: usize = 400;
-    if text.len() > MAX_LEN {
-        format!("{}...", &text[..MAX_LEN])
+    if text.len() > ERROR_SUMMARY_MAX_LEN {
+        format!("{}...", &text[..ERROR_SUMMARY_MAX_LEN])
     } else {
         text
     }

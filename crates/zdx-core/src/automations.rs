@@ -128,7 +128,7 @@ pub fn load_by_name_with_user_dir(
     let all = discover_with_user_dir(root, user_dir)?;
     all.into_iter()
         .find(|a| a.name == trimmed)
-        .ok_or_else(|| anyhow::anyhow!("Automation '{}' not found", trimmed))
+        .ok_or_else(|| anyhow::anyhow!("Automation '{trimmed}' not found"))
 }
 
 /// Returns whether a 5-field cron schedule matches the provided local time.
@@ -145,12 +145,14 @@ pub fn load_by_name_with_user_dir(
 ///
 /// # Errors
 /// Returns an error for invalid cron syntax/ranges.
+///
+/// # Panics
+/// Panics only if chrono returns invalid field values that do not fit in `i32`.
 pub fn schedule_matches_local_time(schedule: &str, now: DateTime<Local>) -> Result<bool> {
     let fields: Vec<&str> = schedule.split_whitespace().collect();
     if fields.len() != 5 {
         bail!(
-            "Invalid schedule '{}': expected 5 cron fields (minute hour day month weekday)",
-            schedule
+            "Invalid schedule '{schedule}': expected 5 cron fields (minute hour day month weekday)"
         );
     }
 
@@ -178,7 +180,7 @@ fn collect_markdown_files(
 
     let mut files: Vec<PathBuf> = fs::read_dir(dir)
         .with_context(|| format!("read automation dir {}", dir.display()))?
-        .filter_map(|entry| entry.ok())
+        .filter_map(std::result::Result::ok)
         .map(|entry| entry.path())
         .filter(|path| {
             path.is_file()
@@ -289,7 +291,7 @@ fn field_matches(expr: &str, value: i32, min: i32, max: i32, is_dow: bool) -> Re
         if let Some(step_str) = part.strip_prefix("*/") {
             let step = parse_value(step_str, min, max, is_dow)?;
             if step <= 0 {
-                bail!("Invalid step '{}': must be greater than zero", part);
+                bail!("Invalid step '{part}': must be greater than zero");
             }
             if (value - min) % step == 0 {
                 return Ok(true);
@@ -301,7 +303,7 @@ fn field_matches(expr: &str, value: i32, min: i32, max: i32, is_dow: bool) -> Re
             let start = parse_value(start_str, min, max, is_dow)?;
             let end = parse_value(end_str, min, max, is_dow)?;
             if start > end {
-                bail!("Invalid range '{}': start must be <= end", part);
+                bail!("Invalid range '{part}': start must be <= end");
             }
             if (start..=end).contains(&value) {
                 return Ok(true);
@@ -334,7 +336,7 @@ fn parse_value(raw: &str, min: i32, max: i32, is_dow: bool) -> Result<i32> {
     }
 
     if !(min..=max).contains(&n) {
-        bail!("Cron value '{}' out of range {}..{}", trimmed, min, max);
+        bail!("Cron value '{trimmed}' out of range {min}..{max}");
     }
     Ok(n)
 }
@@ -415,9 +417,8 @@ mod tests {
 
     #[test]
     fn cron_schedule_matches_expected_local_time() {
-        let dt = match Local.with_ymd_and_hms(2026, 2, 11, 8, 0, 0) {
-            LocalResult::Single(v) => v,
-            _ => panic!("expected unambiguous local datetime"),
+        let LocalResult::Single(dt) = Local.with_ymd_and_hms(2026, 2, 11, 8, 0, 0) else {
+            panic!("expected unambiguous local datetime");
         };
 
         assert!(schedule_matches_local_time("0 8 * * *", dt).unwrap());
@@ -426,9 +427,8 @@ mod tests {
 
     #[test]
     fn cron_schedule_supports_steps_and_ranges() {
-        let dt = match Local.with_ymd_and_hms(2026, 2, 11, 8, 30, 0) {
-            LocalResult::Single(v) => v,
-            _ => panic!("expected unambiguous local datetime"),
+        let LocalResult::Single(dt) = Local.with_ymd_and_hms(2026, 2, 11, 8, 30, 0) else {
+            panic!("expected unambiguous local datetime");
         };
 
         assert!(schedule_matches_local_time("*/15 8-10 * * *", dt).unwrap());

@@ -8,9 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use zdx_core::automations;
-use zdx_core::config;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_core::{automations, config};
 
 use super::automations as automation_commands;
 
