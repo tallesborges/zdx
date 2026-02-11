@@ -355,7 +355,9 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Daemon { poll_interval_secs } => {
             let root_path = resolve_root(context.root, context.worktree_id)?;
-            commands::daemon::run(&root_path, context.config, poll_interval_secs).await
+            let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+            commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
+                .await
         }
         Commands::Exec {
             prompt,

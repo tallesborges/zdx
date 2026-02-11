@@ -28,6 +28,7 @@ pub enum RunTrigger {
 struct AutomationRunRecord {
     automation: String,
     trigger: RunTrigger,
+    thread_id: Option<String>,
     attempt: u32,
     max_attempts: u32,
     started_at: String,
@@ -153,16 +154,7 @@ pub async fn run_definition(
 ) -> Result<()> {
     let attempts = automation.max_retries.saturating_add(1);
     let root_string = root.to_string_lossy().to_string();
-    // Default automation runs to no-thread to avoid polluting transcript history.
-    // If caller explicitly provides a thread id, honor it.
-    let effective_thread_opts = if thread_opts.thread_id.is_some() {
-        thread_opts.clone()
-    } else {
-        ThreadPersistenceOptions {
-            thread_id: None,
-            no_save: true,
-        }
-    };
+    let effective_thread_opts = resolve_automation_thread_opts(thread_opts, &automation.name);
 
     for attempt in 1..=attempts {
         let started_at = Utc::now();
@@ -189,6 +181,7 @@ pub async fn run_definition(
         let record = AutomationRunRecord {
             automation: automation.name.clone(),
             trigger,
+            thread_id: effective_thread_opts.thread_id.clone(),
             attempt,
             max_attempts: attempts,
             started_at: started_at.to_rfc3339(),
@@ -225,6 +218,20 @@ pub async fn run_definition(
     }
 
     Ok(())
+}
+
+fn resolve_automation_thread_opts(
+    thread_opts: &ThreadPersistenceOptions,
+    automation_name: &str,
+) -> ThreadPersistenceOptions {
+    if thread_opts.no_save || thread_opts.thread_id.is_some() {
+        return thread_opts.clone();
+    }
+
+    ThreadPersistenceOptions {
+        thread_id: Some(format!("automation-{automation_name}")),
+        no_save: false,
+    }
 }
 
 fn print_validation_line(automation: &AutomationDefinition) {
@@ -312,6 +319,7 @@ mod tests {
         let record = AutomationRunRecord {
             automation: "morning-report".to_string(),
             trigger: RunTrigger::Manual,
+            thread_id: Some("automation-morning-report".to_string()),
             attempt: 1,
             max_attempts: 1,
             started_at: "2026-02-11T08:00:00Z".to_string(),
@@ -329,7 +337,47 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed["automation"], "morning-report");
         assert_eq!(parsed["trigger"], "manual");
+        assert_eq!(parsed["thread_id"], "automation-morning-report");
         assert_eq!(parsed["ok"], true);
+    }
+
+    #[test]
+    fn resolve_automation_thread_opts_defaults_to_prefixed_thread() {
+        let opts = ThreadPersistenceOptions {
+            thread_id: None,
+            no_save: false,
+        };
+
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        assert_eq!(
+            resolved.thread_id.as_deref(),
+            Some("automation-daily-report")
+        );
+        assert!(!resolved.no_save);
+    }
+
+    #[test]
+    fn resolve_automation_thread_opts_honors_no_thread() {
+        let opts = ThreadPersistenceOptions {
+            thread_id: None,
+            no_save: true,
+        };
+
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        assert!(resolved.thread_id.is_none());
+        assert!(resolved.no_save);
+    }
+
+    #[test]
+    fn resolve_automation_thread_opts_honors_explicit_thread() {
+        let opts = ThreadPersistenceOptions {
+            thread_id: Some("custom-thread".to_string()),
+            no_save: false,
+        };
+
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        assert_eq!(resolved.thread_id.as_deref(), Some("custom-thread"));
+        assert!(!resolved.no_save);
     }
 
     #[test]

@@ -122,6 +122,12 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 The `meta` line (first line only) may be rewritten atomically to update thread metadata (e.g., `title`). This uses write-to-temp-then-rename for safety. Thread events after the meta line are never modified.
 
+### Automation sessions
+
+- By default, automation runs persist to deterministic thread IDs: `automation-<name>`.
+- `zdx automations run <name> --thread <ID>` uses the explicit thread ID instead.
+- `--no-thread` disables persistence for that run.
+
 ---
 
 ## 9) Tools

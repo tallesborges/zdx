@@ -116,7 +116,7 @@ Define Slice 1..N in user-journey order.
   - `zdx automations run <name>`
   - `zdx daemon [--poll-interval-secs N]`
 - Manual and daemon automation runs reuse `exec` path and support per-automation `model`, `timeout_secs`, and `max_retries`.
-- Default automation runs are `--no-thread` unless a thread is explicitly provided.
+- Default automation runs persist to `automation-<name>` thread IDs (unless caller passes `--thread` or `--no-thread`).
 - Daemon restart dedupe state is persisted in `<ZDX_HOME>/automations_daemon_state.json`.
 - Run history is appended to `<ZDX_HOME>/automations_runs.jsonl` (JSONL, no DB).
 - Verified user-created automation at `<ZDX_HOME>/automations/morning-report.md`; validation now passes with current frontmatter schema.
@@ -154,11 +154,14 @@ Limited strictly to scope present in Inputs.
 ## Phase 1: Authoring UX polish
 - Better validation messages and autofix hints.
 - Template variants for common automation types.
+- Add per-automation persistent sessions for easier history/debugging.
+- Use `automation-<name>` as the thread/session ID prefix (aligned with existing `telegram-...` naming).
 - Ship first-party daily-report template through skill.
 - Prompt pattern: priorities, blockers, next actions from recent thread context.
 - Ensure output is saved/retrievable (and delivered via configured channel where applicable).
 - ✅ Check-in demos:
   - New automation created + validated in one interaction.
+  - Automation runs write into `automation-<name>` sessions for easy filtering.
   - Daily report appears on schedule and is actionable.
 
 ## Phase 2: Context quality improvements

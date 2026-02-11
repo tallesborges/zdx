@@ -24,7 +24,12 @@ struct DaemonState {
 ///
 /// # Errors
 /// Returns an error if state loading/writing fails.
-pub async fn run(root: &Path, config: &config::Config, poll_interval_secs: u64) -> Result<()> {
+pub async fn run(
+    root: &Path,
+    thread_opts: &ThreadPersistenceOptions,
+    config: &config::Config,
+    poll_interval_secs: u64,
+) -> Result<()> {
     let poll = Duration::from_secs(poll_interval_secs.max(1));
     let state_path = daemon_state_path();
     let mut state = load_state(&state_path)?;
@@ -34,11 +39,6 @@ pub async fn run(root: &Path, config: &config::Config, poll_interval_secs: u64) 
         root.display(),
         poll.as_secs()
     );
-
-    let thread_opts = ThreadPersistenceOptions {
-        thread_id: None,
-        no_save: true,
-    };
 
     loop {
         let now = Local::now();
@@ -70,7 +70,7 @@ pub async fn run(root: &Path, config: &config::Config, poll_interval_secs: u64) 
                     eprintln!("Running automation '{}'", automation.name);
                     match automation_commands::run_definition(
                         root,
-                        &thread_opts,
+                        thread_opts,
                         config,
                         &automation,
                         automation_commands::RunTrigger::Daemon,
