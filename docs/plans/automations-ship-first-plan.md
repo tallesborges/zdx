@@ -50,7 +50,7 @@ List capabilities that already exist and should not be rebuilt.
 ## Automations v1 (CLI + parser)
 - What exists: markdown automation discovery + parsing, validation, manual run, and daemon scheduler loop.
 - ✅ Demo: `zdx automations validate && zdx automations run <name> && zdx daemon`
-- Gaps: first-party morning-report template flow still needs final polish.
+- Gaps: first-party starter template flow still needs final polish.
 
 # MVP slices (ship-shaped, demoable)
 Define Slice 1..N in user-journey order.
@@ -76,7 +76,7 @@ Define Slice 1..N in user-journey order.
   - [x] Skill asks/fills required practical fields only.
   - [x] Skill supports updating an existing automation by file name.
   - [x] Skill avoids overwriting without explicit confirmation.
-- **✅ Demo**: “Create a daily morning report automation” generates valid file; `validate` passes; `run` works.
+- **✅ Demo**: “Create a daily report automation” generates valid file; `validate` passes; `run` works.
 - **Risks / failure modes**:
   - Skill emits invalid frontmatter.
   - Accidental overwrite of existing files.
@@ -96,24 +96,15 @@ Define Slice 1..N in user-journey order.
 ## Slice 4: Run history + guardrails
 - **Goal**: Make automations reliable and debuggable.
 - **Scope checklist**:
-  - [x] Persist run logs: start/end/duration/status/error/result summary.
-  - [x] Enforce per-run timeout.
-  - [x] Enforce bounded retries (`max_retries` + backoff).
+  - [x] Persist run logs: start/end/duration/status/error summary.
+  - [x] Honor `timeout_secs` via exec timeout override.
+  - [x] Enforce bounded retries (`max_retries`).
+  - [ ] Add retry backoff between attempts.
   - [x] Keep run metadata in runtime store (not in `.md` files).
 - **✅ Demo**: Forced-failure automation shows retry behavior and clear final error in run history.
 - **Risks / failure modes**:
   - Runaway retries if limits fail.
   - Poor observability slows debugging.
-
-## Slice 5: Morning report as first “daily value” automation
-- **Goal**: Deliver concrete autonomous value quickly.
-- **Scope checklist**:
-  - [ ] Ship first-party morning-report template through skill.
-  - [ ] Prompt pattern: priorities, blockers, next actions from recent thread context.
-  - [ ] Ensure output is saved/retrievable (and delivered via configured channel where applicable).
-- **✅ Demo**: Morning report appears daily and is actionable.
-- **Risks / failure modes**:
-  - Low-quality context selection leads to weak report usefulness.
 
 ## Implementation notes (current)
 - `zdx-core` now has `automations.rs` for discovery/parsing + cron matching.
@@ -145,6 +136,7 @@ List only decisions that would cause rework if postponed (derived from Inputs).
 - Definition format is Markdown + frontmatter + body.
 - No `id`; identity comes from filename.
 - No timezone config in v1; use local machine timezone.
+- No `enabled` flag in v1; scheduled files are daemon-eligible.
 - Skill is the authoring UX; core feature is execution/scheduling.
 - Manual run ships before scheduler automation.
 
@@ -162,11 +154,16 @@ Limited strictly to scope present in Inputs.
 ## Phase 1: Authoring UX polish
 - Better validation messages and autofix hints.
 - Template variants for common automation types.
-- ✅ Check-in demo: new automation created + validated in one interaction.
+- Ship first-party daily-report template through skill.
+- Prompt pattern: priorities, blockers, next actions from recent thread context.
+- Ensure output is saved/retrievable (and delivered via configured channel where applicable).
+- ✅ Check-in demos:
+  - New automation created + validated in one interaction.
+  - Daily report appears on schedule and is actionable.
 
 ## Phase 2: Context quality improvements
 - Improve retrieval quality for report-style automations.
-- ✅ Check-in demo: morning report consistently references relevant recent work.
+- ✅ Check-in demo: daily report consistently references relevant recent work.
 
 ## Phase 3: Optional schedule/time sophistication
 - Add explicit timezone only if local-time-only causes real pain.
