@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::CellId;
-use super::selection::{PositionMap, SelectionState, VisualPosition};
+use super::selection::{LineInteraction, PositionMap, SelectionState, VisualPosition};
 use crate::mutations::TranscriptMutation;
 
 const DOUBLE_CLICK_MAX_DELAY: Duration = Duration::from_millis(400);
@@ -249,6 +249,19 @@ impl ScrollState {
         self.cell_line_info
             .get(cell_index)
             .map(|info| info.start_line)
+    }
+
+    /// Returns the cell index containing the given global line.
+    pub fn cell_index_for_line(&self, line: usize) -> Option<usize> {
+        if self.cell_line_info.is_empty() {
+            return None;
+        }
+
+        let idx = self
+            .cell_line_info
+            .partition_point(|info| info.start_line + info.line_count <= line);
+
+        (idx < self.cell_line_info.len()).then_some(idx)
     }
 }
 
@@ -769,6 +782,33 @@ impl TranscriptState {
         self.selection.finish();
         true
     }
+
+    /// Toggles tool args details for the tool cell rendered at `line`, if the
+    /// clicked line is the args disclosure row.
+    pub fn toggle_tool_args_for_line(&mut self, line: usize) -> bool {
+        let Some(mapping) = self.position_map.get_by_global_line(line) else {
+            return false;
+        };
+
+        if !matches!(mapping.interaction, Some(LineInteraction::ToggleToolArgs)) {
+            return false;
+        }
+
+        let Some(cell_idx) = self.scroll.cell_index_for_line(line) else {
+            return false;
+        };
+        let Some(cell) = self.cells.get_mut(cell_idx) else {
+            return false;
+        };
+
+        if cell.toggle_tool_args_expanded() {
+            self.wrap_cache.clear();
+            self.invalidate_line_info();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn is_word_grapheme(grapheme: &str) -> bool {
@@ -778,6 +818,7 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transcript::{HistoryCell, LineMapping};
 
     #[test]
     fn test_scroll_accumulator_acceleration() {
@@ -921,6 +962,71 @@ mod tests {
         assert_eq!(scroll.cell_line_info[0].start_line, 0);
         assert_eq!(scroll.cell_line_info[1].start_line, 10);
         assert_eq!(scroll.cell_line_info[2].start_line, 25);
+    }
+
+    #[test]
+    fn test_cell_index_for_line() {
+        let mut scroll = ScrollState::new();
+        scroll.update_cell_line_info(vec![
+            (make_test_cell_id(1), 3),
+            (make_test_cell_id(2), 2),
+            (make_test_cell_id(3), 4),
+        ]);
+
+        assert_eq!(scroll.cell_index_for_line(0), Some(0));
+        assert_eq!(scroll.cell_index_for_line(2), Some(0));
+        assert_eq!(scroll.cell_index_for_line(3), Some(1));
+        assert_eq!(scroll.cell_index_for_line(4), Some(1));
+        assert_eq!(scroll.cell_index_for_line(5), Some(2));
+        assert_eq!(scroll.cell_index_for_line(8), Some(2));
+        assert_eq!(scroll.cell_index_for_line(9), None);
+    }
+
+    #[test]
+    fn test_toggle_tool_args_for_line() {
+        let tool = HistoryCell::tool_running(
+            "tool-1",
+            "apply_patch",
+            serde_json::json!({
+                "patch": "*** Begin Patch\n*** End Patch",
+                "metadata": {"author": "zdx"}
+            }),
+        );
+        let tool_id = tool.id();
+
+        let mut transcript = TranscriptState::with_cells(vec![tool]);
+        transcript.position_map.clear();
+        transcript.position_map.push(LineMapping {
+            text: "  args (json) ▶".to_string(),
+            interaction: Some(LineInteraction::ToggleToolArgs),
+        });
+        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
+
+        assert!(transcript.toggle_tool_args_for_line(0));
+
+        let all_text: String = transcript.cells()[0]
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(all_text.contains("args (json) ▼"));
+        assert!(all_text.contains("\"metadata\""));
+    }
+
+    #[test]
+    fn test_toggle_tool_args_for_line_ignores_non_header_lines() {
+        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+        let tool_id = tool.id();
+        let mut transcript = TranscriptState::with_cells(vec![tool]);
+
+        transcript.position_map.clear();
+        transcript.position_map.push(LineMapping {
+            text: "read: a".to_string(),
+            interaction: None,
+        });
+        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
+
+        assert!(!transcript.toggle_tool_args_for_line(0));
     }
 
     #[test]
