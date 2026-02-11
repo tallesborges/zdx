@@ -26,7 +26,7 @@ pub use cell::{CellId, HistoryCell, ToolState};
 // Re-export render functions
 pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
 // Re-export selection types (only those used externally)
-pub use selection::{LineMapping, SelectionState};
+pub use selection::{LineInteraction, LineMapping, SelectionState};
 // Re-export scroll types
 pub use state::{ScrollMode, ScrollState};
 // Re-export state types
