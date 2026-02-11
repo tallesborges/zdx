@@ -69,6 +69,12 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 enum Commands {
     /// Run the Telegram bot (long-polling)
     Bot,
+    /// Run scheduled automations daemon
+    Daemon {
+        /// Poll interval in seconds (minimum 1)
+        #[arg(long, default_value_t = 30)]
+        poll_interval_secs: u64,
+    },
     /// Executes a command with a prompt
     Exec {
         /// The prompt to send to the agent
@@ -96,6 +102,11 @@ enum Commands {
     Threads {
         #[command(subcommand)]
         command: ThreadCommands,
+    },
+    /// Manage automations
+    Automations {
+        #[command(subcommand)]
+        command: AutomationCommands,
     },
     /// Manage configuration
     Config {
@@ -172,6 +183,26 @@ enum ThreadCommands {
         /// New title for the thread
         #[arg(value_name = "TITLE")]
         title: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum AutomationCommands {
+    /// List discovered automations
+    List,
+    /// Validate automation files
+    Validate,
+    /// Show automation run history (from JSONL log)
+    Runs {
+        /// Optional automation name (file stem)
+        #[arg(value_name = "NAME")]
+        name: Option<String>,
+    },
+    /// Run one automation by name (file stem)
+    Run {
+        /// Automation name (file stem)
+        #[arg(value_name = "NAME")]
+        name: String,
     },
 }
 
@@ -308,6 +339,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         prompt: &input.prompt,
         config: context.config,
         model_override: input.model.as_deref(),
+        tool_timeout_override: None,
         thinking_override: input.thinking.as_deref(),
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
@@ -320,6 +352,10 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Bot => {
             let root_path = resolve_root(context.root, context.worktree_id)?;
             zdx_bot::run_with_root(root_path).await
+        }
+        Commands::Daemon { poll_interval_secs } => {
+            let root_path = resolve_root(context.root, context.worktree_id)?;
+            commands::daemon::run(&root_path, context.config, poll_interval_secs).await
         }
         Commands::Exec {
             prompt,
@@ -346,6 +382,19 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
             ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
         },
+        Commands::Automations { command } => {
+            let root_path = resolve_root(context.root, context.worktree_id)?;
+            match command {
+                AutomationCommands::List => commands::automations::list(&root_path),
+                AutomationCommands::Validate => commands::automations::validate(&root_path),
+                AutomationCommands::Runs { name } => commands::automations::runs(name.as_deref()),
+                AutomationCommands::Run { name } => {
+                    let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+                    commands::automations::run(&root_path, &thread_opts, context.config, &name)
+                        .await
+                }
+            }
+        }
         Commands::Config { command } => match command {
             ConfigCommands::Path => {
                 commands::config::path();

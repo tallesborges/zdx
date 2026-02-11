@@ -78,6 +78,8 @@ ZDX solves this with a boring, reliable core:
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
+- `zdx automations list|validate|runs [NAME]|run <NAME>`
+- `zdx daemon` — run scheduled automations loop
 - `zdx threads list|show <ID>|resume [ID]`
 - `zdx config init|path`
 

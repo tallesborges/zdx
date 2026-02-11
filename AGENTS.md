@@ -6,6 +6,7 @@
 
 - `crates/zdx-core/`: core library (engine, providers, tools, config)
   - `crates/zdx-core/src/lib.rs`: core crate exports
+  - `crates/zdx-core/src/automations.rs`: automation discovery + frontmatter parsing for markdown-defined automations
   - `crates/zdx-core/src/config.rs`: config loading + paths
   - `crates/zdx-core/src/models.rs`: model registry for TUI model picker
   - `crates/zdx-core/src/prompts.rs`: prompt template helpers
@@ -104,6 +105,8 @@
 - `crates/zdx-cli/`: zdx binary (CLI/router)
   - `crates/zdx-cli/src/main.rs`: binary entrypoint (delegates to `crates/zdx-cli/src/cli/`)
   - `crates/zdx-cli/src/cli/`: CLI arguments + command dispatch
+  - `crates/zdx-cli/src/cli/commands/automations.rs`: automations command handlers (`list`, `validate`, `run`)
+  - `crates/zdx-cli/src/cli/commands/daemon.rs`: scheduled automations daemon loop + persisted run-dedupe state
   - `crates/zdx-cli/src/cli/commands/worktree.rs`: worktree command handler
   - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
   - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)

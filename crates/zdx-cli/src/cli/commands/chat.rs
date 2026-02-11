@@ -29,6 +29,7 @@ pub async fn run(
             prompt,
             config,
             model_override: None,
+            tool_timeout_override: None,
             thinking_override: None,
             tools_override: None,
             no_tools: false,
