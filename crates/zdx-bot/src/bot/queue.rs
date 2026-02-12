@@ -102,6 +102,13 @@ pub(crate) async fn dispatch_message(
             }
         });
     } else {
+        // Quick filter: skip bot messages and unauthorized users before enqueuing,
+        // so they don't produce a spurious "⏳ Queued" status message.
+        // (e.g. service messages from topic creation have thread_id set and would
+        // otherwise get enqueued and show "Queued" before being discarded.)
+        if !should_process_message(context, &message) {
+            return;
+        }
         enqueue_message(queues, context, message).await;
     }
 }
