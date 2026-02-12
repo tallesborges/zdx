@@ -141,6 +141,12 @@ enum Commands {
         command: ModelsCommands,
     },
 
+    /// Telegram utility commands
+    Telegram {
+        #[command(subcommand)]
+        command: TelegramCommands,
+    },
+
     /// Manage git worktrees
     Worktree {
         #[command(subcommand)]
@@ -189,6 +195,52 @@ enum ConfigCommands {
 enum ModelsCommands {
     /// Fetch and update the models registry from models.dev
     Update,
+}
+
+#[derive(clap::Subcommand)]
+enum TelegramCommands {
+    /// Create a forum topic in a supergroup with topics enabled
+    CreateTopic {
+        /// Telegram chat ID (supergroup)
+        #[arg(long, value_name = "CHAT_ID")]
+        chat_id: i64,
+
+        /// Forum topic name
+        #[arg(long, value_name = "NAME")]
+        name: String,
+
+        /// Bot token override
+        #[arg(long, value_name = "TOKEN")]
+        bot_token: Option<String>,
+    },
+
+    /// Send a message to a chat (optionally to a forum topic)
+    SendMessage {
+        /// Telegram chat ID
+        #[arg(long, value_name = "CHAT_ID")]
+        chat_id: i64,
+
+        /// Message body
+        #[arg(long, value_name = "TEXT")]
+        text: String,
+
+        /// Optional forum topic thread ID
+        #[arg(long, value_name = "THREAD_ID")]
+        message_thread_id: Option<i64>,
+
+        /// Message parse mode
+        #[arg(
+            long,
+            value_name = "MODE",
+            default_value = "markdown",
+            value_parser = ["markdown", "markdown-v2", "html", "plain"]
+        )]
+        parse_mode: String,
+
+        /// Bot token override
+        #[arg(long, value_name = "TOKEN")]
+        bot_token: Option<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -374,6 +426,30 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         }
         Commands::Models { command } => match command {
             ModelsCommands::Update => commands::models::update(context.config).await,
+        },
+        Commands::Telegram { command } => match command {
+            TelegramCommands::CreateTopic {
+                chat_id,
+                name,
+                bot_token,
+            } => commands::telegram::create_topic(context.config, bot_token, chat_id, &name).await,
+            TelegramCommands::SendMessage {
+                chat_id,
+                text,
+                message_thread_id,
+                parse_mode,
+                bot_token,
+            } => {
+                commands::telegram::send_message(
+                    context.config,
+                    bot_token,
+                    chat_id,
+                    message_thread_id,
+                    &text,
+                    &parse_mode,
+                )
+                .await
+            }
         },
         Commands::Worktree { command } => match command {
             WorktreeCommands::Ensure { id } => commands::worktree::ensure(context.root, &id),

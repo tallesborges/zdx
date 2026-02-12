@@ -147,6 +147,32 @@ impl TelegramClient {
             .map(|_| ())
     }
 
+    /// Send a message using an explicit parse mode.
+    ///
+    /// This method does not auto-fallback to plain text on parse errors.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_message_with_parse_mode(
+        &self,
+        chat_id: i64,
+        text: &str,
+        reply_to_message_id: Option<i64>,
+        message_thread_id: Option<i64>,
+        parse_mode: Option<&str>,
+    ) -> Result<()> {
+        self.send_message_raw(
+            chat_id,
+            text,
+            reply_to_message_id,
+            message_thread_id,
+            parse_mode,
+            None,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Send a message with an inline keyboard. Returns the sent [`Message`] so
     /// the caller can later edit or delete it by `message_id`.
     ///
