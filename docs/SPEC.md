@@ -78,8 +78,8 @@ ZDX solves this with a boring, reliable core:
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
-- `zdx automations list|validate|daemon|runs [NAME]|run <NAME>`
-- `zdx threads list|show <ID>|resume [ID]`
+- `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
+- `zdx threads list|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
 
 **Exit codes:** `0` success, `1` runtime error, `2` CLI usage error, `130` interrupted.

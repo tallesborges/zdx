@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use zdx_core::automations::{self, AutomationDefinition};
 use zdx_core::config;
@@ -42,8 +42,27 @@ struct AutomationRunRecord {
 
 const ERROR_SUMMARY_MAX_LEN: usize = 400;
 
+/// Options for listing automation runs.
+#[derive(Debug, Clone, Default)]
+pub struct RunsOptions {
+    pub name: Option<String>,
+    pub date: Option<String>,
+    pub date_start: Option<String>,
+    pub date_end: Option<String>,
+    pub json: bool,
+}
+
 /// Prints automation run history from JSONL.
-pub fn runs(name: Option<&str>) -> Result<()> {
+pub fn runs(options: RunsOptions) -> Result<()> {
+    let exact_date = parse_run_date_filter(options.date.as_deref(), "date")?;
+    let start_date = parse_run_date_filter(options.date_start.as_deref(), "date-start")?;
+    let end_date = parse_run_date_filter(options.date_end.as_deref(), "date-end")?;
+    if let (Some(start), Some(end)) = (start_date, end_date)
+        && start > end
+    {
+        anyhow::bail!("--date-start must be on or before --date-end");
+    }
+
     let path = runs_log_path();
     if !path.exists() {
         println!("No automation runs found.");
@@ -51,7 +70,7 @@ pub fn runs(name: Option<&str>) -> Result<()> {
     }
 
     let records = read_run_records(&path)?;
-    let filtered: Vec<&AutomationRunRecord> = if let Some(raw) = name {
+    let filtered_by_name: Vec<&AutomationRunRecord> = if let Some(raw) = options.name.as_deref() {
         let needle = raw.trim();
         if needle.is_empty() {
             Vec::new()
@@ -62,8 +81,13 @@ pub fn runs(name: Option<&str>) -> Result<()> {
         records.iter().collect()
     };
 
+    let filtered: Vec<&AutomationRunRecord> = filtered_by_name
+        .into_iter()
+        .filter(|record| matches_run_date_filters(record, exact_date, start_date, end_date))
+        .collect();
+
     if filtered.is_empty() {
-        if let Some(name) = name {
+        if let Some(name) = options.name.as_deref() {
             println!("No runs found for automation '{}'.", name.trim());
         } else {
             println!("No automation runs found.");
@@ -71,9 +95,18 @@ pub fn runs(name: Option<&str>) -> Result<()> {
         return Ok(());
     }
 
-    for record in filtered.into_iter().rev() {
+    if options.json {
         println!(
-            "{} | {} | {} | {} | {}ms | attempt {}/{}",
+            "{}",
+            serde_json::to_string_pretty(&filtered).context("serialize automation runs")?
+        );
+        return Ok(());
+    }
+
+    for record in filtered.into_iter().rev() {
+        let thread_display = record.thread_id.as_deref().unwrap_or("-");
+        println!(
+            "{} | {} | {} | {} | {}ms | attempt {}/{} | thread {}",
             record.finished_at,
             record.automation,
             match record.trigger {
@@ -83,7 +116,8 @@ pub fn runs(name: Option<&str>) -> Result<()> {
             if record.ok { "ok" } else { "failed" },
             record.duration_ms,
             record.attempt,
-            record.max_attempts
+            record.max_attempts,
+            thread_display
         );
         if let Some(err) = &record.error {
             println!("  error: {err}");
@@ -261,6 +295,60 @@ fn summarize_error(err: &anyhow::Error) -> String {
     }
 }
 
+fn parse_run_date_filter(raw: Option<&str>, flag: &str) -> Result<Option<NaiveDate>> {
+    let Some(raw) = raw else {
+        return Ok(None);
+    };
+
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        anyhow::bail!("--{flag} cannot be empty");
+    }
+
+    NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
+        .with_context(|| format!("invalid --{flag} value '{trimmed}' (expected YYYY-MM-DD)"))
+        .map(Some)
+}
+
+fn matches_run_date_filters(
+    record: &AutomationRunRecord,
+    exact: Option<NaiveDate>,
+    start: Option<NaiveDate>,
+    end: Option<NaiveDate>,
+) -> bool {
+    if exact.is_none() && start.is_none() && end.is_none() {
+        return true;
+    }
+
+    let Some(record_date) = record_finished_date(record) else {
+        return false;
+    };
+
+    if let Some(exact) = exact
+        && record_date != exact
+    {
+        return false;
+    }
+    if let Some(start) = start
+        && record_date < start
+    {
+        return false;
+    }
+    if let Some(end) = end
+        && record_date > end
+    {
+        return false;
+    }
+
+    true
+}
+
+fn record_finished_date(record: &AutomationRunRecord) -> Option<NaiveDate> {
+    DateTime::parse_from_rfc3339(&record.finished_at)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc).date_naive())
+}
+
 fn append_run_record(record: &AutomationRunRecord) -> Result<()> {
     let path = runs_log_path();
     append_run_record_to(&path, record)
@@ -424,5 +512,44 @@ mod tests {
         assert_eq!(records[0].automation, "a");
         assert_eq!(records[1].automation, "b");
         assert!(!records[1].ok);
+    }
+
+    #[test]
+    fn parse_run_date_filter_accepts_valid_date() {
+        let date = parse_run_date_filter(Some("2026-02-11"), "date").unwrap();
+        assert_eq!(
+            date,
+            Some(chrono::NaiveDate::from_ymd_opt(2026, 2, 11).unwrap())
+        );
+    }
+
+    #[test]
+    fn matches_run_date_filters_uses_finished_at() {
+        let record = AutomationRunRecord {
+            automation: "daily".to_string(),
+            trigger: RunTrigger::Manual,
+            thread_id: Some("automation-daily-20260211-0800".to_string()),
+            attempt: 1,
+            max_attempts: 1,
+            started_at: "2026-02-11T08:00:00Z".to_string(),
+            finished_at: "2026-02-11T08:00:03Z".to_string(),
+            duration_ms: 3000,
+            ok: true,
+            error: None,
+            schedule: None,
+            model: None,
+        };
+
+        let exact = chrono::NaiveDate::from_ymd_opt(2026, 2, 11).unwrap();
+        let miss = chrono::NaiveDate::from_ymd_opt(2026, 2, 12).unwrap();
+
+        assert!(matches_run_date_filters(&record, Some(exact), None, None));
+        assert!(!matches_run_date_filters(&record, Some(miss), None, None));
+        assert!(matches_run_date_filters(
+            &record,
+            None,
+            Some(exact),
+            Some(exact)
+        ));
     }
 }

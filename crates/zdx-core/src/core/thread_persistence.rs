@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use anyhow::{Context, Result, anyhow, bail};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::task::JoinHandle;
@@ -817,6 +817,288 @@ impl ThreadSummary {
         self.title
             .clone()
             .unwrap_or_else(|| short_thread_id(&self.id))
+    }
+}
+
+/// Options for thread search.
+#[derive(Debug, Clone)]
+pub struct ThreadSearchOptions {
+    pub query: Option<String>,
+    pub date: Option<NaiveDate>,
+    pub date_start: Option<NaiveDate>,
+    pub date_end: Option<NaiveDate>,
+    pub limit: usize,
+}
+
+impl Default for ThreadSearchOptions {
+    fn default() -> Self {
+        Self {
+            query: None,
+            date: None,
+            date_start: None,
+            date_end: None,
+            limit: 20,
+        }
+    }
+}
+
+/// A thread search match.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadSearchResult {
+    pub thread_id: String,
+    pub title: Option<String>,
+    pub root_path: Option<String>,
+    pub activity_at: Option<String>,
+    pub score: u32,
+    pub preview: String,
+}
+
+impl ThreadSearchResult {
+    /// Returns a display-friendly title (or short ID fallback).
+    pub fn display_title(&self) -> String {
+        self.title
+            .clone()
+            .unwrap_or_else(|| short_thread_id(&self.thread_id))
+    }
+}
+
+const SEARCH_PREVIEW_MAX_BYTES: usize = 200;
+
+struct ThreadSearchIndex {
+    searchable_text: String,
+    preview_candidates: Vec<String>,
+    latest_timestamp: Option<DateTime<Utc>>,
+}
+
+/// Searches threads by optional query and/or date filters.
+///
+/// Results are sorted by relevance then recency when a query is provided,
+/// otherwise by recency only.
+pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
+    let normalized_query = options
+        .query
+        .as_deref()
+        .map(str::trim)
+        .filter(|q| !q.is_empty())
+        .map(|q| q.to_lowercase());
+    let limit = options.limit.max(1);
+
+    let mut ranked: Vec<(ThreadSearchResult, Option<DateTime<Utc>>)> = Vec::new();
+    for summary in list_threads()? {
+        let events = load_thread_events(&summary.id).unwrap_or_default();
+        let index = build_thread_search_index(&events);
+        let activity_at = index
+            .latest_timestamp
+            .or_else(|| summary.modified.map(DateTime::<Utc>::from));
+
+        if !matches_thread_date_filters(activity_at.as_ref(), options) {
+            continue;
+        }
+
+        let score = normalized_query
+            .as_deref()
+            .map(|query| {
+                score_thread_match(summary.title.as_deref(), &index.searchable_text, query)
+            })
+            .unwrap_or(0);
+
+        if normalized_query.is_some() && score == 0 {
+            continue;
+        }
+
+        let preview = build_thread_preview(
+            summary.title.as_deref(),
+            &index.preview_candidates,
+            normalized_query.as_deref(),
+        );
+
+        let result = ThreadSearchResult {
+            thread_id: summary.id,
+            title: summary.title,
+            root_path: summary.root_path,
+            activity_at: activity_at
+                .as_ref()
+                .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
+            score,
+            preview,
+        };
+        ranked.push((result, activity_at));
+    }
+
+    if normalized_query.is_some() {
+        ranked.sort_by(|(a, a_ts), (b, b_ts)| {
+            b.score
+                .cmp(&a.score)
+                .then_with(|| b_ts.cmp(a_ts))
+                .then_with(|| a.thread_id.cmp(&b.thread_id))
+        });
+    } else {
+        ranked.sort_by(|(a, a_ts), (b, b_ts)| {
+            b_ts.cmp(a_ts).then_with(|| a.thread_id.cmp(&b.thread_id))
+        });
+    }
+
+    let mut results: Vec<ThreadSearchResult> =
+        ranked.into_iter().map(|(result, _)| result).collect();
+    results.truncate(limit);
+    Ok(results)
+}
+
+fn build_thread_search_index(events: &[ThreadEvent]) -> ThreadSearchIndex {
+    let mut searchable_text = String::new();
+    let mut preview_candidates = Vec::new();
+    let mut latest_timestamp = None;
+
+    for event in events {
+        if let Some(timestamp) = parse_thread_event_timestamp(event)
+            && latest_timestamp.is_none_or(|current| timestamp > current)
+        {
+            latest_timestamp = Some(timestamp);
+        }
+
+        match event {
+            ThreadEvent::Message { text, .. } => {
+                push_search_text(&mut searchable_text, text);
+                preview_candidates.push(text.clone());
+            }
+            ThreadEvent::Reasoning {
+                text: Some(text), ..
+            } => {
+                push_search_text(&mut searchable_text, text);
+                preview_candidates.push(text.clone());
+            }
+            ThreadEvent::ToolUse { name, input, .. } => {
+                let tool_line = format!(
+                    "{name} {}",
+                    serde_json::to_string(input).unwrap_or_default()
+                );
+                push_search_text(&mut searchable_text, &tool_line);
+                preview_candidates.push(tool_line);
+            }
+            _ => {}
+        }
+    }
+
+    ThreadSearchIndex {
+        searchable_text,
+        preview_candidates,
+        latest_timestamp,
+    }
+}
+
+fn parse_thread_event_timestamp(event: &ThreadEvent) -> Option<DateTime<Utc>> {
+    let ts = match event {
+        ThreadEvent::Meta { ts, .. }
+        | ThreadEvent::Message { ts, .. }
+        | ThreadEvent::ToolUse { ts, .. }
+        | ThreadEvent::ToolResult { ts, .. }
+        | ThreadEvent::Interrupted { ts, .. }
+        | ThreadEvent::Reasoning { ts, .. }
+        | ThreadEvent::Usage { ts, .. } => ts,
+    };
+
+    DateTime::parse_from_rfc3339(ts)
+        .ok()
+        .map(|dt| dt.with_timezone(&Utc))
+}
+
+fn push_search_text(searchable_text: &mut String, value: &str) {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+
+    if !searchable_text.is_empty() {
+        searchable_text.push('\n');
+    }
+    searchable_text.push_str(trimmed);
+}
+
+fn score_thread_match(title: Option<&str>, searchable_text: &str, query: &str) -> u32 {
+    let mut score = 0;
+
+    if let Some(title) = title
+        && title.to_lowercase().contains(query)
+    {
+        score += 20;
+    }
+
+    let searchable_lower = searchable_text.to_lowercase();
+    score += count_occurrences(&searchable_lower, query) as u32;
+    score
+}
+
+fn count_occurrences(haystack: &str, needle: &str) -> usize {
+    if needle.is_empty() {
+        return 0;
+    }
+    haystack.match_indices(needle).count()
+}
+
+fn matches_thread_date_filters(
+    activity_at: Option<&DateTime<Utc>>,
+    options: &ThreadSearchOptions,
+) -> bool {
+    if options.date.is_none() && options.date_start.is_none() && options.date_end.is_none() {
+        return true;
+    }
+
+    let Some(activity_at) = activity_at else {
+        return false;
+    };
+    let activity_date = activity_at.date_naive();
+
+    if let Some(date) = options.date
+        && activity_date != date
+    {
+        return false;
+    }
+    if let Some(start) = options.date_start
+        && activity_date < start
+    {
+        return false;
+    }
+    if let Some(end) = options.date_end
+        && activity_date > end
+    {
+        return false;
+    }
+
+    true
+}
+
+fn build_thread_preview(title: Option<&str>, candidates: &[String], query: Option<&str>) -> String {
+    if let Some(query) = query {
+        if let Some(title) = title
+            && title.to_lowercase().contains(query)
+        {
+            return truncate_preview(title);
+        }
+
+        for candidate in candidates {
+            if candidate.to_lowercase().contains(query) {
+                return truncate_preview(candidate);
+            }
+        }
+    }
+
+    if let Some(first) = candidates.first() {
+        return truncate_preview(first);
+    }
+
+    title.map(truncate_preview).unwrap_or_default()
+}
+
+fn truncate_preview(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+
+    if trimmed.len() > SEARCH_PREVIEW_MAX_BYTES {
+        format!("{}...", truncate_str(trimmed, SEARCH_PREVIEW_MAX_BYTES))
+    } else {
+        trimmed.to_string()
     }
 }
 
