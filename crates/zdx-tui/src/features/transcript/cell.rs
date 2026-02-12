@@ -47,6 +47,115 @@ fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
     }
 }
 
+fn value_as_trimmed_str<'a>(input: &'a Value, key: &str) -> Option<&'a str> {
+    let value = input.get(key)?.as_str()?.trim();
+    (!value.is_empty()).then_some(value)
+}
+
+fn value_as_string_list(input: &Value, key: &str) -> Vec<String> {
+    match input.get(key) {
+        Some(Value::Array(items)) => items
+            .iter()
+            .filter_map(Value::as_str)
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(str::to_string)
+            .collect(),
+        Some(Value::String(item)) => {
+            let item = item.trim();
+            if item.is_empty() {
+                Vec::new()
+            } else {
+                vec![item.to_string()]
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn format_compact_list(items: &[String], max_items: usize) -> String {
+    let displayed: Vec<&str> = items
+        .iter()
+        .take(max_items)
+        .map(std::string::String::as_str)
+        .collect();
+    let mut summary = displayed.join(", ");
+    if items.len() > max_items {
+        summary.push_str(", +");
+        summary.push_str(&(items.len() - max_items).to_string());
+        summary.push_str(" more");
+    }
+    summary
+}
+
+fn summarize_apply_patch_targets(patch: &str) -> Option<String> {
+    const ADD_FILE_PREFIX: &str = "*** Add File: ";
+    const DELETE_FILE_PREFIX: &str = "*** Delete File: ";
+    const UPDATE_FILE_PREFIX: &str = "*** Update File: ";
+
+    let mut targets = Vec::new();
+
+    for line in patch.lines() {
+        let line = line.trim();
+        let target = if let Some(file_path) = line.strip_prefix(ADD_FILE_PREFIX) {
+            let file_path = file_path.trim();
+            (!file_path.is_empty()).then(|| format!("+{file_path}"))
+        } else if let Some(file_path) = line.strip_prefix(DELETE_FILE_PREFIX) {
+            let file_path = file_path.trim();
+            (!file_path.is_empty()).then(|| format!("-{file_path}"))
+        } else {
+            line.strip_prefix(UPDATE_FILE_PREFIX).and_then(|file_path| {
+                let file_path = file_path.trim();
+                (!file_path.is_empty()).then(|| format!("~{file_path}"))
+            })
+        };
+
+        if let Some(target) = target
+            && !targets.contains(&target)
+        {
+            targets.push(target);
+        }
+    }
+
+    if targets.is_empty() {
+        None
+    } else {
+        Some(format_compact_list(&targets, 3))
+    }
+}
+
+fn tool_display_text(name: &str, input: &Value) -> String {
+    match name {
+        "bash" => value_as_trimmed_str(input, "command")
+            .map_or_else(|| "bash".to_string(), str::to_string),
+        "read" | "write" | "edit" => value_as_trimmed_str(input, "path")
+            .map_or_else(|| name.to_string(), |path| format!("{name} {path}")),
+        "apply_patch" => value_as_trimmed_str(input, "patch")
+            .and_then(summarize_apply_patch_targets)
+            .map_or_else(|| name.to_string(), |targets| format!("{name} {targets}")),
+        "web_search" => {
+            let queries = value_as_string_list(input, "search_queries");
+            if queries.is_empty() {
+                value_as_trimmed_str(input, "objective").map_or_else(
+                    || name.to_string(),
+                    |objective| format!("{name} {}", truncate_with_ellipsis(objective, 72)),
+                )
+            } else {
+                format!("{name} [{}]", format_compact_list(&queries, 3))
+            }
+        }
+        "fetch_webpage" => value_as_trimmed_str(input, "url")
+            .map_or_else(|| name.to_string(), |url| format!("{name} {url}")),
+        "read_thread" => value_as_trimmed_str(input, "thread_id").map_or_else(
+            || name.to_string(),
+            |thread_id| format!("{name} {thread_id}"),
+        ),
+        "invoke_subagent" => value_as_trimmed_str(input, "model")
+            .map_or_else(|| name.to_string(), |model| format!("{name} model={model}")),
+        _ => name.to_string(),
+    }
+}
+
 const TOOL_ARG_SUMMARY_MAX_WIDTH: usize = 180;
 const TOOL_ARG_INLINE_VALUE_MAX_WIDTH: usize = 72;
 const TOOL_ARG_DETAIL_MAX_LINES: usize = 200;
@@ -726,54 +835,45 @@ impl HistoryCell {
                 let prefix_width = prefix.width();
                 let content_width = width.saturating_sub(prefix_width).max(10);
 
-                // Show command for bash tool, or tool name for others
-                let display_text = if name == "bash" {
-                    input
-                        .get("command")
-                        .and_then(|v| v.as_str())
-                        .map(std::string::ToString::to_string)
-                } else {
-                    Some(name.to_string())
-                };
+                // Show command for bash and compact context for other tools.
+                let display_text = tool_display_text(name, input);
 
-                if let Some(text) = display_text {
-                    // Wrap the command/tool text
-                    let wrapped = wrap_text(&text, content_width);
+                // Wrap the command/tool text
+                let wrapped = wrap_text(&display_text, content_width);
 
-                    for (i, wrapped_line) in wrapped.into_iter().enumerate() {
-                        let mut spans = Vec::new();
+                for (i, wrapped_line) in wrapped.into_iter().enumerate() {
+                    let mut spans = Vec::new();
 
-                        if i == 0 {
-                            // First line gets the prefix
-                            spans.push(StyledSpan {
-                                text: prefix.clone(),
-                                style: prefix_style,
-                            });
-                        } else {
-                            // Continuation lines get indent
-                            spans.push(StyledSpan {
-                                text: " ".repeat(prefix_width),
-                                style: Style::Plain,
-                            });
-                        }
-
+                    if i == 0 {
+                        // First line gets the prefix
                         spans.push(StyledSpan {
-                            text: wrapped_line,
-                            style: cmd_style,
+                            text: prefix.clone(),
+                            style: prefix_style,
                         });
-
-                        lines.push(StyledLine { spans });
-                    }
-
-                    // Add suffix to last line if present
-                    if let Some(suf) = suffix
-                        && let Some(last) = lines.last_mut()
-                    {
-                        last.spans.push(StyledSpan {
-                            text: suf.to_string(),
-                            style: Style::Interrupted,
+                    } else {
+                        // Continuation lines get indent
+                        spans.push(StyledSpan {
+                            text: " ".repeat(prefix_width),
+                            style: Style::Plain,
                         });
                     }
+
+                    spans.push(StyledSpan {
+                        text: wrapped_line,
+                        style: cmd_style,
+                    });
+
+                    lines.push(StyledLine { spans });
+                }
+
+                // Add suffix to last line if present
+                if let Some(suf) = suffix
+                    && let Some(last) = lines.last_mut()
+                {
+                    last.spans.push(StyledSpan {
+                        text: suf.to_string(),
+                        style: Style::Interrupted,
+                    });
                 }
 
                 if should_render_tool_args(name, input) {
@@ -1367,6 +1467,68 @@ mod tests {
         assert!(all_text.contains("path=\"test.txt\""));
         assert!(all_text.contains("offset=10"));
         assert!(all_text.contains("limit=25"));
+    }
+
+    #[test]
+    fn test_apply_patch_display_shows_target_files() {
+        let patch = "*** Begin Patch\n*** Update File: src/main.rs\n@@\n-old\n+new\n*** Add File: docs/notes.md\n+hello\n*** End Patch";
+        let cell =
+            HistoryCell::tool_running("123", "apply_patch", serde_json::json!({"patch": patch}));
+
+        let all_text: String = cell
+            .display_lines(140, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("apply_patch"));
+        assert!(all_text.contains("src/main.rs"));
+        assert!(all_text.contains("docs/notes.md"));
+    }
+
+    #[test]
+    fn test_web_search_display_shows_queries() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "web_search",
+            serde_json::json!({
+                "objective": "Find docs",
+                "search_queries": ["ratatui style guide", "rust tui styling"]
+            }),
+        );
+
+        let all_text: String = cell
+            .display_lines(140, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("web_search"));
+        assert!(all_text.contains('['));
+        assert!(all_text.contains(']'));
+        assert!(all_text.contains("ratatui style guide"));
+        assert!(all_text.contains("rust tui styling"));
+    }
+
+    #[test]
+    fn test_fetch_webpage_display_shows_url() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "fetch_webpage",
+            serde_json::json!({
+                "url": "https://example.com/docs",
+                "objective": "extract API section"
+            }),
+        );
+
+        let all_text: String = cell
+            .display_lines(140, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("fetch_webpage"));
+        assert!(all_text.contains("https://example.com/docs"));
     }
 
     #[test]
