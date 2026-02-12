@@ -874,13 +874,16 @@ struct ThreadSearchIndex {
 ///
 /// Results are sorted by relevance then recency when a query is provided,
 /// otherwise by recency only.
+///
+/// # Errors
+/// Returns an error if thread listing fails.
 pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchResult>> {
     let normalized_query = options
         .query
         .as_deref()
         .map(str::trim)
         .filter(|q| !q.is_empty())
-        .map(|q| q.to_lowercase());
+        .map(str::to_lowercase);
     let limit = options.limit.max(1);
 
     let mut ranked: Vec<(ThreadSearchResult, Option<DateTime<Utc>>)> = Vec::new();
@@ -895,12 +898,9 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
             continue;
         }
 
-        let score = normalized_query
-            .as_deref()
-            .map(|query| {
-                score_thread_match(summary.title.as_deref(), &index.searchable_text, query)
-            })
-            .unwrap_or(0);
+        let score = normalized_query.as_deref().map_or(0, |query| {
+            score_thread_match(summary.title.as_deref(), &index.searchable_text, query)
+        });
 
         if normalized_query.is_some() && score == 0 {
             continue;
@@ -957,11 +957,8 @@ fn build_thread_search_index(events: &[ThreadEvent]) -> ThreadSearchIndex {
         }
 
         match event {
-            ThreadEvent::Message { text, .. } => {
-                push_search_text(&mut searchable_text, text);
-                preview_candidates.push(text.clone());
-            }
-            ThreadEvent::Reasoning {
+            ThreadEvent::Message { text, .. }
+            | ThreadEvent::Reasoning {
                 text: Some(text), ..
             } => {
                 push_search_text(&mut searchable_text, text);

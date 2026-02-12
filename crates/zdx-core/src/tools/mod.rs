@@ -10,6 +10,7 @@ pub mod fetch_webpage;
 pub mod read;
 pub mod read_thread;
 pub mod subagent;
+pub mod thread_search;
 pub mod web_search;
 pub mod write;
 
@@ -319,6 +320,7 @@ impl ToolSet {
                 "invoke_subagent",
                 "read",
                 "read_thread",
+                "thread_search",
                 "web_search",
                 "write",
             ],
@@ -329,6 +331,7 @@ impl ToolSet {
                 "invoke_subagent",
                 "read",
                 "read_thread",
+                "thread_search",
                 "web_search",
             ],
         }
@@ -518,6 +521,15 @@ impl ToolRegistry {
         );
 
         self.register(
+            thread_search::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_thread_search(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
             subagent::definition(),
             Arc::new(|input, ctx| {
                 let input = input.clone();
@@ -647,6 +659,15 @@ async fn execute_write(input: &Value, ctx: &ToolContext) -> ToolOutput {
         let input = input.clone();
         let ctx = ctx.clone();
         move || write::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || thread_search::execute(&input, &ctx)
     })
     .await
 }
@@ -788,6 +809,7 @@ mod tests {
         assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"thread_search".to_string()));
         assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
     }
@@ -805,6 +827,7 @@ mod tests {
         assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"thread_search".to_string()));
         assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
     }

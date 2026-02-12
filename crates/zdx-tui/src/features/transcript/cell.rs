@@ -150,6 +150,10 @@ fn tool_display_text(name: &str, input: &Value) -> String {
             || name.to_string(),
             |thread_id| format!("{name} {thread_id}"),
         ),
+        "thread_search" => value_as_trimmed_str(input, "query").map_or_else(
+            || name.to_string(),
+            |query| format!("{name} {}", truncate_with_ellipsis(query, 72)),
+        ),
         "invoke_subagent" => value_as_trimmed_str(input, "model")
             .map_or_else(|| name.to_string(), |model| format!("{name} model={model}")),
         _ => name.to_string(),
@@ -1529,6 +1533,29 @@ mod tests {
 
         assert!(all_text.contains("fetch_webpage"));
         assert!(all_text.contains("https://example.com/docs"));
+    }
+
+    #[test]
+    fn test_thread_search_display_shows_query() {
+        let cell = HistoryCell::tool_running(
+            "123",
+            "thread_search",
+            serde_json::json!({
+                "query": "memory system last week",
+                "date_start": "2026-02-01",
+                "date_end": "2026-02-07",
+                "limit": 10
+            }),
+        );
+
+        let all_text: String = cell
+            .display_lines(140, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("thread_search"));
+        assert!(all_text.contains("memory system last week"));
     }
 
     #[test]

@@ -54,9 +54,17 @@ pub struct RunsOptions {
 
 /// Prints automation run history from JSONL.
 pub fn runs(options: RunsOptions) -> Result<()> {
-    let exact_date = parse_run_date_filter(options.date.as_deref(), "date")?;
-    let start_date = parse_run_date_filter(options.date_start.as_deref(), "date-start")?;
-    let end_date = parse_run_date_filter(options.date_end.as_deref(), "date-end")?;
+    let RunsOptions {
+        name,
+        date,
+        date_start,
+        date_end,
+        json,
+    } = options;
+
+    let exact_date = parse_run_date_filter(date.as_deref(), "date")?;
+    let start_date = parse_run_date_filter(date_start.as_deref(), "date-start")?;
+    let end_date = parse_run_date_filter(date_end.as_deref(), "date-end")?;
     if let (Some(start), Some(end)) = (start_date, end_date)
         && start > end
     {
@@ -70,7 +78,7 @@ pub fn runs(options: RunsOptions) -> Result<()> {
     }
 
     let records = read_run_records(&path)?;
-    let filtered_by_name: Vec<&AutomationRunRecord> = if let Some(raw) = options.name.as_deref() {
+    let filtered_by_name: Vec<&AutomationRunRecord> = if let Some(raw) = name.as_deref() {
         let needle = raw.trim();
         if needle.is_empty() {
             Vec::new()
@@ -87,7 +95,7 @@ pub fn runs(options: RunsOptions) -> Result<()> {
         .collect();
 
     if filtered.is_empty() {
-        if let Some(name) = options.name.as_deref() {
+        if let Some(name) = name.as_deref() {
             println!("No runs found for automation '{}'.", name.trim());
         } else {
             println!("No automation runs found.");
@@ -95,7 +103,7 @@ pub fn runs(options: RunsOptions) -> Result<()> {
         return Ok(());
     }
 
-    if options.json {
+    if json {
         println!(
             "{}",
             serde_json::to_string_pretty(&filtered).context("serialize automation runs")?
