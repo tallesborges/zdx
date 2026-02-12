@@ -177,3 +177,16 @@ Explicit list of “not now” items + what would trigger revisiting them.
 - Automatic autonomous task picking from all notes/threads by default (revisit after scheduler trust is established).
 - Web dashboard for automations (revisit when CLI/bot UX becomes limiting).
 - Multi-user permissions/roles (revisit if scope moves beyond personal use).
+
+## Deferred idea: runtime args for manual runs (keep KISS now)
+- Problem: some values are safe and user-specific (chat IDs, channel IDs, recipient aliases), but awkward as env vars.
+- Proposed scope (later): support manual run overrides via CLI args, e.g. `zdx automations run <name> --arg key=value`.
+- Guardrails:
+  - Keep secrets in env/auth only (API keys/tokens never in args).
+  - Keep safe IDs/config in automation file body/frontmatter.
+  - Scheduled/daemon runs should not depend on missing runtime args.
+- Minimal contract candidate:
+  - `--arg key=value` can override optional non-secret placeholders in prompt templates.
+  - Unknown arg keys fail fast with a clear error.
+  - Run history records resolved arg keys (and redacts sensitive-looking values if needed).
+- Revisit trigger: repeated friction from cloning near-identical automation files only to change safe destination IDs.
