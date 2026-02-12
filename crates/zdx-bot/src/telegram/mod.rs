@@ -71,7 +71,7 @@ pub struct TelegramClient {
     token: String,
 }
 
-const TELEGRAM_PARSE_MODE: &str = "Markdown";
+const TELEGRAM_PARSE_MODE: &str = "HTML";
 const TELEGRAM_CONNECT_TIMEOUT_SECS: u64 = 2;
 const TELEGRAM_HTTP_TIMEOUT_SECS: u64 = 35;
 
@@ -196,7 +196,7 @@ impl TelegramClient {
         .await
     }
 
-    /// Inner send with Markdown-fallback-to-plain logic.
+    /// Inner send with HTML-fallback-to-plain logic.
     async fn send_message_inner(
         &self,
         chat_id: i64,
@@ -205,7 +205,7 @@ impl TelegramClient {
         message_thread_id: Option<i64>,
         reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> Result<Message> {
-        // First try with Markdown parse mode
+        // First try with HTML parse mode
         let result = self
             .send_message_raw(
                 chat_id,
@@ -217,7 +217,7 @@ impl TelegramClient {
             )
             .await;
 
-        // If Markdown parsing failed, retry as plain text
+        // If HTML parsing failed, retry as plain text
         if let Err(ref e) = result {
             let err_msg = e.to_string();
             if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
@@ -269,7 +269,7 @@ impl TelegramClient {
         text: &str,
         reply_markup: Option<&InlineKeyboardMarkup>,
     ) -> Result<()> {
-        // Try Markdown first
+        // Try HTML first
         let result = self
             .edit_message_text_raw(
                 chat_id,

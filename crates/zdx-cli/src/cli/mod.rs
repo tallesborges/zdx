@@ -263,7 +263,7 @@ enum TelegramCommands {
         #[arg(
             long,
             value_name = "MODE",
-            default_value = "markdown",
+            default_value = "html",
             value_parser = ["markdown", "markdown-v2", "html", "plain"]
         )]
         parse_mode: String,
