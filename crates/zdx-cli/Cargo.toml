@@ -20,6 +20,7 @@ zdx-tui = { path = "../zdx-tui", optional = true }
 zdx-bot = { path = "../zdx-bot" }
 
 anyhow.workspace = true
+chrono.workspace = true
 clap = { workspace = true, features = ["env"] }
 open.workspace = true
 reqwest.workspace = true

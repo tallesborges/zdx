@@ -16,6 +16,7 @@ pub struct ExecRunOptions<'a> {
     pub prompt: &'a str,
     pub config: &'a config::Config,
     pub model_override: Option<&'a str>,
+    pub tool_timeout_override: Option<u32>,
     pub thinking_override: Option<&'a str>,
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
@@ -33,6 +34,9 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         let mut c = options.config.clone();
         if let Some(model) = options.model_override {
             c.model = model.to_string();
+        }
+        if let Some(timeout_secs) = options.tool_timeout_override {
+            c.tool_timeout_secs = timeout_secs;
         }
         if let Some(thinking) = options.thinking_override {
             c.thinking_level = parse_thinking_level(thinking)?;

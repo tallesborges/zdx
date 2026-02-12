@@ -8,6 +8,7 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
+        .stdout(predicate::str::contains("daemon"))
         .stdout(predicate::str::contains("threads"));
 }
 
@@ -20,6 +21,27 @@ fn test_threads_help_shows_subcommands() {
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("show"))
         .stdout(predicate::str::contains("resume"));
+}
+
+#[test]
+fn test_automations_help_shows_subcommands() {
+    cargo_bin_cmd!("zdx")
+        .args(["automations", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("list"))
+        .stdout(predicate::str::contains("runs"))
+        .stdout(predicate::str::contains("validate"))
+        .stdout(predicate::str::contains("run"));
+}
+
+#[test]
+fn test_daemon_help_shows_poll_interval() {
+    cargo_bin_cmd!("zdx")
+        .args(["daemon", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("poll-interval-secs"));
 }
 
 #[test]
