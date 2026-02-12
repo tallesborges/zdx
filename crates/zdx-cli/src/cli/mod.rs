@@ -69,12 +69,6 @@ impl From<&ThreadArgs> for ThreadPersistenceOptions {
 enum Commands {
     /// Run the Telegram bot (long-polling)
     Bot,
-    /// Run scheduled automations daemon
-    Daemon {
-        /// Poll interval in seconds (minimum 1)
-        #[arg(long, default_value_t = 30)]
-        poll_interval_secs: u64,
-    },
     /// Executes a command with a prompt
     Exec {
         /// The prompt to send to the agent
@@ -198,6 +192,12 @@ enum AutomationCommands {
     List,
     /// Validate automation files
     Validate,
+    /// Run scheduled automations daemon
+    Daemon {
+        /// Poll interval in seconds (minimum 1)
+        #[arg(long, default_value_t = 30)]
+        poll_interval_secs: u64,
+    },
     /// Show automation run history (from JSONL log)
     Runs {
         /// Optional automation name (file stem)
@@ -402,9 +402,6 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
 async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         Commands::Bot => dispatch_bot(context).await,
-        Commands::Daemon { poll_interval_secs } => {
-            dispatch_daemon(context, poll_interval_secs).await
-        }
         Commands::Exec {
             prompt,
             model,
@@ -450,12 +447,6 @@ async fn dispatch_bot(context: &DispatchContext<'_>) -> Result<()> {
     zdx_bot::run_with_root(root_path).await
 }
 
-async fn dispatch_daemon(context: &DispatchContext<'_>, poll_interval_secs: u64) -> Result<()> {
-    let root_path = resolve_root(context.root, context.worktree_id)?;
-    let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
-    commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs).await
-}
-
 async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         ThreadCommands::List => commands::threads::list(),
@@ -473,6 +464,11 @@ async fn dispatch_automations(
     match command {
         AutomationCommands::List => commands::automations::list(&root_path),
         AutomationCommands::Validate => commands::automations::validate(&root_path),
+        AutomationCommands::Daemon { poll_interval_secs } => {
+            let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+            commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
+                .await
+        }
         AutomationCommands::Runs { name } => commands::automations::runs(name.as_deref()),
         AutomationCommands::Run { name } => {
             let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
