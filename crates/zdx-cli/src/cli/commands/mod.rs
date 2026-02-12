@@ -7,5 +7,6 @@ pub mod config;
 pub mod daemon;
 pub mod exec;
 pub mod models;
+pub mod telegram;
 pub mod threads;
 pub mod worktree;

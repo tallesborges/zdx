@@ -55,10 +55,17 @@ impl PartialOrd for VisualPosition {
 /// Maps visual lines to their source cells.
 ///
 /// Built during rendering to enable selection position mapping.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LineInteraction {
+    ToggleToolArgs,
+}
+
 #[derive(Debug, Clone)]
 pub struct LineMapping {
     /// The rendered text content of this line (for display and selection).
     pub text: String,
+    /// Optional interaction attached to this rendered line.
+    pub interaction: Option<LineInteraction>,
 }
 
 /// Maps visual positions to cell text positions.
@@ -412,9 +419,11 @@ mod tests {
 
         map.push(LineMapping {
             text: "Hello".to_string(),
+            interaction: None,
         });
         map.push(LineMapping {
             text: "World!".to_string(),
+            interaction: None,
         });
 
         // Select "llo\nWor"
@@ -429,6 +438,7 @@ mod tests {
         // Text with emoji and CJK
         map.push(LineMapping {
             text: "🎉你好AB".to_string(), // 5 graphemes: 🎉, 你, 好, A, B
+            interaction: None,
         });
 
         // Select graphemes 1-3 (你好A)

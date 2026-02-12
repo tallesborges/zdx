@@ -17,7 +17,7 @@ mod agent;
 mod bot;
 mod handlers;
 mod ingest;
-mod telegram;
+pub mod telegram;
 mod transcribe;
 mod types;
 
