@@ -33,6 +33,7 @@
     - `crates/zdx-core/src/tools/fetch_webpage.rs`: fetch webpage tool (Parallel Extract API)
     - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
     - `crates/zdx-core/src/tools/subagent.rs`: invoke_subagent delegation tool (isolated child `zdx exec`)
+    - `crates/zdx-core/src/tools/thread_search.rs`: thread search tool (query/date discovery for saved threads)
     - `crates/zdx-core/src/tools/web_search.rs`: web search tool (Parallel Search API)
   - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
     - `crates/zdx-core/src/providers/shared.rs`: provider-agnostic types + helpers (merge_system_prompt, config resolution)
