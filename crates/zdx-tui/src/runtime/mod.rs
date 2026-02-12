@@ -30,7 +30,7 @@ mod thread_title;
 
 use std::future::Future;
 use std::io::Stdout;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use crossterm::event;
@@ -434,7 +434,7 @@ impl TuiRuntime {
             UiEffect::OpenConfig => {
                 let config_path = zdx_core::config::paths::config_path();
                 if config_path.exists() {
-                    let _ = open_in_editor(&config_path);
+                    let _ = self.open_path_in_editor(&config_path);
                     // Note: errors are silently ignored for simplicity
                     // Could add an event for error reporting if needed
                 }
@@ -447,7 +447,7 @@ impl TuiRuntime {
                     }
                     let _ = std::fs::write(&models_path, zdx_core::models::default_models_toml());
                 }
-                let _ = open_in_editor(&models_path);
+                let _ = self.open_path_in_editor(&models_path);
                 // Note: errors are silently ignored for simplicity
                 // Could add an event for error reporting if needed
             }
@@ -658,6 +658,18 @@ impl TuiRuntime {
             }
         }
     }
+
+    fn open_path_in_editor(&mut self, path: &Path) -> Result<()> {
+        terminal::disable_input_features()?;
+        terminal::restore_terminal()?;
+
+        let open_result = open_in_editor(path);
+
+        self.terminal = terminal::setup_terminal().context("Failed to setup terminal")?;
+        terminal::enable_input_features()?;
+
+        open_result.context(format!("Failed to open {} in editor", path.display()))
+    }
 }
 
 impl Drop for TuiRuntime {
@@ -668,13 +680,30 @@ impl Drop for TuiRuntime {
 
 /// Opens a file in the user's preferred editor.
 ///
-/// Checks `$EDITOR` environment variable first, then falls back to system default.
-fn open_in_editor(path: &std::path::Path) -> std::io::Result<()> {
-    match std::env::var("EDITOR") {
-        Ok(editor) if !editor.is_empty() => std::process::Command::new(&editor)
-            .arg(path)
-            .spawn()
-            .map(|_| ()),
+/// Checks `$VISUAL` and `$EDITOR` environment variables, then falls back to system default.
+fn open_in_editor(path: &Path) -> std::io::Result<()> {
+    let editor = std::env::var("VISUAL")
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| {
+            std::env::var("EDITOR")
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        });
+
+    match editor {
+        Some(editor) => {
+            let mut parts = editor.split_whitespace();
+            let Some(program) = parts.next() else {
+                return open::that(path);
+            };
+
+            let mut cmd = std::process::Command::new(program);
+            cmd.args(parts);
+            cmd.arg(path);
+
+            cmd.status().map(|_| ())
+        }
         _ => open::that(path),
     }
 }
