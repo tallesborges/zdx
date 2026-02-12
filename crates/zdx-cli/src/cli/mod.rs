@@ -401,15 +401,9 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
 
 async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
-        Commands::Bot => {
-            let root_path = resolve_root(context.root, context.worktree_id)?;
-            zdx_bot::run_with_root(root_path).await
-        }
+        Commands::Bot => dispatch_bot(context).await,
         Commands::Daemon { poll_interval_secs } => {
-            let root_path = resolve_root(context.root, context.worktree_id)?;
-            let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
-            commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
-                .await
+            dispatch_daemon(context, poll_interval_secs).await
         }
         Commands::Exec {
             prompt,
@@ -430,81 +424,120 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             )
             .await
         }
-        Commands::Threads { command } => match command {
-            ThreadCommands::List => commands::threads::list(),
-            ThreadCommands::Show { id } => commands::threads::show(&id),
-            ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
-            ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
-        },
-        Commands::Automations { command } => {
-            let root_path = resolve_root(context.root, context.worktree_id)?;
-            match command {
-                AutomationCommands::List => commands::automations::list(&root_path),
-                AutomationCommands::Validate => commands::automations::validate(&root_path),
-                AutomationCommands::Runs { name } => commands::automations::runs(name.as_deref()),
-                AutomationCommands::Run { name } => {
-                    let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
-                    commands::automations::run(&root_path, &thread_opts, context.config, &name)
-                        .await
-                }
-            }
-        }
-        Commands::Config { command } => match command {
-            ConfigCommands::Path => {
-                commands::config::path();
-                Ok(())
-            }
-            ConfigCommands::Init => commands::config::init(),
-            ConfigCommands::Generate => commands::config::generate(),
-        },
+        Commands::Threads { command } => dispatch_threads(command, context).await,
+        Commands::Automations { command } => dispatch_automations(command, context).await,
+        Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
             anthropic,
             claude_cli,
             openai_codex,
             gemini_cli,
-        } => {
-            let provider = select_auth_provider((anthropic, claude_cli, openai_codex, gemini_cli))?;
-            login_provider(provider).await
-        }
+        } => dispatch_login((anthropic, claude_cli, openai_codex, gemini_cli)).await,
         Commands::Logout {
             anthropic,
             claude_cli,
             openai_codex,
             gemini_cli,
-        } => {
-            let provider = select_auth_provider((anthropic, claude_cli, openai_codex, gemini_cli))?;
-            logout_provider(provider)
+        } => dispatch_logout((anthropic, claude_cli, openai_codex, gemini_cli)),
+        Commands::Models { command } => dispatch_models(command, context).await,
+        Commands::Telegram { command } => dispatch_telegram(command, context).await,
+        Commands::Worktree { command } => dispatch_worktree(command, context),
+    }
+}
+
+async fn dispatch_bot(context: &DispatchContext<'_>) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    zdx_bot::run_with_root(root_path).await
+}
+
+async fn dispatch_daemon(context: &DispatchContext<'_>, poll_interval_secs: u64) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+    commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs).await
+}
+
+async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>) -> Result<()> {
+    match command {
+        ThreadCommands::List => commands::threads::list(),
+        ThreadCommands::Show { id } => commands::threads::show(&id),
+        ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
+        ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
+    }
+}
+
+async fn dispatch_automations(
+    command: AutomationCommands,
+    context: &DispatchContext<'_>,
+) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    match command {
+        AutomationCommands::List => commands::automations::list(&root_path),
+        AutomationCommands::Validate => commands::automations::validate(&root_path),
+        AutomationCommands::Runs { name } => commands::automations::runs(name.as_deref()),
+        AutomationCommands::Run { name } => {
+            let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
+            commands::automations::run(&root_path, &thread_opts, context.config, &name).await
         }
-        Commands::Models { command } => match command {
-            ModelsCommands::Update => commands::models::update(context.config).await,
-        },
-        Commands::Telegram { command } => match command {
-            TelegramCommands::CreateTopic {
-                chat_id,
-                name,
+    }
+}
+
+fn dispatch_config(command: &ConfigCommands) -> Result<()> {
+    match command {
+        ConfigCommands::Path => {
+            commands::config::path();
+            Ok(())
+        }
+        ConfigCommands::Init => commands::config::init(),
+        ConfigCommands::Generate => commands::config::generate(),
+    }
+}
+
+async fn dispatch_login(flags: (bool, bool, bool, bool)) -> Result<()> {
+    let provider = select_auth_provider(flags)?;
+    login_provider(provider).await
+}
+
+fn dispatch_logout(flags: (bool, bool, bool, bool)) -> Result<()> {
+    let provider = select_auth_provider(flags)?;
+    logout_provider(provider)
+}
+
+async fn dispatch_models(command: ModelsCommands, context: &DispatchContext<'_>) -> Result<()> {
+    match command {
+        ModelsCommands::Update => commands::models::update(context.config).await,
+    }
+}
+
+async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<'_>) -> Result<()> {
+    match command {
+        TelegramCommands::CreateTopic {
+            chat_id,
+            name,
+            bot_token,
+        } => commands::telegram::create_topic(context.config, bot_token, chat_id, &name).await,
+        TelegramCommands::SendMessage {
+            chat_id,
+            text,
+            message_thread_id,
+            parse_mode,
+            bot_token,
+        } => {
+            commands::telegram::send_message(
+                context.config,
                 bot_token,
-            } => commands::telegram::create_topic(context.config, bot_token, chat_id, &name).await,
-            TelegramCommands::SendMessage {
                 chat_id,
-                text,
                 message_thread_id,
-                parse_mode,
-                bot_token,
-            } => {
-                commands::telegram::send_message(
-                    context.config,
-                    bot_token,
-                    chat_id,
-                    message_thread_id,
-                    &text,
-                    &parse_mode,
-                )
-                .await
-            }
-        },
-        Commands::Worktree { command } => match command {
-            WorktreeCommands::Ensure { id } => commands::worktree::ensure(context.root, &id),
-        },
+                &text,
+                &parse_mode,
+            )
+            .await
+        }
+    }
+}
+
+fn dispatch_worktree(command: WorktreeCommands, context: &DispatchContext<'_>) -> Result<()> {
+    match command {
+        WorktreeCommands::Ensure { id } => commands::worktree::ensure(context.root, &id),
     }
 }
 

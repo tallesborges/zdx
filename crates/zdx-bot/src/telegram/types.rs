@@ -16,7 +16,7 @@ pub struct CallbackQuery {
     /// The message that contained the inline keyboard (present when the button
     /// was attached to a message sent by the bot).
     #[serde(rename = "message")]
-    pub _message: Option<Message>,
+    pub message: Option<Message>,
     /// Data associated with the callback button (max 64 bytes).
     pub data: Option<String>,
 }
