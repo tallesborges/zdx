@@ -332,3 +332,112 @@ fn test_threads_rename_missing_thread_fails() {
         "Renaming a missing thread should not create a thread file"
     );
 }
+
+#[test]
+fn test_threads_search_query_matches_content() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_meta(
+        &temp_dir,
+        "topic-thread",
+        Some("Thread search planning"),
+        &[(
+            "user".to_string(),
+            "we should improve the thread search flow".to_string(),
+            "2026-02-12T10:00:00Z".to_string(),
+        )],
+    );
+    create_thread_with_meta(
+        &temp_dir,
+        "other-thread",
+        Some("Unrelated"),
+        &[(
+            "user".to_string(),
+            "totally different topic".to_string(),
+            "2026-02-12T11:00:00Z".to_string(),
+        )],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "thread search"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("topic-thread"));
+    assert!(!output_str.contains("other-thread"));
+}
+
+#[test]
+fn test_threads_search_filters_by_date() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_meta(
+        &temp_dir,
+        "feb-thread",
+        Some("February work"),
+        &[(
+            "user".to_string(),
+            "worked on reports".to_string(),
+            "2026-02-12T09:00:00Z".to_string(),
+        )],
+    );
+    create_thread_with_meta(
+        &temp_dir,
+        "jan-thread",
+        Some("January work"),
+        &[(
+            "user".to_string(),
+            "worked on setup".to_string(),
+            "2026-01-10T09:00:00Z".to_string(),
+        )],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "--date", "2026-02-12"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("feb-thread"));
+    assert!(!output_str.contains("jan-thread"));
+}
+
+#[test]
+fn test_threads_search_json_output() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_meta(
+        &temp_dir,
+        "json-thread",
+        Some("Automation report thread"),
+        &[(
+            "user".to_string(),
+            "daily report generated".to_string(),
+            "2026-02-12T12:00:00Z".to_string(),
+        )],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "search", "report", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let first = parsed.as_array().and_then(|arr| arr.first()).unwrap();
+    assert_eq!(first["thread_id"], json!("json-thread"));
+    assert_eq!(first["title"], json!("Automation report thread"));
+    assert!(first["preview"].as_str().is_some());
+}

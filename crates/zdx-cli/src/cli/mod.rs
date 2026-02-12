@@ -184,6 +184,32 @@ enum ThreadCommands {
         #[arg(value_name = "TITLE")]
         title: String,
     },
+    /// Search threads by date and/or query text
+    Search {
+        /// Optional query text to match in titles and thread content
+        #[arg(value_name = "QUERY")]
+        query: Option<String>,
+
+        /// Filter to threads active on this date (YYYY-MM-DD)
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        date: Option<String>,
+
+        /// Filter to threads active on/after this date (YYYY-MM-DD)
+        #[arg(long = "date-start", value_name = "YYYY-MM-DD")]
+        date_start: Option<String>,
+
+        /// Filter to threads active on/before this date (YYYY-MM-DD)
+        #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
+        date_end: Option<String>,
+
+        /// Maximum number of results to return
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -203,6 +229,22 @@ enum AutomationCommands {
         /// Optional automation name (file stem)
         #[arg(value_name = "NAME")]
         name: Option<String>,
+
+        /// Filter by finished date (YYYY-MM-DD)
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        date: Option<String>,
+
+        /// Filter finished date on/after (YYYY-MM-DD)
+        #[arg(long = "date-start", value_name = "YYYY-MM-DD")]
+        date_start: Option<String>,
+
+        /// Filter finished date on/before (YYYY-MM-DD)
+        #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
+        date_end: Option<String>,
+
+        /// Output JSON
+        #[arg(long)]
+        json: bool,
     },
     /// Run one automation by name (file stem)
     Run {
@@ -453,6 +495,21 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Show { id } => commands::threads::show(&id),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
+        ThreadCommands::Search {
+            query,
+            date,
+            date_start,
+            date_end,
+            limit,
+            json,
+        } => commands::threads::search(commands::threads::SearchCommandOptions {
+            query,
+            date,
+            date_start,
+            date_end,
+            limit,
+            json,
+        }),
     }
 }
 
@@ -469,7 +526,19 @@ async fn dispatch_automations(
             commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
                 .await
         }
-        AutomationCommands::Runs { name } => commands::automations::runs(name.as_deref()),
+        AutomationCommands::Runs {
+            name,
+            date,
+            date_start,
+            date_end,
+            json,
+        } => commands::automations::runs(commands::automations::RunsOptions {
+            name,
+            date,
+            date_start,
+            date_end,
+            json,
+        }),
         AutomationCommands::Run { name } => {
             let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
             commands::automations::run(&root_path, &thread_opts, context.config, &name).await
