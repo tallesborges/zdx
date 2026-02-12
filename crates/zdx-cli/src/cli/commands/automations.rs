@@ -6,7 +6,7 @@ use std::path::Path;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use zdx_core::automations::{self, AutomationDefinition};
 use zdx_core::config;
@@ -20,7 +20,7 @@ use super::exec;
 pub enum RunTrigger {
     /// User-triggered run via `zdx automations run <name>`.
     Manual,
-    /// Scheduled run via `zdx daemon`.
+    /// Scheduled run via `zdx automations daemon`.
     Daemon,
 }
 
@@ -154,7 +154,8 @@ pub async fn run_definition(
 ) -> Result<()> {
     let attempts = automation.max_retries.saturating_add(1);
     let root_string = root.to_string_lossy().to_string();
-    let effective_thread_opts = resolve_automation_thread_opts(thread_opts, &automation.name);
+    let effective_thread_opts =
+        resolve_automation_thread_opts(thread_opts, &automation.name, Utc::now());
 
     for attempt in 1..=attempts {
         let started_at = Utc::now();
@@ -223,13 +224,16 @@ pub async fn run_definition(
 fn resolve_automation_thread_opts(
     thread_opts: &ThreadPersistenceOptions,
     automation_name: &str,
+    now: DateTime<Utc>,
 ) -> ThreadPersistenceOptions {
     if thread_opts.no_save || thread_opts.thread_id.is_some() {
         return thread_opts.clone();
     }
 
+    let default_thread_id = format!("automation-{automation_name}-{}", now.format("%Y%m%d-%H%M"));
+
     ThreadPersistenceOptions {
-        thread_id: Some(format!("automation-{automation_name}")),
+        thread_id: Some(default_thread_id),
         no_save: false,
     }
 }
@@ -307,6 +311,7 @@ fn read_run_records(path: &Path) -> Result<Vec<AutomationRunRecord>> {
 
 #[cfg(test)]
 mod tests {
+    use chrono::TimeZone;
     use tempfile::tempdir;
 
     use super::*;
@@ -348,10 +353,27 @@ mod tests {
             no_save: false,
         };
 
-        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report", now);
         assert_eq!(
             resolved.thread_id.as_deref(),
-            Some("automation-daily-report")
+            Some("automation-daily-report-20260212-0745")
+        );
+        assert!(!resolved.no_save);
+    }
+
+    #[test]
+    fn resolve_automation_thread_opts_daemon_uses_timestamped_thread_id() {
+        let opts = ThreadPersistenceOptions {
+            thread_id: None,
+            no_save: false,
+        };
+
+        let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report", now);
+        assert_eq!(
+            resolved.thread_id.as_deref(),
+            Some("automation-daily-report-20260212-0745")
         );
         assert!(!resolved.no_save);
     }
@@ -363,7 +385,8 @@ mod tests {
             no_save: true,
         };
 
-        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report", now);
         assert!(resolved.thread_id.is_none());
         assert!(resolved.no_save);
     }
@@ -375,7 +398,8 @@ mod tests {
             no_save: false,
         };
 
-        let resolved = resolve_automation_thread_opts(&opts, "daily-report");
+        let now = Utc.with_ymd_and_hms(2026, 2, 12, 7, 45, 0).unwrap();
+        let resolved = resolve_automation_thread_opts(&opts, "daily-report", now);
         assert_eq!(resolved.thread_id.as_deref(), Some("custom-thread"));
         assert!(!resolved.no_save);
     }

@@ -78,8 +78,7 @@ ZDX solves this with a boring, reliable core:
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
-- `zdx automations list|validate|runs [NAME]|run <NAME>`
-- `zdx daemon` — run scheduled automations loop
+- `zdx automations list|validate|daemon|runs [NAME]|run <NAME>`
 - `zdx threads list|show <ID>|resume [ID]`
 - `zdx config init|path`
 
@@ -124,7 +123,7 @@ The `meta` line (first line only) may be rewritten atomically to update thread m
 
 ### Automation sessions
 
-- By default, automation runs persist to deterministic thread IDs: `automation-<name>`.
+- Manual and daemon runs persist to timestamped thread IDs by default: `automation-<name>-<YYYYMMDD-HHMM>`.
 - `zdx automations run <name> --thread <ID>` uses the explicit thread ID instead.
 - `--no-thread` disables persistence for that run.
 
