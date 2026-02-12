@@ -15,7 +15,7 @@ pub async fn create_topic(
         bail!("topic name must not be empty");
     }
 
-    let token = resolve_bot_token(config, bot_token)?;
+    let token = resolve_bot_token(config, bot_token.as_deref())?;
     let client = TelegramClient::new(token);
     let message_thread_id = client.create_forum_topic(chat_id, topic_name).await?;
     println!("{message_thread_id}");
@@ -35,7 +35,7 @@ pub async fn send_message(
         bail!("text must not be empty");
     }
 
-    let token = resolve_bot_token(config, bot_token)?;
+    let token = resolve_bot_token(config, bot_token.as_deref())?;
     let client = TelegramClient::new(token);
     let parse_mode = resolve_parse_mode(parse_mode)?;
     match parse_mode {
@@ -58,13 +58,7 @@ pub async fn send_message(
         }
         ParseMode::Html => {
             client
-                .send_message_with_parse_mode(
-                    chat_id,
-                    body,
-                    None,
-                    message_thread_id,
-                    Some("HTML"),
-                )
+                .send_message_with_parse_mode(chat_id, body, None, message_thread_id, Some("HTML"))
                 .await?;
         }
         ParseMode::Plain => {
@@ -94,17 +88,18 @@ fn resolve_parse_mode(parse_mode: &str) -> Result<ParseMode> {
     }
 }
 
-fn resolve_bot_token(config: &Config, override_token: Option<String>) -> Result<String> {
+fn resolve_bot_token(config: &Config, override_token: Option<&str>) -> Result<String> {
     if let Some(token) = normalize_optional(override_token) {
         return Ok(token);
     }
 
-    if let Some(token) = normalize_optional(config.telegram.bot_token.clone()) {
+    if let Some(token) = normalize_optional(config.telegram.bot_token.as_deref()) {
         return Ok(token);
     }
 
     if let Some(token) = std::env::var("ZDX_TELEGRAM_BOT_TOKEN")
         .ok()
+        .as_deref()
         .and_then(normalize_string)
     {
         return Ok(token);
@@ -112,6 +107,7 @@ fn resolve_bot_token(config: &Config, override_token: Option<String>) -> Result<
 
     if let Some(token) = std::env::var("TELEGRAM_BOT_TOKEN")
         .ok()
+        .as_deref()
         .and_then(normalize_string)
     {
         return Ok(token);
@@ -122,11 +118,11 @@ fn resolve_bot_token(config: &Config, override_token: Option<String>) -> Result<
     )
 }
 
-fn normalize_optional(input: Option<String>) -> Option<String> {
+fn normalize_optional(input: Option<&str>) -> Option<String> {
     input.and_then(normalize_string)
 }
 
-fn normalize_string(value: String) -> Option<String> {
+fn normalize_string(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
