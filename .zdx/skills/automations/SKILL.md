@@ -44,30 +44,33 @@ Only modify automation files and only the fields needed for the request.
 
 When prompt instructions involve external systems, prefer staged steps with clear checkpoints and fallback behavior.
 
-### Always define output destination
+### Define external delivery explicitly (when needed)
 
-Every automation prompt must state where results go.
+ZDX already persists automation output to the automation run thread by default (runtime-managed, typically `automation-<name>-<YYYYMMDD-HHMM>`).
 
-- Default destination: persistent automation thread `automation-<name>`.
-- Optional delivery destination: email, WhatsApp, Telegram, Slack, file, PR, etc.
-- If destination is missing, ask one focused question before finalizing.
+- Do **not** add destination boilerplate just to restate default thread persistence.
+- Add a `Delivery` section only when external notification/delivery is requested or implied (email, WhatsApp, Telegram, Slack, file, PR, etc.).
+- Treat verbs like "notify", "alert", "send me", "text me", "post" as implied external delivery.
+- If delivery is implied but target/channel is unclear, ask one focused question before finalizing.
+- Never add placeholders like `Secondary: none`.
 
-When updating an existing automation, preserve its destination rules unless user asks to change them.
+When updating an existing automation, preserve its delivery behavior unless user asks to change it.
 
 ## Workflow
 
 1. Infer automation file name from user intent (kebab-case).
 2. Create or edit `$ZDX_HOME/automations/<name>.md`.
 3. If file exists and user did not request replacement, edit in place.
-4. Define destination behavior in the prompt body:
-   - always include default thread destination (`automation-<name>`)
-   - include delivery target(s) requested by user (email/WhatsApp/etc.)
+4. Decide whether external delivery is required:
+   - if not requested/implied: omit destination/delivery boilerplate
+   - if requested/implied: add explicit `Delivery` block with channel + target + routing policy + fallback behavior
 5. Keep frontmatter minimal and valid.
-6. If delivery target/tooling is unclear, ask one focused clarification question.
+6. If delivery target/tooling is unclear (or implied but ambiguous), ask one focused clarification question.
    - channel/provider
    - recipient/target ID
    - topic/thread policy (reuse existing vs create new per run)
    - failure policy (fail run vs continue with partial result)
+   - example: `You said "notify me" — should I send via Telegram, WhatsApp, or email, and to which target?`
 7. For channel-specific delivery, instruct the automation to use the relevant skill/tooling when available (for example: `gog` for Google email, `wacli` for WhatsApp).
 8. Run validation:
    ```bash
@@ -84,7 +87,7 @@ When updating an existing automation, preserve its destination rules unless user
    - changed file path
    - validation status
    - test-run status (if executed)
-   - destination summary
+   - delivery summary (if any)
 
 ## Templates
 
@@ -99,11 +102,6 @@ schedule: "0 8 * * *"
 ---
 
 <clear prompt for what should run>
-
-## Destination
-
-- Primary: save full result in thread `automation-<name>`.
-- Secondary: <optional channel + target>
 ```
 
 ### Manual-only automation template
@@ -116,11 +114,6 @@ schedule: "0 8 * * *"
 ---
 
 <clear prompt for what should run>
-
-## Destination
-
-- Primary: save full result in thread `automation-<name>`.
-- Secondary: <optional channel + target>
 ```
 
 ## Writing guidance for prompt body
@@ -139,7 +132,7 @@ Write prompts as executable runbooks with explicit sections in this order:
 2. **Inputs**: concrete data sources and assumptions.
 3. **Execution steps**: ordered checklist; prefer staged tool calls.
 4. **Output contract**: exact format/sections required in the result.
-5. **Destination**: where full output and summary must go.
+5. **Delivery (optional)**: only when external send is required; specify channel/target/policy/fallback.
 6. **Failure policy**: fail-fast vs partial result + error reporting rules.
 
 Use imperative language and concrete verbs ("fetch", "summarize", "send", "save").
@@ -153,7 +146,7 @@ Recommended patterns:
 
 - **Report automation**: sections + concise bullets.
 - **Action automation**: what was changed, where, status, follow-up actions.
-- **Delivery automation**: destination status per channel + failure details.
+- **Delivery automation**: delivery status per channel + failure details.
 - **Artifact automation**: file paths generated/updated + summary + validation result.
 
 Generic template:
@@ -183,24 +176,24 @@ If output must be short, include explicit limits (`max bullets`, `max chars`, `n
   - reuse existing thread/topic ID, or
   - create a new topic per run.
 - If creating topics per run, include deterministic naming guidance (for example: `Morning Report - YYYY-MM-DD HH:MM`).
-- Require clear fallback: if topic creation fails, keep full output in `automation-<name>` and surface the error.
+- Require clear fallback: if topic creation fails, report the error clearly (full run output remains in the automation thread by default).
 
 ### Shell reliability guidance
 
 - For multiline content, prefer heredocs over fragile quoting.
 - Do not assume shell variables persist across separate tool invocations unless explicitly preserved.
 
-### Destination block (include in prompt body)
+### Delivery block (only when external delivery is required)
 
-Use an explicit destination block in automation prompts:
+Use an explicit `Delivery` block only when external notification/delivery is requested or implied.
 
 ```md
-## Destination
+## Delivery
 
-- Primary: save full result in thread `automation-<name>`.
-- Secondary: send concise summary to <channel> (<recipient/target>).
-- Topic/thread policy: <reuse-existing | create-per-run>.
-- If channel send fails, keep result in thread and report the error clearly.
+- Channel/provider: <telegram | whatsapp | email | slack | ...>
+- Target: <chat id / phone / email / webhook / file path>
+- Topic/thread policy: <reuse-existing | create-per-run> (if applicable)
+- If delivery fails: report the delivery error clearly; run output remains in the automation thread.
 ```
 
 ### Prompt skeleton (copy/paste)
@@ -222,14 +215,15 @@ Use an explicit destination block in automation prompts:
 # Output Format
 - <required sections / limits>
 
-## Destination
-- Primary: save full result in thread `automation-<name>`.
-- Secondary: <optional channel + target>.
-- Topic/thread policy: <reuse-existing | create-per-run>.
+## Delivery (optional; only if requested/known)
+- Channel/provider: <channel>
+- Target: <recipient/target>
+- Topic/thread policy: <reuse-existing | create-per-run> (if applicable)
+- If delivery fails: report error clearly.
 
 # Failure Policy
 - If a non-critical source fails, continue with available data and state what failed.
-- If delivery fails, keep full result in thread and report delivery error.
+- If delivery fails, report delivery error and continue returning the run output.
 ```
 
 ## Safety
@@ -245,7 +239,7 @@ Before finishing, ensure:
 - automation file exists at `$ZDX_HOME/automations/<name>.md`
 - frontmatter is valid and minimal
 - body prompt is non-empty and specific
-- destination behavior is explicitly documented in the prompt body
-- destination includes target + topic/thread policy + fallback behavior
+- if external delivery is requested/implied: `Delivery` block includes target + policy + fallback behavior
+- if no external delivery: no destination/delivery boilerplate is added
 - `zdx automations validate` was run
-- final response includes file path, validation status, run status (if tested), and destination summary
+- final response includes file path, validation status, run status (if tested), and delivery summary (if any)
