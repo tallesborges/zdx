@@ -513,6 +513,98 @@ pub struct EffectivePrompt {
     pub loaded_skills: Vec<Skill>,
 }
 
+#[derive(Debug, Default)]
+struct PromptContextSectionsResult {
+    loaded_agents_paths: Vec<PathBuf>,
+    warnings: Vec<ContextWarning>,
+    project_context_block: Option<String>,
+    memory_index: Option<String>,
+}
+
+fn load_prompt_context_sections(root: &Path) -> PromptContextSectionsResult {
+    let mut result = PromptContextSectionsResult::default();
+    let mut agents_content: Option<String> = None;
+
+    if let Some(loaded) = load_all_agents_files(root) {
+        result.loaded_agents_paths = loaded.loaded_paths;
+        result.warnings = loaded.warnings;
+
+        if !loaded.content.trim().is_empty() {
+            agents_content = Some(loaded.content);
+        }
+    }
+
+    result.project_context_block =
+        format_project_context_block(agents_content.as_deref().unwrap_or_default());
+
+    if let Some(loaded_memory_index) = load_memory_index(root) {
+        result.warnings.extend(loaded_memory_index.warnings);
+
+        if !loaded_memory_index.content.trim().is_empty() {
+            result.memory_index = Some(loaded_memory_index.content);
+        }
+    }
+
+    result
+}
+
+fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
+    let mut skill_options = LoadSkillsOptions::new(root);
+    skill_options.sources = config.skills.sources.clone();
+    skill_options
+        .ignored_skills
+        .clone_from(&config.skills.ignored_skills);
+    skill_options
+        .include_skills
+        .clone_from(&config.skills.include_skills);
+    load_skills(&skill_options)
+}
+
+fn render_system_prompt_with_fallback(
+    config: &Config,
+    vars: &PromptTemplateVars,
+    warnings: &mut Vec<ContextWarning>,
+    base_prompt: Option<&str>,
+    project_context_block: Option<&str>,
+    memory_index: Option<&str>,
+) -> Option<String> {
+    let template_source = match load_prompt_template(config) {
+        Ok(source) => source,
+        Err(warning) => {
+            warnings.push(warning);
+            TemplateSource {
+                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+                path: None,
+            }
+        }
+    };
+
+    match render_prompt_template(&template_source.content, vars) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            warnings.push(ContextWarning {
+                path: template_source.path.clone(),
+                message: format!(
+                    "Failed to render system prompt template: {error}; falling back to default template"
+                ),
+            });
+
+            match render_prompt_template(DEFAULT_SYSTEM_PROMPT_TEMPLATE, vars) {
+                Ok(rendered) => rendered,
+                Err(default_error) => {
+                    warnings.push(ContextWarning {
+                        path: None,
+                        message: format!(
+                            "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
+                        ),
+                    });
+                    combine_prompt_sections(base_prompt, project_context_block, memory_index)
+                }
+            }
+        }
+    }
+}
+
 /// Builds the effective system prompt by combining config, AGENTS.md files,
 /// optional memory index files, and template-driven sections.
 ///
@@ -532,42 +624,14 @@ pub fn build_effective_system_prompt_with_paths(
     root: &Path,
 ) -> Result<EffectivePrompt> {
     let base_prompt = config.effective_system_prompt()?;
-    let mut loaded_agents_paths = Vec::new();
-    let mut warnings = Vec::new();
-    let mut agents_content: Option<String> = None;
-    let mut memory_index: Option<String> = None;
+    let PromptContextSectionsResult {
+        loaded_agents_paths,
+        mut warnings,
+        project_context_block,
+        memory_index,
+    } = load_prompt_context_sections(root);
 
-    // Auto-include AGENTS.md files from hierarchy
-    if let Some(loaded) = load_all_agents_files(root) {
-        loaded_agents_paths = loaded.loaded_paths;
-        warnings = loaded.warnings;
-
-        if !loaded.content.trim().is_empty() {
-            agents_content = Some(loaded.content);
-        }
-    }
-
-    let project_context_block =
-        format_project_context_block(agents_content.as_deref().unwrap_or_default());
-
-    if let Some(loaded_memory_index) = load_memory_index(root) {
-        warnings.extend(loaded_memory_index.warnings);
-
-        if !loaded_memory_index.content.trim().is_empty() {
-            memory_index = Some(loaded_memory_index.content);
-        }
-    }
-
-    let mut skill_options = LoadSkillsOptions::new(root);
-    skill_options.sources = config.skills.sources.clone();
-    skill_options
-        .ignored_skills
-        .clone_from(&config.skills.ignored_skills);
-    skill_options
-        .include_skills
-        .clone_from(&config.skills.include_skills);
-
-    let skills_result = load_skills(&skill_options);
+    let skills_result = load_skills_with_config(config, root);
     let LoadSkillsResult {
         skills,
         warnings: skill_warnings,
@@ -577,17 +641,6 @@ pub fn build_effective_system_prompt_with_paths(
         config.subagent_available_models()
     } else {
         Vec::new()
-    };
-
-    let mut template_source = match load_prompt_template(config) {
-        Ok(source) => source,
-        Err(warning) => {
-            warnings.push(warning);
-            TemplateSource {
-                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
-                path: None,
-            }
-        }
     };
 
     let vars = build_prompt_template_vars(
@@ -603,39 +656,14 @@ pub fn build_effective_system_prompt_with_paths(
         },
     );
 
-    let system_prompt = match render_prompt_template(&template_source.content, &vars) {
-        Ok(rendered) => rendered,
-        Err(error) => {
-            warnings.push(ContextWarning {
-                path: template_source.path.clone(),
-                message: format!(
-                    "Failed to render system prompt template: {error}; falling back to default template"
-                ),
-            });
-
-            template_source = TemplateSource {
-                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
-                path: None,
-            };
-
-            match render_prompt_template(&template_source.content, &vars) {
-                Ok(rendered) => rendered,
-                Err(default_error) => {
-                    warnings.push(ContextWarning {
-                        path: None,
-                        message: format!(
-                            "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
-                        ),
-                    });
-                    combine_prompt_sections(
-                        base_prompt.as_deref(),
-                        project_context_block.as_deref(),
-                        memory_index.as_deref(),
-                    )
-                }
-            }
-        }
-    };
+    let system_prompt = render_system_prompt_with_fallback(
+        config,
+        &vars,
+        &mut warnings,
+        base_prompt.as_deref(),
+        project_context_block.as_deref(),
+        memory_index.as_deref(),
+    );
 
     if skills.len() > 20 {
         warnings.push(ContextWarning {
