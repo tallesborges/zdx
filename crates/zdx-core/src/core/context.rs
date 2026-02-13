@@ -26,6 +26,13 @@ use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
 /// Files larger than this are truncated with a warning.
 pub const MAX_AGENTS_FILE_SIZE: usize = 64 * 1024;
 
+/// Maximum size for a single MEMORY.md file (16KB).
+/// Files larger than this are truncated with a warning.
+pub const MAX_MEMORY_FILE_SIZE: usize = 16 * 1024;
+
+/// Preferred memory index filename.
+pub const MEMORY_INDEX_FILE_NAME: &str = "MEMORY.md";
+
 /// Default prompt template used when template mode is enabled and no file is configured.
 const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
 
@@ -49,13 +56,18 @@ impl ContextWarning {
 
     /// Creates a warning for a truncated file.
     pub fn truncated(path: &Path, original_size: usize) -> Self {
+        Self::truncated_with_limit(path, original_size, MAX_AGENTS_FILE_SIZE)
+    }
+
+    /// Creates a warning for a truncated file with a custom cap.
+    pub fn truncated_with_limit(path: &Path, original_size: usize, truncated_size: usize) -> Self {
         Self {
             path: Some(path.to_path_buf()),
             message: format!(
                 "Truncated {} ({} bytes) to {} bytes",
                 path.display(),
                 original_size,
-                MAX_AGENTS_FILE_SIZE
+                truncated_size
             ),
         }
     }
@@ -65,6 +77,17 @@ impl ContextWarning {
 #[derive(Debug, Clone)]
 pub struct LoadedContext {
     /// Combined content from all AGENTS.md files.
+    pub content: String,
+    /// Paths of files that were loaded (in order).
+    pub loaded_paths: Vec<PathBuf>,
+    /// Warnings generated during loading (e.g., unreadable files, truncation).
+    pub warnings: Vec<ContextWarning>,
+}
+
+/// Result of loading memory index files.
+#[derive(Debug, Clone)]
+pub struct LoadedMemoryIndex {
+    /// Combined content from all MEMORY.md files.
     pub content: String,
     /// Paths of files that were loaded (in order).
     pub loaded_paths: Vec<PathBuf>,
@@ -98,6 +121,7 @@ struct PromptTemplateVars {
     is_openai_codex: bool,
     base_prompt: String,
     project_context: String,
+    memory_index: String,
     skills_list: Vec<PromptTemplateSkill>,
     subagents_config: Option<PromptTemplateSubagents>,
     cwd: String,
@@ -108,6 +132,7 @@ struct PromptTemplateVars {
 struct PromptTemplateSections<'a> {
     base_prompt: Option<&'a str>,
     project_context: Option<&'a str>,
+    memory_index: Option<&'a str>,
     skills_list: &'a [Skill],
     subagents_enabled: bool,
     subagent_models: &'a [String],
@@ -121,9 +146,13 @@ fn format_project_context_block(content: &str) -> Option<String> {
 fn combine_prompt_sections(
     base_prompt: Option<&str>,
     project_context_block: Option<&str>,
+    memory_index_block: Option<&str>,
 ) -> Option<String> {
     let mut sections: Vec<&str> = Vec::new();
-    for value in [base_prompt, project_context_block].into_iter().flatten() {
+    for value in [base_prompt, project_context_block, memory_index_block]
+        .into_iter()
+        .flatten()
+    {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed);
@@ -184,6 +213,7 @@ fn build_prompt_template_vars(
         .unwrap_or_default()
         .trim()
         .to_string();
+    let memory_index = sections.memory_index.unwrap_or_default().trim().to_string();
     let skills_list = sections
         .skills_list
         .iter()
@@ -202,18 +232,19 @@ fn build_prompt_template_vars(
 
     PromptTemplateVars {
         invocation_term: if is_openai_codex {
-            "tool".to_string()
-        } else {
             "function".to_string()
+        } else {
+            "tool".to_string()
         },
         invocation_term_plural: if is_openai_codex {
-            "tools".to_string()
-        } else {
             "functions".to_string()
+        } else {
+            "tools".to_string()
         },
         is_openai_codex,
         base_prompt,
         project_context,
+        memory_index,
         skills_list,
         subagents_config,
         cwd: root.display().to_string(),
@@ -252,6 +283,37 @@ fn render_prompt_template(
 /// Paths are deduplicated (later occurrences removed).
 pub fn collect_agents_paths(root: &Path) -> Vec<PathBuf> {
     collect_agents_paths_with_zdx_home(root, &paths::zdx_home())
+}
+
+/// Collects all memory index paths to check, in order.
+///
+/// Order:
+/// 1. `ZDX_HOME/MEMORY.md` (global memory index)
+/// 2. `root/MEMORY.md` (project memory index)
+///
+/// Paths are deduplicated (later occurrences removed).
+pub fn collect_memory_paths(root: &Path) -> Vec<PathBuf> {
+    collect_memory_paths_with_zdx_home(root, &paths::zdx_home())
+}
+
+/// Collects all memory index paths with an explicit ZDX home directory.
+///
+/// This is the core implementation that allows dependency injection of the
+/// ZDX home path, primarily for testing without environment variable mutation.
+pub fn collect_memory_paths_with_zdx_home(root: &Path, zdx_home: &Path) -> Vec<PathBuf> {
+    let mut paths: Vec<PathBuf> = Vec::new();
+
+    // 1. ZDX_HOME/MEMORY.md
+    paths.push(zdx_home.join(MEMORY_INDEX_FILE_NAME));
+
+    // 2. root/MEMORY.md
+    if let Ok(canonical_root) = root.canonicalize() {
+        paths.push(canonical_root.join(MEMORY_INDEX_FILE_NAME));
+    } else {
+        paths.push(root.join(MEMORY_INDEX_FILE_NAME));
+    }
+
+    deduplicate_paths(paths)
 }
 
 /// Collects all AGENTS.md paths with an explicit ZDX home directory.
@@ -371,10 +433,71 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
     })
 }
 
+/// Loads all memory index files from configured locations.
+///
+/// Returns None if no files were found or all were empty.
+/// Empty files are skipped silently.
+/// Unreadable files generate a warning but don't fail.
+/// Large files are truncated with a warning.
+pub fn load_memory_index(root: &Path) -> Option<LoadedMemoryIndex> {
+    load_memory_index_with_zdx_home(root, &paths::zdx_home())
+}
+
+fn load_memory_index_with_zdx_home(root: &Path, zdx_home: &Path) -> Option<LoadedMemoryIndex> {
+    let paths = collect_memory_paths_with_zdx_home(root, zdx_home);
+    let mut loaded_paths: Vec<PathBuf> = Vec::new();
+    let mut sections: Vec<String> = Vec::new();
+    let mut warnings: Vec<ContextWarning> = Vec::new();
+
+    for path in paths {
+        if !path.exists() {
+            continue;
+        }
+
+        match fs::read(&path) {
+            Ok(bytes) => {
+                let (content_bytes, was_truncated) = if bytes.len() > MAX_MEMORY_FILE_SIZE {
+                    warnings.push(ContextWarning::truncated_with_limit(
+                        &path,
+                        bytes.len(),
+                        MAX_MEMORY_FILE_SIZE,
+                    ));
+                    (&bytes[..MAX_MEMORY_FILE_SIZE], true)
+                } else {
+                    (bytes.as_slice(), false)
+                };
+
+                // Convert to string (lossy for non-UTF8)
+                let content = String::from_utf8_lossy(content_bytes);
+                let trimmed = content.trim();
+
+                if !trimmed.is_empty() {
+                    let suffix = if was_truncated { " [truncated]" } else { "" };
+                    sections.push(format!("## {}{}\n\n{}", path.display(), suffix, trimmed));
+                    loaded_paths.push(path);
+                }
+            }
+            Err(error) => {
+                warnings.push(ContextWarning::unreadable(&path, &error));
+            }
+        }
+    }
+
+    if sections.is_empty() && warnings.is_empty() {
+        return None;
+    }
+
+    Some(LoadedMemoryIndex {
+        content: sections.join("\n\n"),
+        loaded_paths,
+        warnings,
+    })
+}
+
 /// Result of building the effective system prompt.
 #[derive(Debug, Clone, Default)]
 pub struct EffectivePrompt {
-    /// The combined system prompt (config + AGENTS.md files).
+    /// The combined system prompt (config + AGENTS.md + optional memory index + template sections).
     pub prompt: Option<String>,
     /// Paths of AGENTS.md files that were loaded (in order).
     pub loaded_agents_paths: Vec<PathBuf>,
@@ -384,7 +507,8 @@ pub struct EffectivePrompt {
     pub loaded_skills: Vec<Skill>,
 }
 
-/// Builds the effective system prompt by combining config and AGENTS.md files.
+/// Builds the effective system prompt by combining config, AGENTS.md files,
+/// optional memory index files, and template-driven sections.
 ///
 /// AGENTS.md files are loaded hierarchically from:
 /// 1. `ZDX_HOME/AGENTS.md`
@@ -405,6 +529,7 @@ pub fn build_effective_system_prompt_with_paths(
     let mut loaded_agents_paths = Vec::new();
     let mut warnings = Vec::new();
     let mut agents_content: Option<String> = None;
+    let mut memory_index: Option<String> = None;
 
     // Auto-include AGENTS.md files from hierarchy
     if let Some(loaded) = load_all_agents_files(root) {
@@ -418,6 +543,14 @@ pub fn build_effective_system_prompt_with_paths(
 
     let project_context_block =
         format_project_context_block(agents_content.as_deref().unwrap_or_default());
+
+    if let Some(loaded_memory_index) = load_memory_index(root) {
+        warnings.extend(loaded_memory_index.warnings);
+
+        if !loaded_memory_index.content.trim().is_empty() {
+            memory_index = Some(loaded_memory_index.content);
+        }
+    }
 
     let mut skill_options = LoadSkillsOptions::new(root);
     skill_options.sources = config.skills.sources.clone();
@@ -457,6 +590,7 @@ pub fn build_effective_system_prompt_with_paths(
         PromptTemplateSections {
             base_prompt: base_prompt.as_deref(),
             project_context: project_context_block.as_deref(),
+            memory_index: memory_index.as_deref(),
             skills_list: &skills,
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
@@ -490,6 +624,7 @@ pub fn build_effective_system_prompt_with_paths(
                     combine_prompt_sections(
                         base_prompt.as_deref(),
                         project_context_block.as_deref(),
+                        memory_index.as_deref(),
                     )
                 }
             }
@@ -691,6 +826,61 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_memory_paths_includes_global_and_project() {
+        let zdx_home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+
+        let paths = collect_memory_paths_with_zdx_home(root.path(), zdx_home.path());
+
+        assert_eq!(paths[0], zdx_home.path().join(MEMORY_INDEX_FILE_NAME));
+        assert_eq!(
+            paths[1],
+            root.path()
+                .canonicalize()
+                .unwrap()
+                .join(MEMORY_INDEX_FILE_NAME)
+        );
+        assert_eq!(paths.len(), 2);
+    }
+
+    #[test]
+    fn test_load_memory_index_combines_global_and_project() {
+        let zdx_home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+
+        fs::write(zdx_home.path().join(MEMORY_INDEX_FILE_NAME), "Global facts").unwrap();
+        fs::write(root.path().join(MEMORY_INDEX_FILE_NAME), "Project facts").unwrap();
+
+        let loaded = load_memory_index_with_zdx_home(root.path(), zdx_home.path()).unwrap();
+
+        assert!(loaded.content.contains("Global facts"));
+        assert!(loaded.content.contains("Project facts"));
+        assert_eq!(loaded.loaded_paths.len(), 2);
+        assert!(loaded.warnings.is_empty());
+    }
+
+    #[test]
+    fn test_large_memory_file_truncated_with_warning() {
+        let zdx_home = tempdir().unwrap();
+        let root = tempdir().unwrap();
+        let memory_md = zdx_home.path().join(MEMORY_INDEX_FILE_NAME);
+
+        let large_content = "x".repeat(MAX_MEMORY_FILE_SIZE + 1000);
+        fs::write(&memory_md, &large_content).unwrap();
+
+        let loaded = load_memory_index_with_zdx_home(root.path(), zdx_home.path()).unwrap();
+
+        assert!(loaded.content.contains("[truncated]"));
+        assert!(
+            loaded
+                .warnings
+                .iter()
+                .any(|warning| warning.message.contains("Truncated"))
+        );
+        assert!(loaded.content.len() < large_content.len());
+    }
+
+    #[test]
     fn test_unreadable_agents_triggers_warning() {
         use std::os::unix::fs::PermissionsExt;
 
@@ -796,6 +986,7 @@ mod tests {
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
+                memory_index: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -814,6 +1005,7 @@ mod tests {
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
+                memory_index: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -849,6 +1041,7 @@ mod tests {
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
+                memory_index: None,
                 skills_list: &skills,
                 subagents_enabled: true,
                 subagent_models: &models,
@@ -877,6 +1070,7 @@ mod tests {
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
+                memory_index: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -892,6 +1086,7 @@ mod tests {
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
+                memory_index: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -926,13 +1121,71 @@ mod tests {
         let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
-        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Current directory:"));
         assert!(prompt.contains("<context>"));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("<project>"));
         assert!(prompt.contains("# Project Context"));
         assert!(prompt.contains("<subagents>"));
+    }
+
+    #[test]
+    fn test_template_mode_includes_memory_block_when_available() {
+        let dir = tempdir().unwrap();
+        fs::write(
+            dir.path().join(MEMORY_INDEX_FILE_NAME),
+            "Remember this project fact",
+        )
+        .unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("<memory>"));
+        assert!(prompt.contains("Remember this project fact"));
+        assert!(prompt.contains("<memory_instructions>"));
+    }
+
+    #[test]
+    fn test_render_prompt_template_omits_memory_block_when_memory_index_empty() {
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: None,
+                project_context: None,
+                memory_index: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
+        );
+
+        let rendered = render_prompt_template(
+            "{% if memory_index %}<memory>{{ memory_index }}</memory><memory_instructions>always</memory_instructions>{% endif %}",
+            &vars,
+        )
+        .unwrap()
+        .unwrap_or_default();
+
+        assert!(!rendered.contains("<memory>"));
+        assert!(!rendered.contains("<memory_instructions>"));
     }
 
     #[test]
@@ -994,7 +1247,7 @@ mod tests {
 
         let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
-        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
         assert!(effective.warnings.iter().any(|w| {
             w.message
@@ -1025,7 +1278,7 @@ mod tests {
 
         let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
-        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
         assert!(
             effective

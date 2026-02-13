@@ -211,15 +211,29 @@ Error:
 - Prompt templating:
   - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
   - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
-  - Render context includes: `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - Render context includes: `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `skills_list`, `subagents_config`, `cwd`, `date`.
   - On custom template load/render failure, ZDX warns and falls back to the built-in template.
   - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
 
 ---
 
-## 12) Project Context (AGENTS.md)
+## 12) Project Context + Memory (`AGENTS.md`, `MEMORY.md`)
 
-ZDX loads `AGENTS.md` hierarchically and appends the content to the system prompt (project-specific guidance). Unreadable files warn; empty files are skipped.
+ZDX composes project/user context in this order before skills/subagents sections:
+
+1. Base/system prompt from config (`system_prompt` / `system_prompt_file`)
+2. Hierarchical `AGENTS.md` context (global + user + project ancestry)
+3. Optional memory index from `MEMORY.md` files:
+   - `$ZDX_HOME/MEMORY.md`
+   - `<root>/MEMORY.md`
+
+Contracts:
+
+- Memory is optional. Missing `MEMORY.md` files do not fail startup and do not inject memory blocks.
+- `MEMORY.md` load failures are warnings (non-fatal).
+- `MEMORY.md` content is capped per file (16 KiB) with truncation warning.
+- Only `MEMORY.md` index content is injected. Detailed files in `<ZDX_HOME>/memories/` are read on-demand via tools.
+- Built-in template emits `<memory>` and `<memory_instructions>` only when memory index content is present.
 
 ---
 
