@@ -18,13 +18,14 @@
 - **Index-based loading**: only `memory.md` is injected into the system prompt; AI reads detailed files on-demand
 - Use XML tags (`<memory>`) consistent with existing prompt structure (`<persona>`, `<subagents>`, etc.)
 - No new dependencies or tools in MVP — use existing `read`, `write`, `edit` tools
+- Use resolved absolute paths from `config::paths::zdx_home()` in tool instructions (no `~` shorthand)
 - **AI organizes freely**: memory files can be about people (`alice.md`), topics (`whatsapp.md`), projects (`zdx.md`)
 - AI maintains `memory.md` — when memories are created/updated, AI updates the index too
 
 # File structure
 
 ```
-~/.zdx/
+<ZDX_HOME>/
 ├── memory.md              ← always loaded into system prompt (index + core facts)
 ├── memories/              ← detailed memory files (read on-demand)
 │   ├── alice.md           ← Alice Borges: wife, contacts, preferences
@@ -51,13 +52,13 @@ Core facts:
 - Language: PT-BR preferred, EN for technical
 - Location: ...
 
-Available memories in ~/.zdx/memories/ (use `read` tool when relevant):
+Available memories in <ZDX_HOME>/memories/ (use `read` tool when relevant):
 - alice.md: Alice Borges — wife, WhatsApp contact, personal context
 - whatsapp.md: WhatsApp interaction patterns, tone, frequent contacts
 - zdx-project.md: ZDX project decisions, architecture, coding patterns
 
 When creating or updating memories:
-- Update the relevant file in ~/.zdx/memories/
+- Update the relevant file in <ZDX_HOME>/memories/
 - Update this index with any new files or changed descriptions
 - Keep entries concise, one fact per line
 ```
@@ -80,24 +81,27 @@ When creating or updating memories:
 - Gaps: no memory section
 
 ## ZDX_HOME path helper
-- What exists: `config::paths::zdx_home()` returns `~/.zdx/`
+- What exists: `config::paths::zdx_home()` resolves `<ZDX_HOME>` (env override or default home path)
 - ✅ Demo: used for config, skills, threads
 - Gaps: none
 
 # MVP slices (ship-shaped, demoable)
 
 ## Slice 1: Load `memory.md` into system prompt
-- **Goal**: `~/.zdx/memory.md` is loaded and injected into every system prompt; AI reads detailed files from `memories/` on-demand
+- **Goal**: `<ZDX_HOME>/memory.md` is loaded and injected into every system prompt; AI reads detailed files from `memories/` on-demand
 - **Scope checklist**:
   - [ ] Add `load_memory()` function in `context.rs` that reads `ZDX_HOME/memory.md`
   - [ ] Wrap content in `<memory>` XML tags when injecting
   - [ ] Append memory block in `build_effective_system_prompt_with_paths()` after AGENTS.md, before skills
   - [ ] If `memory.md` doesn't exist, skip silently (no error, no block)
-  - [ ] Cap memory.md size (e.g., 16KB) with truncation warning
-  - [ ] Ensure `memories/` folder path is accessible to agent via `read`/`write`/`edit` tools (no code needed — tools already work with any path)
+  - [ ] Cap `memory.md` size (e.g., `16 * 1024`) with truncation warning
+  - [ ] Reuse lossy UTF-8 decoding behavior from AGENTS.md loading for consistency
+  - [ ] If `memory.md` exists but read fails, emit warning and continue (no startup failure)
+  - [ ] Ensure `memories/` path is reachable by tools (note: `read`/`edit` require existing file; `write` can create files)
+  - [ ] Update `docs/SPEC.md` prompt assembly contract to include optional memory block and insertion order
 - **✅ Demo**:
-  - Create `~/.zdx/memory.md` with core facts + index of available memories
-  - Create `~/.zdx/memories/alice.md` with personal context about Alice
+  - Create `<ZDX_HOME>/memory.md` with core facts + index of available memories
+  - Create `<ZDX_HOME>/memories/alice.md` with personal context about Alice
   - Start ZDX bot or TUI
   - Ask "send a WhatsApp message to my wife" — AI reads memory.md → sees alice.md → reads it → knows Alice
   - Ask something unrelated — AI reads memory.md but doesn't load any detail files (saves tokens)
@@ -112,17 +116,17 @@ When creating or updating memories:
 - **Scope checklist**:
   - [ ] Add `<memory_instructions>` section to `bot_system_prompt.md` explaining:
     - `memory.md` is loaded with your core facts and an index of detailed memories
-    - Use `read` tool to load relevant memory files from `~/.zdx/memories/` when needed
+    - Use `read` tool to load relevant memory files from `<ZDX_HOME>/memories/` when needed
     - Be selective — only load what's relevant to the current conversation
     - When user explicitly says "remember X": update appropriate file AND update `memory.md` index
     - NEVER update memory during normal conversation (only on explicit "remember" requests)
     - Create new files in `memories/` for new topics/people if needed
     - Keep entries concise: one fact per line
     - Don't duplicate — read existing file before adding
-  - [ ] Add same instructions to `zdx_agentic.md` prompt template (for TUI/exec)
+  - [ ] Add same instructions to the unified `system_prompt_template.md` (all providers)
 - **✅ Demo**:
   - Tell bot "remember that my daughter's name is Sofia, she's 3"
-  - Agent creates/updates `~/.zdx/memories/family.md` AND updates `memory.md` index
+  - Agent creates/updates `<ZDX_HOME>/memories/family.md` AND updates `memory.md` index
   - Start a new thread — ask "what's my daughter's name?" — agent reads memory.md → loads family.md → knows
   - Have a normal conversation — verify agent does NOT touch memory files
 - **Risks / failure modes**:
@@ -133,13 +137,13 @@ When creating or updating memories:
 - Memory is optional: ZDX must work identically when `memory.md` doesn't exist
 - Memory loading must not crash or block startup if file is missing/corrupted
 - Only `memory.md` content is injected into system prompt — detailed files read on-demand
-- Agent must NOT update memory files during normal conversation (only on explicit "remember X")
-- Existing system prompt structure (config + AGENTS.md + skills + subagents) must not break
+- Prompts should instruct the agent not to update memory files during normal conversation (only on explicit "remember X")
+- Existing system prompt structure must remain stable: config + AGENTS.md + memory + skills + subagents
 - AI maintains `memory.md` index — any memory file creation/update must also update the index
 
 # Key decisions
-- Index location: `~/.zdx/memory.md` (top-level, alongside config.toml)
-- Detail files: `~/.zdx/memories/` folder
+- Index location: `<ZDX_HOME>/memory.md` (top-level, alongside config.toml)
+- Detail files: `<ZDX_HOME>/memories/` folder
 - XML tag name: `<memory>` (consistent with `<persona>`, `<subagents>`)
 - Prompt position: after AGENTS.md content, before skills block
 - Loading: memory.md only in prompt; detail files via `read` tool on-demand
@@ -151,6 +155,8 @@ When creating or updating memories:
 - Unit test: `build_effective_system_prompt_with_paths` includes memory block when `memory.md` exists
 - Unit test: no memory block when `memory.md` is missing
 - Unit test: memory block contains only `memory.md` content, not files from `memories/`
+- Unit test: prompt ordering remains `config -> AGENTS -> memory -> skills -> subagents`
+- Unit test: memory truncation emits warning and caps injected content
 - Integration: verify memory appears in prompt across TUI, bot, exec modes
 - Integration: verify AI can read files from `memories/` on-demand
 

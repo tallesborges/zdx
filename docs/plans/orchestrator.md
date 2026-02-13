@@ -45,9 +45,9 @@ Alternative: user runs `zdx orchestrate` directly from terminal for standalone u
 - **Important**: `run_turn` does not load AGENTS.md/skills context itself. The caller must build the system prompt including project context (see `exec.rs:52` for reference). Orchestrator must do the same.
 
 ## System prompt chain
-- What exists: `run_turn` passes `system_prompt` to providers. Some providers prepend coding-focused prompts: OpenAI-compatible providers (Moonshot, MiMo, Mistral, StepFun, OpenRouter, Gemini) call `merge_system_prompt()` (`providers/shared.rs:94`) which always prepends `ZDX_AGENTIC_PROMPT_TEMPLATE`; Claude CLI prepends `CLAUDE_CODE_SYSTEM_PROMPT` (`providers/anthropic/cli.rs:103`); OpenAI Codex hardcodes `CODEX_PROMPT_TEMPLATE` (`providers/openai/codex.rs:131`). However, **Anthropic API** and **OpenAI API** do *not* prepend coding prompts — they pass the caller's system prompt through directly.
+- What exists: `run_turn` passes `system_prompt` to providers. Providers use the caller-composed prompt directly.
 - ✅ Demo: system prompt flows through to all providers
-- Gaps: **Most providers (but not all) prepend coding-focused system prompts.** The orchestrator's brainstorm system prompt gets appended *after* the coding prelude for affected providers. Anthropic API and OpenAI API pass it through cleanly. See Key Decisions for MVP approach.
+- Gaps: none (provider-specific static coding preludes removed in favor of unified templated prompt assembly)
 
 ## Subagent pattern
 - What exists: Handoff, thread title, and `read_thread` all use one-shot subagent calls
@@ -99,7 +99,7 @@ Alternative: user runs `zdx orchestrate` directly from terminal for standalone u
 - **✅ Demo**: `zdx orchestrate "What are the top 3 features to build next?" --agents claude-cli:claude-sonnet-4-20250514,codex:gpt-5.3-codex --turns 1` prints labeled alternating agent responses to stdout
 - **Risks / failure modes**:
   - Role encoding: providers drop unknown roles. Mitigation: always use `user`/`assistant` roles only, encode speaker in text prefix
-  - System prompt bias: coding prelude is always prepended by `merge_system_prompt` in most providers. **MVP accepts this** — the brainstorm context is appended after the coding prelude. This is acceptable because: (a) the coding context is actually useful when brainstorming about code, (b) fixing it requires refactoring all providers, which is out of scope for MVP. Tracked as Polish Phase 1.
+  - System prompt quality depends on the unified template content. Mitigation: keep orchestrator instructions explicit and concise.
   - Context loading: must explicitly load AGENTS.md + skills context like `exec` mode does, or agents won't have project context.
   - `run_turn` re-creates the provider client on every call. For MVP this is fine (stateless HTTP clients). If it becomes a perf issue, refactor later.
   - API key requirements: both providers need valid auth. Mitigation: fail fast with clear error per agent before starting.

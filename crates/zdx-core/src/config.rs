@@ -57,6 +57,16 @@ fn default_subagents_enabled() -> bool {
     true
 }
 
+/// Prompt template rendering configuration.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct PromptTemplateConfig {
+    /// Optional template file path.
+    ///
+    /// If relative, it is resolved from `ZDX_HOME`.
+    pub file: Option<String>,
+}
+
 /// Skill discovery configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -445,6 +455,10 @@ pub struct Config {
     #[serde(default)]
     pub subagents: SubagentsConfig,
 
+    /// System prompt template rendering configuration
+    #[serde(default)]
+    pub prompt_template: PromptTemplateConfig,
+
     /// Telegram bot configuration
     #[serde(default)]
     pub telegram: TelegramConfig,
@@ -733,6 +747,7 @@ impl Default for Config {
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
+            prompt_template: PromptTemplateConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
@@ -1670,6 +1685,34 @@ max_tokens = 4096
         let config = SubagentsConfig::default();
         assert!(config.enabled);
         assert!(config.available_models.is_empty());
+    }
+
+    /// `PromptTemplateConfig`: defaults to built-in template and no custom file.
+    #[test]
+    fn test_prompt_template_config_defaults() {
+        let config = PromptTemplateConfig::default();
+        assert!(config.file.is_none());
+    }
+
+    /// Prompt template config loads from file.
+    #[test]
+    fn test_prompt_template_config_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"[prompt_template]
+file = "prompts/template.md"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(
+            config.prompt_template.file,
+            Some("prompts/template.md".to_string())
+        );
     }
 
     /// Subagents config loads from file.

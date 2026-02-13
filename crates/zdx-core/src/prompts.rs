@@ -12,20 +12,14 @@ pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/thread_title_prompt.md"
 ));
 
-/// Prompt template for Codex (`openai_codex` provider).
-pub const CODEX_PROMPT_TEMPLATE: &str = include_str!(concat!(
+/// Prompt template for system prompt assembly (`MiniJinja`).
+pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/openai_codex.md"
+    "/prompts/system_prompt_template.md"
 ));
 
 /// Prompt template for read thread tool (shared with tool execution).
 pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/read_thread_prompt.md"
-));
-
-/// Prompt template for zdx agentic coding (Gemini, `StepFun`, Moonshot, etc.).
-pub const ZDX_AGENTIC_PROMPT_TEMPLATE: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/zdx_agentic.md"
 ));

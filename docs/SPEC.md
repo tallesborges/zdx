@@ -179,7 +179,7 @@ Error:
 
 - Location: `<base>/config.toml`
 - Format: TOML
-- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `thinking_level`, `subagents.*`
+- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `prompt_template.*`, `thinking_level`, `subagents.*`
   - `max_tokens` is optional; when unset, requests use the model output limit (exclusive, minus 1).
 - Provider base URLs:
   - `[providers.anthropic].base_url`
@@ -208,6 +208,12 @@ Error:
 - Subagents:
   - `[subagents].enabled` — enable/disable `invoke_subagent` tool exposure.
   - `[subagents].allowed_models` — allowed models for `invoke_subagent` (empty means any).
+- Prompt templating:
+  - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
+  - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
+  - Render context includes: `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - On custom template load/render failure, ZDX warns and falls back to the built-in template.
+  - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
 
 ---
 

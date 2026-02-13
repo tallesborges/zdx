@@ -19,6 +19,16 @@ tool_timeout_secs = 0
 # System prompt from file (takes precedence over inline)
 # system_prompt_file = "/path/to/system_prompt.md"
 
+# Optional custom system prompt template file.
+# zdx always renders a MiniJinja system prompt template.
+# If this file is unset (default), zdx uses the built-in template.
+# MiniJinja syntax supported: {{ var }}, {% if %}, {% for %}
+# Useful vars: invocation_term, invocation_term_plural,
+# is_openai_codex, base_prompt, project_context,
+# skills_list, subagents_config, cwd, date
+[prompt_template]
+# file = "prompts/system_prompt_template.md"
+
 # Extended thinking level
 # Controls how much reasoning the model shows before responding.
 # Higher levels allocate more output tokens to reasoning.

@@ -39,9 +39,9 @@ List capabilities that already exist and should not be rebuilt.
 - Gaps: No template-level placement/conditional control.
 
 ## Provider merge baseline
-- What exists: `merge_system_prompt` always includes the base agentic prompt and appends caller prompt.
-- ✅ Demo: Send request with and without caller prompt and verify merged shape.
-- Gaps: No explicit template contract between context assembly and provider merge.
+- What exists: providers consume caller-composed system prompt from context assembly.
+- ✅ Demo: Send request with and without caller prompt and verify pass-through behavior.
+- Gaps: No explicit template contract between context assembly and provider calls.
 
 ## External reference prompt
 - What exists: Raw reference source is available.
@@ -102,7 +102,7 @@ List non-negotiable behaviors that must not regress (derived from Inputs and exi
 - `AGENTS.md` loading order, warning behavior, and truncation behavior must remain unchanged.
 - Skills and subagents metadata must continue to be available to the final prompt.
 - Default behavior must remain stable when template mode is disabled.
-- Provider merge flow must still include base agentic prompt plus caller/system additions.
+- Provider merge flow must preserve caller-composed system prompt content.
 
 # Key decisions (decide early)
 List only decisions that would cause rework if postponed (derived from Inputs).
