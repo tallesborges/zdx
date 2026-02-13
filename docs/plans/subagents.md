@@ -50,14 +50,14 @@
   - No `default_model`: when `model` is omitted, use current parent model
 
 ## Scope checklist
-- [ ] Rename tool from `subagent` to `invoke_subagent`
-- [ ] Required input: `prompt`
-- [ ] Optional input: `model` override
-- [ ] Remove `system_prompt` and `no_tools` params from MVP schema
-- [ ] Return response text only on success; clear structured error on failure
-- [ ] Register tool in tool registry (both full + bot tool sets)
-- [ ] Tool description guides when to use (review, research, explore, scoped tasks) and when NOT to use (simple questions, single-file edits)
-- [ ] Parallel execution works automatically (multiple `invoke_subagent` calls in one turn → `tokio::JoinSet`)
+- [x] Rename tool from `subagent` to `invoke_subagent`
+- [x] Required input: `prompt`
+- [x] Optional input: `model` override
+- [x] Remove `system_prompt` and `no_tools` params from MVP schema
+- [x] Return response text only on success; clear structured error on failure
+- [x] Register tool in tool registry (both full + bot tool sets)
+- [x] Tool description guides when to use (review, research, explore, scoped tasks) and when NOT to use (simple questions, single-file edits)
+- [x] Parallel execution works automatically (multiple `invoke_subagent` calls in one turn → `tokio::JoinSet`)
 
 ## ✅ Demo
 In a normal agent run, ask "review my auth module" — agent calls `invoke_subagent` with a review prompt, gets back a fresh-context review, and summarizes it.
