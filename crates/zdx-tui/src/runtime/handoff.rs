@@ -22,6 +22,13 @@ const HANDOFF_THINKING: &str = "minimal";
 /// Timeout for handoff generation subagent (2 minutes).
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
+/// Prefix shown at the beginning of generated handoff output.
+fn build_handoff_prefix(thread_id: &str) -> String {
+    format!(
+        "Continuing work from thread {thread_id}. If you need specific information, use read_thread to get it."
+    )
+}
+
 /// Builds the prompt for handoff generation.
 fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
     HANDOFF_PROMPT_TEMPLATE
@@ -158,6 +165,21 @@ pub async fn handoff_generation(
     };
 
     let generation_prompt = build_handoff_prompt(&content, &goal);
-    let result = run_subagent(cancel, handoff_model, generation_prompt, root).await;
+    let handoff_prefix = build_handoff_prefix(&thread_id);
+    let result = run_subagent(cancel, handoff_model, generation_prompt, root)
+        .await
+        .map(|generated_prompt| format!("{handoff_prefix}\n\n{generated_prompt}"));
     UiEvent::HandoffResult { goal, result }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_handoff_prefix;
+
+    #[test]
+    fn handoff_prefix_mentions_thread_and_read_thread_tool() {
+        let prefix = build_handoff_prefix("thread-123");
+        assert!(prefix.contains("thread-123"));
+        assert!(prefix.contains("read_thread"));
+    }
 }
