@@ -32,6 +32,8 @@ pub const MAX_MEMORY_FILE_SIZE: usize = 16 * 1024;
 
 /// Preferred memory index filename.
 pub const MEMORY_INDEX_FILE_NAME: &str = "MEMORY.md";
+/// Project-local ZDX directory name.
+pub const PROJECT_ZDX_DIR_NAME: &str = ".zdx";
 
 /// Default prompt template used when template mode is enabled and no file is configured.
 const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
@@ -289,7 +291,7 @@ pub fn collect_agents_paths(root: &Path) -> Vec<PathBuf> {
 ///
 /// Order:
 /// 1. `ZDX_HOME/MEMORY.md` (global memory index)
-/// 2. `root/MEMORY.md` (project memory index)
+/// 2. `root/.zdx/MEMORY.md` (project memory index)
 ///
 /// Paths are deduplicated (later occurrences removed).
 pub fn collect_memory_paths(root: &Path) -> Vec<PathBuf> {
@@ -306,11 +308,15 @@ pub fn collect_memory_paths_with_zdx_home(root: &Path, zdx_home: &Path) -> Vec<P
     // 1. ZDX_HOME/MEMORY.md
     paths.push(zdx_home.join(MEMORY_INDEX_FILE_NAME));
 
-    // 2. root/MEMORY.md
+    // 2. root/.zdx/MEMORY.md
     if let Ok(canonical_root) = root.canonicalize() {
-        paths.push(canonical_root.join(MEMORY_INDEX_FILE_NAME));
+        paths.push(
+            canonical_root
+                .join(PROJECT_ZDX_DIR_NAME)
+                .join(MEMORY_INDEX_FILE_NAME),
+        );
     } else {
-        paths.push(root.join(MEMORY_INDEX_FILE_NAME));
+        paths.push(root.join(PROJECT_ZDX_DIR_NAME).join(MEMORY_INDEX_FILE_NAME));
     }
 
     deduplicate_paths(paths)
@@ -838,6 +844,7 @@ mod tests {
             root.path()
                 .canonicalize()
                 .unwrap()
+                .join(PROJECT_ZDX_DIR_NAME)
                 .join(MEMORY_INDEX_FILE_NAME)
         );
         assert_eq!(paths.len(), 2);
@@ -847,9 +854,16 @@ mod tests {
     fn test_load_memory_index_combines_global_and_project() {
         let zdx_home = tempdir().unwrap();
         let root = tempdir().unwrap();
+        fs::create_dir_all(root.path().join(PROJECT_ZDX_DIR_NAME)).unwrap();
 
         fs::write(zdx_home.path().join(MEMORY_INDEX_FILE_NAME), "Global facts").unwrap();
-        fs::write(root.path().join(MEMORY_INDEX_FILE_NAME), "Project facts").unwrap();
+        fs::write(
+            root.path()
+                .join(PROJECT_ZDX_DIR_NAME)
+                .join(MEMORY_INDEX_FILE_NAME),
+            "Project facts",
+        )
+        .unwrap();
 
         let loaded = load_memory_index_with_zdx_home(root.path(), zdx_home.path()).unwrap();
 
@@ -1133,8 +1147,11 @@ mod tests {
     #[test]
     fn test_template_mode_includes_memory_block_when_available() {
         let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join(PROJECT_ZDX_DIR_NAME)).unwrap();
         fs::write(
-            dir.path().join(MEMORY_INDEX_FILE_NAME),
+            dir.path()
+                .join(PROJECT_ZDX_DIR_NAME)
+                .join(MEMORY_INDEX_FILE_NAME),
             "Remember this project fact",
         )
         .unwrap();
