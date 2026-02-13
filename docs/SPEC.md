@@ -225,14 +225,14 @@ ZDX composes project/user context in this order before skills/subagents sections
 2. Hierarchical `AGENTS.md` context (global + user + project ancestry)
 3. Optional memory index from `MEMORY.md` files:
    - `$ZDX_HOME/MEMORY.md`
-   - `<root>/MEMORY.md`
+   - `<root>/.zdx/MEMORY.md`
 
 Contracts:
 
 - Memory is optional. Missing `MEMORY.md` files do not fail startup and do not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
 - `MEMORY.md` content is capped per file (16 KiB) with truncation warning.
-- Only `MEMORY.md` index content is injected. Detailed files in `<ZDX_HOME>/memories/` are read on-demand via tools.
+- Only `MEMORY.md` index content is injected. Detailed files in `$ZDX_HOME/memories/` and `<root>/.zdx/memories/` are read on-demand via tools.
 - Built-in template emits `<memory>` and `<memory_instructions>` only when memory index content is present.
 
 ---

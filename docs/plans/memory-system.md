@@ -36,6 +36,11 @@
 ├── config.toml
 ├── skills/
 └── threads/
+
+<PROJECT_ROOT>/
+└── .zdx/
+    ├── MEMORY.md          ← optional project-specific memory index
+    └── memories/          ← optional project-specific detailed memories
 ```
 
 ## `MEMORY.md` (index — always in system prompt)
@@ -53,13 +58,13 @@ Core facts:
 - Language: PT-BR preferred, EN for technical
 - Location: ...
 
-Available memories in <ZDX_HOME>/memories/ (use `read` tool when relevant):
+Available memories in `$ZDX_HOME/memories/` and/or `<root>/.zdx/memories/` (use `read` tool when relevant):
 - alice.md: Alice Borges — wife, WhatsApp contact, personal context
 - whatsapp.md: WhatsApp interaction patterns, tone, frequent contacts
 - zdx-project.md: ZDX project decisions, architecture, coding patterns
 
 When creating or updating memories:
-- Update the relevant file in <ZDX_HOME>/memories/
+- Update the relevant file in the correct scope (`$ZDX_HOME/memories/` or `<root>/.zdx/memories/`)
 - Update this index with any new files or changed descriptions
 - Keep entries concise, one fact per line
 ```
@@ -89,9 +94,9 @@ When creating or updating memories:
 # MVP slices (ship-shaped, demoable)
 
 ## Slice 1: Load `MEMORY.md` into system prompt
-- **Goal**: `<ZDX_HOME>/MEMORY.md` is loaded and injected into every system prompt; AI reads detailed files from `memories/` on-demand
+- **Goal**: global (`<ZDX_HOME>/MEMORY.md`) and optional project (`<root>/.zdx/MEMORY.md`) indexes are loaded and injected; AI reads detailed files on-demand
 - **Scope checklist**:
-  - [x] Add memory loading in `context.rs` for `ZDX_HOME/MEMORY.md` and `<root>/MEMORY.md`
+  - [x] Add memory loading in `context.rs` for `ZDX_HOME/MEMORY.md` and `<root>/.zdx/MEMORY.md`
   - [x] Wrap content in `<memory>` XML tags when injecting
   - [x] Append memory block in `build_effective_system_prompt_with_paths()` after AGENTS.md, before skills
   - [x] If `MEMORY.md` doesn't exist, skip silently (no error, no block)
@@ -102,7 +107,7 @@ When creating or updating memories:
   - [x] Update `docs/SPEC.md` prompt assembly contract to include optional memory block and insertion order
 - **✅ Demo**:
   - Create `<ZDX_HOME>/MEMORY.md` with core facts + index of available memories
-  - Create `<ZDX_HOME>/memories/alice.md` with personal context about Alice
+  - Create memory details under the intended scope, e.g. `$ZDX_HOME/memories/alice.md` or `<root>/.zdx/memories/project-notes.md`
   - Start ZDX bot or TUI
   - Ask "send a WhatsApp message to my wife" — AI reads MEMORY.md → sees alice.md → reads it → knows Alice
   - Ask something unrelated — AI reads MEMORY.md but doesn't load any detail files (saves tokens)
@@ -117,7 +122,7 @@ When creating or updating memories:
 - **Scope checklist**:
   - [ ] Add `<memory_instructions>` section to `bot_system_prompt.md` explaining:
     - `MEMORY.md` is loaded with your core facts and an index of detailed memories
-    - Use `read` tool to load relevant memory files from `<ZDX_HOME>/memories/` when needed
+    - Use `read` tool to load relevant memory files from `<ZDX_HOME>/memories/` and/or `<root>/.zdx/memories/` when needed
     - Be selective — only load what's relevant to the current conversation
     - When user explicitly says "remember X": update appropriate file AND update `MEMORY.md` index
     - NEVER update memory during normal conversation (only on explicit "remember" requests)
@@ -128,7 +133,7 @@ When creating or updating memories:
   - [x] Show `<memory_instructions>` only when memory index is present
 - **✅ Demo**:
   - Tell bot "remember that my daughter's name is Sofia, she's 3"
-  - Agent creates/updates `<ZDX_HOME>/memories/family.md` AND updates `MEMORY.md` index
+  - Agent creates/updates a scoped detail file (global or project) AND updates the matching `MEMORY.md` index
   - Start a new thread — ask "what's my daughter's name?" — agent reads MEMORY.md → loads family.md → knows
   - Have a normal conversation — verify agent does NOT touch memory files
 - **Risks / failure modes**:
@@ -145,7 +150,7 @@ When creating or updating memories:
 
 # Key decisions
 - Index location: `<ZDX_HOME>/MEMORY.md` (top-level, alongside config.toml)
-- Detail files: `<ZDX_HOME>/memories/` folder
+- Detail files: `$ZDX_HOME/memories/` (global) and optional `<root>/.zdx/memories/` (project)
 - XML tag name: `<memory>` (consistent with `<persona>`, `<subagents>`)
 - Prompt position: after AGENTS.md content, before skills block
 - Loading: MEMORY.md only in prompt; detail files via `read` tool on-demand
@@ -186,7 +191,7 @@ When creating or updating memories:
 - Expected automation behavior:
   - Read recent thread summaries/transcripts
   - Extract durable facts/preferences only (avoid transient chatter)
-  - Update or create files in `<ZDX_HOME>/memories/`
+  - Update or create files in the matching memories scope (`$ZDX_HOME/memories/` or `<root>/.zdx/memories/`)
   - Always sync `MEMORY.md` index entries (file + one-line description)
   - Deduplicate and normalize wording (one fact per line where practical)
 - Safety guardrails:
