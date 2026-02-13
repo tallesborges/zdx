@@ -57,6 +57,21 @@ Current date: {{ date }}
 </project>
 {% endif %}
 
+{% if memory_index %}
+<memory_instructions>
+- If the <memory> section is present, it contains memory index files (global and/or project-specific).
+- Use `read` to load relevant detailed memory files only when needed for the current task.
+- Be selective: do not load every memory file by default.
+- During normal conversation, do not update memory files.
+- Only update memory when the user explicitly asks to remember/forget/update memory.
+- When creating/updating a detailed memory file, update the corresponding `MEMORY.md` index too.
+- Keep memory entries concise and avoid duplicates (read existing content before appending).
+</memory_instructions>
+<memory>
+{{ memory_index }}
+</memory>
+{% endif %}
+
 {% if skills_list %}
 <skills>
 When a task matches an available skill, read the skill file before executing.
