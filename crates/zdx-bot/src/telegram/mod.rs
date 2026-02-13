@@ -161,15 +161,15 @@ impl TelegramClient {
         message_thread_id: Option<i64>,
         parse_mode: Option<&str>,
     ) -> Result<()> {
-        self.send_message_raw(
+        self.send_message_raw(SendMessageRawArgs {
             chat_id,
             text,
             reply_to_message_id,
             message_thread_id,
             parse_mode,
-            None,
-            None,
-        )
+            reply_markup: None,
+            reply_parameters: None,
+        })
         .await
         .map(|_| ())
     }
@@ -230,15 +230,15 @@ impl TelegramClient {
     ) -> Result<Message> {
         // First try with HTML parse mode
         let result = self
-            .send_message_raw(
+            .send_message_raw(SendMessageRawArgs {
                 chat_id,
                 text,
                 reply_to_message_id,
                 message_thread_id,
-                Some(TELEGRAM_PARSE_MODE),
+                parse_mode: Some(TELEGRAM_PARSE_MODE),
                 reply_markup,
-                None,
-            )
+                reply_parameters: None,
+            })
             .await;
 
         // If HTML parsing failed, retry as plain text
@@ -246,15 +246,15 @@ impl TelegramClient {
             let err_msg = e.to_string();
             if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
                 return self
-                    .send_message_raw(
+                    .send_message_raw(SendMessageRawArgs {
                         chat_id,
                         text,
                         reply_to_message_id,
                         message_thread_id,
-                        None,
+                        parse_mode: None,
                         reply_markup,
-                        None,
-                    )
+                        reply_parameters: None,
+                    })
                     .await;
             }
         }
@@ -262,7 +262,7 @@ impl TelegramClient {
         result
     }
 
-    /// Inner send with reply_parameters and HTML-fallback-to-plain logic.
+    /// Inner send with `reply_parameters` and HTML-fallback-to-plain logic.
     async fn send_message_inner_with_reply_params(
         &self,
         chat_id: i64,
@@ -272,30 +272,30 @@ impl TelegramClient {
         reply_parameters: Option<ReplyParameters>,
     ) -> Result<Message> {
         let result = self
-            .send_message_raw(
+            .send_message_raw(SendMessageRawArgs {
                 chat_id,
                 text,
-                None,
+                reply_to_message_id: None,
                 message_thread_id,
-                Some(TELEGRAM_PARSE_MODE),
+                parse_mode: Some(TELEGRAM_PARSE_MODE),
                 reply_markup,
                 reply_parameters,
-            )
+            })
             .await;
 
         if let Err(ref e) = result {
             let err_msg = e.to_string();
             if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
                 return self
-                    .send_message_raw(
+                    .send_message_raw(SendMessageRawArgs {
                         chat_id,
                         text,
-                        None,
+                        reply_to_message_id: None,
                         message_thread_id,
-                        None,
+                        parse_mode: None,
                         reply_markup,
-                        None,
-                    )
+                        reply_parameters: None,
+                    })
                     .await;
             }
         }
@@ -303,25 +303,16 @@ impl TelegramClient {
         result
     }
 
-    async fn send_message_raw(
-        &self,
-        chat_id: i64,
-        text: &str,
-        reply_to_message_id: Option<i64>,
-        message_thread_id: Option<i64>,
-        parse_mode: Option<&str>,
-        reply_markup: Option<&InlineKeyboardMarkup>,
-        reply_parameters: Option<ReplyParameters>,
-    ) -> Result<Message> {
+    async fn send_message_raw(&self, args: SendMessageRawArgs<'_>) -> Result<Message> {
         let request = SendMessageRequest {
-            chat_id,
-            text,
-            message_thread_id,
-            reply_to_message_id,
+            chat_id: args.chat_id,
+            text: args.text,
+            message_thread_id: args.message_thread_id,
+            reply_to_message_id: args.reply_to_message_id,
             allow_sending_without_reply: Some(true),
-            parse_mode,
-            reply_markup,
-            reply_parameters,
+            parse_mode: args.parse_mode,
+            reply_markup: args.reply_markup,
+            reply_parameters: args.reply_parameters,
         };
         self.post("sendMessage", &request).await
     }
@@ -637,6 +628,16 @@ pub struct ReplyParameters {
     pub chat_id: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub allow_sending_without_reply: Option<bool>,
+}
+
+struct SendMessageRawArgs<'a> {
+    chat_id: i64,
+    text: &'a str,
+    reply_to_message_id: Option<i64>,
+    message_thread_id: Option<i64>,
+    parse_mode: Option<&'a str>,
+    reply_markup: Option<&'a InlineKeyboardMarkup>,
+    reply_parameters: Option<ReplyParameters>,
 }
 
 #[derive(Debug, Serialize)]
