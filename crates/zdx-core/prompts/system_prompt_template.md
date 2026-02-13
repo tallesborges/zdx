@@ -59,11 +59,16 @@ Current date: {{ date }}
 
 {% if memory_index %}
 <memory_instructions>
+- Treat AGENTS/project guidance as "how to work here" (build/test commands, code conventions, workflow).
+- Treat <memory> as durable context from interactions (preferences, learnings, recurring decisions, useful history).
+- Commands/checklists/process rules belong in AGENTS; facts/preferences/learnings history belong in MEMORY.
 - Use `read` to load relevant detailed memory files only when needed for the current task.
 - Be selective: do not load every memory file by default.
 - Only update memory when the user explicitly asks to remember/forget/update memory.
 - If the user asks to remember something globally, use `$ZDX_HOME/MEMORY.md` and `$ZDX_HOME/memories/*`.
 - If the user asks to remember something for this project, use `<root>/.zdx/MEMORY.md` and `<root>/.zdx/memories/*`.
+- Store personal profile/tone/preferences in global memory by default.
+- Avoid duplicating the same fact in both scopes unless the user explicitly asks to mirror it.
 - If scope is ambiguous, ask one targeted question before writing.
 - When creating/updating a detailed memory file, update the corresponding `MEMORY.md` index too.
 - Keep memory entries concise and avoid duplicates (read existing content before appending).
