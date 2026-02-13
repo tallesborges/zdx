@@ -151,6 +151,8 @@ When creating or updating memories:
 # Key decisions
 - Index location: `<ZDX_HOME>/MEMORY.md` (top-level, alongside config.toml)
 - Detail files: `$ZDX_HOME/memories/` (global) and optional `<root>/.zdx/memories/` (project)
+- Scope defaults: personal/profile/tone/preferences are global by default; project scope stores repository-specific context.
+- Avoid duplication across scopes unless user explicitly asks to mirror the same fact.
 - XML tag name: `<memory>` (consistent with `<persona>`, `<subagents>`)
 - Prompt position: after AGENTS.md content, before skills block
 - Loading: MEMORY.md only in prompt; detail files via `read` tool on-demand
@@ -172,6 +174,7 @@ When creating or updating memories:
 ## Phase 1: Seed memory
 - Create starter `MEMORY.md` template during first run or via `just` recipe
 - Create example `memories/` files (contacts, preferences)
+- If initializing both scopes, keep profile/communication in global scope and reserve project scope for repository-specific context.
 - ✅ Check-in demo: new user gets helpful starter templates
 
 ## Phase 2: Memory in status display

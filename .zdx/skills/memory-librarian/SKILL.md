@@ -15,13 +15,24 @@ Manage memory as a small index + detailed files.
 - Project details: `<root>/.zdx/memories/*.md`.
 - Read detailed files on demand; do not load everything.
 
+## AGENTS vs MEMORY
+
+- `AGENTS.md` (and project guidance) is for operational repo instructions: how to build, test, and work.
+- `MEMORY.md` + `memories/*` is for durable interaction context: preferences, learnings, recurring decisions, useful history.
+- Commands/checklists/process rules belong in AGENTS; facts/preferences/learnings history belong in MEMORY.
+- Do not move operational workflow rules into memory; keep them in AGENTS/project guidance.
+
 ## Path Policy
 
 - For project-specific facts, default to `<root>/.zdx/MEMORY.md` + `<root>/.zdx/memories/`.
 - For personal cross-project facts, default to `$ZDX_HOME/MEMORY.md` + `$ZDX_HOME/memories/`.
 - If user says “remember globally”, use global scope.
 - If user says “remember for this project”, use project scope.
+- If user says “both”, split by type:
+  - personal/profile/tone/preferences → global scope
+  - repository/project-specific facts → project scope
 - If scope is ambiguous, ask one targeted question before writing.
+- Avoid duplicating the same fact in both scopes unless user explicitly asks to mirror it.
 - Use absolute paths in tool calls.
 - When editing one scope (global or project), synchronize that scope's `MEMORY.md` index.
 
@@ -33,6 +44,12 @@ If memory is not initialized yet:
 2. Create a minimal set of detail files under the matching `memories/` folder (only what is immediately useful).
 3. Keep `MEMORY.md` concise and list each detailed file with a one-line description.
 4. Prefer user profile + communication preferences first; expand incrementally.
+
+If user requests initialization in both scopes:
+
+- Initialize global with personal/profile/communication memories.
+- Initialize project scope with project-specific memory only.
+- Do not clone profile/communication files into project scope unless explicitly requested.
 
 ## Trigger Conditions
 

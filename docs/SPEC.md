@@ -234,6 +234,7 @@ Contracts:
 - `MEMORY.md` content is capped per file (16 KiB) with truncation warning.
 - Only `MEMORY.md` index content is injected. Detailed files in `$ZDX_HOME/memories/` and `<root>/.zdx/memories/` are read on-demand via tools.
 - Built-in template emits `<memory>` and `<memory_instructions>` only when memory index content is present.
+- Scope defaults: personal profile/tone/preferences belong in global memory; project-scoped memory is for repository-specific context. Mirroring the same fact across both scopes requires explicit user intent.
 
 ---
 
