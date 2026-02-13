@@ -51,16 +51,16 @@
 
 - **Goal**: Add the Telegram API methods and types needed by all subsequent slices
 - **Scope checklist**:
-  - [ ] Add `InlineKeyboardMarkup` and `InlineKeyboardButton` types (serializable)
-  - [ ] Add `CallbackQuery` type (deserializable) with `id`, `from`, `message`, `data` fields
-  - [ ] Extend `Update` type to include optional `callback_query` field
-  - [ ] Add `allowed_updates: ["message", "callback_query"]` to `get_updates`
-  - [ ] Add `send_message_with_reply_markup` method that returns the sent `Message` (need `message_id` back)
-  - [ ] Add `edit_message_text(chat_id, message_id, text, reply_markup?)` method
-  - [ ] Add `delete_message(chat_id, message_id)` method
-  - [ ] Add `answer_callback_query(callback_query_id, text?)` method
-  - [ ] Add `pin_chat_message(chat_id, message_id, disable_notification?)` method
-  - [ ] Add `hide_general_forum_topic(chat_id)` method
+  - [x] Add `InlineKeyboardMarkup` and `InlineKeyboardButton` types (serializable)
+  - [x] Add `CallbackQuery` type (deserializable) with `id`, `from`, `message`, `data` fields
+  - [x] Extend `Update` type to include optional `callback_query` field
+  - [x] Add `allowed_updates: ["message", "callback_query"]` to `get_updates`
+  - [x] Add `send_message_with_reply_markup` method that returns the sent `Message` (need `message_id` back)
+  - [x] Add `edit_message_text(chat_id, message_id, text, reply_markup?)` method
+  - [x] Add `delete_message(chat_id, message_id)` method
+  - [x] Add `answer_callback_query(callback_query_id, text?)` method
+  - [x] Add `pin_chat_message(chat_id, message_id, disable_notification?)` method
+  - [x] Add `hide_general_forum_topic(chat_id)` method
 - **✅ Demo**: cargo builds, new methods callable (unit-testable with mock or manual bot test)
 - **Risks / failure modes**:
   - Inline keyboard JSON shape mismatch → test serialization against Telegram docs
@@ -70,14 +70,14 @@
 
 - **Goal**: When the agent starts processing, send an editable "Thinking..." message with a Cancel inline button. On completion, edit it to the final response.
 - **Scope checklist**:
-  - [ ] In `handle_message`, after `record_user_message`, send a "🧠 Thinking..." message with `[⏹ Cancel]` button (callback_data: `cancel:{chat_id}:{topic_id}`)
-  - [ ] Store the status message's `message_id` so it can be edited later
-  - [ ] Add a `CancellationToken` per active agent turn, stored in a shared map keyed by `(chat_id, topic_id)`
-  - [ ] On agent completion: `edit_message_text` the status message to the final response (remove inline keyboard)
-  - [ ] On agent error: edit status message to error text
-  - [ ] In the polling loop (`lib.rs`), handle `callback_query` updates: if data matches `cancel:*`, cancel the token and call `answer_callback_query`
-  - [ ] When token is cancelled: agent turn aborts, status message edited to "Cancelled ✓"
-  - [ ] Drop the `TypingIndicator` when status message is sent (they serve the same purpose; status message is better)
+  - [x] In `handle_message`, after `record_user_message`, send a "🧠 Thinking..." message with `[⏹ Cancel]` button (callback_data: `cancel:{chat_id}:{topic_id}`)
+  - [x] Store the status message's `message_id` so it can be edited later
+  - [x] Add a `CancellationToken` per active agent turn, stored in a shared map keyed by `(chat_id, topic_id)`
+  - [x] On agent completion: `edit_message_text` the status message to the final response (remove inline keyboard)
+  - [x] On agent error: edit status message to error text
+  - [x] In the polling loop (`lib.rs`), handle `callback_query` updates: if data matches `cancel:*`, cancel the token and call `answer_callback_query`
+  - [x] When token is cancelled: agent turn aborts, status message edited to "Cancelled ✓"
+  - [x] Drop the `TypingIndicator` when status message is sent (they serve the same purpose; status message is better)
 - **✅ Demo**: send a message → see "🧠 Thinking..." with Cancel button → tap Cancel → message changes to "Cancelled ✓". Or wait for completion → message changes to final response with no button.
 - **Risks / failure modes**:
   - Agent turn (`run_agent_turn_with_persist`) doesn't support cancellation today → need to either pass a `CancellationToken` into the agent loop or use `tokio::select!` with the token in `handle_message`
@@ -88,12 +88,12 @@
 
 - **Goal**: When a message is queued (second message while first is processing), show queue position with a Cancel button. Cancelling removes it from the queue.
 - **Scope checklist**:
-  - [ ] Change queue channel type from `mpsc::UnboundedSender<Message>` to send a wrapper that includes a per-item `CancellationToken` (or cancellation flag)
-  - [ ] When a message is enqueued (not the first), send a "⏳ Queued" status message with `[✖ Cancel]` button
-  - [ ] Store the queued status message_id with the queue item
-  - [ ] In queue worker: before processing each item, check if cancelled → if yes, skip and edit status to "Cancelled ✓"
-  - [ ] On cancel callback for a queued item: mark cancelled, edit status to "Cancelled ✓", attempt `delete_message` on user's original message (best-effort, ignore failure)
-  - [ ] Callback data format: `cancel_q:{chat_id}:{topic_id}:{message_id}` to distinguish from active cancel
+  - [x] Change queue channel type from `mpsc::UnboundedSender<Message>` to send a wrapper that includes a per-item `CancellationToken` (or cancellation flag)
+  - [x] When a message is enqueued (not the first), send a "⏳ Queued" status message with `[✖ Cancel]` button
+  - [x] Store the queued status message_id with the queue item
+  - [x] In queue worker: before processing each item, check if cancelled → if yes, skip and edit status to "Cancelled ✓"
+  - [x] On cancel callback for a queued item: mark cancelled, edit status to "Cancelled ✓", attempt `delete_message` on user's original message (best-effort, ignore failure)
+  - [x] Callback data format: `cancel_q:{chat_id}:{topic_id}:{message_id}` to distinguish from active cancel
 - **✅ Demo**: send message A (processing) → send message B (queued, shows "⏳ Queued" with Cancel) → tap Cancel on B → B's status changes to "Cancelled ✓", B never processed. A continues normally.
 - **Risks / failure modes**:
   - Deleting user messages requires `can_delete_messages` admin right → document this requirement, fail silently if not granted

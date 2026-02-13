@@ -57,13 +57,13 @@
 
 - **Goal**: Open a skill picker overlay showing a hardcoded repo, fetch skills list
 - **Scope checklist**:
-  - [ ] Add `skill_repositories: Vec<String>` to config with default `["openai/skills"]`
-  - [ ] Create `skill_picker.rs` overlay with `SkillPickerState`
-  - [ ] Add `OverlayRequest::SkillPicker` and `Overlay::SkillPicker` variants
-  - [ ] Add "skills" command to command palette
-  - [ ] Add `UiEffect::FetchSkillsList { repo: String }` effect
-  - [ ] Runtime handler: fetch GitHub API (curl or reqwest), parse JSON
-  - [ ] Render skill list in overlay (name only, no install status yet)
+  - [x] Add `skill_repositories: Vec<String>` to config with default `["openai/skills"]`
+  - [x] Create `skill_picker.rs` overlay with `SkillPickerState`
+  - [x] Add `OverlayRequest::SkillPicker` and `Overlay::SkillPicker` variants
+  - [x] Add "skills" command to command palette
+  - [x] Add `UiEffect::FetchSkillsList { repo: String }` effect
+  - [x] Runtime handler: fetch GitHub API (curl or reqwest), parse JSON
+  - [x] Render skill list in overlay (name only, no install status yet)
 - **✅ Demo**: Ctrl+O → "skills" → see list of skills from openai/skills repo
 - **Risks / failure modes**:
   - GitHub API rate limiting → show error in overlay
@@ -73,11 +73,11 @@
 
 - **Goal**: Show which skills are already installed, allow selection
 - **Scope checklist**:
-  - [ ] Load installed skills from `~/.zdx/skills/` and `~/.codex/skills/`
-  - [ ] Annotate skill list items with "(installed)" suffix
-  - [ ] Add filter/search input (reuse model_picker pattern)
-  - [ ] Arrow key navigation + Enter to select
-  - [ ] Show skill description in a detail pane (optional, if space)
+  - [x] Load installed skills from `~/.zdx/skills/` and `~/.codex/skills/`
+  - [x] Annotate skill list items with "(installed)" suffix
+  - [x] Add filter/search input (reuse model_picker pattern)
+  - [x] Arrow key navigation + Enter to select
+  - [x] Show skill description in a detail pane (optional, if space)
 - **✅ Demo**: See "(installed)" next to skills you already have, filter by typing
 - **Risks / failure modes**:
   - Skill name mismatch between repo and local → normalize names
@@ -86,12 +86,12 @@
 
 - **Goal**: Actually install a skill when user presses Enter
 - **Scope checklist**:
-  - [ ] Add `UiEffect::InstallSkill { repo: String, skill_path: String }` effect
-  - [ ] Runtime handler: download skill files from GitHub raw URLs
-  - [ ] Write files to `~/.zdx/skills/<skill-name>/`
-  - [ ] Show progress/spinner in overlay during install
-  - [ ] Show success message + "Restart to pick up new skills"
-  - [ ] Close overlay on success
+  - [x] Add `UiEffect::InstallSkill { repo: String, skill_path: String }` effect
+  - [x] Runtime handler: download skill files from GitHub raw URLs
+  - [x] Write files to `~/.zdx/skills/<skill-name>/`
+  - [x] Show progress/spinner in overlay during install
+  - [x] Show success message + "Restart to pick up new skills"
+  - [x] Close overlay on success
 - **✅ Demo**: Select uninstalled skill → Enter → files appear in ~/.zdx/skills/
 - **Risks / failure modes**:
   - Partial download failure → cleanup on error
@@ -101,9 +101,9 @@
 
 - **Goal**: Support multiple repos, show repo selector or combined view
 - **Scope checklist**:
-  - [ ] Parse `skill_repositories` as list from config
-  - [ ] Add repo selector in overlay (Tab to switch repos, or nested list)
-  - [ ] Remember last selected repo in session
+  - [x] Parse `skill_repositories` as list from config
+  - [x] Add repo selector in overlay (Tab to switch repos, or nested list)
+  - [x] Remember last selected repo in session
   - [x] Default repos: `["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]`
 - **✅ Demo**: Add custom repo to config → see its skills in overlay
 - **Risks / failure modes**:
