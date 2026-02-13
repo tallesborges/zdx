@@ -8,7 +8,6 @@ use futures_util::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::prompts::ZDX_AGENTIC_PROMPT_TEMPLATE;
 use crate::tools::ToolResult;
 
 /// Standard User-Agent header for zdx API requests.
@@ -93,18 +92,14 @@ fn validate_url(url: &str, provider_name: &str) -> Result<()> {
     Ok(())
 }
 
-/// Merges the zdx agentic prompt with the provided system prompt.
+/// Normalizes the provided system prompt.
 ///
-/// Always includes the zdx agentic template, appending any caller-provided system prompt.
+/// Returns `None` when the prompt is absent or whitespace-only.
 pub fn merge_system_prompt(system: Option<&str>) -> Option<String> {
-    let base = ZDX_AGENTIC_PROMPT_TEMPLATE.trim();
-    let merged = match system {
-        Some(prompt) if !prompt.trim().is_empty() => {
-            format!("{}\n\n{}", base, prompt.trim())
-        }
-        _ => base.to_string(),
-    };
-    Some(merged)
+    system
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(ToOwned::to_owned)
 }
 
 /// Provider-specific replay token for reasoning/thinking blocks.
@@ -438,6 +433,16 @@ mod tests {
         assert_eq!(
             ContentBlockType::from_str("tool_use").unwrap(),
             ContentBlockType::ToolUse
+        );
+    }
+
+    #[test]
+    fn test_merge_system_prompt_passthrough() {
+        assert_eq!(merge_system_prompt(None), None);
+        assert_eq!(merge_system_prompt(Some("   ")), None);
+        assert_eq!(
+            merge_system_prompt(Some("  hello world  ")),
+            Some("hello world".to_string())
         );
     }
 }

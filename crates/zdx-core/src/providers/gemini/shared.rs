@@ -352,12 +352,9 @@ fn sanitize_gemini_function_schema(schema: &Value) -> Value {
             }
             Value::Object(sanitized)
         }
-        Value::Array(values) => Value::Array(
-            values
-                .iter()
-                .map(sanitize_gemini_function_schema)
-                .collect(),
-        ),
+        Value::Array(values) => {
+            Value::Array(values.iter().map(sanitize_gemini_function_schema).collect())
+        }
         _ => schema.clone(),
     }
 }
@@ -776,7 +773,9 @@ mod integration_tests {
             "includeThoughts should NOT be present for Cloud Code Assist API"
         );
         assert!(
-            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            gen_config["thinkingConfig"]
+                .get("includeThoughts")
+                .is_none(),
             "thinkingConfig.includeThoughts should NOT be present for Cloud Code Assist API"
         );
     }
@@ -820,7 +819,9 @@ mod integration_tests {
             "includeThoughts should NOT be present for Cloud Code Assist API"
         );
         assert!(
-            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            gen_config["thinkingConfig"]
+                .get("includeThoughts")
+                .is_none(),
             "thinkingConfig.includeThoughts should NOT be present for Cloud Code Assist API"
         );
     }
@@ -887,7 +888,9 @@ mod integration_tests {
             "includeThoughts should NOT be present for Gemini 2.5"
         );
         assert!(
-            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            gen_config["thinkingConfig"]
+                .get("includeThoughts")
+                .is_none(),
             "thinkingConfig.includeThoughts should NOT be present for Gemini 2.5"
         );
     }

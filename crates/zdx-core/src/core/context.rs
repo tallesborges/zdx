@@ -13,15 +13,21 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use chrono::Utc;
+use minijinja::{Environment, UndefinedBehavior};
+use serde::Serialize;
 
 use crate::config::{Config, paths};
-use crate::skills::{
-    LoadSkillsOptions, LoadSkillsResult, Skill, format_skills_for_prompt, load_skills,
-};
+use crate::prompts::SYSTEM_PROMPT_TEMPLATE;
+use crate::providers::{ProviderKind, resolve_provider};
+use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
 
 /// Maximum size for a single AGENTS.md file (64KB).
 /// Files larger than this are truncated with a warning.
 pub const MAX_AGENTS_FILE_SIZE: usize = 64 * 1024;
+
+/// Default prompt template used when template mode is enabled and no file is configured.
+const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
 
 /// A warning generated during context loading.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -64,6 +70,175 @@ pub struct LoadedContext {
     pub loaded_paths: Vec<PathBuf>,
     /// Warnings generated during loading (e.g., unreadable files, truncation).
     pub warnings: Vec<ContextWarning>,
+}
+
+#[derive(Debug, Clone)]
+struct TemplateSource {
+    content: String,
+    path: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateSkill {
+    name: String,
+    description: String,
+    path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateSubagents {
+    enabled: bool,
+    available_models: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateVars {
+    invocation_term: String,
+    invocation_term_plural: String,
+    is_openai_codex: bool,
+    base_prompt: String,
+    project_context: String,
+    skills_list: Vec<PromptTemplateSkill>,
+    subagents_config: Option<PromptTemplateSubagents>,
+    cwd: String,
+    date: String,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct PromptTemplateSections<'a> {
+    base_prompt: Option<&'a str>,
+    project_context: Option<&'a str>,
+    skills_list: &'a [Skill],
+    subagents_enabled: bool,
+    subagent_models: &'a [String],
+}
+
+fn format_project_context_block(content: &str) -> Option<String> {
+    let trimmed = content.trim();
+    (!trimmed.is_empty()).then(|| format!("# Project Context\n\n{trimmed}"))
+}
+
+fn combine_prompt_sections(
+    base_prompt: Option<&str>,
+    project_context_block: Option<&str>,
+) -> Option<String> {
+    let mut sections: Vec<&str> = Vec::new();
+    for value in [base_prompt, project_context_block].into_iter().flatten() {
+        let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed);
+        }
+    }
+
+    (!sections.is_empty()).then(|| sections.join("\n\n"))
+}
+
+fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, ContextWarning> {
+    if let Some(path_str) = config.prompt_template.file.as_deref() {
+        let requested = Path::new(path_str);
+        let path = if requested.is_absolute() {
+            requested.to_path_buf()
+        } else {
+            paths::zdx_home().join(requested)
+        };
+
+        let content = fs::read_to_string(&path).map_err(|error| ContextWarning {
+            path: Some(path.clone()),
+            message: format!(
+                "Failed to read system prompt template {}: {}; falling back to built-in template",
+                path.display(),
+                error
+            ),
+        })?;
+
+        if content.trim().is_empty() {
+            return Err(ContextWarning {
+                path: Some(path.clone()),
+                message: format!(
+                    "System prompt template {} is empty; falling back to built-in template",
+                    path.display()
+                ),
+            });
+        }
+
+        return Ok(TemplateSource {
+            content,
+            path: Some(path),
+        });
+    }
+
+    Ok(TemplateSource {
+        content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+        path: None,
+    })
+}
+
+fn build_prompt_template_vars(
+    root: &Path,
+    model: &str,
+    sections: PromptTemplateSections<'_>,
+) -> PromptTemplateVars {
+    let base_prompt = sections.base_prompt.unwrap_or_default().trim().to_string();
+    let project_context = sections
+        .project_context
+        .unwrap_or_default()
+        .trim()
+        .to_string();
+    let skills_list = sections
+        .skills_list
+        .iter()
+        .map(|skill| PromptTemplateSkill {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            path: skill.file_path.display().to_string(),
+        })
+        .collect();
+    let subagents_config = sections.subagents_enabled.then(|| PromptTemplateSubagents {
+        enabled: true,
+        available_models: sections.subagent_models.to_vec(),
+    });
+    let provider_selection = resolve_provider(model);
+    let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
+
+    PromptTemplateVars {
+        invocation_term: if is_openai_codex {
+            "tool".to_string()
+        } else {
+            "function".to_string()
+        },
+        invocation_term_plural: if is_openai_codex {
+            "tools".to_string()
+        } else {
+            "functions".to_string()
+        },
+        is_openai_codex,
+        base_prompt,
+        project_context,
+        skills_list,
+        subagents_config,
+        cwd: root.display().to_string(),
+        date: Utc::now().format("%Y-%m-%d").to_string(),
+    }
+}
+
+fn render_prompt_template(
+    template: &str,
+    vars: &PromptTemplateVars,
+) -> std::result::Result<Option<String>, String> {
+    let mut env = Environment::new();
+    env.set_undefined_behavior(UndefinedBehavior::Strict);
+    env.add_template("system_prompt", template)
+        .map_err(|error| error.to_string())?;
+
+    let output = env
+        .get_template("system_prompt")
+        .map_err(|error| error.to_string())?
+        .render(vars)
+        .map_err(|error| error.to_string())?;
+
+    let normalized = output.replace("\r\n", "\n");
+    let trimmed = normalized.trim();
+    Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
 /// Collects all AGENTS.md paths to check, in order.
@@ -226,23 +401,23 @@ pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
 ) -> Result<EffectivePrompt> {
-    let mut system_prompt = config.effective_system_prompt()?;
+    let base_prompt = config.effective_system_prompt()?;
     let mut loaded_agents_paths = Vec::new();
     let mut warnings = Vec::new();
+    let mut agents_content: Option<String> = None;
 
     // Auto-include AGENTS.md files from hierarchy
     if let Some(loaded) = load_all_agents_files(root) {
         loaded_agents_paths = loaded.loaded_paths;
         warnings = loaded.warnings;
 
-        if !loaded.content.is_empty() {
-            let combined = match system_prompt {
-                Some(sp) => format!("{}\n\n# Project Context\n\n{}", sp, loaded.content),
-                None => format!("# Project Context\n\n{}", loaded.content),
-            };
-            system_prompt = Some(combined);
+        if !loaded.content.trim().is_empty() {
+            agents_content = Some(loaded.content);
         }
     }
+
+    let project_context_block =
+        format_project_context_block(agents_content.as_deref().unwrap_or_default());
 
     let mut skill_options = LoadSkillsOptions::new(root);
     skill_options.sources = config.skills.sources.clone();
@@ -259,24 +434,67 @@ pub fn build_effective_system_prompt_with_paths(
         warnings: skill_warnings,
     } = skills_result;
 
-    if let Some(skills_block) = format_skills_for_prompt(&skills) {
-        let combined = match system_prompt {
-            Some(sp) => format!("{sp}\n\n{skills_block}"),
-            None => skills_block,
-        };
-        system_prompt = Some(combined);
-    }
+    let subagent_models = if config.subagents.enabled {
+        config.subagent_available_models()
+    } else {
+        Vec::new()
+    };
 
-    if config.subagents.enabled {
-        let available_models = config.subagent_available_models();
-        let subagents_block =
-            format_subagents_for_prompt(config.subagents.enabled, &available_models);
-        let combined = match system_prompt {
-            Some(sp) => format!("{sp}\n\n{subagents_block}"),
-            None => subagents_block,
-        };
-        system_prompt = Some(combined);
-    }
+    let mut template_source = match load_prompt_template(config) {
+        Ok(source) => source,
+        Err(warning) => {
+            warnings.push(warning);
+            TemplateSource {
+                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+                path: None,
+            }
+        }
+    };
+
+    let vars = build_prompt_template_vars(
+        root,
+        &config.model,
+        PromptTemplateSections {
+            base_prompt: base_prompt.as_deref(),
+            project_context: project_context_block.as_deref(),
+            skills_list: &skills,
+            subagents_enabled: config.subagents.enabled,
+            subagent_models: &subagent_models,
+        },
+    );
+
+    let system_prompt = match render_prompt_template(&template_source.content, &vars) {
+        Ok(rendered) => rendered,
+        Err(error) => {
+            warnings.push(ContextWarning {
+                path: template_source.path.clone(),
+                message: format!(
+                    "Failed to render system prompt template: {error}; falling back to default template"
+                ),
+            });
+
+            template_source = TemplateSource {
+                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+                path: None,
+            };
+
+            match render_prompt_template(&template_source.content, &vars) {
+                Ok(rendered) => rendered,
+                Err(default_error) => {
+                    warnings.push(ContextWarning {
+                        path: None,
+                        message: format!(
+                            "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
+                        ),
+                    });
+                    combine_prompt_sections(
+                        base_prompt.as_deref(),
+                        project_context_block.as_deref(),
+                    )
+                }
+            }
+        }
+    };
 
     if skills.len() > 20 {
         warnings.push(ContextWarning {
@@ -300,22 +518,6 @@ pub fn build_effective_system_prompt_with_paths(
     })
 }
 
-fn format_subagents_for_prompt(enabled: bool, available_models: &[String]) -> String {
-    let available_models = if available_models.is_empty() {
-        "(none)".to_string()
-    } else {
-        available_models
-            .iter()
-            .map(String::as_str)
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
-
-    format!(
-        "<subagents>\n  <enabled>{enabled}</enabled>\n  <available_models>{available_models}</available_models>\n</subagents>",
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -324,6 +526,7 @@ mod tests {
 
     use super::*;
     use crate::config::SkillSourceToggles;
+    use crate::skills::SkillSource;
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
@@ -586,19 +789,250 @@ mod tests {
     }
 
     #[test]
-    fn test_subagents_block_includes_config_values() {
-        let block = format_subagents_for_prompt(
-            true,
-            &[
-                "codex:gpt-5.3-codex".to_string(),
-                "openai:gpt-5.2".to_string(),
-            ],
+    fn test_render_prompt_template_unknown_variable_fails() {
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
         );
-        assert!(block.contains("<subagents>"));
-        assert!(block.contains("<enabled>true</enabled>"));
-        assert!(block.contains("<available_models>"));
-        assert!(block.contains("codex:gpt-5.3-codex"));
-        assert!(block.contains("openai:gpt-5.2"));
+
+        let err = render_prompt_template("{{unknown}}", &vars).unwrap_err();
+        assert!(err.contains("undefined") || err.contains("unknown"));
+    }
+
+    #[test]
+    fn test_render_prompt_template_supports_if_and_for() {
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
+        );
+
+        let rendered = render_prompt_template(
+            "{% if base_prompt %}{{ base_prompt }}\n{% endif %}{% for line in [\"alpha\", \"beta\"] %}- {{ line }}\n{% endfor %}",
+            &vars,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(rendered.contains("hello"));
+        assert!(rendered.contains("- alpha"));
+        assert!(rendered.contains("- beta"));
+    }
+
+    #[test]
+    fn test_render_prompt_template_supports_structured_skills_and_subagents() {
+        let skills = vec![Skill {
+            name: "demo-skill".to_string(),
+            description: "Use <special> syntax".to_string(),
+            file_path: PathBuf::from("/tmp/demo&skill/SKILL.md"),
+            base_dir: PathBuf::from("/tmp/demo&skill"),
+            source: SkillSource::ZdxUser,
+        }];
+        let models = vec!["codex:gpt-5.3-codex".to_string()];
+
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "codex:gpt-5.3-codex",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                skills_list: &skills,
+                subagents_enabled: true,
+                subagent_models: &models,
+            },
+        );
+
+        let rendered = render_prompt_template(
+            "{% for skill in skills_list %}<name>{{ skill.name|escape }}</name><description>{{ skill.description|escape }}</description><path>{{ skill.path|escape }}</path>{% endfor %}\n{% if subagents_config %}<subagents><enabled>{{ subagents_config.enabled }}</enabled><available_models>{% for model in subagents_config.available_models %}{{ model|escape }}{% endfor %}</available_models></subagents>{% endif %}",
+            &vars,
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(rendered.contains("<name>demo-skill</name>"));
+        assert!(rendered.contains("Use &lt;special&gt; syntax"));
+        assert!(rendered.contains("demo&amp;skill"));
+        assert!(rendered.contains("<enabled>true</enabled>"));
+        assert!(rendered.contains("codex:gpt-5.3-codex"));
+    }
+
+    #[test]
+    fn test_prompt_template_vars_provider_terms() {
+        let anthropic = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
+        );
+
+        assert_eq!(anthropic.invocation_term, "tool");
+        assert!(!anthropic.is_openai_codex);
+
+        let codex = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "codex:gpt-5.3-codex",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
+        );
+
+        assert_eq!(codex.invocation_term, "function");
+        assert!(codex.is_openai_codex);
+    }
+
+    #[test]
+    fn test_template_mode_default_template_renders_runtime_and_context_sections() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Agent note").unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = true;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+        config.prompt_template.file = None;
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("Current directory:"));
+        assert!(prompt.contains("<context>"));
+        assert!(prompt.contains("Base prompt"));
+        assert!(prompt.contains("<project>"));
+        assert!(prompt.contains("# Project Context"));
+        assert!(prompt.contains("<subagents>"));
+    }
+
+    #[test]
+    fn test_template_mode_renders_custom_template_file() {
+        let dir = tempdir().unwrap();
+        let template_file = dir.path().join("template.md");
+        fs::write(
+            &template_file,
+            "Prompt={{base_prompt}}\nRoot={{cwd}}\nDate={{date}}\nContext={{project_context}}",
+        )
+        .unwrap();
+        fs::write(dir.path().join("AGENTS.md"), "Agent note").unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.prompt_template.file = Some(template_file.display().to_string());
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+        assert!(prompt.contains("Prompt=Base prompt"));
+        assert!(prompt.contains(&format!("Root={}", dir.path().display())));
+        assert!(prompt.contains("Date="));
+        assert!(prompt.contains("Context=# Project Context"));
+    }
+
+    #[test]
+    fn test_template_mode_falls_back_on_render_error() {
+        let dir = tempdir().unwrap();
+        let template_file = dir.path().join("template.md");
+        fs::write(&template_file, "{{unknown_var}}").unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.prompt_template.file = Some(template_file.display().to_string());
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("Base prompt"));
+        assert!(effective.warnings.iter().any(|w| {
+            w.message
+                .contains("Failed to render system prompt template")
+        }));
+    }
+
+    #[test]
+    fn test_template_mode_falls_back_when_template_file_missing() {
+        let dir = tempdir().unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.prompt_template.file =
+            Some(dir.path().join("missing-template.md").display().to_string());
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+        assert!(prompt.contains("<runtime>"));
+        assert!(prompt.contains("Base prompt"));
+        assert!(
+            effective
+                .warnings
+                .iter()
+                .any(|w| w.message.contains("Failed to read system prompt template"))
+        );
     }
 
     #[test]

@@ -14,8 +14,7 @@
   - `crates/zdx-core/default_config.toml`: default configuration template
   - `crates/zdx-core/default_models.toml`: default model registry fallback
   - `crates/zdx-core/prompts/`: prompt templates
-    - `crates/zdx-core/prompts/openai_codex.md`: Codex system prompt template
-    - `crates/zdx-core/prompts/zdx_agentic.md`: Unified agentic system prompt (used by Gemini, StepFun, Moonshot)
+    - `crates/zdx-core/prompts/system_prompt_template.md`: unified MiniJinja system prompt template (all providers)
   - `crates/zdx-core/src/core/`: UI-agnostic domain + runtime
     - `crates/zdx-core/src/core/mod.rs`: core module exports
     - `crates/zdx-core/src/core/events.rs`: agent event types for streaming

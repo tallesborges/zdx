@@ -17,6 +17,7 @@ eventsource-stream.workspace = true
 futures-util.workspace = true
 globset.workspace = true
 infer.workspace = true
+minijinja.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

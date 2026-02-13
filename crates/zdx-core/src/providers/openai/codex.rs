@@ -5,7 +5,6 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::prompts::CODEX_PROMPT_TEMPLATE;
 use crate::providers::ProviderStream;
 use crate::providers::oauth::openai_codex as oauth_codex;
 use crate::providers::openai::responses::{ResponsesConfig, send_responses_stream};
@@ -122,6 +121,11 @@ impl OpenAICodexClient {
     ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
 
+        let instructions = system
+            .map(str::trim)
+            .filter(|prompt| !prompt.is_empty())
+            .map(ToOwned::to_owned);
+
         let headers = build_headers(
             &creds.account_id,
             &creds.access,
@@ -133,7 +137,7 @@ impl OpenAICodexClient {
             model: self.config.model.clone(),
             max_output_tokens: None,
             reasoning_effort: self.config.reasoning_effort.clone(),
-            instructions: Some(CODEX_PROMPT_TEMPLATE.to_string()),
+            instructions,
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
@@ -144,7 +148,9 @@ impl OpenAICodexClient {
             truncation: None, // Default: "disabled" - fail if context exceeded
         };
 
-        send_responses_stream(&self.http, &config, headers, messages, tools, system).await
+        // For Codex, send the system prompt through top-level `instructions`.
+        // Keep `system` input empty here to avoid duplication in `input`.
+        send_responses_stream(&self.http, &config, headers, messages, tools, None).await
     }
 }
 
