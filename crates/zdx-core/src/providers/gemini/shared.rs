@@ -323,15 +323,42 @@ pub fn build_tools(tools: &[ToolDefinition]) -> Option<Value> {
                     .map(|tool| {
                         // Use lowercase tool names for Gemini (Anthropic requires PascalCase, others prefer lowercase)
                         let tool = tool.with_lowercase_name();
+                        let parameters = sanitize_gemini_function_schema(&tool.input_schema);
                         json!({
                             "name": tool.name,
                             "description": tool.description,
-                            "parameters": tool.input_schema
+                            "parameters": parameters
                         })
                     })
                     .collect::<Vec<_>>()
             }
         ]))
+    }
+}
+
+/// Gemini function declaration schema is a subset of JSON Schema/OpenAPI.
+///
+/// In practice, Gemini rejects `additionalProperties` inside function parameter
+/// schemas for tool declarations. Strip unsupported fields recursively.
+fn sanitize_gemini_function_schema(schema: &Value) -> Value {
+    match schema {
+        Value::Object(map) => {
+            let mut sanitized = serde_json::Map::new();
+            for (key, value) in map {
+                if key == "additionalProperties" {
+                    continue;
+                }
+                sanitized.insert(key.clone(), sanitize_gemini_function_schema(value));
+            }
+            Value::Object(sanitized)
+        }
+        Value::Array(values) => Value::Array(
+            values
+                .iter()
+                .map(sanitize_gemini_function_schema)
+                .collect(),
+        ),
+        _ => schema.clone(),
     }
 }
 
@@ -376,12 +403,13 @@ pub fn build_gemini_request(
         && let Some(thinking_json) = thinking.to_json()
         && let Some(thinking_config_obj) = thinking_json.get("thinkingConfig")
     {
-        generation_config["thinkingConfig"] = thinking_config_obj.clone();
+        let mut thinking_config_obj = thinking_config_obj.clone();
         // Request thought summaries when thinking is enabled (Gemini 3 only)
         // includeThoughts is not supported by Gemini 2.5 models (which use thinkingBudget)
         if matches!(thinking, GeminiThinkingConfig::Level(_)) {
-            generation_config["includeThoughts"] = json!(true);
+            thinking_config_obj["includeThoughts"] = json!(true);
         }
+        generation_config["thinkingConfig"] = thinking_config_obj;
     }
 
     // Only add generationConfig if it has content
@@ -709,6 +737,7 @@ mod tests {
 mod integration_tests {
     use super::*;
     use crate::config::ThinkingLevel;
+    use crate::tools::ToolDefinition;
 
     /// Cloud Code Assist API does NOT support includeThoughts for any model
     #[test]
@@ -745,6 +774,10 @@ mod integration_tests {
         assert!(
             gen_config.get("includeThoughts").is_none(),
             "includeThoughts should NOT be present for Cloud Code Assist API"
+        );
+        assert!(
+            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            "thinkingConfig.includeThoughts should NOT be present for Cloud Code Assist API"
         );
     }
 
@@ -786,6 +819,10 @@ mod integration_tests {
             gen_config.get("includeThoughts").is_none(),
             "includeThoughts should NOT be present for Cloud Code Assist API"
         );
+        assert!(
+            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            "thinkingConfig.includeThoughts should NOT be present for Cloud Code Assist API"
+        );
     }
 
     /// Standard Gemini API DOES support includeThoughts for Gemini 3 models
@@ -811,9 +848,13 @@ mod integration_tests {
             "thinkingConfig should be present"
         );
         assert_eq!(
-            gen_config.get("includeThoughts"),
+            gen_config["thinkingConfig"].get("includeThoughts"),
             Some(&serde_json::json!(true)),
-            "includeThoughts should be true for Gemini 3 on standard API"
+            "thinkingConfig.includeThoughts should be true for Gemini 3 on standard API"
+        );
+        assert!(
+            gen_config.get("includeThoughts").is_none(),
+            "includeThoughts should not be at generationConfig top-level"
         );
     }
 
@@ -844,6 +885,43 @@ mod integration_tests {
         assert!(
             gen_config.get("includeThoughts").is_none(),
             "includeThoughts should NOT be present for Gemini 2.5"
+        );
+        assert!(
+            gen_config["thinkingConfig"].get("includeThoughts").is_none(),
+            "thinkingConfig.includeThoughts should NOT be present for Gemini 2.5"
+        );
+    }
+
+    #[test]
+    fn test_build_tools_strips_additional_properties() {
+        let tools = vec![ToolDefinition {
+            name: "Bash".to_string(),
+            description: "Run shell command".to_string(),
+            input_schema: serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "command": {
+                        "type": "string",
+                        "additionalProperties": false
+                    }
+                },
+                "required": ["command"],
+                "additionalProperties": false
+            }),
+        }];
+
+        let built = build_tools(&tools).expect("tools should be present");
+        let parameters = &built[0]["function_declarations"][0]["parameters"];
+
+        assert!(
+            parameters.get("additionalProperties").is_none(),
+            "top-level additionalProperties must be stripped"
+        );
+        assert!(
+            parameters["properties"]["command"]
+                .get("additionalProperties")
+                .is_none(),
+            "nested additionalProperties must be stripped"
         );
     }
 
