@@ -226,6 +226,22 @@ When creating or updating memories:
 - Use skill + memory together: skill defines HOW, memory files provide WHAT
 - ✅ Check-in demo: memory updates become more consistent across sessions/providers
 
+## Phase 8: Daily logs + promotion automations
+- Add optional day-to-day memory lane files (separate from curated memory):
+  - Global: `$ZDX_HOME/memories/daily/YYYY-MM-DD.md`
+  - Project: `<root>/.zdx/memories/daily/YYYY-MM-DD.md`
+- Keep `MEMORY.md` as the curated durable index; do not dump transient chatter there.
+- Add automations to handle the lifecycle:
+  - **Capture automation**: append transient notes/facts into current daily file.
+  - **Promotion automation**: review recent daily files and promote durable facts to scoped `MEMORY.md` + relevant detail files.
+  - **Cleanup automation**: deduplicate and compress daily files after promotion (optional, conservative).
+- Promotion rules (automation prompt contract):
+  - Promote only durable facts (preferences, stable decisions, recurring constraints).
+  - Skip low-confidence or one-off transient items.
+  - Always sync matching `MEMORY.md` index when promoting into new/changed detail files.
+  - Prefer minimal edits; avoid broad rewrites.
+- ✅ Check-in demo: after several days of usage, daily logs contain raw context while curated memory stays compact and high-signal.
+
 # Later / Deferred
 - Mid-conversation memory updates → explicitly rejected; pollutes conversation
 - Dedicated `update_memory` tool → revisit if write/edit proves unreliable
