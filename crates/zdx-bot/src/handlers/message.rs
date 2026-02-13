@@ -27,7 +27,13 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     };
 
-    let reply_to_message_id = Some(incoming.message_id);
+    // Skip reply_to when message_id == message_thread_id (topic-creating message).
+    // Telegram rejects REPLY_MESSAGE_ID_INVALID for these.
+    let reply_to_message_id = if incoming.message_thread_id == Some(incoming.message_id) {
+        None
+    } else {
+        Some(incoming.message_id)
+    };
     let topic_id = incoming.message_thread_id;
 
     if handle_general_forum_commands(context, &incoming, reply_to_message_id).await?
@@ -279,7 +285,7 @@ async fn setup_turn_status(
         map.insert(key, token.clone());
     }
 
-    let message_id = context
+    let mut message_id = context
         .client()
         .send_message_with_markup(
             incoming.chat_id,
@@ -291,6 +297,22 @@ async fn setup_turn_status(
         .await
         .ok()
         .map(|m| m.id);
+
+    // Retry without reply_to on REPLY_MESSAGE_ID_INVALID
+    if message_id.is_none() && reply_to_message_id.is_some() {
+        message_id = context
+            .client()
+            .send_message_with_markup(
+                incoming.chat_id,
+                "🧠 Thinking...",
+                None,
+                topic_id,
+                &cancel_markup,
+            )
+            .await
+            .ok()
+            .map(|m| m.id);
+    }
 
     TurnStatus {
         key,
@@ -522,16 +544,36 @@ async fn send_final_response(
             {
                 eprintln!("Failed to delete stale status message {msg_id}: {del_err}");
             }
-            context
+            let send_result = context
                 .client()
                 .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
-                .await?;
+                .await;
+            if let Err(ref e) = send_result {
+                if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
+                    context
+                        .client()
+                        .send_message(incoming.chat_id, final_text, None, topic_id)
+                        .await?;
+                } else {
+                    send_result?;
+                }
+            }
         }
     } else {
-        context
+        let send_result = context
             .client()
             .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
-            .await?;
+            .await;
+        if let Err(ref e) = send_result {
+            if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
+                context
+                    .client()
+                    .send_message(incoming.chat_id, final_text, None, topic_id)
+                    .await?;
+            } else {
+                send_result?;
+            }
+        }
     }
 
     Ok(())

@@ -168,6 +168,7 @@ impl TelegramClient {
             message_thread_id,
             parse_mode,
             None,
+            None,
         )
         .await
         .map(|_| ())
@@ -196,6 +197,28 @@ impl TelegramClient {
         .await
     }
 
+    /// Send a message with explicit [`ReplyParameters`] for cross-topic references.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn send_message_with_reply_params(
+        &self,
+        chat_id: i64,
+        text: &str,
+        message_thread_id: Option<i64>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<()> {
+        self.send_message_inner_with_reply_params(
+            chat_id,
+            text,
+            message_thread_id,
+            None,
+            reply_parameters,
+        )
+        .await
+        .map(|_| ())
+    }
+
     /// Inner send with HTML-fallback-to-plain logic.
     async fn send_message_inner(
         &self,
@@ -214,6 +237,7 @@ impl TelegramClient {
                 message_thread_id,
                 Some(TELEGRAM_PARSE_MODE),
                 reply_markup,
+                None,
             )
             .await;
 
@@ -229,6 +253,48 @@ impl TelegramClient {
                         message_thread_id,
                         None,
                         reply_markup,
+                        None,
+                    )
+                    .await;
+            }
+        }
+
+        result
+    }
+
+    /// Inner send with reply_parameters and HTML-fallback-to-plain logic.
+    async fn send_message_inner_with_reply_params(
+        &self,
+        chat_id: i64,
+        text: &str,
+        message_thread_id: Option<i64>,
+        reply_markup: Option<&InlineKeyboardMarkup>,
+        reply_parameters: Option<ReplyParameters>,
+    ) -> Result<Message> {
+        let result = self
+            .send_message_raw(
+                chat_id,
+                text,
+                None,
+                message_thread_id,
+                Some(TELEGRAM_PARSE_MODE),
+                reply_markup,
+                reply_parameters,
+            )
+            .await;
+
+        if let Err(ref e) = result {
+            let err_msg = e.to_string();
+            if err_msg.contains("can't parse entities") || err_msg.contains("Can't find end of") {
+                return self
+                    .send_message_raw(
+                        chat_id,
+                        text,
+                        None,
+                        message_thread_id,
+                        None,
+                        reply_markup,
+                        None,
                     )
                     .await;
             }
@@ -245,6 +311,7 @@ impl TelegramClient {
         message_thread_id: Option<i64>,
         parse_mode: Option<&str>,
         reply_markup: Option<&InlineKeyboardMarkup>,
+        reply_parameters: Option<ReplyParameters>,
     ) -> Result<Message> {
         let request = SendMessageRequest {
             chat_id,
@@ -254,6 +321,7 @@ impl TelegramClient {
             allow_sending_without_reply: Some(true),
             parse_mode,
             reply_markup,
+            reply_parameters,
         };
         self.post("sendMessage", &request).await
     }
@@ -563,6 +631,15 @@ struct GetUpdatesRequest {
 }
 
 #[derive(Debug, Serialize)]
+pub struct ReplyParameters {
+    pub message_id: i64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_id: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allow_sending_without_reply: Option<bool>,
+}
+
+#[derive(Debug, Serialize)]
 struct SendMessageRequest<'a> {
     chat_id: i64,
     text: &'a str,
@@ -576,6 +653,8 @@ struct SendMessageRequest<'a> {
     parse_mode: Option<&'a str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     reply_markup: Option<&'a InlineKeyboardMarkup>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reply_parameters: Option<ReplyParameters>,
 }
 
 #[derive(Debug, Serialize)]
