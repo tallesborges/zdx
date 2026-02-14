@@ -621,7 +621,7 @@ struct GetUpdatesRequest {
     allowed_updates: Option<Vec<&'static str>>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Clone, Serialize)]
 pub struct ReplyParameters {
     pub message_id: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
