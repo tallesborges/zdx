@@ -9,6 +9,13 @@ use crate::ingest::AllowlistConfig;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters};
 use crate::{agent, ingest};
 
+/// Groups the reply-targeting fields that travel together through the turn pipeline.
+struct ReplyContext {
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+    cross_topic_reply_parameters: Option<ReplyParameters>,
+}
+
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
 const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
 
@@ -49,8 +56,14 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         None
     };
 
-    if handle_general_forum_commands(context, &incoming, reply_to_message_id).await?
-        || handle_rebuild_command(context, &incoming, reply_to_message_id).await?
+    let reply_ctx = ReplyContext {
+        reply_to_message_id,
+        topic_id,
+        cross_topic_reply_parameters,
+    };
+
+    if handle_general_forum_commands(context, &incoming, reply_ctx.reply_to_message_id).await?
+        || handle_rebuild_command(context, &incoming, reply_ctx.reply_to_message_id).await?
     {
         return Ok(());
     }
@@ -59,33 +72,26 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         "Accepted message from user {} in chat {}{}",
         incoming.user_id,
         incoming.chat_id,
-        topic_id
+        reply_ctx
+            .topic_id
             .map(|id| format!(" (topic {id})"))
             .unwrap_or_default()
     );
 
-    let thread_id = thread_id_for_chat(incoming.chat_id, topic_id);
+    let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
     if handle_thread_commands(
         context,
         &incoming,
         &thread_id,
-        reply_to_message_id,
-        topic_id,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
     )
     .await?
     {
         return Ok(());
     }
 
-    run_agent_turn(
-        context,
-        incoming,
-        reply_to_message_id,
-        topic_id,
-        cross_topic_reply_parameters,
-        &thread_id,
-    )
-    .await
+    run_agent_turn(context, incoming, reply_ctx, &thread_id).await
 }
 
 struct TurnStatus {
@@ -249,18 +255,24 @@ async fn handle_thread_commands(
 async fn run_agent_turn(
     context: &BotContext,
     incoming: crate::types::IncomingMessage,
-    reply_to_message_id: Option<i64>,
-    topic_id: Option<i64>,
-    cross_topic_reply_parameters: Option<ReplyParameters>,
+    reply_ctx: ReplyContext,
     thread_id: &str,
 ) -> Result<()> {
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
-    let typing = context.client().start_typing(incoming.chat_id, topic_id);
+    let typing = context
+        .client()
+        .start_typing(incoming.chat_id, reply_ctx.topic_id);
 
-    let status = setup_turn_status(context, &incoming, reply_to_message_id, topic_id).await;
+    let status = setup_turn_status(
+        context,
+        &incoming,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
+    )
+    .await;
     let mut handle = spawn_or_fail(
         context,
         &incoming,
@@ -274,17 +286,7 @@ async fn run_agent_turn(
     let result = stream_turn_events(context, &incoming, &mut handle, &status).await;
     drop(typing);
     cleanup_turn_status(context, &status).await;
-    finalize_turn(
-        context,
-        &incoming,
-        reply_to_message_id,
-        topic_id,
-        cross_topic_reply_parameters,
-        &mut thread,
-        &status,
-        result,
-    )
-    .await
+    finalize_turn(context, &incoming, &reply_ctx, &mut thread, &status, result).await
 }
 
 async fn setup_turn_status(
@@ -474,9 +476,7 @@ async fn cleanup_turn_status(context: &BotContext, status: &TurnStatus) {
 async fn finalize_turn(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
-    reply_to_message_id: Option<i64>,
-    topic_id: Option<i64>,
-    cross_topic_reply_parameters: Option<ReplyParameters>,
+    reply_ctx: &ReplyContext,
     thread: &mut zdx_core::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
@@ -485,7 +485,8 @@ async fn finalize_turn(
         eprintln!(
             "Agent turn cancelled for chat {}{}",
             incoming.chat_id,
-            topic_id
+            reply_ctx
+                .topic_id
                 .map(|id| format!(" topic {id}"))
                 .unwrap_or_default()
         );
@@ -522,9 +523,7 @@ async fn finalize_turn(
     send_final_response(
         context,
         incoming,
-        reply_to_message_id,
-        topic_id,
-        cross_topic_reply_parameters,
+        reply_ctx,
         status.message_id,
         &result.final_text,
     )
@@ -534,9 +533,7 @@ async fn finalize_turn(
 async fn send_final_response(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
-    reply_to_message_id: Option<i64>,
-    topic_id: Option<i64>,
-    cross_topic_reply_parameters: Option<ReplyParameters>,
+    reply_ctx: &ReplyContext,
     status_message_id: Option<i64>,
     final_text: &str,
 ) -> Result<()> {
@@ -554,7 +551,7 @@ async fn send_final_response(
 
     eprintln!("Sending reply for chat {}", incoming.chat_id);
 
-    if let Some(reply_parameters) = cross_topic_reply_parameters {
+    if let Some(ref reply_parameters) = reply_ctx.cross_topic_reply_parameters {
         if let Some(msg_id) = status_message_id
             && let Err(err) = context
                 .client()
@@ -569,8 +566,8 @@ async fn send_final_response(
             .send_message_with_reply_params(
                 incoming.chat_id,
                 final_text,
-                topic_id,
-                Some(reply_parameters),
+                reply_ctx.topic_id,
+                Some(reply_parameters.clone()),
             )
             .await?;
         return Ok(());
@@ -595,13 +592,18 @@ async fn send_final_response(
             }
             let send_result = context
                 .client()
-                .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
+                .send_message(
+                    incoming.chat_id,
+                    final_text,
+                    reply_ctx.reply_to_message_id,
+                    reply_ctx.topic_id,
+                )
                 .await;
             if let Err(ref e) = send_result {
                 if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
                     context
                         .client()
-                        .send_message(incoming.chat_id, final_text, None, topic_id)
+                        .send_message(incoming.chat_id, final_text, None, reply_ctx.topic_id)
                         .await?;
                 } else {
                     send_result?;
@@ -611,13 +613,18 @@ async fn send_final_response(
     } else {
         let send_result = context
             .client()
-            .send_message(incoming.chat_id, final_text, reply_to_message_id, topic_id)
+            .send_message(
+                incoming.chat_id,
+                final_text,
+                reply_ctx.reply_to_message_id,
+                reply_ctx.topic_id,
+            )
             .await;
         if let Err(ref e) = send_result {
             if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
                 context
                     .client()
-                    .send_message(incoming.chat_id, final_text, None, topic_id)
+                    .send_message(incoming.chat_id, final_text, None, reply_ctx.topic_id)
                     .await?;
             } else {
                 send_result?;
