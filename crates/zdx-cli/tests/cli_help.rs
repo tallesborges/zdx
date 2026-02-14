@@ -8,7 +8,7 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
-        .stdout(predicate::str::contains("daemon"))
+        .stdout(predicate::str::contains("automations"))
         .stdout(predicate::str::contains("threads"));
 }
 
@@ -39,7 +39,7 @@ fn test_automations_help_shows_subcommands() {
 #[test]
 fn test_daemon_help_shows_poll_interval() {
     cargo_bin_cmd!("zdx")
-        .args(["daemon", "--help"])
+        .args(["automations", "daemon", "--help"])
         .assert()
         .success()
         .stdout(predicate::str::contains("poll-interval-secs"));
