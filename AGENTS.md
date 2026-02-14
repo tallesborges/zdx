@@ -1,135 +1,35 @@
-# zdx development guide
+# zdx workspace development guide
 
-`docs/SPEC.md` is the source of truth for product behavior (contracts). This file is about working in the repo.
+`docs/SPEC.md` is the source of truth for product behavior (contracts). This file is the workspace index.
 
-## Where things are
+## AGENTS.md index
 
-- `crates/zdx-core/`: core library (engine, providers, tools, config)
-  - `crates/zdx-core/src/lib.rs`: core crate exports
-  - `crates/zdx-core/src/automations.rs`: automation discovery + frontmatter parsing for markdown-defined automations
-  - `crates/zdx-core/src/config.rs`: config loading + paths
-  - `crates/zdx-core/src/models.rs`: model registry for TUI model picker
-  - `crates/zdx-core/src/prompts.rs`: prompt template helpers
-  - `crates/zdx-core/src/skills.rs`: skills discovery + parsing
-  - `crates/zdx-core/default_config.toml`: default configuration template
-  - `crates/zdx-core/default_models.toml`: default model registry fallback
-  - `crates/zdx-core/prompts/`: prompt templates
-    - `crates/zdx-core/prompts/system_prompt_template.md`: unified MiniJinja system prompt template (all providers)
-  - `crates/zdx-core/src/core/`: UI-agnostic domain + runtime
-    - `crates/zdx-core/src/core/mod.rs`: core module exports
-    - `crates/zdx-core/src/core/events.rs`: agent event types for streaming
-    - `crates/zdx-core/src/core/context.rs`: project context loading (AGENTS.md files)
-    - `crates/zdx-core/src/core/interrupt.rs`: signal handling
-    - `crates/zdx-core/src/core/agent.rs`: agent loop + event channels
-    - `crates/zdx-core/src/core/subagent.rs`: reusable child `zdx exec` subagent runner
-    - `crates/zdx-core/src/core/thread_persistence.rs`: thread persistence
-    - `crates/zdx-core/src/core/worktree.rs`: git worktree management helpers
-  - `crates/zdx-core/src/tools/`: tool implementations + schemas
-    - `crates/zdx-core/src/tools/apply_patch/`: apply_patch tool (Codex-style file patching)
-      - `crates/zdx-core/src/tools/apply_patch/mod.rs`: tool definition, execution wrapper, patch application engine
-      - `crates/zdx-core/src/tools/apply_patch/parser.rs`: patch parser for file hunks
-      - `crates/zdx-core/src/tools/apply_patch/types.rs`: Hunk enum, UpdateFileChunk, ParseError
-    - `crates/zdx-core/src/tools/fetch_webpage.rs`: fetch webpage tool (Parallel Extract API)
-    - `crates/zdx-core/src/tools/read_thread.rs`: read thread tool (subagent prompt over thread transcript)
-    - `crates/zdx-core/src/tools/subagent.rs`: invoke_subagent delegation tool (isolated child `zdx exec`)
-    - `crates/zdx-core/src/tools/thread_search.rs`: thread search tool (query/date discovery for saved threads)
-    - `crates/zdx-core/src/tools/web_search.rs`: web search tool (Parallel Search API)
-  - `crates/zdx-core/src/providers/`: provider clients + OAuth helpers
-    - `crates/zdx-core/src/providers/shared.rs`: provider-agnostic types + helpers (merge_system_prompt, config resolution)
-    - `crates/zdx-core/src/providers/debug_metrics.rs`: stream metrics wrapper for all provider SSE streams (`ZDX_DEBUG_STREAM`)
-    - `crates/zdx-core/src/providers/thinking_parser.rs`: parser for `<think>`/`</think>` reasoning blocks (handles content bleeding)
-    - `crates/zdx-core/src/providers/text_tool_parser.rs`: parser for XML-like text tool calls (`<tool_call>`, `<function=>`)
-    - `crates/zdx-core/src/providers/openai/`: OpenAI-compatible provider helpers (Responses + Chat Completions)
-      - `crates/zdx-core/src/providers/openai/mod.rs`: OpenAI provider module exports
-      - `crates/zdx-core/src/providers/openai/api.rs`: OpenAI API key provider (Responses API)
-      - `crates/zdx-core/src/providers/openai/codex.rs`: OpenAI Codex OAuth provider (Responses API)
-      - `crates/zdx-core/src/providers/openai/responses.rs`: Responses API helpers
-      - `crates/zdx-core/src/providers/openai/responses_sse.rs`: Responses SSE parser
-      - `crates/zdx-core/src/providers/openai/responses_types.rs`: Responses request/response types
-      - `crates/zdx-core/src/providers/openai/chat_completions.rs`: OpenAI-compatible Chat Completions helpers
-    - `crates/zdx-core/src/providers/anthropic/`: Anthropic Claude providers (API key + CLI OAuth)
-      - `crates/zdx-core/src/providers/anthropic/mod.rs`: Anthropic provider module exports
-      - `crates/zdx-core/src/providers/anthropic/api.rs`: Anthropic API key provider (Messages API)
-      - `crates/zdx-core/src/providers/anthropic/cli.rs`: Claude CLI OAuth provider (Messages API)
-      - `crates/zdx-core/src/providers/anthropic/shared.rs`: shared helpers (message builders, request helpers)
-      - `crates/zdx-core/src/providers/anthropic/types.rs`: API request/response types
-      - `crates/zdx-core/src/providers/anthropic/sse.rs`: Anthropic SSE parser
-    - `crates/zdx-core/src/providers/gemini/`: Gemini provider helpers (API key + CLI OAuth)
-      - `crates/zdx-core/src/providers/gemini/mod.rs`: Gemini provider module exports
-      - `crates/zdx-core/src/providers/gemini/api.rs`: Gemini API key provider (Generative Language API)
-      - `crates/zdx-core/src/providers/gemini/cli.rs`: Gemini CLI OAuth provider (Cloud Code Assist API)
-      - `crates/zdx-core/src/providers/gemini/shared.rs`: shared helpers (request builders, thinking config)
-      - `crates/zdx-core/src/providers/gemini/sse.rs`: Gemini SSE parser
-    - `crates/zdx-core/src/providers/mistral.rs`: Mistral OpenAI-compatible chat completions provider
-    - `crates/zdx-core/src/providers/moonshot.rs`: Moonshot (Kimi) OpenAI-compatible chat completions provider
-    - `crates/zdx-core/src/providers/stepfun.rs`: StepFun (Step-3.5-Flash) OpenAI-compatible chat completions provider
-    - `crates/zdx-core/src/providers/mimo.rs`: MiMo (Xiaomi MiMo) OpenAI-compatible chat completions provider
-- `crates/zdx-tui/`: full-screen interactive TUI library
-  - `crates/zdx-tui/src/lib.rs`: TUI exports (run_interactive_chat, TuiRuntime)
-  - `crates/zdx-tui/src/terminal.rs`: terminal setup, restore, panic hooks
-  - `crates/zdx-tui/src/`: full-screen TUI (Elm-like architecture)
-    - `crates/zdx-tui/src/state.rs`: AppState + TuiState + AgentState
-    - `crates/zdx-tui/src/events.rs`: UiEvent + SessionUiEvent
-    - `crates/zdx-tui/src/update.rs`: reducer
-    - `crates/zdx-tui/src/render.rs`: pure render functions
-    - `crates/zdx-tui/src/effects.rs`: UiEffect definitions (side-effect descriptions)
-    - `crates/zdx-tui/src/mutations.rs`: StateMutation + cross-slice mutations
-    - `crates/zdx-tui/src/runtime/`: runtime + effect dispatch
-      - `crates/zdx-tui/src/runtime/mod.rs`: TuiRuntime - owns terminal, runs event loop
-      - `crates/zdx-tui/src/runtime/inbox.rs`: inbox channel types
-      - `crates/zdx-tui/src/runtime/handlers/`: effect handlers (thread ops, agent spawn, auth)
-      - `crates/zdx-tui/src/runtime/handlers/skills.rs`: skill fetch/install handlers (GitHub API)
-      - `crates/zdx-tui/src/runtime/handoff.rs`: handoff generation handlers
-      - `crates/zdx-tui/src/runtime/thread_title.rs`: auto-title handlers
-    - `crates/zdx-tui/src/common/`: shared leaf types (no feature deps)
-    - `crates/zdx-tui/src/features/`: feature slices (state/update/render per slice)
-      - `crates/zdx-tui/src/features/auth/`: auth feature slice
-      - `crates/zdx-tui/src/features/input/`: input feature slice
-        - `crates/zdx-tui/src/features/input/text_buffer.rs`: minimal text buffer + cursor editing for input
-      - `crates/zdx-tui/src/features/statusline/`: debug status line feature slice
-        - `crates/zdx-tui/src/features/statusline/mod.rs`: module exports
-        - `crates/zdx-tui/src/features/statusline/state.rs`: StatusLineAccumulator (mutable), StatusLine (snapshot)
-        - `crates/zdx-tui/src/features/statusline/render.rs`: render_debug_status_line function
-      - `crates/zdx-tui/src/features/thread/`: thread feature slice
-        - `crates/zdx-tui/src/features/thread/mod.rs`: module exports
-        - `crates/zdx-tui/src/features/thread/state.rs`: ThreadState, ThreadUsage
-        - `crates/zdx-tui/src/features/thread/update.rs`: thread event handlers
-        - `crates/zdx-tui/src/features/thread/render.rs`: thread picker rendering
-        - `crates/zdx-tui/src/features/thread/tree.rs`: tree derivation for hierarchical display (ThreadDisplayItem, flatten_as_tree)
-      - `crates/zdx-tui/src/features/transcript/`: transcript feature slice
-        - `crates/zdx-tui/src/features/transcript/markdown/`: markdown parsing + wrapping
-    - `crates/zdx-tui/src/overlays/`: overlay feature slice
-      - `crates/zdx-tui/src/overlays/command_palette.rs`: command palette overlay (Ctrl+O or `/` when input empty)
-      - `crates/zdx-tui/src/overlays/skill_picker.rs`: skill installer overlay
-      - `crates/zdx-tui/src/overlays/rename.rs`: thread rename overlay
-- `crates/zdx-cli/`: zdx binary (CLI/router)
-  - `crates/zdx-cli/src/main.rs`: binary entrypoint (delegates to `crates/zdx-cli/src/cli/`)
-  - `crates/zdx-cli/src/cli/`: CLI arguments + command dispatch
-  - `crates/zdx-cli/src/cli/commands/automations.rs`: automations command handlers (`list`, `validate`, `run`)
-  - `crates/zdx-cli/src/cli/commands/daemon.rs`: scheduled automations daemon loop + persisted run-dedupe state
-  - `crates/zdx-cli/src/cli/commands/telegram.rs`: Telegram utility commands (create topics, send messages)
-  - `crates/zdx-cli/src/cli/commands/worktree.rs`: worktree command handler
-  - `crates/zdx-cli/src/modes/exec.rs`: non-interactive streaming mode (stdout/stderr rendering)
-  - `crates/zdx-cli/src/modes/mod.rs`: mode exports (exec + TUI feature-gated)
-- `crates/zdx-bot/`: Telegram bot library (long-polling)
-  - `crates/zdx-bot/src/lib.rs`: Telegram bot library entrypoint (used by CLI subcommand)
-  - `crates/zdx-bot/src/bot/mod.rs`: bot module exports
-  - `crates/zdx-bot/src/bot/context.rs`: shared bot context
-  - `crates/zdx-bot/src/bot/queue.rs`: per-chat queueing helpers
-  - `crates/zdx-bot/src/handlers/mod.rs`: message handler module exports
-  - `crates/zdx-bot/src/handlers/message.rs`: Telegram message flow orchestration
-  - `crates/zdx-bot/src/ingest/mod.rs`: Telegram message parsing + attachment loading
-  - `crates/zdx-bot/src/agent/mod.rs`: thread log + agent turn helpers
-  - `crates/zdx-bot/src/telegram/mod.rs`: Telegram API client + tool wiring
-  - `crates/zdx-bot/src/telegram/types.rs`: Telegram API DTOs
-  - `crates/zdx-bot/src/transcribe.rs`: OpenAI audio transcription helper for Telegram audio
-  - `crates/zdx-bot/src/types.rs`: Telegram bot message/media structs
-- `tools/scripts/`: optional repo scripts (seed/import/dev helpers)
-- `.github/workflows/`: CI workflows
-- `.cargo/config.toml`: cargo alias for `cargo xtask`, shared target dir config
-- `crates/xtask/`: maintainer utilities (update default models/config, codebase snapshot)
-- `crates/zdx-cli/tests/`: integration tests (`assert_cmd`, fixtures)
-- `justfile`: task runner recipes (run `just` to list all)
+This monorepo now uses scoped `AGENTS.md` files per crate.
+
+- `AGENTS.md` (this file): workspace-level conventions + index
+- `crates/zdx-core/AGENTS.md`: core engine/providers/tools map + core-specific conventions
+- `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
+- `crates/zdx-cli/AGENTS.md`: CLI routing/modes/commands map + CLI testing guidance
+- `crates/zdx-bot/AGENTS.md`: Telegram bot flow map + bot-specific conventions
+- `crates/xtask/AGENTS.md`: maintainer task crate guidance
+
+### Scope and precedence
+
+- `AGENTS.md` applies to its directory tree.
+- For each changed file, follow every in-scope `AGENTS.md`.
+- When rules conflict: deeper `AGENTS.md` wins; system/developer/user instructions win over all `AGENTS.md`.
+- Scope-specific style rules stay within scope unless explicitly stated otherwise.
+- If an in-scope `AGENTS.md` requires checks, run them after changes and make a best effort to pass.
+
+## Workspace layout
+
+- `docs/SPEC.md`: behavior contracts
+- `docs/ARCHITECTURE.md`: architecture and data flow
+- `docs/plans/`: commit-sized implementation plans
+- `tools/scripts/`: optional repo scripts
+- `.github/workflows/`: CI/release workflows
+- `.cargo/config.toml`: cargo aliases/shared target dir config
+- `justfile`: common development tasks
 
 ## Build / run
 
@@ -156,7 +56,6 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - Rust edition: 2024 (see `Cargo.toml`)
 - Formatting: rustfmt defaults
 - Errors: prefer `anyhow::Result` + `Context` at I/O boundaries
-- Keep `zdx-core` UI-agnostic: terminal I/O lives in `crates/zdx-tui/src/terminal.rs`
 
 ## Tests (keep it light)
 
@@ -174,9 +73,8 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 
 **This is mandatory, not optional.** When you:
 
-- **Add a new `.rs` file** → Add it to "Where things are" with a one-line description
-- **Move/rename a module** → Update the path in "Where things are"
-- **Delete a file** → Remove it from "Where things are"
-- **Change build/run/test workflows** → Update "Build / run"
-- **Add new conventions** → Document here or in scoped `AGENTS.md` files
+- **Add/move/delete a crate-level file** → Update the corresponding `crates/*/AGENTS.md`
+- **Add/remove/rename a crate AGENTS file** → Update the "AGENTS.md index" section here
+- **Change build/run/test workflows** → Update "Build / run" here
+- **Add workspace-wide conventions** → Document here (or in the relevant scoped crate file)
 - **Change system architecture** → Update `docs/ARCHITECTURE.md` (module relationships, data flow, component boundaries, or design patterns)
