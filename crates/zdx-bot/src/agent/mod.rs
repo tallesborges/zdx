@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
-use zdx_core::core::context::build_effective_system_prompt_with_paths;
+use zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules;
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
@@ -89,22 +89,16 @@ pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
     root: &Path,
-    bot_system_prompt: Option<&str>,
+    bot_surface_rules: Option<&str>,
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
-    // Build effective system prompt from config + AGENTS.md + skills
+    // Build effective system prompt from config + AGENTS.md + memory + skills + optional surface rules.
     let effective =
-        build_effective_system_prompt_with_paths(config, root).context("build system prompt")?;
-
-    // Append bot-specific prompt if provided
-    let system_prompt = match (effective.prompt, bot_system_prompt) {
-        (Some(base), Some(bot)) => Some(format!("{base}\n\n{bot}")),
-        (Some(base), None) => Some(base),
-        (None, Some(bot)) => Some(bot.to_string()),
-        (None, None) => None,
-    };
+        build_effective_system_prompt_with_paths_and_surface_rules(config, root, bot_surface_rules)
+            .context("build system prompt")?;
+    let system_prompt = effective.prompt;
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),

@@ -211,7 +211,8 @@ Error:
 - Prompt templating:
   - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
   - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
-  - Render context includes: `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - Render context includes: `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - Built-in template emits `<surface_rules>` only when `surface_rules` is present/non-empty.
   - On custom template load/render failure, ZDX warns and falls back to the built-in template.
   - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
 
