@@ -21,9 +21,9 @@ pub mod telegram;
 mod transcribe;
 mod types;
 
-const BOT_SYSTEM_PROMPT: &str = include_str!(concat!(
+const TELEGRAM_SURFACE_RULES: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/bot_system_prompt.md"
+    "/prompts/telegram_surface_rules.md"
 ));
 
 /// Exit code used to signal the wrapper script to rebuild.
@@ -77,8 +77,9 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let queue_cancel_map = new_queue_cancel_map();
     let allowlist_user_len = settings.allowlist_user_ids.len();
     let allowlist_chat_len = settings.allowlist_chat_ids.len();
-    let trimmed_prompt = BOT_SYSTEM_PROMPT.trim();
-    let bot_system_prompt = (!trimmed_prompt.is_empty()).then(|| trimmed_prompt.to_string());
+    let trimmed_surface_rules = TELEGRAM_SURFACE_RULES.trim();
+    let bot_surface_rules =
+        (!trimmed_surface_rules.is_empty()).then(|| trimmed_surface_rules.to_string());
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
@@ -86,7 +87,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             allowlist_user_ids: settings.allowlist_user_ids,
             allowlist_chat_ids: settings.allowlist_chat_ids,
             root,
-            bot_system_prompt,
+            bot_surface_rules,
             tool_config,
             cancel_map,
             queue_cancel_map,

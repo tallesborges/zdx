@@ -118,12 +118,14 @@ struct PromptTemplateSubagents {
 
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateVars {
+    provider: String,
     invocation_term: String,
     invocation_term_plural: String,
     is_openai_codex: bool,
     base_prompt: String,
     project_context: String,
     memory_index: String,
+    surface_rules: String,
     skills_list: Vec<PromptTemplateSkill>,
     subagents_config: Option<PromptTemplateSubagents>,
     cwd: String,
@@ -135,6 +137,7 @@ struct PromptTemplateSections<'a> {
     base_prompt: Option<&'a str>,
     project_context: Option<&'a str>,
     memory_index: Option<&'a str>,
+    surface_rules: Option<&'a str>,
     skills_list: &'a [Skill],
     subagents_enabled: bool,
     subagent_models: &'a [String],
@@ -149,11 +152,17 @@ fn combine_prompt_sections(
     base_prompt: Option<&str>,
     project_context_block: Option<&str>,
     memory_index_block: Option<&str>,
+    surface_rules_block: Option<&str>,
 ) -> Option<String> {
     let mut sections: Vec<&str> = Vec::new();
-    for value in [base_prompt, project_context_block, memory_index_block]
-        .into_iter()
-        .flatten()
+    for value in [
+        base_prompt,
+        project_context_block,
+        memory_index_block,
+        surface_rules_block,
+    ]
+    .into_iter()
+    .flatten()
     {
         let trimmed = value.trim();
         if !trimmed.is_empty() {
@@ -216,6 +225,11 @@ fn build_prompt_template_vars(
         .trim()
         .to_string();
     let memory_index = sections.memory_index.unwrap_or_default().trim().to_string();
+    let surface_rules = sections
+        .surface_rules
+        .unwrap_or_default()
+        .trim()
+        .to_string();
     let skills_list = sections
         .skills_list
         .iter()
@@ -230,9 +244,11 @@ fn build_prompt_template_vars(
         available_models: sections.subagent_models.to_vec(),
     });
     let provider_selection = resolve_provider(model);
+    let provider = provider_selection.kind.id().to_string();
     let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
 
     PromptTemplateVars {
+        provider,
         invocation_term: if is_openai_codex {
             "function".to_string()
         } else {
@@ -247,6 +263,7 @@ fn build_prompt_template_vars(
         base_prompt,
         project_context,
         memory_index,
+        surface_rules,
         skills_list,
         subagents_config,
         cwd: root.display().to_string(),
@@ -567,6 +584,7 @@ fn render_system_prompt_with_fallback(
     base_prompt: Option<&str>,
     project_context_block: Option<&str>,
     memory_index: Option<&str>,
+    surface_rules: Option<&str>,
 ) -> Option<String> {
     let template_source = match load_prompt_template(config) {
         Ok(source) => source,
@@ -598,7 +616,12 @@ fn render_system_prompt_with_fallback(
                             "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
                         ),
                     });
-                    combine_prompt_sections(base_prompt, project_context_block, memory_index)
+                    combine_prompt_sections(
+                        base_prompt,
+                        project_context_block,
+                        memory_index,
+                        surface_rules,
+                    )
                 }
             }
         }
@@ -622,6 +645,20 @@ fn render_system_prompt_with_fallback(
 pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
+) -> Result<EffectivePrompt> {
+    build_effective_system_prompt_with_paths_and_surface_rules(config, root, None)
+}
+
+/// Builds the effective system prompt by combining config, AGENTS.md files,
+/// optional memory index files, template-driven sections, and optional
+/// surface-specific output rules (e.g., Telegram formatting constraints).
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn build_effective_system_prompt_with_paths_and_surface_rules(
+    config: &Config,
+    root: &Path,
+    surface_rules: Option<&str>,
 ) -> Result<EffectivePrompt> {
     let base_prompt = config.effective_system_prompt()?;
     let PromptContextSectionsResult {
@@ -650,6 +687,7 @@ pub fn build_effective_system_prompt_with_paths(
             base_prompt: base_prompt.as_deref(),
             project_context: project_context_block.as_deref(),
             memory_index: memory_index.as_deref(),
+            surface_rules,
             skills_list: &skills,
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
@@ -663,6 +701,7 @@ pub fn build_effective_system_prompt_with_paths(
         base_prompt.as_deref(),
         project_context_block.as_deref(),
         memory_index.as_deref(),
+        surface_rules,
     );
 
     if skills.len() > 20 {
@@ -1029,6 +1068,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -1048,6 +1088,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -1084,6 +1125,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &skills,
                 subagents_enabled: true,
                 subagent_models: &models,
@@ -1113,12 +1155,14 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
         );
 
+        assert_eq!(anthropic.provider, "anthropic");
         assert_eq!(anthropic.invocation_term, "tool");
         assert!(!anthropic.is_openai_codex);
 
@@ -1129,14 +1173,43 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
         );
 
+        assert_eq!(codex.provider, "openai-codex");
         assert_eq!(codex.invocation_term, "function");
         assert!(codex.is_openai_codex);
+    }
+
+    #[test]
+    fn test_template_mode_omits_z_identity_for_claude_cli_provider() {
+        let dir = tempdir().unwrap();
+
+        let mut config = crate::config::Config {
+            model: "claude-cli:claude-sonnet-4-5".to_string(),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(!prompt.contains(
+            "You are Z. You are running as a coding agent in the zdx CLI on a user's computer."
+        ));
     }
 
     #[test]
@@ -1216,6 +1289,7 @@ mod tests {
                 base_prompt: None,
                 project_context: None,
                 memory_index: None,
+                surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
@@ -1231,6 +1305,37 @@ mod tests {
 
         assert!(!rendered.contains("<memory>"));
         assert!(!rendered.contains("<memory_instructions>"));
+    }
+
+    #[test]
+    fn test_template_mode_includes_surface_rules_when_provided() {
+        let dir = tempdir().unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective = build_effective_system_prompt_with_paths_and_surface_rules(
+            &config,
+            dir.path(),
+            Some("Telegram output rules"),
+        )
+        .unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("<surface_rules>"));
+        assert!(prompt.contains("Telegram output rules"));
     }
 
     #[test]

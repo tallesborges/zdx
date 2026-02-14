@@ -335,7 +335,7 @@ async fn spawn_or_fail(
         messages,
         context.config(),
         worktree_root,
-        context.bot_system_prompt(),
+        context.bot_surface_rules(),
         thread_id,
         thread,
         context.tool_config(),

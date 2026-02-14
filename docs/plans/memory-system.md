@@ -81,9 +81,9 @@ When creating or updating memories:
 - ✅ Demo: run `just run` and observe system prompt in debug output
 - Gaps: none for Slice 1/2 core prompt path
 
-## Bot system prompt (`bot_system_prompt.md`)
-- What exists: XML-tagged prompt with `<persona>`, `<context>`, `<tone>`, `<important>`, `<telegram_formatting>`, `<response_style>`, `<examples>`
-- ✅ Demo: `cat crates/zdx-bot/prompts/bot_system_prompt.md`
+## Bot Telegram surface rules (`telegram_surface_rules.md`)
+- What exists: Telegram-specific `<telegram_output_contract>`, `<telegram_style_profile>`, and `<telegram_examples>` content injected via `<surface_rules>`
+- ✅ Demo: `cat crates/zdx-bot/prompts/telegram_surface_rules.md`
 - Gaps: no memory section
 
 ## ZDX_HOME path helper
@@ -120,7 +120,7 @@ When creating or updating memories:
 ## Slice 2: Add memory instructions to system prompts
 - **Goal**: System prompts tell the agent how to use and maintain the memory system
 - **Scope checklist**:
-  - [ ] Add `<memory_instructions>` section to `bot_system_prompt.md` explaining:
+  - [ ] Add `<memory_instructions>` section to `telegram_surface_rules.md` explaining:
     - `MEMORY.md` is loaded with your core facts and an index of detailed memories
     - Use `read` tool to load relevant memory files from `<ZDX_HOME>/memories/` and/or `<root>/.zdx/memories/` when needed
     - Be selective — only load what's relevant to the current conversation
