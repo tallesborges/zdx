@@ -60,6 +60,10 @@ pub struct Message {
     /// Original message this message replies to.
     #[serde(default, rename = "reply_to_message")]
     pub reply_to: Option<Box<Message>>,
+    /// Internal marker used when we route a General message into a newly
+    /// created topic before handling it.
+    #[serde(skip)]
+    pub synthetic_topic_routed_from_general: bool,
 }
 
 impl Message {

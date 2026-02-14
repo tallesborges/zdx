@@ -6,7 +6,7 @@ use zdx_core::core::worktree;
 
 use crate::bot::context::BotContext;
 use crate::ingest::AllowlistConfig;
-use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
+use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters};
 use crate::{agent, ingest};
 
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
@@ -16,6 +16,7 @@ const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
 /// # Errors
 /// Returns an error if the operation fails.
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
+    let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
     let allowlist = AllowlistConfig {
         user_ids: context.allowlist_user_ids(),
         chat_ids: context.allowlist_chat_ids(),
@@ -29,12 +30,24 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 
     // Skip reply_to when message_id == message_thread_id (topic-creating message).
     // Telegram rejects REPLY_MESSAGE_ID_INVALID for these.
-    let reply_to_message_id = if incoming.message_thread_id == Some(incoming.message_id) {
+    let reply_to_message_id = if synthetic_topic_routed_from_general
+        || incoming.message_thread_id == Some(incoming.message_id)
+    {
         None
     } else {
         Some(incoming.message_id)
     };
     let topic_id = incoming.message_thread_id;
+    let cross_topic_reply_parameters = if synthetic_topic_routed_from_general && topic_id.is_some()
+    {
+        Some(ReplyParameters {
+            message_id: incoming.message_id,
+            chat_id: Some(incoming.chat_id),
+            allow_sending_without_reply: Some(true),
+        })
+    } else {
+        None
+    };
 
     if handle_general_forum_commands(context, &incoming, reply_to_message_id).await?
         || handle_rebuild_command(context, &incoming, reply_to_message_id).await?
@@ -64,7 +77,15 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
-    run_agent_turn(context, incoming, reply_to_message_id, topic_id, &thread_id).await
+    run_agent_turn(
+        context,
+        incoming,
+        reply_to_message_id,
+        topic_id,
+        cross_topic_reply_parameters,
+        &thread_id,
+    )
+    .await
 }
 
 struct TurnStatus {
@@ -230,6 +251,7 @@ async fn run_agent_turn(
     incoming: crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
+    cross_topic_reply_parameters: Option<ReplyParameters>,
     thread_id: &str,
 ) -> Result<()> {
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
@@ -257,6 +279,7 @@ async fn run_agent_turn(
         &incoming,
         reply_to_message_id,
         topic_id,
+        cross_topic_reply_parameters,
         &mut thread,
         &status,
         result,
@@ -453,6 +476,7 @@ async fn finalize_turn(
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
+    cross_topic_reply_parameters: Option<ReplyParameters>,
     thread: &mut zdx_core::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
@@ -500,6 +524,7 @@ async fn finalize_turn(
         incoming,
         reply_to_message_id,
         topic_id,
+        cross_topic_reply_parameters,
         status.message_id,
         &result.final_text,
     )
@@ -511,6 +536,7 @@ async fn send_final_response(
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
+    cross_topic_reply_parameters: Option<ReplyParameters>,
     status_message_id: Option<i64>,
     final_text: &str,
 ) -> Result<()> {
@@ -527,6 +553,29 @@ async fn send_final_response(
     }
 
     eprintln!("Sending reply for chat {}", incoming.chat_id);
+
+    if let Some(reply_parameters) = cross_topic_reply_parameters {
+        if let Some(msg_id) = status_message_id
+            && let Err(err) = context
+                .client()
+                .delete_message(incoming.chat_id, msg_id)
+                .await
+        {
+            eprintln!("Failed to delete status message {msg_id}: {err}");
+        }
+
+        context
+            .client()
+            .send_message_with_reply_params(
+                incoming.chat_id,
+                final_text,
+                topic_id,
+                Some(reply_parameters),
+            )
+            .await?;
+        return Ok(());
+    }
+
     if let Some(msg_id) = status_message_id {
         let edit_result = context
             .client()
