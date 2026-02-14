@@ -87,6 +87,7 @@ pub(crate) async fn dispatch_message(
                     // Enqueue with the new topic ID so handler knows to use it
                     let mut message = message;
                     message.thread_id = Some(topic_id);
+                    message.synthetic_topic_routed_from_general = true;
                     enqueue_message(&queues, &context, message).await;
                 }
                 Err(err) => {
