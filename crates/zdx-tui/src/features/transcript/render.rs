@@ -236,17 +236,23 @@ fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
 }
 
 fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> {
-    let has_label = styled_line
+    let has_args_label = styled_line
         .spans
         .iter()
         .any(|span| span.text == "args (json) ");
+    let has_output_label = styled_line
+        .spans
+        .iter()
+        .any(|span| span.text.starts_with("─ output ─"));
     let has_disclosure = styled_line
         .spans
         .iter()
         .any(|span| span.text == "▶" || span.text == "▼");
 
-    if has_label && has_disclosure {
+    if has_args_label && has_disclosure {
         Some(LineInteraction::ToggleToolArgs)
+    } else if has_output_label && has_disclosure {
+        Some(LineInteraction::ToggleToolOutput)
     } else {
         None
     }

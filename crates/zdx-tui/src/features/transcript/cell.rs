@@ -163,6 +163,21 @@ fn tool_display_text(name: &str, input: &Value) -> String {
 const TOOL_ARG_SUMMARY_MAX_WIDTH: usize = 180;
 const TOOL_ARG_INLINE_VALUE_MAX_WIDTH: usize = 72;
 const TOOL_ARG_DETAIL_MAX_LINES: usize = 200;
+const TOOL_OUTPUT_PREVIEW_MAX_LINES: usize = 5;
+const TOOL_OUTPUT_DETAIL_MAX_LINES: usize = 200;
+const TOOL_OUTPUT_SUMMARY_MAX_WIDTH: usize = 120;
+
+#[derive(Debug, Clone, Copy)]
+enum OutputStrategy {
+    Head,
+    Tail,
+}
+
+#[derive(Debug, Clone)]
+struct ToolOutputPayload {
+    text: String,
+    strategy: OutputStrategy,
+}
 
 fn format_tool_arg_inline_value(value: &Value, max_width: usize) -> (String, bool) {
     let raw = serde_json::to_string(value).unwrap_or_else(|_| value.to_string());
@@ -305,6 +320,324 @@ fn tail_rendered_rows(text: &str, width: usize, max_rows: usize) -> (Vec<String>
     (tail.into_iter().collect(), total_rows)
 }
 
+fn head_rendered_rows(text: &str, width: usize, max_rows: usize) -> (Vec<String>, usize) {
+    let mut total_rows = 0;
+    let mut rows = Vec::new();
+
+    for line in text.lines() {
+        let safe_line = sanitize_for_display(line);
+        let wrapped: Vec<String> = if safe_line.width() > width {
+            wrap_chars(&safe_line, width)
+        } else {
+            vec![safe_line.into_owned()]
+        };
+
+        for row in wrapped {
+            total_rows += 1;
+            if rows.len() < max_rows {
+                rows.push(row);
+            }
+        }
+    }
+
+    (rows, total_rows)
+}
+
+fn render_tool_output_rows(
+    text: &str,
+    width: usize,
+    max_rows: usize,
+    strategy: OutputStrategy,
+) -> (Vec<String>, usize) {
+    match strategy {
+        OutputStrategy::Head => head_rendered_rows(text, width, max_rows),
+        OutputStrategy::Tail => tail_rendered_rows(text, width, max_rows),
+    }
+}
+
+fn format_output_label(_total_rows: usize) -> String {
+    "─ output ─ ".to_string()
+}
+
+fn extract_stdout_stderr(data: &Value) -> Option<String> {
+    let stdout = data.get("stdout").and_then(Value::as_str).unwrap_or("");
+    let stderr = data.get("stderr").and_then(Value::as_str).unwrap_or("");
+
+    if stdout.is_empty() && stderr.is_empty() {
+        return None;
+    }
+
+    let mut combined = String::new();
+    if !stdout.is_empty() {
+        combined.push_str(stdout);
+        if !stdout.ends_with('\n') && !stderr.is_empty() {
+            combined.push('\n');
+        }
+    }
+    if !stderr.is_empty() {
+        combined.push_str(stderr);
+    }
+
+    Some(combined)
+}
+
+fn summarize_apply_patch_output(data: &Value) -> Option<String> {
+    let applied = data.get("applied")?.as_array()?;
+    if applied.is_empty() {
+        return None;
+    }
+
+    let mut lines = Vec::new();
+    for op in applied {
+        let op_type = op.get("op").and_then(Value::as_str).unwrap_or("op");
+        let path = op.get("path").and_then(Value::as_str).unwrap_or("<unknown>");
+        let move_path = op.get("move_path").and_then(Value::as_str);
+        let chunks = op.get("chunks").and_then(Value::as_u64);
+        let bytes = op.get("bytes").and_then(Value::as_u64);
+
+        let line = match op_type {
+            "add" => bytes
+                .map(|bytes| format!("• add {path} ({bytes} bytes)"))
+                .unwrap_or_else(|| format!("• add {path}")),
+            "delete" => format!("• delete {path}"),
+            "update" => {
+                let mut line = format!("• update {path}");
+                if let Some(move_path) = move_path {
+                    line.push_str(&format!(" → {move_path}"));
+                }
+                if chunks.is_some() || bytes.is_some() {
+                    line.push_str(" (");
+                    if let Some(chunks) = chunks {
+                        line.push_str(&format!("{chunks} chunks"));
+                    }
+                    if let Some(bytes) = bytes {
+                        if chunks.is_some() {
+                            line.push_str(", ");
+                        }
+                        line.push_str(&format!("{bytes} bytes"));
+                    }
+                    line.push(')');
+                }
+                line
+            }
+            _ => format!("• {op_type} {path}"),
+        };
+
+        lines.push(line);
+    }
+
+    Some(lines.join("\n"))
+}
+
+fn summarize_write_edit_output(data: &Value) -> Option<String> {
+    let mut lines = Vec::new();
+
+    if let Some(path) = data.get("path").and_then(Value::as_str) {
+        lines.push(format!("path: {path}"));
+    }
+    if let Some(bytes) = data.get("bytes").and_then(Value::as_u64) {
+        lines.push(format!("bytes: {bytes}"));
+    }
+    if let Some(created) = data.get("created").and_then(Value::as_bool) {
+        lines.push(format!("created: {created}"));
+    }
+    if let Some(replacements) = data.get("replacements").and_then(Value::as_u64) {
+        lines.push(format!("replacements: {replacements}"));
+    }
+
+    if lines.is_empty() {
+        None
+    } else {
+        Some(lines.join("\n"))
+    }
+}
+
+fn summarize_image_output(data: &Value) -> Option<String> {
+    let image_type = data.get("type").and_then(Value::as_str)?;
+    if image_type != "image" {
+        return None;
+    }
+
+    let mime = data.get("mime_type").and_then(Value::as_str).unwrap_or("image");
+    let bytes = data.get("bytes").and_then(Value::as_u64);
+    let path = data.get("path").and_then(Value::as_str);
+
+    let mut line = format!("image: {mime}");
+    if let Some(bytes) = bytes {
+        line.push_str(&format!(" ({bytes} bytes)"));
+    }
+    if let Some(path) = path {
+        line.push_str(&format!(" — {path}"));
+    }
+
+    Some(line)
+}
+
+fn summarize_results_output(data: &Value) -> Option<String> {
+    if let Some(results) = data.get("results").and_then(Value::as_array) {
+        let mut lines = Vec::new();
+
+        if let Some(search_id) = data.get("search_id").and_then(Value::as_str) {
+            lines.push(format!("search_id: {search_id}"));
+        }
+        if let Some(extract_id) = data.get("extract_id").and_then(Value::as_str) {
+            lines.push(format!("extract_id: {extract_id}"));
+        }
+        if let Some(warnings) = data.get("warnings").and_then(Value::as_str) {
+            let warnings = warnings.trim();
+            if !warnings.is_empty() {
+                lines.push(format!(
+                    "warnings: {}",
+                    truncate_with_ellipsis(warnings, TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+                ));
+            }
+        }
+
+        lines.extend(format_result_lines(results));
+        return if lines.is_empty() { None } else { Some(lines.join("\n")) };
+    }
+
+    if let Some(results) = data.as_array() {
+        let lines = format_result_lines(results);
+        return if lines.is_empty() { None } else { Some(lines.join("\n")) };
+    }
+
+    None
+}
+
+fn format_result_lines(results: &[Value]) -> Vec<String> {
+    let mut lines = Vec::new();
+
+    for result in results {
+        let Some(obj) = result.as_object() else {
+            if let Some(text) = result.as_str() {
+                lines.push(text.to_string());
+            }
+            continue;
+        };
+
+        let title = obj
+            .get("title")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        let thread_id = obj
+            .get("thread_id")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+        let url = obj
+            .get("url")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty());
+
+        let label = title.or(thread_id).unwrap_or("result");
+        let mut line = format!(
+            "• {}",
+            truncate_with_ellipsis(label.trim(), TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+        );
+        if let Some(url) = url {
+            line.push_str(" — ");
+            line.push_str(&truncate_with_ellipsis(url.trim(), TOOL_OUTPUT_SUMMARY_MAX_WIDTH));
+        }
+        lines.push(line);
+
+        if let Some(preview) = obj
+            .get("preview")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            lines.push(format!(
+                "  {}",
+                truncate_with_ellipsis(preview.trim(), TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+            ));
+            continue;
+        }
+
+        if let Some(excerpts) = obj.get("excerpts").and_then(Value::as_array) {
+            if let Some(excerpt) = excerpts
+                .iter()
+                .filter_map(Value::as_str)
+                .map(str::trim)
+                .find(|text| !text.is_empty())
+            {
+                lines.push(format!(
+                    "  {}",
+                    truncate_with_ellipsis(excerpt, TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+                ));
+                continue;
+            }
+        }
+
+        if let Some(full_content) = obj
+            .get("full_content")
+            .and_then(Value::as_str)
+            .filter(|s| !s.trim().is_empty())
+        {
+            let snippet = full_content
+                .lines()
+                .map(str::trim)
+                .find(|line| !line.is_empty())
+                .unwrap_or(full_content.trim());
+            if !snippet.is_empty() {
+                lines.push(format!(
+                    "  {}",
+                    truncate_with_ellipsis(snippet, TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+                ));
+            }
+        }
+    }
+
+    lines
+}
+
+fn build_tool_output_payload(name: &str, data: &Value) -> Option<ToolOutputPayload> {
+    if let Some(text) = extract_stdout_stderr(data) {
+        return Some(ToolOutputPayload {
+            text,
+            strategy: OutputStrategy::Tail,
+        });
+    }
+
+    if name == "read" {
+        if let Some(content) = data.get("content").and_then(Value::as_str) {
+            if !content.is_empty() {
+                return Some(ToolOutputPayload {
+                    text: content.to_string(),
+                    strategy: OutputStrategy::Head,
+                });
+            }
+        }
+    }
+
+    if let Some(text) = data.as_str().filter(|text| !text.trim().is_empty()) {
+        return Some(ToolOutputPayload {
+            text: text.to_string(),
+            strategy: OutputStrategy::Head,
+        });
+    }
+
+    if let Some(summary) = summarize_image_output(data)
+        .or_else(|| summarize_apply_patch_output(data))
+        .or_else(|| summarize_write_edit_output(data))
+        .or_else(|| summarize_results_output(data))
+    {
+        return Some(ToolOutputPayload {
+            text: summary,
+            strategy: OutputStrategy::Head,
+        });
+    }
+
+    let pretty = serde_json::to_string_pretty(data).unwrap_or_else(|_| data.to_string());
+    let pretty = pretty.trim();
+    if pretty.is_empty() {
+        None
+    } else {
+        Some(ToolOutputPayload {
+            text: pretty.to_string(),
+            strategy: OutputStrategy::Head,
+        })
+    }
+}
+
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -393,6 +726,7 @@ pub enum HistoryCell {
         input: Value,
         input_delta: Option<String>,
         tool_args_expanded: bool,
+        tool_output_expanded: bool,
         state: ToolState,
         started_at: DateTime<Utc>,
         /// Some when tool has finished (Done or Error).
@@ -493,6 +827,7 @@ impl HistoryCell {
             input,
             input_delta: None,
             tool_args_expanded: false,
+            tool_output_expanded: false,
             state: ToolState::Running,
             started_at: now,
             result: None,
@@ -630,6 +965,22 @@ impl HistoryCell {
                 tool_args_expanded, ..
             } => {
                 *tool_args_expanded = !*tool_args_expanded;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// Toggles expanded/collapsed tool output details.
+    ///
+    /// Returns true if toggled, false for non-tool cells.
+    pub fn toggle_tool_output_expanded(&mut self) -> bool {
+        match self {
+            HistoryCell::Tool {
+                tool_output_expanded,
+                ..
+            } => {
+                *tool_output_expanded = !*tool_output_expanded;
                 true
             }
             _ => false,
@@ -799,6 +1150,7 @@ impl HistoryCell {
                 input,
                 input_delta,
                 tool_args_expanded,
+                tool_output_expanded,
                 result,
                 ..
             } => {
@@ -1002,59 +1354,57 @@ impl HistoryCell {
                     }
                 }
 
-                // Show truncated output preview when done (combine stdout + stderr)
+                // Render output preview and truncation warnings when done.
                 if let Some(res) = result
                     && let Some(data) = res.data()
                 {
-                    let stdout = data.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
-                    let stderr = data.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
-                    let all_lines: Vec<&str> = stdout.lines().chain(stderr.lines()).collect();
-
-                    if !all_lines.is_empty() {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: "─ output ─".to_string(),
-                                style: Style::ToolBracket,
-                            }],
-                        });
-                    }
-
-                    let max_preview_lines = 5;
-                    let truncated = all_lines.len() > max_preview_lines;
-
-                    // Show truncation indicator first (before the last lines)
-                    if truncated {
-                        lines.push(StyledLine {
-                            spans: vec![StyledSpan {
-                                text: format!(
-                                    "[{} more lines ...]",
-                                    all_lines.len() - max_preview_lines
-                                ),
-                                style: Style::ToolBracket,
-                            }],
-                        });
-                    }
-
-                    // Show the last N lines (most recent output is usually most relevant)
-                    let skip_count = all_lines.len().saturating_sub(max_preview_lines);
-                    for line in all_lines.iter().skip(skip_count) {
-                        // Sanitize line for display (strips ANSI escapes, expands tabs)
-                        let safe_line = sanitize_for_display(line);
-
-                        // Check if line needs wrapping
-                        let wrapped: Vec<String> = if safe_line.width() > width {
-                            wrap_chars(&safe_line, width)
+                    if let Some(output) = build_tool_output_payload(name, data) {
+                        let max_rows = if *tool_output_expanded {
+                            TOOL_OUTPUT_DETAIL_MAX_LINES
                         } else {
-                            vec![safe_line.into_owned()]
+                            TOOL_OUTPUT_PREVIEW_MAX_LINES
                         };
+                        let (rows, total_rows) =
+                            render_tool_output_rows(&output.text, width, max_rows, output.strategy);
+                        let row_count = rows.len();
+                        let truncated = total_rows > row_count;
 
-                        for wrapped_line in wrapped {
+                        if !rows.is_empty() || truncated {
+                            let disclosure = if *tool_output_expanded { '▼' } else { '▶' };
                             lines.push(StyledLine {
-                                spans: vec![StyledSpan {
-                                    text: wrapped_line,
-                                    style: Style::ToolOutput,
-                                }],
+                                spans: vec![
+                                    StyledSpan {
+                                        text: format_output_label(total_rows),
+                                        style: Style::ToolBracket,
+                                    },
+                                    StyledSpan {
+                                        text: disclosure.to_string(),
+                                        style: Style::ToolBracket,
+                                    },
+                                ],
                             });
+
+                            if truncated {
+                                lines.push(StyledLine {
+                                    spans: vec![StyledSpan {
+                                        text: format!(
+                                            "[{} more lines ...]",
+                                            total_rows - row_count
+                                        ),
+                                        style: Style::ToolBracket,
+                                    }],
+                                });
+                            }
+
+                            for row in rows {
+                                lines.push(StyledLine {
+                                    spans: vec![StyledSpan {
+                                        text: row,
+                                        style: Style::ToolOutput,
+                                    }],
+                                });
+                            }
+
                         }
                     }
 
@@ -1186,9 +1536,17 @@ impl HistoryCell {
                 ..
             } => {
                 let prefix = "Thinking: ";
+                // Trim trailing whitespace for finalized thinking blocks to avoid extra vertical space.
+                // Keep raw content for streaming to preserve cursor position on newlines.
+                let display_content = if *is_streaming {
+                    content.as_str()
+                } else {
+                    content.trim_end()
+                };
+
                 let mut lines = render_prefixed_content(
                     prefix,
-                    content,
+                    display_content,
                     width,
                     Style::ThinkingPrefix,
                     Style::Thinking,
@@ -1303,10 +1661,13 @@ impl HistoryCell {
             HistoryCell::Tool {
                 result,
                 tool_args_expanded,
+                tool_output_expanded,
                 ..
             } => {
                 // Include expanded/collapsed state so toggles invalidate cache.
-                usize::from(result.is_some()) + usize::from(*tool_args_expanded)
+                usize::from(result.is_some())
+                    + usize::from(*tool_args_expanded)
+                    + usize::from(*tool_output_expanded)
             }
             HistoryCell::System { content, .. } => content.len(),
             HistoryCell::Thinking {
@@ -2053,6 +2414,24 @@ mod tests {
             lines[2].spans[0].text, "          ",
             "Third line should be indented, not prefixed"
         );
+    }
+
+    #[test]
+    fn test_thinking_trailing_newlines() {
+        // Streaming: should preserve trailing newlines (cursor positioning)
+        let cell_streaming = HistoryCell::thinking_streaming("Text\n\n");
+        let lines_streaming = cell_streaming.display_lines(80, 0);
+        
+        // 3 lines: "Thinking: Text", "", ""
+        assert_eq!(lines_streaming.len(), 3, "Streaming should preserve trailing newlines");
+        
+        // Finalized: should trim trailing newlines
+        let mut cell_final = HistoryCell::thinking_streaming("Text\n\n");
+        cell_final.finalize_thinking(None);
+        let lines_final = cell_final.display_lines(80, 0);
+        
+        // 1 line: "Thinking: Text"
+        assert_eq!(lines_final.len(), 1, "Finalized should trim trailing newlines");
     }
 
     #[test]

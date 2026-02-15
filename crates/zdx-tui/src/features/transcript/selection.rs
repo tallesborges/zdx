@@ -58,6 +58,7 @@ impl PartialOrd for VisualPosition {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineInteraction {
     ToggleToolArgs,
+    ToggleToolOutput,
 }
 
 #[derive(Debug, Clone)]
