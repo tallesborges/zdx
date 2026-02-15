@@ -555,14 +555,16 @@ mod tests {
     }
 
     #[test]
-    fn test_palette_state_filtered_commands_hides_thinking_when_unsupported() {
+    fn test_palette_state_filtered_commands_respects_reasoning_support() {
+        let model_id = "openai:gpt-4.1";
+        let supports_reasoning = zdx_core::models::model_supports_reasoning(model_id);
         let (state, _) = CommandPaletteState::open(
             zdx_core::providers::ProviderKind::OpenAI,
-            "openai:gpt-4.1".to_string(),
+            model_id.to_string(),
         );
         let filtered = state.filtered_commands();
         let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
-        assert!(!names.contains(&"thinking"));
+        assert_eq!(names.contains(&"thinking"), supports_reasoning);
     }
 
     #[test]
