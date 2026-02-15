@@ -817,10 +817,7 @@ impl TranscriptState {
             return false;
         };
 
-        if !matches!(
-            mapping.interaction,
-            Some(LineInteraction::ToggleToolOutput)
-        ) {
+        if !matches!(mapping.interaction, Some(LineInteraction::ToggleToolOutput)) {
             return false;
         }
 
@@ -847,9 +844,10 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use zdx_core::core::events::ToolOutput;
+
     use super::*;
     use crate::transcript::{HistoryCell, LineMapping};
-    use zdx_core::core::events::ToolOutput;
 
     #[test]
     fn test_scroll_accumulator_acceleration() {

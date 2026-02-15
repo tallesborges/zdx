@@ -1,3 +1,19 @@
+# Status: Pivoted to NotePlan-backed memory (2026-02-15)
+
+The original plan below used `MEMORY.md` + `memories/*.md` files as the memory backend.
+This has been replaced with a simpler approach:
+
+- **`MEMORY.md`** remains as a micro-index in the system prompt (core facts + pointers).
+- **NotePlan** is the single detailed memory backend (second brain).
+- **No `memories/` folders** — all detailed facts live in NotePlan notes.
+- **"Remember X"** → agent writes to the appropriate NotePlan note via `noteplan-notes` skill.
+- **Project-scoped `.zdx/MEMORY.md`** removed — NotePlan handles project memories too.
+- **Automation (future)** → will mine threads + NotePlan to auto-evolve the MEMORY.md index.
+
+The original plan is preserved below for reference.
+
+---
+
 # Goals
 - Agent has persistent memory of personal facts across all threads/sessions
 - `MEMORY.md` (index) is always loaded into system prompt — lightweight catalog of available memories
