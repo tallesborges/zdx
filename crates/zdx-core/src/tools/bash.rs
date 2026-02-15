@@ -165,6 +165,10 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
         }
     };
 
+    if input.command.trim().is_empty() {
+        return ToolOutput::failure("invalid_input", "command cannot be empty", None);
+    }
+
     match run_command(&input.command, ctx, timeout).await {
         Ok(output) => output.into_tool_output(),
         Err(e) => e,
@@ -176,6 +180,10 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
 /// This is a simpler API that takes the command string directly,
 /// useful for direct user invocation (e.g., `$` shortcut).
 pub async fn run(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
+    if command.trim().is_empty() {
+        return ToolOutput::failure("invalid_input", "command cannot be empty", None);
+    }
+
     match run_command(command, ctx, timeout).await {
         Ok(output) => output.into_tool_output(),
         Err(e) => e,
@@ -348,6 +356,31 @@ mod tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    #[tokio::test]
+    async fn test_bash_rejects_empty_command() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"command": "   "});
+
+        let result = execute(&input, &ctx, None).await;
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "command cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_bash_run_rejects_empty_command() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+
+        let result = run("", &ctx, None).await;
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "command cannot be empty");
     }
 
     #[test]

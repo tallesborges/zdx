@@ -43,6 +43,7 @@ pub fn definition() -> ToolDefinition {
                     "minimum": 1
                 }
             },
+            "required": [],
             "additionalProperties": false
         }),
     }
@@ -65,10 +66,17 @@ where
                     .map(Some)
                     .map_err(|_overflow| D::Error::custom("number too large"))
             }),
-        Some(Value::String(s)) => s
-            .parse::<usize>()
-            .map(Some)
-            .map_err(|_parse| D::Error::custom(format!("invalid number string: {s}"))),
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<usize>()
+                    .map(Some)
+                    .map_err(|_parse| D::Error::custom(format!("invalid number string: {s}")))
+            }
+        }
         Some(_) => Err(D::Error::custom("expected number or numeric string")),
     }
 }
@@ -149,7 +157,7 @@ fn parse_date_filter(raw: Option<&str>, field: &str) -> Result<Option<NaiveDate>
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(format!("{field} cannot be empty"));
+        return Ok(None);
     }
 
     NaiveDate::parse_from_str(trimmed, "%Y-%m-%d")
@@ -189,9 +197,22 @@ mod tests {
     }
 
     #[test]
+    fn test_limit_empty_string_becomes_none() {
+        let input = json!({"limit": "   "});
+        let parsed: ThreadSearchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.limit.is_none());
+    }
+
+    #[test]
     fn test_parse_date_filter_invalid() {
         let err = parse_date_filter(Some("2026-13-01"), "date").unwrap_err();
         assert!(err.contains("invalid date value"));
+    }
+
+    #[test]
+    fn test_parse_date_filter_empty_is_ignored() {
+        let parsed = parse_date_filter(Some("   "), "date").unwrap();
+        assert!(parsed.is_none());
     }
 
     #[test]

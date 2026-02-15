@@ -100,6 +100,16 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         }
     };
 
+    let url = input.url.trim();
+    if url.is_empty() {
+        return ToolOutput::failure("invalid_input", "url cannot be empty", None);
+    }
+
+    let objective = input.objective.trim();
+    if objective.is_empty() {
+        return ToolOutput::failure("invalid_input", "objective cannot be empty", None);
+    }
+
     // Get API key from environment
     let api_key = match std::env::var("PARALLEL_API_KEY") {
         Ok(key) if !key.is_empty() => key,
@@ -114,8 +124,8 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
 
     // Build request
     let request = ExtractRequest {
-        urls: vec![input.url],
-        objective: input.objective,
+        urls: vec![url.to_string()],
+        objective: objective.to_string(),
         search_queries: input.search_queries,
         excerpts: !input.full_content, // excerpts if not full_content
         full_content: input.full_content,
@@ -187,6 +197,8 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -260,6 +272,57 @@ mod tests {
         });
         let parsed: FetchInput = serde_json::from_value(input).unwrap();
         assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_whitespace_string_becomes_none() {
+        let input = json!({
+            "url": "https://example.com",
+            "objective": "test",
+            "search_queries": "   "
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_array_items_are_trimmed() {
+        let input = json!({
+            "url": "https://example.com",
+            "objective": "test",
+            "search_queries": ["  alpha  ", "beta"]
+        });
+        let parsed: FetchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_rejects_empty_url() {
+        let ctx = ToolContext::new(PathBuf::from("."), None);
+        let output = execute(&json!({"url": "  ", "objective": "test"}), &ctx).await;
+
+        assert!(!output.is_ok());
+        let payload = serde_json::to_value(output).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "url cannot be empty");
+    }
+
+    #[tokio::test]
+    async fn test_execute_rejects_empty_objective() {
+        let ctx = ToolContext::new(PathBuf::from("."), None);
+        let output = execute(
+            &json!({"url": "https://example.com", "objective": "   "}),
+            &ctx,
+        )
+        .await;
+
+        assert!(!output.is_ok());
+        let payload = serde_json::to_value(output).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "objective cannot be empty");
     }
 
     #[test]
