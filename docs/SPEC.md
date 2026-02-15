@@ -211,7 +211,7 @@ Error:
 - Prompt templating:
   - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
   - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
-  - Render context includes: `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - Render context includes: `agent_identity`, `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
   - Built-in template emits `<surface_rules>` only when `surface_rules` is present/non-empty.
   - On custom template load/render failure, ZDX warns and falls back to the built-in template.
   - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
@@ -224,18 +224,15 @@ ZDX composes project/user context in this order before skills/subagents sections
 
 1. Base/system prompt from config (`system_prompt` / `system_prompt_file`)
 2. Hierarchical `AGENTS.md` context (global + user + project ancestry)
-3. Optional memory index from `MEMORY.md` files:
-   - `$ZDX_HOME/MEMORY.md`
-   - `<root>/.zdx/MEMORY.md`
+3. Optional memory index from `$ZDX_HOME/MEMORY.md`
 
 Contracts:
 
-- Memory is optional. Missing `MEMORY.md` files do not fail startup and do not inject memory blocks.
+- Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
-- `MEMORY.md` content is capped per file (16 KiB) with truncation warning.
-- Only `MEMORY.md` index content is injected. Detailed files in `$ZDX_HOME/memories/` and `<root>/.zdx/memories/` are read on-demand via tools.
-- Built-in template emits `<memory>` and `<memory_instructions>` only when memory index content is present.
-- Scope defaults: personal profile/tone/preferences belong in global memory; project-scoped memory is for repository-specific context. Mirroring the same fact across both scopes requires explicit user intent.
+- `MEMORY.md` content is capped at 16 KiB with truncation warning.
+- Only `MEMORY.md` index content is injected. Detailed memory lives in NotePlan and is accessed on-demand via the `noteplan-notes` skill.
+- Built-in template emits a `## Memory` section (with `<memory>` block) only when memory index content is present.
 
 ---
 

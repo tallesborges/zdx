@@ -7,6 +7,7 @@
 )]
 
 use std::collections::VecDeque;
+use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use chrono::{DateTime, Utc};
@@ -390,31 +391,35 @@ fn summarize_apply_patch_output(data: &Value) -> Option<String> {
     let mut lines = Vec::new();
     for op in applied {
         let op_type = op.get("op").and_then(Value::as_str).unwrap_or("op");
-        let path = op.get("path").and_then(Value::as_str).unwrap_or("<unknown>");
+        let path = op
+            .get("path")
+            .and_then(Value::as_str)
+            .unwrap_or("<unknown>");
         let move_path = op.get("move_path").and_then(Value::as_str);
         let chunks = op.get("chunks").and_then(Value::as_u64);
         let bytes = op.get("bytes").and_then(Value::as_u64);
 
         let line = match op_type {
-            "add" => bytes
-                .map(|bytes| format!("• add {path} ({bytes} bytes)"))
-                .unwrap_or_else(|| format!("• add {path}")),
+            "add" => bytes.map_or_else(
+                || format!("• add {path}"),
+                |bytes| format!("• add {path} ({bytes} bytes)"),
+            ),
             "delete" => format!("• delete {path}"),
             "update" => {
                 let mut line = format!("• update {path}");
                 if let Some(move_path) = move_path {
-                    line.push_str(&format!(" → {move_path}"));
+                    let _ = write!(line, " → {move_path}");
                 }
                 if chunks.is_some() || bytes.is_some() {
                     line.push_str(" (");
                     if let Some(chunks) = chunks {
-                        line.push_str(&format!("{chunks} chunks"));
+                        let _ = write!(line, "{chunks} chunks");
                     }
                     if let Some(bytes) = bytes {
                         if chunks.is_some() {
                             line.push_str(", ");
                         }
-                        line.push_str(&format!("{bytes} bytes"));
+                        let _ = write!(line, "{bytes} bytes");
                     }
                     line.push(')');
                 }
@@ -458,16 +463,19 @@ fn summarize_image_output(data: &Value) -> Option<String> {
         return None;
     }
 
-    let mime = data.get("mime_type").and_then(Value::as_str).unwrap_or("image");
+    let mime = data
+        .get("mime_type")
+        .and_then(Value::as_str)
+        .unwrap_or("image");
     let bytes = data.get("bytes").and_then(Value::as_u64);
     let path = data.get("path").and_then(Value::as_str);
 
     let mut line = format!("image: {mime}");
     if let Some(bytes) = bytes {
-        line.push_str(&format!(" ({bytes} bytes)"));
+        let _ = write!(line, " ({bytes} bytes)");
     }
     if let Some(path) = path {
-        line.push_str(&format!(" — {path}"));
+        let _ = write!(line, " — {path}");
     }
 
     Some(line)
@@ -494,12 +502,20 @@ fn summarize_results_output(data: &Value) -> Option<String> {
         }
 
         lines.extend(format_result_lines(results));
-        return if lines.is_empty() { None } else { Some(lines.join("\n")) };
+        return if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        };
     }
 
     if let Some(results) = data.as_array() {
         let lines = format_result_lines(results);
-        return if lines.is_empty() { None } else { Some(lines.join("\n")) };
+        return if lines.is_empty() {
+            None
+        } else {
+            Some(lines.join("\n"))
+        };
     }
 
     None
@@ -536,7 +552,10 @@ fn format_result_lines(results: &[Value]) -> Vec<String> {
         );
         if let Some(url) = url {
             line.push_str(" — ");
-            line.push_str(&truncate_with_ellipsis(url.trim(), TOOL_OUTPUT_SUMMARY_MAX_WIDTH));
+            line.push_str(&truncate_with_ellipsis(
+                url.trim(),
+                TOOL_OUTPUT_SUMMARY_MAX_WIDTH,
+            ));
         }
         lines.push(line);
 
@@ -552,19 +571,18 @@ fn format_result_lines(results: &[Value]) -> Vec<String> {
             continue;
         }
 
-        if let Some(excerpts) = obj.get("excerpts").and_then(Value::as_array) {
-            if let Some(excerpt) = excerpts
+        if let Some(excerpts) = obj.get("excerpts").and_then(Value::as_array)
+            && let Some(excerpt) = excerpts
                 .iter()
                 .filter_map(Value::as_str)
                 .map(str::trim)
                 .find(|text| !text.is_empty())
-            {
-                lines.push(format!(
-                    "  {}",
-                    truncate_with_ellipsis(excerpt, TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
-                ));
-                continue;
-            }
+        {
+            lines.push(format!(
+                "  {}",
+                truncate_with_ellipsis(excerpt, TOOL_OUTPUT_SUMMARY_MAX_WIDTH)
+            ));
+            continue;
         }
 
         if let Some(full_content) = obj
@@ -597,15 +615,14 @@ fn build_tool_output_payload(name: &str, data: &Value) -> Option<ToolOutputPaylo
         });
     }
 
-    if name == "read" {
-        if let Some(content) = data.get("content").and_then(Value::as_str) {
-            if !content.is_empty() {
-                return Some(ToolOutputPayload {
-                    text: content.to_string(),
-                    strategy: OutputStrategy::Head,
-                });
-            }
-        }
+    if name == "read"
+        && let Some(content) = data.get("content").and_then(Value::as_str)
+        && !content.is_empty()
+    {
+        return Some(ToolOutputPayload {
+            text: content.to_string(),
+            strategy: OutputStrategy::Head,
+        });
     }
 
     if let Some(text) = data.as_str().filter(|text| !text.trim().is_empty()) {
@@ -1404,7 +1421,6 @@ impl HistoryCell {
                                     }],
                                 });
                             }
-
                         }
                     }
 
@@ -2421,17 +2437,25 @@ mod tests {
         // Streaming: should preserve trailing newlines (cursor positioning)
         let cell_streaming = HistoryCell::thinking_streaming("Text\n\n");
         let lines_streaming = cell_streaming.display_lines(80, 0);
-        
+
         // 3 lines: "Thinking: Text", "", ""
-        assert_eq!(lines_streaming.len(), 3, "Streaming should preserve trailing newlines");
-        
+        assert_eq!(
+            lines_streaming.len(),
+            3,
+            "Streaming should preserve trailing newlines"
+        );
+
         // Finalized: should trim trailing newlines
         let mut cell_final = HistoryCell::thinking_streaming("Text\n\n");
         cell_final.finalize_thinking(None);
         let lines_final = cell_final.display_lines(80, 0);
-        
+
         // 1 line: "Thinking: Text"
-        assert_eq!(lines_final.len(), 1, "Finalized should trim trailing newlines");
+        assert_eq!(
+            lines_final.len(),
+            1,
+            "Finalized should trim trailing newlines"
+        );
     }
 
     #[test]
