@@ -33,6 +33,8 @@ pub struct GeminiSseParser<S> {
     last_reasoning: String,
     /// Accumulated thought signature to emit at block completion
     pending_signature: Option<String>,
+    /// Whether the pending signature originated from a function call part
+    signature_from_function_call: bool,
     saw_tool: bool,
     emitted_tool_calls: HashSet<String>,
     final_usage: Option<Usage>,
@@ -61,6 +63,7 @@ impl<S> GeminiSseParser<S> {
             reasoning_index: None,
             last_reasoning: String::new(),
             pending_signature: None,
+            signature_from_function_call: false,
             saw_tool: false,
             emitted_tool_calls: HashSet::new(),
             final_usage: None,
@@ -156,6 +159,30 @@ impl<S> GeminiSseParser<S> {
             if let Some(content) = candidate.get("content")
                 && let Some(parts) = content.get("parts").and_then(|v| v.as_array())
             {
+                // Capture thought signatures from any part (text, thought, or functionCall).
+                // Prefer signatures attached to function calls when present.
+                for part in parts {
+                    let mut signature = part
+                        .get("thoughtSignature")
+                        .and_then(serde_json::Value::as_str)
+                        .map(|sig| (sig, part.get("functionCall").is_some()));
+
+                    if signature.is_none() {
+                        signature = part
+                            .get("functionCall")
+                            .and_then(|call| call.get("thoughtSignature"))
+                            .and_then(serde_json::Value::as_str)
+                            .map(|sig| (sig, true));
+                    }
+
+                    if let Some((sig, is_function_call)) = signature
+                        && (is_function_call || !self.signature_from_function_call)
+                    {
+                        self.pending_signature = Some(sig.to_string());
+                        self.signature_from_function_call = is_function_call;
+                    }
+                }
+
                 // First pass: process thought parts (reasoning)
                 let mut combined_reasoning = String::new();
                 for part in parts {
@@ -167,10 +194,6 @@ impl<S> GeminiSseParser<S> {
                         // Accumulate thought text
                         if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
                             combined_reasoning.push_str(text);
-                        }
-                        // Capture thought signature (may arrive in later chunk)
-                        if let Some(sig) = part.get("thoughtSignature").and_then(|v| v.as_str()) {
-                            self.pending_signature = Some(sig.to_string());
                         }
                     }
                 }
@@ -290,11 +313,24 @@ impl<S> GeminiSseParser<S> {
             self.emitted_done = true;
 
             // Close reasoning block with signature if present
+            if self.reasoning_index.is_none() && self.pending_signature.is_some() {
+                let index = self.next_index;
+                self.next_index += 1;
+                self.reasoning_index = Some(index);
+                self.pending.push_back(StreamEvent::ContentBlockStart {
+                    index,
+                    block_type: ContentBlockType::Reasoning,
+                    id: None,
+                    name: None,
+                });
+            }
+
             if let Some(index) = self.reasoning_index.take() {
                 // Emit signature if we accumulated one
                 if let Some(signature) = self.pending_signature.take() {
                     self.pending
                         .push_back(StreamEvent::ReasoningSignatureDelta { index, signature });
+                    self.signature_from_function_call = false;
                 }
                 self.pending
                     .push_back(StreamEvent::ContentBlockCompleted { index });
@@ -570,6 +606,75 @@ mod tests {
         assert!(
             has_block_completed,
             "Should emit ContentBlockCompleted for reasoning block"
+        );
+    }
+
+    /// Test: functionCall parts can carry thoughtSignature; emit reasoning signature on completion.
+    #[test]
+    fn test_function_call_signature_emitted_on_completion() {
+        let mut parser = create_test_parser();
+
+        // Chunk 1: Function call with thoughtSignature (no thought text)
+        let chunk1 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "name": "get_weather",
+                            "args": {"city": "Paris"}
+                        },
+                        "thoughtSignature": "func_call_signature_base64"
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk1).unwrap();
+
+        // Tool events are emitted; clear them for focused assertions
+        parser.pending.clear();
+
+        // Signature should be captured and marked as function-call origin
+        assert_eq!(
+            parser.pending_signature,
+            Some("func_call_signature_base64".to_string())
+        );
+        assert!(parser.signature_from_function_call);
+
+        // Chunk 2: Finish reason triggers reasoning block completion with signature
+        let chunk2 = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": { "parts": [] }
+            }]
+        });
+        parser.handle_chunk(chunk2).unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        let has_start = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::Reasoning,
+                    ..
+                }
+            )
+        });
+        assert!(
+            has_start,
+            "Should start a reasoning block for signature-only output"
+        );
+
+        let has_signature_delta = events.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ReasoningSignatureDelta { signature, .. }
+                    if signature == "func_call_signature_base64"
+            )
+        });
+        assert!(
+            has_signature_delta,
+            "Should emit ReasoningSignatureDelta for functionCall signatures"
         );
     }
 

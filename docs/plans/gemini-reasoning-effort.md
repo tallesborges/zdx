@@ -165,11 +165,19 @@ Each `Part` in the response `parts` array may include:
 - `thought`: `boolean` - when `true`, indicates this part represents model reasoning
 - `thoughtSignature`: `string` (base64-encoded) - opaque signature for context preservation
 - `text`: `string` - when `thought: true`, contains the thought summary text
+- `functionCall`: signatures may also appear on functionCall parts (Gemini 3 requirement)
+
+**Signature precedence (implementation detail)**
+- When both functionCall and non-functionCall signatures appear in the same response,
+  prefer the **functionCall** signature so we satisfy the Gemini requirement that
+  the first functionCall part’s signature is preserved. This avoids overwriting the
+  required signature with a later, optional one.
 
 ### Streaming Behavior
 - Thought summaries arrive as rolling incremental chunks during streaming
 - May arrive in parts with empty `text` (signature-only chunks at end)
 - Parser must check for `thought: true` even when text is empty
+- `thoughtSignature` can arrive on `functionCall` parts; capture even if no thought text
 - Final signature may arrive in the last chunk
 
 ### Key Differences from Anthropic
