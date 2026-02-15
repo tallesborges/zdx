@@ -809,6 +809,36 @@ impl TranscriptState {
             false
         }
     }
+
+    /// Toggles tool output details for the tool cell rendered at `line`, if the
+    /// clicked line is the output disclosure row.
+    pub fn toggle_tool_output_for_line(&mut self, line: usize) -> bool {
+        let Some(mapping) = self.position_map.get_by_global_line(line) else {
+            return false;
+        };
+
+        if !matches!(
+            mapping.interaction,
+            Some(LineInteraction::ToggleToolOutput)
+        ) {
+            return false;
+        }
+
+        let Some(cell_idx) = self.scroll.cell_index_for_line(line) else {
+            return false;
+        };
+        let Some(cell) = self.cells.get_mut(cell_idx) else {
+            return false;
+        };
+
+        if cell.toggle_tool_output_expanded() {
+            self.wrap_cache.clear();
+            self.invalidate_line_info();
+            true
+        } else {
+            false
+        }
+    }
 }
 
 fn is_word_grapheme(grapheme: &str) -> bool {
@@ -819,6 +849,7 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 mod tests {
     use super::*;
     use crate::transcript::{HistoryCell, LineMapping};
+    use zdx_core::core::events::ToolOutput;
 
     #[test]
     fn test_scroll_accumulator_acceleration() {
@@ -1027,6 +1058,49 @@ mod tests {
         transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
 
         assert!(!transcript.toggle_tool_args_for_line(0));
+    }
+
+    #[test]
+    fn test_toggle_tool_output_for_line() {
+        let mut tool =
+            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+        tool.set_tool_result(ToolOutput::success(serde_json::json!({
+            "content": "line1\nline2"
+        })));
+        let tool_id = tool.id();
+
+        let mut transcript = TranscriptState::with_cells(vec![tool]);
+        transcript.position_map.clear();
+        transcript.position_map.push(LineMapping {
+            text: "─ output ─ ▶".to_string(),
+            interaction: Some(LineInteraction::ToggleToolOutput),
+        });
+        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
+
+        assert!(transcript.toggle_tool_output_for_line(0));
+
+        let all_text: String = transcript.cells()[0]
+            .display_lines(80, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+        assert!(all_text.contains("─ output ─ ▼"));
+    }
+
+    #[test]
+    fn test_toggle_tool_output_for_line_ignores_non_header_lines() {
+        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+        let tool_id = tool.id();
+        let mut transcript = TranscriptState::with_cells(vec![tool]);
+
+        transcript.position_map.clear();
+        transcript.position_map.push(LineMapping {
+            text: "output line".to_string(),
+            interaction: None,
+        });
+        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
+
+        assert!(!transcript.toggle_tool_output_for_line(0));
     }
 
     #[test]
