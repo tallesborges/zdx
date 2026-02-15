@@ -60,22 +60,30 @@ pub(crate) mod string_or_vec {
         match value {
             None => Ok(None),
             Some(StringOrVec::String(s)) => {
-                if s.is_empty() {
+                let trimmed = s.trim();
+                if trimmed.is_empty() {
                     Ok(None)
                 } else {
-                    Ok(Some(vec![s]))
+                    Ok(Some(vec![trimmed.to_string()]))
                 }
             }
             Some(StringOrVec::Vec(v)) => {
-                // Validate every element is a non-empty string
-                for item in &v {
-                    if item.is_empty() {
+                // Validate and normalize every element as non-empty trimmed strings.
+                let mut normalized = Vec::with_capacity(v.len());
+                for item in v {
+                    let trimmed = item.trim();
+                    if trimmed.is_empty() {
                         return Err(de::Error::custom(
                             "search_queries array contains empty string",
                         ));
                     }
+                    normalized.push(trimmed.to_string());
                 }
-                if v.is_empty() { Ok(None) } else { Ok(Some(v)) }
+                if normalized.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(normalized))
+                }
             }
         }
     }

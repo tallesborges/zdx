@@ -95,8 +95,13 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         }
     };
 
+    let objective = input.objective.trim();
+    if objective.is_empty() {
+        return ToolOutput::failure("invalid_input", "objective cannot be empty", None);
+    }
+
     // Validate objective length
-    if input.objective.len() > 5000 {
+    if objective.len() > 5000 {
         return ToolOutput::failure(
             "invalid_input",
             "Objective exceeds maximum length of 5000 characters",
@@ -140,7 +145,7 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
 
     // Build request
     let request = SearchRequest {
-        objective: input.objective,
+        objective: objective.to_string(),
         search_queries: input.search_queries,
         max_results: input.max_results,
         mode: "agentic",
@@ -200,6 +205,8 @@ pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
 
 #[cfg(test)]
 mod tests {
+    use std::path::PathBuf;
+
     use super::*;
 
     #[test]
@@ -266,5 +273,39 @@ mod tests {
         });
         let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
         assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_whitespace_string_becomes_none() {
+        let input = json!({
+            "objective": "test query",
+            "search_queries": "   "
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.search_queries.is_none());
+    }
+
+    #[test]
+    fn test_search_queries_array_items_are_trimmed() {
+        let input = json!({
+            "objective": "test query",
+            "search_queries": ["  alpha  ", "beta"]
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec!["alpha".to_string(), "beta".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_rejects_empty_objective() {
+        let ctx = ToolContext::new(PathBuf::from("."), None);
+        let output = execute(&json!({"objective": "   "}), &ctx).await;
+
+        assert!(!output.is_ok());
+        let payload = serde_json::to_value(output).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "objective cannot be empty");
     }
 }

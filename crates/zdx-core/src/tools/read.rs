@@ -33,10 +33,17 @@ where
                     .map(Some)
                     .map_err(|_overflow| D::Error::custom("number too large"))
             }),
-        Some(Value::String(s)) => s
-            .parse::<usize>()
-            .map(Some)
-            .map_err(|_parse| D::Error::custom(format!("invalid number string: {s}"))),
+        Some(Value::String(s)) => {
+            let trimmed = s.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<usize>()
+                    .map(Some)
+                    .map_err(|_parse| D::Error::custom(format!("invalid number string: {s}")))
+            }
+        }
         Some(_) => Err(D::Error::custom("expected number or numeric string")),
     }
 }
@@ -146,7 +153,12 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let file_path = match resolve_existing_path(&input.path, &ctx.root) {
+    let path = input.path.trim();
+    if path.is_empty() {
+        return ToolOutput::failure("invalid_input", "path cannot be empty", None);
+    }
+
+    let file_path = match resolve_existing_path(path, &ctx.root) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -651,6 +663,19 @@ mod tests {
         assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 
+    #[test]
+    fn test_read_rejects_empty_path() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "   "});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "path cannot be empty");
+    }
+
     // String-to-number coercion tests (AI sometimes passes "600" instead of 600)
 
     #[test]
@@ -669,6 +694,23 @@ mod tests {
         assert_eq!(data["content"], "line2\nline3\n");
         assert_eq!(data["offset"], 2);
         assert_eq!(data["lines_shown"], 2);
+    }
+
+    #[test]
+    fn test_read_offset_and_limit_empty_strings_use_defaults() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("lines.txt");
+        fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "lines.txt", "offset": " ", "limit": ""});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["offset"], 1);
+        assert_eq!(data["lines_shown"], 3);
+        assert_eq!(data["content"], "line1\nline2\nline3\n");
     }
 
     // MIME detection tests

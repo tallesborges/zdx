@@ -54,11 +54,16 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
+    let path = input.path.trim();
+    if path.is_empty() {
+        return ToolOutput::failure("invalid_input", "path cannot be empty", None);
+    }
+
     // Resolve path (relative to root, or absolute as-is)
-    let file_path = if std::path::Path::new(&input.path).is_absolute() {
-        std::path::PathBuf::from(&input.path)
+    let file_path = if std::path::Path::new(path).is_absolute() {
+        std::path::PathBuf::from(path)
     } else {
-        ctx.root.join(&input.path)
+        ctx.root.join(path)
     };
 
     // Create parent directories if needed (mkdir -p behavior)
@@ -146,6 +151,19 @@ mod tests {
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    #[test]
+    fn test_write_rejects_empty_path() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "   ", "content": "hello"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "path cannot be empty");
     }
 
     #[test]
