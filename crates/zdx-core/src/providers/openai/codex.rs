@@ -22,6 +22,11 @@ const HEADER_SESSION_ID: &str = "session_id";
 const ORIGINATOR_VALUE: &str = "zdx";
 const USER_AGENT_VALUE: &str = concat!("zdx/", env!("CARGO_PKG_VERSION"));
 
+fn supports_reasoning_summary(model: &str) -> bool {
+    // Current Codex backend rejects `reasoning.summary` for Spark tier.
+    !model.eq_ignore_ascii_case("gpt-5.3-codex-spark")
+}
+
 /// Runtime config for `OpenAI` Codex requests.
 #[derive(Debug, Clone)]
 pub struct OpenAICodexConfig {
@@ -137,6 +142,8 @@ impl OpenAICodexClient {
             model: self.config.model.clone(),
             max_output_tokens: None,
             reasoning_effort: self.config.reasoning_effort.clone(),
+            reasoning_summary: supports_reasoning_summary(&self.config.model)
+                .then(|| "auto".to_string()),
             instructions,
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
@@ -181,4 +188,19 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
         headers.insert(HEADER_SESSION_ID, header_value);
     }
     headers
+}
+
+#[cfg(test)]
+mod tests {
+    use super::supports_reasoning_summary;
+
+    #[test]
+    fn spark_model_disables_reasoning_summary() {
+        assert!(!supports_reasoning_summary("gpt-5.3-codex-spark"));
+    }
+
+    #[test]
+    fn non_spark_models_keep_reasoning_summary() {
+        assert!(supports_reasoning_summary("gpt-5.3-codex"));
+    }
 }
