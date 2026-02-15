@@ -23,6 +23,7 @@ pub struct ResponsesConfig {
     pub model: String,
     pub max_output_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
+    pub reasoning_summary: Option<String>,
     pub instructions: Option<String>,
     pub text_verbosity: Option<String>,
     pub store: Option<bool>,
@@ -75,7 +76,7 @@ pub async fn send_responses_stream(
             .as_ref()
             .map(|effort| ReasoningConfig {
                 effort: effort.clone(),
-                summary: Some("detailed".to_string()),
+                summary: config.reasoning_summary.clone(),
             }),
         include: config.include.clone(),
         input,

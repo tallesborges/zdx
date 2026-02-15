@@ -7,7 +7,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
@@ -485,6 +485,10 @@ fn merge_tool_defs(
 
 /// Timeout for stream polling to allow interrupt checks.
 const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
+/// Abort threshold for repeated malformed-only tool turns.
+const MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS: usize = 3;
+const MALFORMED_TOOL_LOOP_ABORT_MESSAGE: &str =
+    "Aborting after repeated malformed tool calls with invalid JSON input";
 
 /// Runs a single turn of the agent using async channels.
 ///
@@ -506,6 +510,7 @@ pub async fn run_turn(
     let sender = EventSender::new(tx);
     let setup = build_run_turn_setup(config, options, thread_id)?;
     let mut messages = messages;
+    let mut consecutive_malformed_tool_turns = 0usize;
 
     loop {
         ensure_not_interrupted(&sender, None).await?;
@@ -520,7 +525,26 @@ pub async fn run_turn(
         let mut stream_state = consume_stream(stream, setup.provider, &sender).await?;
 
         if stream_state.needs_tool_execution() {
-            process_tool_turn(&mut messages, &mut stream_state.turn, &setup, &sender).await?;
+            let stats =
+                process_tool_turn(&mut messages, &mut stream_state.turn, &setup, &sender).await?;
+            if stats.executable == 0 && stats.malformed > 0 {
+                consecutive_malformed_tool_turns += 1;
+                if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
+                    sender
+                        .send_important(AgentEvent::Error {
+                            kind: ErrorKind::Parse,
+                            message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
+                            details: Some(
+                                "Provider repeatedly requested tool calls without valid arguments"
+                                    .to_string(),
+                            ),
+                        })
+                        .await;
+                    return Err(anyhow!(MALFORMED_TOOL_LOOP_ABORT_MESSAGE));
+                }
+            } else {
+                consecutive_malformed_tool_turns = 0;
+            }
             continue;
         }
 
@@ -1126,13 +1150,20 @@ struct ToolTurnOutcome {
     malformed_tools: Vec<(String, String, ToolOutput)>,
 }
 
+struct ToolTurnStats {
+    executable: usize,
+    malformed: usize,
+}
+
 async fn process_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: &mut AssistantTurnBuilder,
     setup: &RunTurnSetup,
     sender: &EventSender,
-) -> Result<()> {
+) -> Result<ToolTurnStats> {
     let outcome = finalize_tool_calls(turn, sender).await;
+    let executable_count = outcome.executable.len();
+    let malformed_count = outcome.malformed_results.len();
     emit_assistant_completed_if_present(sender, &turn.text).await;
     emit_malformed_tool_events(sender, outcome.malformed_tools).await;
 
@@ -1167,7 +1198,10 @@ async fn process_tool_turn(
         return Err(InterruptedError.into());
     }
 
-    Ok(())
+    Ok(ToolTurnStats {
+        executable: executable_count,
+        malformed: malformed_count,
+    })
 }
 
 async fn finalize_non_tool_turn(

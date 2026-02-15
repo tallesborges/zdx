@@ -90,6 +90,7 @@ impl OpenAIClient {
             model: self.config.model.clone(),
             max_output_tokens: Some(self.config.max_output_tokens),
             reasoning_effort: None,
+            reasoning_summary: None,
             instructions: None,
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
