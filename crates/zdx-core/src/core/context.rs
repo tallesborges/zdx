@@ -32,8 +32,6 @@ pub const MAX_MEMORY_FILE_SIZE: usize = 16 * 1024;
 
 /// Preferred memory index filename.
 pub const MEMORY_INDEX_FILE_NAME: &str = "MEMORY.md";
-/// Project-local ZDX directory name.
-
 /// Default prompt template used when template mode is enabled and no file is configured.
 const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
 
