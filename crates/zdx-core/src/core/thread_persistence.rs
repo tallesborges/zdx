@@ -1364,15 +1364,16 @@ impl MessageReplay {
             self.messages
                 .push(crate::providers::ChatMessage::assistant_blocks(blocks));
         }
+        // If there are open tool_uses without results (e.g. bot crashed mid-execution),
+        // inject cancelled tool_results now so the API sees them right after the tool_use.
+        for tool_use_id in std::mem::take(&mut self.open_tool_uses) {
+            self.pending_tool_results
+                .push(cancelled_tool_result(tool_use_id));
+        }
         self.flush_tool_results();
     }
 
     fn finalize(mut self) -> Vec<crate::providers::ChatMessage> {
-        self.flush_pending_assistant();
-        for tool_use_id in self.open_tool_uses.drain(..) {
-            self.pending_tool_results
-                .push(cancelled_tool_result(tool_use_id));
-        }
         self.flush_pending_assistant();
         self.messages
     }
@@ -2296,5 +2297,39 @@ mod tests {
         // Test is_empty
         assert!(!u1.is_empty());
         assert!(Usage::default().is_empty());
+    }
+
+    /// Regression test: orphaned `tool_use` (bot crashed mid-execution) followed by
+    /// user message must produce a cancelled `tool_result` immediately after the
+    /// assistant `tool_use` block, not at the end of the conversation.
+    #[test]
+    fn test_orphaned_tool_use_gets_cancelled_before_user_message() {
+        let events = vec![
+            ThreadEvent::user_message("do something"),
+            ThreadEvent::tool_use("t1", "bash", json!({"command": "sleep 999"})),
+            // No tool_result — bot crashed here
+            ThreadEvent::user_message("hello again"),
+        ];
+        let messages = thread_events_to_messages(events);
+
+        // Expected: user, assistant(tool_use), tool_result(cancelled), user
+        assert_eq!(messages.len(), 4, "messages: {messages:#?}");
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+        assert_eq!(messages[2].role, "user"); // tool_results role is "user" in Anthropic API
+        assert_eq!(messages[3].role, "user");
+
+        // Verify the tool_result is marked as cancelled
+        if let crate::providers::MessageContent::Blocks(blocks) = &messages[2].content {
+            match &blocks[0] {
+                crate::providers::ChatContentBlock::ToolResult(result) => {
+                    assert_eq!(result.tool_use_id, "t1");
+                    assert!(result.is_error);
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        } else {
+            panic!("expected blocks content for tool_result message");
+        }
     }
 }
