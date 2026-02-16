@@ -1,3 +1,6 @@
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_core::core::events::AgentEvent;
@@ -18,6 +21,10 @@ struct ReplyContext {
 
 /// Minimum interval between Telegram status message edits (avoid rate limiting).
 const STATUS_DEBOUNCE: std::time::Duration = std::time::Duration::from_secs(3);
+const MEDIA_BLOCK_OPEN: &str = "<medias>";
+const MEDIA_BLOCK_CLOSE: &str = "</medias>";
+const MEDIA_TAG_OPEN: &str = "<media";
+const MEDIA_TAG_CLOSE: &str = "</media>";
 
 ///
 /// # Errors
@@ -537,7 +544,10 @@ async fn send_final_response(
     status_message_id: Option<i64>,
     final_text: &str,
 ) -> Result<()> {
-    if final_text.trim().is_empty() {
+    let parsed = parse_final_response(final_text);
+    let has_text = !parsed.text.trim().is_empty();
+
+    if !has_text && parsed.media_paths.is_empty() {
         if let Some(msg_id) = status_message_id
             && let Err(err) = context
                 .client()
@@ -549,6 +559,34 @@ async fn send_final_response(
         return Ok(());
     }
 
+    if has_text {
+        send_text_response(
+            context,
+            incoming,
+            reply_ctx,
+            status_message_id,
+            parsed.text.as_str(),
+        )
+        .await?;
+    } else if let Some(msg_id) = status_message_id
+        && let Err(err) = context
+            .client()
+            .delete_message(incoming.chat_id, msg_id)
+            .await
+    {
+        eprintln!("Failed to delete empty status message {msg_id}: {err}");
+    }
+
+    send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await
+}
+
+async fn send_text_response(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+    status_message_id: Option<i64>,
+    text: &str,
+) -> Result<()> {
     eprintln!("Sending reply for chat {}", incoming.chat_id);
 
     if let Some(ref reply_parameters) = reply_ctx.cross_topic_reply_parameters {
@@ -565,7 +603,7 @@ async fn send_final_response(
             .client()
             .send_message_with_reply_params(
                 incoming.chat_id,
-                final_text,
+                text,
                 reply_ctx.topic_id,
                 Some(reply_parameters.clone()),
             )
@@ -576,7 +614,7 @@ async fn send_final_response(
     if let Some(msg_id) = status_message_id {
         let edit_result = context
             .client()
-            .edit_message_text(incoming.chat_id, msg_id, final_text, None)
+            .edit_message_text(incoming.chat_id, msg_id, text, None)
             .await;
         if let Err(ref err) = edit_result {
             eprintln!(
@@ -594,7 +632,7 @@ async fn send_final_response(
                 .client()
                 .send_message(
                     incoming.chat_id,
-                    final_text,
+                    text,
                     reply_ctx.reply_to_message_id,
                     reply_ctx.topic_id,
                 )
@@ -603,7 +641,7 @@ async fn send_final_response(
                 if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
                     context
                         .client()
-                        .send_message(incoming.chat_id, final_text, None, reply_ctx.topic_id)
+                        .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
                         .await?;
                 } else {
                     send_result?;
@@ -615,7 +653,7 @@ async fn send_final_response(
             .client()
             .send_message(
                 incoming.chat_id,
-                final_text,
+                text,
                 reply_ctx.reply_to_message_id,
                 reply_ctx.topic_id,
             )
@@ -624,7 +662,7 @@ async fn send_final_response(
             if e.to_string().contains("REPLY_MESSAGE_ID_INVALID") {
                 context
                     .client()
-                    .send_message(incoming.chat_id, final_text, None, reply_ctx.topic_id)
+                    .send_message(incoming.chat_id, text, None, reply_ctx.topic_id)
                     .await?;
             } else {
                 send_result?;
@@ -633,6 +671,228 @@ async fn send_final_response(
     }
 
     Ok(())
+}
+
+async fn send_media_responses(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+    media_paths: &[PathBuf],
+    sent_text: bool,
+) -> Result<()> {
+    if media_paths.is_empty() {
+        return Ok(());
+    }
+
+    let valid_media_paths: Vec<PathBuf> = media_paths
+        .iter()
+        .filter(|path| is_valid_media_path(path))
+        .cloned()
+        .collect();
+
+    if valid_media_paths.is_empty() {
+        if !sent_text {
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    "I couldn't find a valid local media file to send.",
+                    None,
+                    reply_ctx.topic_id,
+                )
+                .await?;
+        }
+        return Ok(());
+    }
+
+    for media_path in valid_media_paths {
+        let reply_parameters = reply_ctx.cross_topic_reply_parameters.clone();
+        let reply_to_message_id = if reply_parameters.is_some() {
+            None
+        } else {
+            reply_ctx.reply_to_message_id
+        };
+
+        let send_result = if is_image_path(&media_path) {
+            context
+                .client()
+                .send_photo_from_path(
+                    incoming.chat_id,
+                    &media_path,
+                    None,
+                    reply_to_message_id,
+                    reply_ctx.topic_id,
+                    reply_parameters,
+                )
+                .await
+        } else {
+            context
+                .client()
+                .send_document_from_path(
+                    incoming.chat_id,
+                    &media_path,
+                    None,
+                    reply_to_message_id,
+                    reply_ctx.topic_id,
+                    reply_parameters,
+                )
+                .await
+        };
+
+        if let Err(err) = send_result {
+            eprintln!("Failed to send media file {}: {err}", media_path.display());
+            context
+                .client()
+                .send_message(
+                    incoming.chat_id,
+                    &format!("Failed to send media file {}: {err}", media_path.display()),
+                    None,
+                    reply_ctx.topic_id,
+                )
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+#[derive(Default)]
+struct ParsedFinalResponse {
+    text: String,
+    media_paths: Vec<PathBuf>,
+}
+
+fn parse_final_response(final_text: &str) -> ParsedFinalResponse {
+    let text_without_wrappers = strip_media_wrappers(final_text);
+    let (text_without_media_tags, raw_media_values) = extract_media_tags(&text_without_wrappers);
+    let mut media_paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for raw in raw_media_values {
+        if let Some(path) = parse_media_path(&raw)
+            && seen.insert(path.clone())
+        {
+            media_paths.push(path);
+        }
+    }
+
+    ParsedFinalResponse {
+        text: normalize_reply_text(&text_without_media_tags),
+        media_paths,
+    }
+}
+
+fn strip_media_wrappers(input: &str) -> String {
+    input
+        .replace(MEDIA_BLOCK_OPEN, "")
+        .replace(MEDIA_BLOCK_CLOSE, "")
+}
+
+fn extract_media_tags(input: &str) -> (String, Vec<String>) {
+    let mut cleaned = String::new();
+    let mut media_values = Vec::new();
+    let mut cursor = 0;
+
+    while let Some(start_rel) = input[cursor..].find(MEDIA_TAG_OPEN) {
+        let start = cursor + start_rel;
+        let Some(after_tag_name) = input.as_bytes().get(start + MEDIA_TAG_OPEN.len()) else {
+            break;
+        };
+        // Skip accidental matches such as "<medias>".
+        if *after_tag_name == b's' {
+            let skip_to = start + MEDIA_TAG_OPEN.len();
+            cleaned.push_str(&input[cursor..skip_to]);
+            cursor = skip_to;
+            continue;
+        }
+
+        cleaned.push_str(&input[cursor..start]);
+
+        let Some(open_end_rel) = input[start..].find('>') else {
+            cleaned.push_str(&input[start..]);
+            cursor = input.len();
+            break;
+        };
+        let open_end = start + open_end_rel;
+        let open_tag = &input[start..=open_end];
+
+        if open_tag.ends_with("/>") {
+            cursor = open_end + 1;
+            continue;
+        }
+
+        let content_start = open_end + 1;
+        let Some(close_rel) = input[content_start..].find(MEDIA_TAG_CLOSE) else {
+            cleaned.push_str(&input[start..]);
+            cursor = input.len();
+            break;
+        };
+        let content_end = content_start + close_rel;
+        let inner = input[content_start..content_end].trim();
+        if !inner.is_empty() {
+            media_values.push(inner.to_string());
+        }
+
+        cursor = content_end + MEDIA_TAG_CLOSE.len();
+    }
+
+    if cursor < input.len() {
+        cleaned.push_str(&input[cursor..]);
+    }
+
+    (cleaned, media_values)
+}
+
+fn normalize_reply_text(text: &str) -> String {
+    let mut out = String::new();
+    let mut prev_blank = false;
+
+    for line in text.lines() {
+        let is_blank = line.trim().is_empty();
+        if is_blank && prev_blank {
+            continue;
+        }
+
+        if !out.is_empty() {
+            out.push('\n');
+        }
+        out.push_str(line);
+        prev_blank = is_blank;
+    }
+
+    out.trim().to_string()
+}
+
+fn parse_media_path(raw: &str) -> Option<PathBuf> {
+    let candidate = raw
+        .trim()
+        .trim_matches('`')
+        .trim_matches('"')
+        .trim_matches('\'')
+        .trim_start_matches('(')
+        .trim_end_matches(')')
+        .trim_end_matches([',', ';']);
+
+    if candidate.starts_with('/') {
+        Some(PathBuf::from(candidate))
+    } else {
+        None
+    }
+}
+
+fn is_valid_media_path(path: &Path) -> bool {
+    path.is_absolute() && std::fs::metadata(path).is_ok_and(|meta| meta.is_file())
+}
+
+fn is_image_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|ext| ext.to_str())
+        .is_some_and(|ext| {
+            matches!(
+                ext.to_ascii_lowercase().as_str(),
+                "png" | "jpg" | "jpeg" | "webp"
+            )
+        })
 }
 
 fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
@@ -665,4 +925,61 @@ fn is_worktree_create_command(text: &str) -> bool {
     ["/worktree create", "/worktree", "/wt"]
         .iter()
         .any(|cmd| command_matches(text, cmd))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use super::{is_image_path, parse_final_response};
+
+    #[test]
+    fn parse_final_response_extracts_media_wrapper_format() {
+        let parsed = parse_final_response("Done.\n<medias><media>/tmp/out.png</media></medias>");
+        assert_eq!(parsed.text, "Done.");
+        assert_eq!(parsed.media_paths, vec![PathBuf::from("/tmp/out.png")]);
+    }
+
+    #[test]
+    fn parse_final_response_extracts_multiple_media_entries() {
+        let parsed = parse_final_response(
+            "<medias><media>/tmp/one.png</media><media>/tmp/two.pdf</media></medias>",
+        );
+        assert!(parsed.text.is_empty());
+        assert_eq!(
+            parsed.media_paths,
+            vec![PathBuf::from("/tmp/one.png"), PathBuf::from("/tmp/two.pdf")]
+        );
+    }
+
+    #[test]
+    fn parse_final_response_extracts_bare_media_entries_without_wrapper() {
+        let parsed =
+            parse_final_response("Done.\n<media>/tmp/one.png</media>\n<media>/tmp/two.pdf</media>");
+        assert_eq!(parsed.text, "Done.");
+        assert_eq!(
+            parsed.media_paths,
+            vec![PathBuf::from("/tmp/one.png"), PathBuf::from("/tmp/two.pdf")]
+        );
+    }
+
+    #[test]
+    fn parse_final_response_ignores_media_path_attribute_format() {
+        let parsed = parse_final_response("<media path=\"/tmp/out.png\"/>");
+        assert!(parsed.text.is_empty());
+        assert!(parsed.media_paths.is_empty());
+    }
+
+    #[test]
+    fn parse_final_response_ignores_plain_absolute_paths_without_media_xml() {
+        let parsed = parse_final_response("/tmp/report.pdf");
+        assert_eq!(parsed.text, "/tmp/report.pdf");
+        assert!(parsed.media_paths.is_empty());
+    }
+
+    #[test]
+    fn image_extension_routing_is_detected() {
+        assert!(is_image_path(Path::new("/tmp/screenshot.webp")));
+        assert!(!is_image_path(Path::new("/tmp/report.pdf")));
+    }
 }
