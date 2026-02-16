@@ -268,3 +268,26 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 - `docs/ARCHITECTURE.md` — TUI implementation patterns, code organization
 - `docs/adr/` — Architecture Decision Records (the "why" behind decisions)
 - `AGENTS.md` — Development guide and conventions
+
+---
+
+## 14) Telegram bot media response (`zdx-bot`)
+
+When using the Telegram bot runtime, assistant turns may include media file directives.
+
+Contracts:
+
+- Text replies continue to work unchanged.
+- If assistant output contains explicit media directives, the bot may send media in addition to text.
+  - Supported entry formats:
+    - `<media>/absolute/path/to/file</media>`
+    - `<medias><media>/absolute/path/to/file1</media><media>/absolute/path/to/file2</media></medias>`
+- Any `<media>` directives are stripped from the user-visible reply text.
+- Routing by file type:
+  - Image-like extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) are sent via Telegram `sendPhoto`.
+  - Other files (including `.pdf`) are sent via Telegram `sendDocument`.
+- When multiple valid media paths are present, the bot attempts to send each one in order.
+- Bot only uses local absolute file paths for this flow (no URL fetch in this slice).
+- Preflight upload size checks:
+  - photos > 10 MB are rejected before upload
+  - documents > 50 MB are rejected before upload

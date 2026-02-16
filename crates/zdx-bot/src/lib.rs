@@ -4,8 +4,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
-use zdx_core::core::agent::{ToolConfig, ToolSelection};
-use zdx_core::tools::{ToolRegistry, ToolSet};
+use zdx_core::core::agent::ToolConfig;
 
 use crate::bot::{
     BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
@@ -62,16 +61,7 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
 
 async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
     let client = TelegramClient::new(settings.bot_token);
-    let mut tool_registry = ToolRegistry::builtins();
-    let (telegram_def, telegram_handler) = telegram::telegram_send_tool(client.clone());
-    tool_registry.register(telegram_def, telegram_handler);
-    let tool_config = ToolConfig::new(
-        tool_registry,
-        ToolSelection::Auto {
-            base: ToolSet::Default,
-            include: vec!["telegram_send".to_string()],
-        },
-    );
+    let tool_config = ToolConfig::default();
 
     let cancel_map = new_cancel_map();
     let queue_cancel_map = new_queue_cancel_map();
