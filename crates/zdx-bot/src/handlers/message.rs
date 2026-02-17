@@ -8,6 +8,7 @@ use zdx_core::core::thread_persistence::{self, ThreadEvent};
 use zdx_core::core::worktree;
 
 use crate::bot::context::BotContext;
+use crate::commands::{BotCommand, parse_command};
 use crate::ingest::AllowlistConfig;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters};
 use crate::{agent, ingest};
@@ -130,14 +131,17 @@ async fn handle_general_forum_commands(
     let Some(text) = incoming.text.as_deref() else {
         return Ok(false);
     };
-    if !is_new_command(text) && !is_worktree_create_command(text) {
+    let Some(command) = parse_command(text) else {
+        return Ok(false);
+    };
+    if !matches!(command, BotCommand::New | BotCommand::WorktreeCreate) {
         return Ok(false);
     }
 
-    let message = if is_new_command(text) {
-        "/new is not allowed in General."
-    } else {
-        "/worktree must be used inside a topic, not General."
+    let message = match command {
+        BotCommand::New => "/new is not allowed in General.",
+        BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
+        BotCommand::Rebuild => unreachable!("rebuild is handled by handle_rebuild_command"),
     };
     context
         .client()
@@ -154,10 +158,11 @@ async fn handle_rebuild_command(
     if !incoming.images.is_empty() || !incoming.audios.is_empty() {
         return Ok(false);
     }
-    let Some(text) = incoming.text.as_deref() else {
-        return Ok(false);
-    };
-    if !is_rebuild_command(text) {
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Rebuild)))
+    {
         return Ok(false);
     }
 
@@ -187,35 +192,38 @@ async fn handle_thread_commands(
     let Some(text) = incoming.text.as_deref() else {
         return Ok(false);
     };
+    let Some(command) = parse_command(text) else {
+        return Ok(false);
+    };
 
-    if is_new_command(text) {
-        if incoming.is_forum && topic_id.is_some() {
+    match command {
+        BotCommand::New => {
+            if incoming.is_forum && topic_id.is_some() {
+                context
+                    .client()
+                    .send_message(
+                        incoming.chat_id,
+                        "/new is not allowed in topics.",
+                        reply_to_message_id,
+                        topic_id,
+                    )
+                    .await?;
+                return Ok(true);
+            }
+            agent::clear_thread_history(thread_id)?;
             context
                 .client()
                 .send_message(
                     incoming.chat_id,
-                    "/new is not allowed in topics.",
+                    "History cleared. Start a new conversation anytime.",
                     reply_to_message_id,
                     topic_id,
                 )
                 .await?;
             return Ok(true);
         }
-        agent::clear_thread_history(thread_id)?;
-        context
-            .client()
-            .send_message(
-                incoming.chat_id,
-                "History cleared. Start a new conversation anytime.",
-                reply_to_message_id,
-                topic_id,
-            )
-            .await?;
-        return Ok(true);
-    }
-
-    if !is_worktree_create_command(text) {
-        return Ok(false);
+        BotCommand::Rebuild => return Ok(false),
+        BotCommand::WorktreeCreate => {}
     }
 
     let worktree_root = match worktree::ensure_worktree(context.root(), thread_id) {
@@ -900,31 +908,6 @@ fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {
         Some(topic_id) => format!("telegram-{chat_id}-topic-{topic_id}"),
         None => format!("telegram-{chat_id}"),
     }
-}
-
-fn command_matches(text: &str, command: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed == command {
-        return true;
-    }
-    if let Some(stripped) = trimmed.strip_prefix(command) {
-        return stripped.starts_with('@');
-    }
-    false
-}
-
-fn is_new_command(text: &str) -> bool {
-    command_matches(text, "/new")
-}
-
-fn is_rebuild_command(text: &str) -> bool {
-    command_matches(text, "/rebuild")
-}
-
-fn is_worktree_create_command(text: &str) -> bool {
-    ["/worktree create", "/worktree", "/wt"]
-        .iter()
-        .any(|cmd| command_matches(text, cmd))
 }
 
 #[cfg(test)]

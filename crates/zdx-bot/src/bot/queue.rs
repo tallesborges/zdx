@@ -5,6 +5,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::bot::context::{BotContext, QueueCancelKey};
+use crate::commands::is_topic_blocking_command;
 use crate::handlers::message::handle_message;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
@@ -62,7 +63,7 @@ pub(crate) async fn dispatch_message(
 
         // Check for commands that shouldn't create a topic
         if let Some(text) = message.text.as_deref()
-            && is_command_blocked_in_general(text)
+            && is_topic_blocking_command(text)
         {
             // Handle directly without creating a topic
             spawn_standalone(Arc::clone(context), message);
@@ -143,22 +144,6 @@ fn should_process_message(context: &BotContext, message: &Message) -> bool {
     }
 
     true
-}
-
-/// Check if a command should be blocked in General (not create a topic).
-fn is_command_blocked_in_general(text: &str) -> bool {
-    let trimmed = text.trim();
-    // /new, /worktree, and /rebuild commands shouldn't create topics
-    trimmed == "/new"
-        || trimmed.starts_with("/new@")
-        || trimmed == "/worktree"
-        || trimmed.starts_with("/worktree@")
-        || trimmed == "/worktree create"
-        || trimmed.starts_with("/worktree create@")
-        || trimmed == "/wt"
-        || trimmed.starts_with("/wt@")
-        || trimmed == "/rebuild"
-        || trimmed.starts_with("/rebuild@")
 }
 
 /// Generate a topic name from message text.
