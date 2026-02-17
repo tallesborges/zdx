@@ -235,6 +235,8 @@ Contracts:
 - Built-in template emits a `## Memory` section (with `<memory>` block) only when memory index content is present.
 - Proactive memory-save suggestion instructions are surface-gated: enabled for TUI and Telegram sessions, disabled for exec mode, automations, and subagent runs.
 - Explicit `remember X` still means immediate save regardless of proactive suggestion mode.
+- When proactive suggestions are enabled, memory instructions are note-first: save full detail in NotePlan notes, and only promote durable/reusable items into `MEMORY.md`.
+- `MEMORY.md` entries should be concise routing pointers; updates should prefer upsert/merge over append-only duplication.
 
 ---
 
