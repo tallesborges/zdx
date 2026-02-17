@@ -14,6 +14,7 @@ use crate::telegram::{CallbackQuery, TelegramClient, TelegramSettings};
 
 mod agent;
 mod bot;
+mod commands;
 mod handlers;
 mod ingest;
 pub mod telegram;
@@ -61,6 +62,14 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
 
 async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> Result<()> {
     let client = TelegramClient::new(settings.bot_token);
+    let command_specs = crate::commands::telegram_command_specs();
+    match client.set_my_commands(&command_specs).await {
+        Ok(()) => eprintln!(
+            "Telegram command menu updated ({} command(s)).",
+            command_specs.len()
+        ),
+        Err(err) => eprintln!("Failed to update Telegram command menu: {err}"),
+    }
     let tool_config = ToolConfig::default();
 
     let cancel_map = new_cancel_map();

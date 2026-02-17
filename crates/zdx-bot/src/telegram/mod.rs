@@ -256,6 +256,25 @@ impl TelegramClient {
     ///
     /// # Errors
     /// Returns an error if the operation fails.
+    pub(crate) async fn set_my_commands(
+        &self,
+        command_specs: &[crate::commands::TelegramCommandSpec],
+    ) -> Result<()> {
+        let commands = command_specs
+            .iter()
+            .map(|spec| TelegramBotCommand {
+                command: spec.command,
+                description: spec.description,
+            })
+            .collect();
+        let request = SetMyCommandsRequest { commands };
+        let _: bool = self.post("setMyCommands", &request).await?;
+        Ok(())
+    }
+
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
     pub async fn get_file(&self, file_id: &str) -> Result<TelegramFile> {
         let request = GetFileRequest { file_id };
         self.post("getFile", &request).await
@@ -863,6 +882,17 @@ struct GetUpdatesRequest {
     timeout: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
     allowed_updates: Option<Vec<&'static str>>,
+}
+
+#[derive(Debug, Serialize)]
+struct SetMyCommandsRequest<'a> {
+    commands: Vec<TelegramBotCommand<'a>>,
+}
+
+#[derive(Debug, Serialize)]
+struct TelegramBotCommand<'a> {
+    command: &'a str,
+    description: &'a str,
 }
 
 #[derive(Debug, Clone, Serialize)]
