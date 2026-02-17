@@ -51,8 +51,11 @@ pub async fn run_exec(
 ) -> Result<String> {
     use std::io::Write;
 
-    let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &options.root)?;
+    let effective = zdx_core::core::context::build_effective_system_prompt_with_paths(
+        config,
+        &options.root,
+        false,
+    )?;
 
     // Emit warnings from context loading to stderr
     for warning in &effective.warnings {

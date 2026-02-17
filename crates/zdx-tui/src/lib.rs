@@ -58,7 +58,7 @@ pub async fn run_interactive_chat_with_history(
     }
 
     let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &root)?;
+        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &root, true)?;
 
     // Print pre-TUI info to stderr (will be replaced by alternate screen)
     let mut err = stderr();

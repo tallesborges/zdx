@@ -95,9 +95,13 @@ pub(crate) fn spawn_agent_turn(
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
     // Build effective system prompt from config + AGENTS.md + memory + skills + optional surface rules.
-    let effective =
-        build_effective_system_prompt_with_paths_and_surface_rules(config, root, bot_surface_rules)
-            .context("build system prompt")?;
+    let effective = build_effective_system_prompt_with_paths_and_surface_rules(
+        config,
+        root,
+        bot_surface_rules,
+        true,
+    )
+    .context("build system prompt")?;
     let system_prompt = effective.prompt;
 
     let agent_opts = AgentOptions {

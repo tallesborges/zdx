@@ -131,7 +131,8 @@ pub fn execute_handoff_submit(
         .map_err(|e| e.to_string())?;
 
     let context_paths =
-        match zdx_core::core::context::build_effective_system_prompt_with_paths(config, root) {
+        match zdx_core::core::context::build_effective_system_prompt_with_paths(config, root, true)
+        {
             Ok(effective) => effective.loaded_agents_paths,
             Err(_) => Vec::new(),
         };

@@ -140,9 +140,10 @@ pub fn resolve_root_display(path: PathBuf) -> UiEvent {
 
 /// Refreshes the effective system prompt for a new root.
 pub fn refresh_system_prompt(config: &zdx_core::config::Config, path: &Path) -> UiEvent {
-    let result = zdx_core::core::context::build_effective_system_prompt_with_paths(config, path)
-        .map(|context| context.prompt)
-        .map_err(|error| format!("Failed to refresh system prompt: {error}"));
+    let result =
+        zdx_core::core::context::build_effective_system_prompt_with_paths(config, path, true)
+            .map(|context| context.prompt)
+            .map_err(|error| format!("Failed to refresh system prompt: {error}"));
 
     UiEvent::SystemPromptRefreshed { result }
 }
@@ -281,7 +282,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
 
         // Load AGENTS.md paths and skills
         let context =
-            zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &root)
+            zdx_core::core::context::build_effective_system_prompt_with_paths(&config, &root, true)
                 .unwrap_or_default();
 
         UiEvent::Thread(ThreadUiEvent::Created {
