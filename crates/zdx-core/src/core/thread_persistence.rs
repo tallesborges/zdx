@@ -1295,7 +1295,8 @@ impl MessageReplay {
             return;
         }
 
-        self.flush_pending_assistant();
+        self.flush_pending_assistant_blocks();
+        self.cancel_open_tool_uses();
         self.messages.push(ChatMessage {
             role,
             content: MessageContent::Text(text),
@@ -1304,7 +1305,7 @@ impl MessageReplay {
 
     fn handle_tool_result(&mut self, tool_use_id: String, output: &Value, ok: bool) {
         self.open_tool_uses.retain(|id| id != &tool_use_id);
-        self.flush_pending_assistant();
+        self.flush_pending_assistant_blocks();
         self.pending_tool_results.push(crate::tools::ToolResult {
             tool_use_id,
             content: crate::tools::ToolResultContent::Text(
@@ -1347,6 +1348,14 @@ impl MessageReplay {
         }
     }
 
+    fn cancel_open_tool_uses(&mut self) {
+        for tool_use_id in std::mem::take(&mut self.open_tool_uses) {
+            self.pending_tool_results
+                .push(cancelled_tool_result(tool_use_id));
+        }
+        self.flush_tool_results();
+    }
+
     fn take_assistant_blocks(&mut self) -> Vec<crate::providers::ChatContentBlock> {
         let mut blocks = Vec::new();
         for reasoning in std::mem::take(&mut self.pending_reasoning) {
@@ -1358,23 +1367,18 @@ impl MessageReplay {
         blocks
     }
 
-    fn flush_pending_assistant(&mut self) {
+    fn flush_pending_assistant_blocks(&mut self) {
         let blocks = self.take_assistant_blocks();
         if !blocks.is_empty() {
             self.messages
                 .push(crate::providers::ChatMessage::assistant_blocks(blocks));
         }
-        // If there are open tool_uses without results (e.g. bot crashed mid-execution),
-        // inject cancelled tool_results now so the API sees them right after the tool_use.
-        for tool_use_id in std::mem::take(&mut self.open_tool_uses) {
-            self.pending_tool_results
-                .push(cancelled_tool_result(tool_use_id));
-        }
         self.flush_tool_results();
     }
 
     fn finalize(mut self) -> Vec<crate::providers::ChatMessage> {
-        self.flush_pending_assistant();
+        self.flush_pending_assistant_blocks();
+        self.cancel_open_tool_uses();
         self.messages
     }
 }
@@ -2132,6 +2136,53 @@ mod tests {
 
         // Message 5: Final assistant message
         assert_eq!(messages[5].role, "assistant");
+    }
+
+    #[test]
+    fn test_events_to_messages_parallel_tool_results_do_not_cancel_pending_tools() {
+        use std::collections::HashMap;
+
+        use crate::providers::{ChatContentBlock, MessageContent, ReplayToken};
+
+        // Regression: when one tool_result arrives before another from the same
+        // assistant tool_use turn, replay must NOT inject a cancelled result for
+        // the still-pending tool.
+        let events = vec![
+            ThreadEvent::user_message("find wife contact"),
+            ThreadEvent::reasoning(
+                Some("Checking tools".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig1".to_string(),
+                }),
+            ),
+            ThreadEvent::tool_use("t1", "read", json!({"path": "a.md"})),
+            ThreadEvent::tool_use("t2", "read", json!({"path": "b.md"})),
+            ThreadEvent::tool_result("t1", json!({"ok": true}), true),
+            ThreadEvent::tool_result("t2", json!({"ok": true}), true),
+            ThreadEvent::assistant_message("Done."),
+        ];
+
+        let messages = thread_events_to_messages(events);
+
+        let mut counts: HashMap<String, usize> = HashMap::new();
+        for message in &messages {
+            let MessageContent::Blocks(blocks) = &message.content else {
+                continue;
+            };
+            for block in blocks {
+                if let ChatContentBlock::ToolResult(result) = block {
+                    *counts.entry(result.tool_use_id.clone()).or_insert(0) += 1;
+                    assert!(
+                        !result.is_error,
+                        "tool result for {} should not be cancelled",
+                        result.tool_use_id
+                    );
+                }
+            }
+        }
+
+        assert_eq!(counts.get("t1"), Some(&1));
+        assert_eq!(counts.get("t2"), Some(&1));
     }
 
     #[test]
