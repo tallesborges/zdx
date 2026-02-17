@@ -80,7 +80,14 @@ All detailed memory lives in NotePlan (second brain) and must be read on demand.
 1. Use the index to locate relevant NotePlan notes.
 2. Load only the specific NotePlan note(s) needed for the task.
 3. Never load everything by default.
+{% if memory_suggestions %}
+4. Suggest saving clearly noteworthy items (decisions, preferences, facts, useful links, learnings, recurring patterns) with one line at the end of the response: `💡 Want me to save [specific item] to [specific note]?`
+5. Suggest sparingly: at most once per response, only when the item is genuinely useful later.
+6. If user says yes, save immediately. If user says no or ignores it, move on and don't repeat.
+7. If the user explicitly says "remember X", save immediately without asking first.
+{% else %}
 4. Only update memory when the user explicitly says "remember X".
+{% endif %}
 
 ### Updating Memory
 - Write new facts into the appropriate NotePlan note.

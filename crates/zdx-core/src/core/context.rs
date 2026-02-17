@@ -122,6 +122,7 @@ struct PromptTemplateVars {
     base_prompt: String,
     project_context: String,
     memory_index: String,
+    memory_suggestions: bool,
     surface_rules: String,
     skills_list: Vec<PromptTemplateSkill>,
     subagents_config: Option<PromptTemplateSubagents>,
@@ -134,6 +135,7 @@ struct PromptTemplateSections<'a> {
     base_prompt: Option<&'a str>,
     project_context: Option<&'a str>,
     memory_index: Option<&'a str>,
+    memory_suggestions: bool,
     surface_rules: Option<&'a str>,
     skills_list: &'a [Skill],
     subagents_enabled: bool,
@@ -266,6 +268,7 @@ fn build_prompt_template_vars(
         base_prompt,
         project_context,
         memory_index,
+        memory_suggestions: sections.memory_suggestions,
         surface_rules,
         skills_list,
         subagents_config,
@@ -604,8 +607,14 @@ fn render_system_prompt_with_fallback(
 pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
+    memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
-    build_effective_system_prompt_with_paths_and_surface_rules(config, root, None)
+    build_effective_system_prompt_with_paths_and_surface_rules(
+        config,
+        root,
+        None,
+        memory_suggestions,
+    )
 }
 
 /// Builds the effective system prompt by combining config, AGENTS.md files,
@@ -618,6 +627,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
     config: &Config,
     root: &Path,
     surface_rules: Option<&str>,
+    memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
     let base_prompt = config.effective_system_prompt()?;
     let PromptContextSectionsResult {
@@ -646,6 +656,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
             base_prompt: base_prompt.as_deref(),
             project_context: project_context_block.as_deref(),
             memory_index: memory_index.as_deref(),
+            memory_suggestions,
             surface_rules,
             skills_list: &skills,
             subagents_enabled: config.subagents.enabled,
@@ -1008,6 +1019,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
@@ -1028,6 +1040,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
@@ -1048,6 +1061,33 @@ mod tests {
     }
 
     #[test]
+    fn test_render_prompt_template_can_branch_on_memory_suggestions_flag() {
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "anthropic:claude-opus-4-6",
+            PromptTemplateSections {
+                base_prompt: Some("hello"),
+                project_context: None,
+                memory_index: None,
+                memory_suggestions: true,
+                surface_rules: None,
+                skills_list: &[],
+                subagents_enabled: false,
+                subagent_models: &[],
+            },
+        );
+
+        let rendered = render_prompt_template(
+            "{% if memory_suggestions %}MEMORY_SUGGESTIONS_ON{% endif %}",
+            &vars,
+        )
+        .unwrap()
+        .unwrap_or_default();
+
+        assert!(rendered.contains("MEMORY_SUGGESTIONS_ON"));
+    }
+
+    #[test]
     fn test_render_prompt_template_supports_structured_skills_and_subagents() {
         let skills = vec![Skill {
             name: "demo-skill".to_string(),
@@ -1065,6 +1105,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &skills,
                 subagents_enabled: true,
@@ -1094,6 +1135,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
@@ -1112,6 +1154,7 @@ mod tests {
                 base_prompt: Some("hello"),
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
@@ -1143,7 +1186,8 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(!prompt.contains(
@@ -1172,7 +1216,8 @@ mod tests {
         };
         config.prompt_template.file = None;
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("<environment>"));
@@ -1208,12 +1253,84 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("<memory>"));
         assert!(prompt.contains("Remember this memory"));
         assert!(prompt.contains("## Memory"));
+    }
+
+    #[test]
+    fn test_template_mode_includes_proactive_memory_suggestions_when_enabled() {
+        let dir = tempdir().unwrap();
+        let zdx_home = setup_temp_zdx_home();
+        fs::write(
+            zdx_home.path().join(MEMORY_INDEX_FILE_NAME),
+            "Remember this memory",
+        )
+        .unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), true).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("💡 Want me to save"));
+        assert!(prompt.contains("Suggest sparingly"));
+        assert!(prompt.contains(
+            "If the user explicitly says \"remember X\", save immediately without asking first."
+        ));
+    }
+
+    #[test]
+    fn test_template_mode_omits_proactive_memory_suggestions_when_disabled() {
+        let dir = tempdir().unwrap();
+        let zdx_home = setup_temp_zdx_home();
+        fs::write(
+            zdx_home.path().join(MEMORY_INDEX_FILE_NAME),
+            "Remember this memory",
+        )
+        .unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(!prompt.contains("💡 Want me to save"));
+        assert!(
+            prompt.contains("Only update memory when the user explicitly says \"remember X\".")
+        );
     }
 
     #[test]
@@ -1225,6 +1342,7 @@ mod tests {
                 base_prompt: None,
                 project_context: None,
                 memory_index: None,
+                memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
                 subagents_enabled: false,
@@ -1266,6 +1384,7 @@ mod tests {
             &config,
             dir.path(),
             Some("Telegram output rules"),
+            false,
         )
         .unwrap();
         let prompt = effective.prompt.unwrap_or_default();
@@ -1301,7 +1420,8 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("Prompt=Base prompt"));
         assert!(prompt.contains(&format!("Root={}", dir.path().display())));
@@ -1331,7 +1451,8 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
@@ -1362,7 +1483,8 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
@@ -1389,7 +1511,8 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths(&config, dir.path()).unwrap();
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(!prompt.contains("Available model overrides"));
     }

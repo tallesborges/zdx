@@ -211,7 +211,7 @@ Error:
 - Prompt templating:
   - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
   - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
-  - Render context includes: `agent_identity`, `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
+  - Render context includes: `agent_identity`, `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `memory_suggestions`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
   - Built-in template emits `<surface_rules>` only when `surface_rules` is present/non-empty.
   - On custom template load/render failure, ZDX warns and falls back to the built-in template.
   - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
@@ -233,6 +233,8 @@ Contracts:
 - `MEMORY.md` content is capped at 16 KiB with truncation warning.
 - Only `MEMORY.md` index content is injected. Detailed memory lives in NotePlan and is accessed on-demand via the `noteplan-notes` skill.
 - Built-in template emits a `## Memory` section (with `<memory>` block) only when memory index content is present.
+- Proactive memory-save suggestion instructions are surface-gated: enabled for TUI and Telegram sessions, disabled for exec mode, automations, and subagent runs.
+- Explicit `remember X` still means immediate save regardless of proactive suggestion mode.
 
 ---
 
