@@ -83,8 +83,14 @@ All detailed memory lives in NotePlan (second brain) and must be read on demand.
 {% if memory_suggestions %}
 4. Suggest saving clearly noteworthy items (decisions, preferences, facts, useful links, learnings, recurring patterns) with one line at the end of the response: `💡 Want me to save [specific item] to [specific note]?`
 5. Suggest sparingly: at most once per response, only when the item is genuinely useful later.
-6. If user says yes, save immediately. If user says no or ignores it, move on and don't repeat.
-7. If the user explicitly says "remember X", save immediately without asking first.
+6. If user says yes, save immediately: write full detail to the NotePlan note first.
+7. Treat `MEMORY.md` as a compact index (routing pointers), not a full memory dump.
+8. Promote to `MEMORY.md` only when info is durable/reusable (stable preferences, key personal facts, long-lived project decisions, recurring patterns).
+9. Keep transient items note-only (one-off status updates, temporary blockers, most ad-hoc links) unless the user explicitly asks to index them.
+10. When updating `MEMORY.md`, upsert/merge existing pointers instead of appending duplicates.
+11. Keep `MEMORY.md` concise: short bullets, high signal, no long narrative.
+12. If user says no or ignores it, move on and don't repeat.
+13. If the user explicitly says "remember X", save immediately without asking first.
 {% else %}
 4. Only update memory when the user explicitly says "remember X".
 {% endif %}

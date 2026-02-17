@@ -81,13 +81,13 @@
 ## Slice 4: Add memory growth guardrails in prompt template
 - **Goal**: Prevent unbounded memory index growth by encoding "note detail first, index selectively" policy in the prompt
 - **Scope checklist**:
-  - [ ] In memory instructions, explicitly state: full detail goes to NotePlan note; `MEMORY.md` keeps short pointers only
-  - [ ] Add "promote vs save" guidance:
-    - [ ] Promote to `MEMORY.md` when durable/reusable (stable preferences, key personal facts, long-lived project decisions, recurring patterns)
-    - [ ] Save note-only for transient items (one-off status updates, temporary blockers, most ad-hoc links)
-  - [ ] Add "upsert, don’t append" guidance for `MEMORY.md` entries to reduce duplication
-  - [ ] Add soft cap guidance for index sections (keep concise)
-  - [ ] Add test asserting guardrail wording appears when `memory_suggestions` is true
+  - [x] In memory instructions, explicitly state: full detail goes to NotePlan note; `MEMORY.md` keeps short pointers only
+  - [x] Add "promote vs save" guidance:
+    - [x] Promote to `MEMORY.md` when durable/reusable (stable preferences, key personal facts, long-lived project decisions, recurring patterns)
+    - [x] Save note-only for transient items (one-off status updates, temporary blockers, most ad-hoc links)
+  - [x] Add "upsert, don’t append" guidance for `MEMORY.md` entries to reduce duplication
+  - [x] Add soft cap guidance for index sections (keep concise)
+  - [x] Add test asserting guardrail wording appears when `memory_suggestions` is true
 - **✅ Demo**: Rendered prompt clearly differentiates NotePlan detail vs `MEMORY.md` index pointers
 - **Risks / failure modes**:
   - Overly strict guidance can under-capture useful durable info; tune during dogfooding
@@ -95,10 +95,10 @@
 ## Slice 5: Align second-brain skill instructions with index policy
 - **Goal**: Make second-brain skill enforce the same compaction policy used by the system prompt
 - **Scope checklist**:
-  - [ ] Update `second-brain` skill instructions to explicitly treat `MEMORY.md` as an index
-  - [ ] Document note-first flow: write full detail to note, then selectively update index pointer
-  - [ ] Document dedupe/upsert behavior for existing index pointers
-  - [ ] Document concise-entry rule (short pointers, no long narrative in `MEMORY.md`)
+  - [x] Update `second-brain` skill instructions to explicitly treat `MEMORY.md` as an index
+  - [x] Document note-first flow: write full detail to note, then selectively update index pointer
+  - [x] Document dedupe/upsert behavior for existing index pointers
+  - [x] Document concise-entry rule (short pointers, no long narrative in `MEMORY.md`)
 - **✅ Demo**: In a memory-save flow, assistant updates note detail and avoids over-appending to `MEMORY.md`
 - **Risks / failure modes**:
   - Prompt + skill drift over time; keep both instructions in sync

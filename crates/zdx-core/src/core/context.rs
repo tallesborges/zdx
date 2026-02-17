@@ -1294,6 +1294,15 @@ mod tests {
         assert!(prompt.contains("💡 Want me to save"));
         assert!(prompt.contains("Suggest sparingly"));
         assert!(prompt.contains(
+            "Treat `MEMORY.md` as a compact index (routing pointers), not a full memory dump."
+        ));
+        assert!(prompt.contains(
+            "Keep transient items note-only (one-off status updates, temporary blockers, most ad-hoc links) unless the user explicitly asks to index them."
+        ));
+        assert!(prompt.contains(
+            "When updating `MEMORY.md`, upsert/merge existing pointers instead of appending duplicates."
+        ));
+        assert!(prompt.contains(
             "If the user explicitly says \"remember X\", save immediately without asking first."
         ));
     }
