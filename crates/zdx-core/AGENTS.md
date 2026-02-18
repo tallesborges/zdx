@@ -46,6 +46,8 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `providers/anthropic/`: Anthropic providers (API key + CLI OAuth)
 - `providers/gemini/`: Gemini providers (API key + CLI OAuth)
 - `providers/mistral.rs`: Mistral provider
+- `providers/zen.rs`: Zen provider (OpenCode)
+- `providers/apiyi.rs`: APIYI provider
 - `providers/moonshot.rs`: Moonshot provider
 - `providers/stepfun.rs`: StepFun provider
 - `providers/mimo.rs`: MiMo provider

@@ -52,6 +52,8 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_core::providers::ProviderKind::Stepfun => "StepFun API Key",
             zdx_core::providers::ProviderKind::Gemini => "Gemini Login",
             zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
+            zdx_core::providers::ProviderKind::Zen => "Zen API Key",
+            zdx_core::providers::ProviderKind::Apiyi => "APIYI API Key",
         },
     }
 }

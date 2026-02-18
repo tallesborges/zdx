@@ -22,6 +22,7 @@ use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
     EffortLevel as AnthropicEffortLevel,
 };
+use crate::providers::apiyi::{ApiyiClient, ApiyiConfig};
 use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
@@ -31,6 +32,7 @@ use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::stepfun::{StepfunClient, StepfunConfig};
+use crate::providers::zen::{ZenClient, ZenConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
     ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
@@ -159,6 +161,8 @@ enum ProviderClient {
     Stepfun(StepfunClient),
     Gemini(GeminiClient),
     GeminiCli(GeminiCliClient),
+    Zen(ZenClient),
+    Apiyi(ApiyiClient),
 }
 
 impl ProviderClient {
@@ -200,6 +204,12 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::GeminiCli(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Zen(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Apiyi(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
         }
@@ -660,6 +670,18 @@ fn build_provider_client(
         ProviderKind::GeminiCli => Ok(ProviderClient::GeminiCli(GeminiCliClient::new(
             GeminiCliConfig::new(model.to_string(), max_tokens, gemini_thinking),
         ))),
+        ProviderKind::Zen => build_zen_client(
+            config,
+            model,
+            max_tokens,
+            thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+            gemini_thinking.clone(),
+            reasoning_effort,
+            cache_key,
+        ),
+        ProviderKind::Apiyi => build_apiyi_client(config, model, cache_key, thinking_enabled),
     }
 }
 
@@ -801,6 +823,50 @@ fn build_gemini_client(
             config.providers.gemini.effective_base_url(),
             config.providers.gemini.effective_api_key(),
             gemini_thinking,
+        )?,
+    )))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn build_zen_client(
+    config: &Config,
+    model: &str,
+    max_tokens: u32,
+    thinking_enabled: bool,
+    thinking_budget_tokens: u32,
+    thinking_effort: Option<AnthropicEffortLevel>,
+    gemini_thinking: Option<GeminiThinkingConfig>,
+    reasoning_effort: Option<String>,
+    cache_key: Option<String>,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Zen(ZenClient::new(ZenConfig::from_env(
+        model.to_string(),
+        max_tokens,
+        config.providers.zen.effective_base_url(),
+        config.providers.zen.effective_api_key(),
+        thinking_enabled,
+        thinking_budget_tokens,
+        thinking_effort,
+        gemini_thinking,
+        reasoning_effort,
+        cache_key,
+    )?)))
+}
+
+fn build_apiyi_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Apiyi(ApiyiClient::new(
+        ApiyiConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.apiyi.effective_base_url(),
+            config.providers.apiyi.effective_api_key(),
+            cache_key,
+            thinking_enabled,
         )?,
     )))
 }

@@ -15,6 +15,7 @@ tool_timeout_secs = 0
 handoff_model = "gemini-cli:gemini-3-flash-preview"
 title_model = "gemini-cli:gemini-2.5-flash"
 thinking_level = "off"
+read_thread_model = "gemini:gemini-2.5-flash-lite"
 
 # System prompt (inline)
 # system_prompt = "You are a helpful coding assistant."
@@ -58,11 +59,7 @@ enabled = true
 # Skill discovery configuration
 # Enable/disable skill sources (all enabled by default)
 [skills]
-skill_repositories = [
-  "openai/skills/skills/.curated",
-  "openai/skills/skills/.system",
-  "anthropics/skills/skills",
-]
+skill_repositories = ["openai/skills/skills/.curated", "openai/skills/skills/.system", "anthropics/skills/skills"]
 [skills.sources]
 zdx_user = true
 zdx_project = true
@@ -111,42 +108,22 @@ thinking_level = "minimal"
 enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
-models = [
-  "claude-opus-4-6",
-  "claude-opus-4-5",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-]
+models = ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
-models = [
-  "claude-opus-4-6",
-  "claude-opus-4-5",
-  "claude-sonnet-4-5",
-  "claude-haiku-4-5",
-]
+models = ["claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-5", "claude-haiku-4-5"]
 
 [providers.openai]
 enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
-models = [
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-spark",
-  "gpt-5.2-codex",
-  "gpt-5.1-codex-max",
-]
+models = ["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
 
 [providers.openai_codex]
 enabled = true
-models = [
-  "gpt-5.3-codex",
-  "gpt-5.3-codex-spark",
-  "gpt-5.2-codex",
-  "gpt-5.1-codex-max",
-]
+models = ["gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
 # Codex models have built-in apply_patch instructions
 
 [providers.openrouter]
@@ -177,22 +154,12 @@ models = ["mimo-v2-flash"]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
-models = [
-  "gemini-3-flash-preview",
-  "gemini-3-pro-preview",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-]
+models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 [providers.gemini_cli]
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
-models = [
-  "gemini-3-flash-preview",
-  "gemini-3-pro-preview",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-]
+models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 [providers.mistral]
 enabled = true

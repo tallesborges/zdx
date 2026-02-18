@@ -11,8 +11,6 @@ use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::core::thread_persistence as tp;
 use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 
-const READ_THREAD_MODEL: &str = "gemini-cli:gemini-2.5-flash-lite";
-
 /// Returns the tool definition for the read thread tool.
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
@@ -102,7 +100,11 @@ fn build_read_thread_prompt(thread_content: &str, goal: &str) -> String {
 
 async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, String> {
     let options = ExecSubagentOptions {
-        model: Some(READ_THREAD_MODEL.to_string()),
+        model: Some(
+            ctx.read_thread_model
+                .clone()
+                .unwrap_or_else(|| "gemini:gemini-2.5-flash-lite".to_string()),
+        ),
         thinking_level: ctx.thinking_level,
         no_tools: true,
         timeout: ctx.timeout,

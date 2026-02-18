@@ -400,6 +400,11 @@ fn default_title_model() -> String {
     Config::DEFAULT_TITLE_MODEL.to_string()
 }
 
+/// Default value for serde when `read_thread_model` is missing.
+fn default_read_thread_model() -> String {
+    Config::DEFAULT_READ_THREAD_MODEL.to_string()
+}
+
 /// Transcription configuration.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
@@ -443,6 +448,10 @@ pub struct Config {
     #[serde(default = "default_title_model")]
     pub title_model: String,
 
+    /// Model to use for `read_thread` subagent.
+    #[serde(default = "default_read_thread_model")]
+    pub read_thread_model: String,
+
     /// Thinking level for extended thinking feature
     #[serde(default)]
     pub thinking_level: ThinkingLevel,
@@ -471,6 +480,7 @@ impl Config {
     const DEFAULT_TOOL_TIMEOUT_SECS: u32 = 0;
     const DEFAULT_HANDOFF_MODEL: &str = "gemini-cli:gemini-3-flash-preview";
     const DEFAULT_TITLE_MODEL: &str = "gemini-cli:gemini-2.5-flash";
+    const DEFAULT_READ_THREAD_MODEL: &str = "gemini:gemini-2.5-flash-lite";
 
     /// Loads configuration from the default config path.
     ///
@@ -744,6 +754,7 @@ impl Default for Config {
             providers: ProvidersConfig::default(),
             handoff_model: Self::DEFAULT_HANDOFF_MODEL.to_string(),
             title_model: Self::DEFAULT_TITLE_MODEL.to_string(),
+            read_thread_model: Self::DEFAULT_READ_THREAD_MODEL.to_string(),
             thinking_level: ThinkingLevel::default(),
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
@@ -779,6 +790,10 @@ pub struct ProvidersConfig {
     pub gemini_cli: ProviderConfig,
     #[serde(default = "default_mistral_provider")]
     pub mistral: ProviderConfig,
+    #[serde(default = "default_zen_provider")]
+    pub zen: ProviderConfig,
+    #[serde(default = "default_apiyi_provider")]
+    pub apiyi: ProviderConfig,
 }
 
 impl ProvidersConfig {
@@ -800,6 +815,8 @@ impl ProvidersConfig {
             id if id == ProviderKind::Mimo.id() => &self.mimo,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
+            id if id == ProviderKind::Zen.id() => &self.zen,
+            id if id == ProviderKind::Apiyi.id() => &self.apiyi,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -821,6 +838,8 @@ impl ProvidersConfig {
             ProviderKind::Mimo => &self.mimo,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
+            ProviderKind::Zen => &self.zen,
+            ProviderKind::Apiyi => &self.apiyi,
         }
     }
 }
@@ -839,6 +858,8 @@ impl Default for ProvidersConfig {
             stepfun: default_stepfun_provider(),
             mimo: default_mimo_provider(),
             mistral: default_mistral_provider(),
+            zen: default_zen_provider(),
+            apiyi: default_apiyi_provider(),
         }
     }
 }
@@ -957,6 +978,22 @@ fn default_mistral_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["voxtral-mini-latest".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_zen_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["gemini-3-flash".to_string(), "gemini-3-pro".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_apiyi_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["gpt-4o".to_string()],
         ..Default::default()
     }
 }
@@ -1776,6 +1813,14 @@ available_models = ["codex:gpt-5.3-codex"]
                 mistral: ProviderConfig {
                     enabled: Some(false),
                     ..default_mistral_provider()
+                },
+                zen: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_zen_provider()
+                },
+                apiyi: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_apiyi_provider()
                 },
                 ..Default::default()
             },

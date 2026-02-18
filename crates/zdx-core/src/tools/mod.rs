@@ -279,6 +279,9 @@ pub struct ToolContext {
     /// Optional model override for tool subagents.
     pub model: Option<String>,
 
+    /// Optional model override for `read_thread` subagent.
+    pub read_thread_model: Option<String>,
+
     /// Optional thinking level for tool subagents.
     pub thinking_level: Option<crate::config::ThinkingLevel>,
 
@@ -295,6 +298,7 @@ impl ToolContext {
             root,
             timeout,
             model: None,
+            read_thread_model: None,
             thinking_level: None,
             subagents_enabled: true,
             subagent_available_models: Vec::new(),
@@ -304,6 +308,7 @@ impl ToolContext {
     #[must_use]
     pub fn with_config(mut self, config: &crate::config::Config) -> Self {
         self.model = Some(config.model.clone());
+        self.read_thread_model = Some(config.read_thread_model.clone());
         self.thinking_level = Some(config.thinking_level);
         self.subagents_enabled = config.subagents.enabled;
         self.subagent_available_models = config.subagent_available_models();
