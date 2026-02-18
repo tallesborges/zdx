@@ -6,6 +6,7 @@ pub mod text_tool_parser;
 pub mod thinking_parser;
 
 pub mod anthropic;
+pub mod apiyi;
 pub mod gemini;
 pub mod mimo;
 pub mod mistral;
@@ -15,6 +16,7 @@ pub mod openai;
 pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
+pub mod zen;
 
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
 pub use shared::{
@@ -37,6 +39,8 @@ pub enum ProviderKind {
     Stepfun,
     Gemini,
     GeminiCli,
+    Zen,
+    Apiyi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -67,6 +71,8 @@ impl ProviderKind {
             ProviderKind::Stepfun,
             ProviderKind::Gemini,
             ProviderKind::GeminiCli,
+            ProviderKind::Zen,
+            ProviderKind::Apiyi,
         ]
     }
 
@@ -84,6 +90,8 @@ impl ProviderKind {
             ProviderKind::Stepfun => "stepfun",
             ProviderKind::Gemini => "gemini",
             ProviderKind::GeminiCli => "gemini-cli",
+            ProviderKind::Zen => "zen",
+            ProviderKind::Apiyi => "apiyi",
         }
     }
 
@@ -101,6 +109,8 @@ impl ProviderKind {
             "stepfun" => Some(ProviderKind::Stepfun),
             "gemini" => Some(ProviderKind::Gemini),
             "gemini-cli" => Some(ProviderKind::GeminiCli),
+            "zen" => Some(ProviderKind::Zen),
+            "apiyi" => Some(ProviderKind::Apiyi),
             _ => None,
         }
     }
@@ -119,6 +129,8 @@ impl ProviderKind {
             ProviderKind::Stepfun => "StepFun",
             ProviderKind::Gemini => "Gemini",
             ProviderKind::GeminiCli => "Gemini CLI",
+            ProviderKind::Zen => "Zen",
+            ProviderKind::Apiyi => "APIYI",
         }
     }
 
@@ -145,6 +157,8 @@ impl ProviderKind {
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
+            ProviderKind::Zen => Some("ZEN_API_KEY"),
+            ProviderKind::Apiyi => Some("APIYI_API_KEY"),
             ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => None,
         }
     }
@@ -161,7 +175,9 @@ impl ProviderKind {
             | ProviderKind::Mistral
             | ProviderKind::Moonshot
             | ProviderKind::Stepfun
-            | ProviderKind::Gemini => ProviderAuthMode::ApiKey,
+            | ProviderKind::Gemini
+            | ProviderKind::Zen
+            | ProviderKind::Apiyi => ProviderAuthMode::ApiKey,
         }
     }
 }
@@ -218,6 +234,8 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "gemini" | "google" => ProviderKind::Gemini,
                 "gemini-cli" | "google-gemini-cli" => ProviderKind::GeminiCli,
                 "codex" | "openai-codex" => ProviderKind::OpenAICodex,
+                "zen" | "opencode" => ProviderKind::Zen,
+                "apiyi" => ProviderKind::Apiyi,
                 _ => continue,
             };
             return Some((kind, rest));
