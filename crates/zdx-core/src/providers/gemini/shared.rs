@@ -43,7 +43,8 @@ impl GeminiThinkingConfig {
     pub fn from_thinking_level(level: ThinkingLevel, model: &str) -> Self {
         // Check if model is Gemini 3 (use thinkingLevel)
         let is_gemini_3 = model.contains("gemini-3");
-        let is_gemini_3_pro = model.contains("gemini-3-pro");
+        let is_gemini_3_pro = model.contains("gemini-3-pro") || model.contains("gemini-3.1-pro");
+        let is_gemini_31 = model.contains("gemini-3.1");
 
         if is_gemini_3 {
             // Gemini 3 models use thinkingLevel
@@ -67,10 +68,14 @@ impl GeminiThinkingConfig {
                 }
                 ThinkingLevel::Low => Self::Level("low".to_string()),
                 ThinkingLevel::Medium => {
-                    // Gemini 3 Pro doesn't support medium
-                    if is_gemini_3_pro {
+                    // Gemini 3.1 Pro supports medium
+                    if is_gemini_31 {
+                        Self::Level("medium".to_string())
+                    } else if is_gemini_3_pro {
+                        // Gemini 3.0 Pro doesn't support medium
                         Self::Level("high".to_string())
                     } else {
+                        // Flash supports medium
                         Self::Level("medium".to_string())
                     }
                 }
@@ -194,16 +199,38 @@ impl GeminiContentsBuilder {
 
     fn append_assistant_blocks(
         &mut self,
-        add_thought_signature: bool,
+        allow_synthetic_signature: bool,
         blocks: &[ChatContentBlock],
     ) {
         let mut parts = Vec::new();
         let mut added_signature = false;
         let real_signature = gemini_signature(blocks);
+        let has_tool_use = blocks
+            .iter()
+            .any(|b| matches!(b, ChatContentBlock::ToolUse { .. }));
+
+        // Determine which signature to use (if any).
+        // Priority: Real signature > Synthetic (if allowed) > None
+        let signature_to_use = real_signature.as_deref().or(if allow_synthetic_signature {
+            Some(SYNTHETIC_THOUGHT_SIGNATURE)
+        } else {
+            None
+        });
 
         for block in blocks {
             match block {
-                ChatContentBlock::Text(text) => parts.push(text_part(text)),
+                ChatContentBlock::Text(text) => {
+                    let mut part = text_part(text);
+                    // Only attach signature to text if there is no tool use in this message
+                    // (Gemini prefers attaching signature to functionCall if present)
+                    if let Some(sig) = signature_to_use {
+                        if !added_signature && !has_tool_use {
+                            part["thoughtSignature"] = json!(sig);
+                            added_signature = true;
+                        }
+                    }
+                    parts.push(part);
+                }
                 ChatContentBlock::Image { mime_type, data } => {
                     parts.push(inline_data_part(mime_type, data));
                 }
@@ -215,12 +242,11 @@ impl GeminiContentsBuilder {
                             "args": input
                         }
                     });
-                    if add_thought_signature && !added_signature {
-                        let signature = real_signature
-                            .as_deref()
-                            .unwrap_or(SYNTHETIC_THOUGHT_SIGNATURE);
-                        part["thoughtSignature"] = json!(signature);
-                        added_signature = true;
+                    if let Some(sig) = signature_to_use {
+                        if !added_signature {
+                            part["thoughtSignature"] = json!(sig);
+                            added_signature = true;
+                        }
                     }
                     parts.push(part);
                 }
@@ -403,11 +429,9 @@ pub fn build_gemini_request(
         && let Some(thinking_config_obj) = thinking_json.get("thinkingConfig")
     {
         let mut thinking_config_obj = thinking_config_obj.clone();
-        // Request thought summaries when thinking is enabled (Gemini 3 only)
-        // includeThoughts is not supported by Gemini 2.5 models (which use thinkingBudget)
-        if matches!(thinking, GeminiThinkingConfig::Level(_)) {
-            thinking_config_obj["includeThoughts"] = json!(true);
-        }
+        // Request thought summaries when thinking is enabled
+        // standard Gemini API supports includeThoughts for both Level and Budget models
+        thinking_config_obj["includeThoughts"] = json!(true);
         generation_config["thinkingConfig"] = thinking_config_obj;
     }
 
@@ -534,7 +558,7 @@ fn extract_tool_result_with_image(
             let image = blocks.iter().find_map(|block| match block {
                 ToolResultBlock::Image { mime_type, data } => {
                     Some((mime_type.clone(), data.clone()))
-                }
+                },
                 ToolResultBlock::Text { .. } => None,
             });
 
@@ -661,10 +685,7 @@ mod tests {
     fn test_build_contents_uses_real_gemini_signature() {
         use crate::providers::{ReasoningBlock, ReplayToken};
 
-        // Create a message history with:
-        // 1. User message
-        // 2. Assistant message with reasoning block (Gemini signature) + tool use
-        // 3. Tool result
+        // Case 1: Assistant message with reasoning block (Gemini signature) + tool use
         let messages = vec![
             ChatMessage::user("What files are here?"),
             ChatMessage {
@@ -700,6 +721,34 @@ mod tests {
             function_call_part["thoughtSignature"],
             "real_thought_signature_base64"
         );
+
+        // Case 2: Assistant message with reasoning block (Gemini signature) + ONLY text
+        let messages = vec![
+            ChatMessage::user("Hi"),
+            ChatMessage {
+                role: "assistant".to_string(),
+                content: MessageContent::Blocks(vec![
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some("Thinking...".to_string()),
+                        replay: Some(ReplayToken::Gemini {
+                            signature: "text_only_signature".to_string(),
+                        }),
+                    }),
+                    ChatContentBlock::Text("Hello!".to_string()),
+                ]),
+            },
+        ];
+
+        let (contents, _) = build_contents(&messages);
+
+        let assistant_msg = &contents[1];
+        let parts = assistant_msg["parts"].as_array().unwrap();
+
+        // Should have one text part with the signature
+        assert_eq!(parts.len(), 1);
+        let text_part = &parts[0];
+        assert_eq!(text_part["text"], "Hello!");
+        assert_eq!(text_part["thoughtSignature"], "text_only_signature");
     }
 
     /// `build_contents` falls back to synthetic signature when no Gemini signature available.
@@ -728,6 +777,39 @@ mod tests {
         assert_eq!(
             function_call_part["thoughtSignature"],
             SYNTHETIC_THOUGHT_SIGNATURE
+        );
+    }
+
+    /// `build_contents` includes thought signature for historical messages.
+    #[test]
+    fn test_build_contents_includes_signature_for_history() {
+        use crate::providers::{ReasoningBlock, ReplayToken};
+
+        // Message 1: Assistant with signature (simulating history)
+        let msg1 = ChatMessage {
+            role: "assistant".to_string(),
+            content: MessageContent::Blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("Thinking...".to_string()),
+                    replay: Some(ReplayToken::Gemini {
+                        signature: "hist_sig".to_string(),
+                    }),
+                }),
+                ChatContentBlock::Text("Hello".to_string()),
+            ]),
+        };
+
+        // Message 2: User (makes msg1 "history")
+        let msg2 = ChatMessage::user("Next");
+
+        let messages = vec![msg1, msg2];
+        let (contents, _) = build_contents(&messages);
+
+        let assistant_part = &contents[0]["parts"][0];
+        assert_eq!(assistant_part["text"], "Hello");
+        assert_eq!(
+            assistant_part["thoughtSignature"], "hist_sig",
+            "History should keep signature"
         );
     }
 }
@@ -867,9 +949,9 @@ mod integration_tests {
         );
     }
 
-    /// Standard Gemini API does NOT include includeThoughts for Gemini 2.5 (uses thinkingBudget)
+    /// Standard Gemini API DOES include includeThoughts for Gemini 2.5/2.0
     #[test]
-    fn test_build_gemini_request_no_include_thoughts_for_25() {
+    fn test_build_gemini_request_includes_thoughts_for_25() {
         let messages = vec![ChatMessage::user("hello")];
         let tools = vec![];
         let system = Some("You are helpful");
@@ -887,7 +969,7 @@ mod integration_tests {
         )
         .unwrap();
 
-        // Gemini 2.5 uses thinkingBudget, not thinkingLevel, so no includeThoughts
+        // Gemini 2.5 uses thinkingBudget, AND should include includeThoughts for standard API
         let gen_config = &request["generationConfig"];
         assert!(
             gen_config.get("thinkingConfig").is_some(),
@@ -897,15 +979,10 @@ mod integration_tests {
             gen_config["thinkingConfig"].get("thinkingBudget").is_some(),
             "should use thinkingBudget for 2.5"
         );
-        assert!(
-            gen_config.get("includeThoughts").is_none(),
-            "includeThoughts should NOT be present for Gemini 2.5"
-        );
-        assert!(
-            gen_config["thinkingConfig"]
-                .get("includeThoughts")
-                .is_none(),
-            "thinkingConfig.includeThoughts should NOT be present for Gemini 2.5"
+        assert_eq!(
+            gen_config["thinkingConfig"].get("includeThoughts"),
+            Some(&serde_json::json!(true)),
+            "includeThoughts should be present for Gemini 2.5"
         );
     }
 
