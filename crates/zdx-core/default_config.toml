@@ -13,8 +13,8 @@ model = "claude-haiku-4-5"
 
 # Timeout for tool execution in seconds (0 disables timeout)
 tool_timeout_secs = 0
-handoff_model = "gemini-cli:gemini-3-flash-preview"
-title_model = "gemini-cli:gemini-2.5-flash"
+handoff_model = "gemini:gemini-3-flash-preview"
+title_model = "gemini:gemini-2.5-flash"
 thinking_level = "off"
 read_thread_model = "gemini:gemini-2.5-flash-lite"
 
@@ -40,8 +40,8 @@ read_thread_model = "gemini:gemini-2.5-flash-lite"
 # Options: off, minimal (~5%), low (~20%), medium (~50%), high (~80%), xhigh (~95%)
 # Note: when max_tokens is set, it is auto-adjusted to ensure room for both thinking and response.
 thinking_level = "off"
-handoff_model = "gemini-cli:gemini-3-flash-preview"
-title_model = "gemini-cli:gemini-2.5-flash"
+handoff_model = "gemini:gemini-3-flash-preview"
+title_model = "gemini:gemini-2.5-flash"
 
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
@@ -167,12 +167,12 @@ models = ["mimo-v2-flash"]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
-models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+models = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 [providers.gemini_cli]
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
-models = ["gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+models = ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-3-pro-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
 
 [providers.mistral]
 enabled = true
