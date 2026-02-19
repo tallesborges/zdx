@@ -50,6 +50,12 @@ struct ModalitiesEntry {
     input: Vec<String>,
 }
 
+#[derive(Debug, Deserialize, Default, Clone)]
+struct ModelProviderEntry {
+    #[serde(default)]
+    npm: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 struct ModelEntry {
     id: String,
@@ -64,6 +70,8 @@ struct ModelEntry {
     limit: LimitEntry,
     #[serde(default)]
     modalities: ModalitiesEntry,
+    #[serde(default)]
+    provider: Option<ModelProviderEntry>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -109,6 +117,8 @@ struct ModelCapabilitiesRecord {
     input_images: bool,
     #[serde(default)]
     output_limit: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    api: Option<String>,
 }
 
 pub async fn update(config: &config::Config) -> Result<()> {
@@ -313,7 +323,7 @@ fn selected_candidates(
     spec: &ProviderSpec<'_>,
     models_map: &std::collections::BTreeMap<String, ModelEntry>,
 ) -> Vec<ModelCandidate> {
-    let candidates = build_candidates(spec.provider_id, spec.prefix, models_map);
+    let candidates = build_candidates(spec.provider_id, spec.prefix, spec.api_id, models_map);
     selected_candidates_from_candidates(spec, &candidates)
 }
 
@@ -379,7 +389,12 @@ fn select_meta_candidate_from_official_sources(
 
     for source_provider in source_providers {
         if let Some(model) = lookup_model_in_provider(api, source_provider, &target_model) {
-            return Some(candidate_from_model_entry(spec, pattern, model));
+            return Some(candidate_from_model_entry(
+                spec,
+                pattern,
+                source_provider,
+                model,
+            ));
         }
     }
 
@@ -387,7 +402,12 @@ fn select_meta_candidate_from_official_sources(
     if normalized != target_model.to_ascii_lowercase() {
         for source_provider in source_providers {
             if let Some(model) = lookup_model_in_provider(api, source_provider, &normalized) {
-                return Some(candidate_from_model_entry(spec, pattern, model));
+                return Some(candidate_from_model_entry(
+                    spec,
+                    pattern,
+                    source_provider,
+                    model,
+                ));
             }
         }
     }
@@ -435,6 +455,7 @@ fn lookup_model_in_provider<'a>(
 fn candidate_from_model_entry(
     spec: &ProviderSpec<'_>,
     pattern: &str,
+    source_provider_id: &str,
     model: &ModelEntry,
 ) -> ModelCandidate {
     let full_id = format_model_id(spec.prefix, pattern);
@@ -458,6 +479,7 @@ fn candidate_from_model_entry(
             reasoning: model.reasoning,
             input_images,
             output_limit: model.limit.output,
+            api: model_api_hint(spec.provider_id, Some(source_provider_id), model),
         },
         match_targets: build_match_targets(spec.provider_id, pattern, &full_id),
     }
@@ -485,6 +507,7 @@ async fn fetch_api(url: &str) -> Result<ApiResponse> {
 fn build_candidates(
     provider_id: &str,
     prefix: Option<&str>,
+    source_provider_id: &str,
     models_map: &std::collections::BTreeMap<String, ModelEntry>,
 ) -> Vec<ModelCandidate> {
     models_map
@@ -508,6 +531,7 @@ fn build_candidates(
                 reasoning: model.reasoning,
                 input_images,
                 output_limit: model.limit.output,
+                api: model_api_hint(provider_id, Some(source_provider_id), model),
             };
 
             let match_targets = build_match_targets(provider_id, &model.id, &full_id);
@@ -522,6 +546,40 @@ fn build_candidates(
             }
         })
         .collect()
+}
+
+fn model_api_hint(
+    provider_id: &str,
+    source_provider_id: Option<&str>,
+    model: &ModelEntry,
+) -> Option<String> {
+    if !is_meta_provider(provider_id) {
+        return None;
+    }
+
+    let npm = model
+        .provider
+        .as_ref()
+        .and_then(|provider| provider.npm.as_deref());
+
+    let api = match npm {
+        Some("@ai-sdk/openai") => "openai-responses",
+        Some("@ai-sdk/anthropic") => "anthropic-messages",
+        Some("@ai-sdk/google") => "google-generative-ai",
+        Some("@ai-sdk/openai-compatible") => "openai-completions",
+        _ => source_provider_default_api(source_provider_id.unwrap_or(provider_id)),
+    };
+
+    Some(api.to_string())
+}
+
+fn source_provider_default_api(source_provider_id: &str) -> &'static str {
+    match source_provider_id {
+        "anthropic" => "anthropic-messages",
+        "openai" => "openai-responses",
+        "google" | "google-vertex" => "google-generative-ai",
+        _ => "openai-completions",
+    }
 }
 
 /// Result of selecting candidates from patterns.
@@ -657,12 +715,21 @@ fn create_default_candidate(
 
     // Fall back to generic defaults
     let display_name = format!("{model_id} (custom)");
+    let capabilities = if is_meta_provider(provider_id) {
+        ModelCapabilitiesRecord {
+            api: Some("openai-completions".to_string()),
+            ..Default::default()
+        }
+    } else {
+        ModelCapabilitiesRecord::default()
+    };
 
     ModelCandidate {
         full_id,
         display_name,
         context_limit: DEFAULT_CONTEXT_LIMIT,
         match_targets,
+        capabilities,
         ..Default::default()
     }
 }
@@ -914,5 +981,67 @@ mod tests {
             normalize_model_lookup_id("gemini-3-flash-preview-nothinking"),
             "gemini-3-flash-preview"
         );
+    }
+
+    #[test]
+    fn test_model_api_hint_for_meta_provider_uses_models_dev_npm() {
+        let model = ModelEntry {
+            id: "gpt-5".to_string(),
+            name: "GPT-5".to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: Some(ModelProviderEntry {
+                npm: Some("@ai-sdk/openai".to_string()),
+            }),
+        };
+
+        assert_eq!(
+            model_api_hint("zen", Some("opencode"), &model).as_deref(),
+            Some("openai-responses")
+        );
+    }
+
+    #[test]
+    fn test_model_api_hint_for_meta_provider_defaults_from_source_provider() {
+        let model = ModelEntry {
+            id: "gemini-2.5-flash".to_string(),
+            name: "Gemini 2.5 Flash".to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: None,
+        };
+
+        assert_eq!(
+            model_api_hint("apiyi", Some("google"), &model).as_deref(),
+            Some("google-generative-ai")
+        );
+        assert_eq!(
+            model_api_hint("apiyi", Some("moonshotai"), &model).as_deref(),
+            Some("openai-completions")
+        );
+    }
+
+    #[test]
+    fn test_model_api_hint_non_meta_provider_is_none() {
+        let model = ModelEntry {
+            id: "gpt-5".to_string(),
+            name: "GPT-5".to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: Some(ModelProviderEntry {
+                npm: Some("@ai-sdk/openai".to_string()),
+            }),
+        };
+
+        assert_eq!(model_api_hint("openai", Some("openai"), &model), None);
     }
 }

@@ -18,7 +18,7 @@ pub struct OpenAIConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
-    pub max_output_tokens: u32,
+    pub max_output_tokens: Option<u32>,
     pub prompt_cache_key: Option<String>,
 }
 
@@ -37,7 +37,7 @@ impl OpenAIConfig {
     /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
-        max_output_tokens: u32,
+        max_output_tokens: Option<u32>,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
@@ -88,7 +88,7 @@ impl OpenAIClient {
             base_url: self.config.base_url.clone(),
             path: RESPONSES_PATH.to_string(),
             model: self.config.model.clone(),
-            max_output_tokens: Some(self.config.max_output_tokens),
+            max_output_tokens: self.config.max_output_tokens,
             reasoning_effort: None,
             reasoning_summary: None,
             instructions: None,

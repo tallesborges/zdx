@@ -180,7 +180,8 @@ Error:
 - Location: `<base>/config.toml`
 - Format: TOML
 - Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `prompt_template.*`, `thinking_level`, `subagents.*`
-  - `max_tokens` is optional; when unset, requests use the model output limit (exclusive, minus 1).
+  - `max_tokens` is optional; when unset, providers that support omitted limits use provider defaults.
+  - Providers that require a token limit use an internal fallback derived from model metadata.
 - Provider base URLs:
   - `[providers.anthropic].base_url`
   - `[providers.claude_cli].base_url`

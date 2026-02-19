@@ -658,7 +658,7 @@ fn build_provider_client(
         ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
             OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
         ))),
-        ProviderKind::OpenAI => build_openai_client(config, model, max_tokens, cache_key),
+        ProviderKind::OpenAI => build_openai_client(config, model, config.max_tokens, cache_key),
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, model, reasoning_effort, cache_key)
         }
@@ -666,13 +666,16 @@ fn build_provider_client(
         ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Stepfun => build_stepfun_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Gemini => build_gemini_client(config, model, max_tokens, gemini_thinking),
+        ProviderKind::Gemini => {
+            build_gemini_client(config, model, config.max_tokens, gemini_thinking)
+        }
         ProviderKind::GeminiCli => Ok(ProviderClient::GeminiCli(GeminiCliClient::new(
-            GeminiCliConfig::new(model.to_string(), max_tokens, gemini_thinking),
+            GeminiCliConfig::new(model.to_string(), config.max_tokens, gemini_thinking),
         ))),
         ProviderKind::Zen => build_zen_client(
             config,
             model,
+            config.max_tokens,
             max_tokens,
             thinking_enabled,
             thinking_budget_tokens,
@@ -684,6 +687,7 @@ fn build_provider_client(
         ProviderKind::Apiyi => build_apiyi_client(
             config,
             model,
+            config.max_tokens,
             max_tokens,
             thinking_enabled,
             thinking_budget_tokens,
@@ -719,7 +723,7 @@ fn build_anthropic_client(
 fn build_openai_client(
     config: &Config,
     model: &str,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
     cache_key: Option<String>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::OpenAI(OpenAIClient::new(
@@ -823,7 +827,7 @@ fn build_stepfun_client(
 fn build_gemini_client(
     config: &Config,
     model: &str,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
     gemini_thinking: Option<GeminiThinkingConfig>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::Gemini(GeminiClient::new(
@@ -841,7 +845,8 @@ fn build_gemini_client(
 fn build_zen_client(
     config: &Config,
     model: &str,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
+    fallback_max_tokens: u32,
     thinking_enabled: bool,
     thinking_budget_tokens: u32,
     thinking_effort: Option<AnthropicEffortLevel>,
@@ -852,6 +857,7 @@ fn build_zen_client(
     Ok(ProviderClient::Zen(ZenClient::new(ZenConfig::from_env(
         model.to_string(),
         max_tokens,
+        fallback_max_tokens,
         config.providers.zen.effective_base_url(),
         config.providers.zen.effective_api_key(),
         thinking_enabled,
@@ -867,7 +873,8 @@ fn build_zen_client(
 fn build_apiyi_client(
     config: &Config,
     model: &str,
-    max_tokens: u32,
+    max_tokens: Option<u32>,
+    fallback_max_tokens: u32,
     thinking_enabled: bool,
     thinking_budget_tokens: u32,
     thinking_effort: Option<AnthropicEffortLevel>,
@@ -879,6 +886,7 @@ fn build_apiyi_client(
         ApiyiConfig::from_env(
             model.to_string(),
             max_tokens,
+            fallback_max_tokens,
             config.providers.apiyi.effective_base_url(),
             config.providers.apiyi.effective_api_key(),
             thinking_enabled,
