@@ -14,6 +14,10 @@ run *ARGS:
 bot:
     cargo run -p zdx -- bot
 
+# Run automations commands (pass extra args: just automations list)
+automations *ARGS:
+    cargo run -p zdx -- automations {{ARGS}}
+
 # Run the bot with auto-rebuild (exit 42 = rebuild)
 bot-loop:
     #!/usr/bin/env bash
