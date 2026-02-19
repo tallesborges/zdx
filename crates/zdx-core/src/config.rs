@@ -972,6 +972,7 @@ fn default_gemini_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
             "gemini-3-pro-preview".to_string(),
@@ -986,6 +987,7 @@ fn default_gemini_cli_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
             "gemini-3-pro-preview".to_string(),

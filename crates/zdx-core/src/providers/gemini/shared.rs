@@ -223,11 +223,12 @@ impl GeminiContentsBuilder {
                     let mut part = text_part(text);
                     // Only attach signature to text if there is no tool use in this message
                     // (Gemini prefers attaching signature to functionCall if present)
-                    if let Some(sig) = signature_to_use {
-                        if !added_signature && !has_tool_use {
-                            part["thoughtSignature"] = json!(sig);
-                            added_signature = true;
-                        }
+                    if let Some(sig) = signature_to_use
+                        && !added_signature
+                        && !has_tool_use
+                    {
+                        part["thoughtSignature"] = json!(sig);
+                        added_signature = true;
                     }
                     parts.push(part);
                 }
@@ -242,11 +243,11 @@ impl GeminiContentsBuilder {
                             "args": input
                         }
                     });
-                    if let Some(sig) = signature_to_use {
-                        if !added_signature {
-                            part["thoughtSignature"] = json!(sig);
-                            added_signature = true;
-                        }
+                    if let Some(sig) = signature_to_use
+                        && !added_signature
+                    {
+                        part["thoughtSignature"] = json!(sig);
+                        added_signature = true;
                     }
                     parts.push(part);
                 }
@@ -558,7 +559,7 @@ fn extract_tool_result_with_image(
             let image = blocks.iter().find_map(|block| match block {
                 ToolResultBlock::Image { mime_type, data } => {
                     Some((mime_type.clone(), data.clone()))
-                },
+                }
                 ToolResultBlock::Text { .. } => None,
             });
 
