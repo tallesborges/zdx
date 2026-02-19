@@ -150,6 +150,8 @@ impl ZenClient {
             }
             ZenRoute::OpenAICompletions => {
                 // Chat Completions — append /v1 (client appends /chat/completions)
+                // Zen proxy rejects extra fields (`reasoning`, `prompt_cache_key`),
+                // so we intentionally omit them here.
                 InnerClient::ChatCompletions(OpenAIChatCompletionsClient::new(
                     OpenAIChatCompletionsConfig {
                         api_key: config.api_key,
@@ -157,8 +159,8 @@ impl ZenClient {
                         model: config.model,
                         max_tokens: config.max_tokens,
                         max_completion_tokens: None,
-                        reasoning_effort: config.reasoning_effort,
-                        prompt_cache_key: config.cache_key,
+                        reasoning_effort: None,
+                        prompt_cache_key: None,
                         extra_headers: HeaderMap::new(),
                         include_usage: true,
                         include_reasoning_content: false,
