@@ -367,7 +367,7 @@ pub fn build_gemini_request(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system: Option<&str>,
-    max_output_tokens: u32,
+    max_output_tokens: Option<u32>,
     thinking_config: Option<&GeminiThinkingConfig>,
 ) -> Result<Value> {
     let (contents, _) = build_contents(messages);
@@ -391,7 +391,9 @@ pub fn build_gemini_request(
 
     // Build generationConfig with max_output_tokens and optional thinkingConfig
     let mut generation_config = json!({});
-    if max_output_tokens > 0 {
+    if let Some(max_output_tokens) = max_output_tokens
+        && max_output_tokens > 0
+    {
         generation_config["maxOutputTokens"] = json!(max_output_tokens);
     }
 
@@ -839,8 +841,14 @@ mod integration_tests {
             "gemini-3-flash-preview",
         );
 
-        let request =
-            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+        let request = build_gemini_request(
+            &messages,
+            &tools,
+            system,
+            Some(8192),
+            Some(&thinking_config),
+        )
+        .unwrap();
 
         // Standard Gemini API supports includeThoughts for Gemini 3
         let gen_config = &request["generationConfig"];
@@ -870,8 +878,14 @@ mod integration_tests {
         let thinking_config =
             GeminiThinkingConfig::from_thinking_level(ThinkingLevel::Medium, "gemini-2.5-flash");
 
-        let request =
-            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+        let request = build_gemini_request(
+            &messages,
+            &tools,
+            system,
+            Some(8192),
+            Some(&thinking_config),
+        )
+        .unwrap();
 
         // Gemini 2.5 uses thinkingBudget, not thinkingLevel, so no includeThoughts
         let gen_config = &request["generationConfig"];
@@ -936,7 +950,7 @@ mod integration_tests {
         let system = Some("You are helpful");
 
         // Test with None
-        let request = build_gemini_request(&messages, &tools, system, 8192, None).unwrap();
+        let request = build_gemini_request(&messages, &tools, system, Some(8192), None).unwrap();
         let gen_config = &request["generationConfig"];
         assert!(
             gen_config.get("thinkingConfig").is_none(),
@@ -945,8 +959,14 @@ mod integration_tests {
 
         // Test with Default variant
         let thinking_config = GeminiThinkingConfig::Default;
-        let request =
-            build_gemini_request(&messages, &tools, system, 8192, Some(&thinking_config)).unwrap();
+        let request = build_gemini_request(
+            &messages,
+            &tools,
+            system,
+            Some(8192),
+            Some(&thinking_config),
+        )
+        .unwrap();
         let gen_config = &request["generationConfig"];
         assert!(
             gen_config.get("thinkingConfig").is_none(),

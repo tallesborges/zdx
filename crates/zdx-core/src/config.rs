@@ -646,24 +646,44 @@ impl Config {
             .collect()
     }
 
-    /// Returns the effective `max_tokens` to use in API requests for a model.
+    /// Returns the effective `max_tokens` fallback for a model.
     ///
     /// Resolution order:
     /// 1) Explicit config `max_tokens` (if set)
     /// 2) Model output limit from the registry (exclusive, minus 1)
     /// 3) Fallback default
+    ///
+    /// Callers may still omit max tokens for providers that support provider-side defaults.
     pub fn effective_max_tokens_for(&self, model_id: &str) -> u32 {
         let configured = self.max_tokens;
-        let output_limit = crate::models::ModelOption::find_by_id(model_id)
+        let model = crate::models::ModelOption::find_by_id(model_id);
+        let output_limit = model
             .map(|model| model.capabilities.output_limit)
+            .filter(|limit| *limit > 0)
+            .and_then(|limit| u32::try_from(limit).ok());
+        let context_limit = model
+            .map(|model| model.context_limit)
             .filter(|limit| *limit > 0)
             .and_then(|limit| u32::try_from(limit).ok());
         let output_limit_exclusive = output_limit
             .and_then(|limit| limit.checked_sub(1))
             .filter(|limit| *limit > 0);
+        let context_limit_exclusive = context_limit
+            .and_then(|limit| limit.checked_sub(1))
+            .filter(|limit| *limit > 0);
+
+        let suspicious_output_limit = output_limit_exclusive
+            .zip(context_limit_exclusive)
+            .is_some_and(|(output, context)| output >= context);
 
         let max_tokens = configured
-            .or(output_limit_exclusive)
+            .or({
+                if suspicious_output_limit {
+                    Some(Self::DEFAULT_MAX_TOKENS)
+                } else {
+                    output_limit_exclusive
+                }
+            })
             .unwrap_or(Self::DEFAULT_MAX_TOKENS);
 
         // Clamp to output limit if available
@@ -985,15 +1005,24 @@ fn default_mistral_provider() -> ProviderConfig {
 fn default_zen_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["gemini-3-flash".to_string(), "gemini-3-pro".to_string()],
+        models: vec![
+            "big-pickle".to_string(),
+            "gemini-3-flash".to_string(),
+            "minimax-m2.5".to_string(),
+            "minimax-m2.5-free".to_string(),
+            "kimi-k2.5".to_string(),
+            "kimi-k2.5-free".to_string(),
+            "glm-5".to_string(),
+            "glm-5-free".to_string(),
+        ],
         ..Default::default()
     }
 }
 
 fn default_apiyi_provider() -> ProviderConfig {
     ProviderConfig {
-        enabled: Some(true),
-        models: vec!["gpt-4o".to_string()],
+        enabled: Some(false),
+        models: vec![],
         ..Default::default()
     }
 }
@@ -1423,6 +1452,22 @@ max_tokens = 2048
             .unwrap_or(Config::DEFAULT_MAX_TOKENS);
 
         assert_eq!(config.effective_max_tokens_for(model_id), expected);
+    }
+
+    #[test]
+    fn test_effective_max_tokens_uses_default_when_output_limit_matches_context_limit() {
+        let config = Config {
+            max_tokens: None,
+            thinking_level: ThinkingLevel::Off,
+            ..Default::default()
+        };
+
+        // zen:kimi-k2.5-free currently reports output_limit == context_limit in models.dev.
+        // In that case, using output_limit-1 as max_tokens can exceed context once input is added.
+        assert_eq!(
+            config.effective_max_tokens_for("zen:kimi-k2.5-free"),
+            Config::DEFAULT_MAX_TOKENS
+        );
     }
 
     /// Thinking: config loads from file with `thinking_level`.

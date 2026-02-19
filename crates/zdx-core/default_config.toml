@@ -7,7 +7,8 @@
 model = "claude-haiku-4-5"
 
 # Maximum tokens for responses (optional)
-# Defaults to the model's output limit (exclusive, minus 1) when unset.
+# When unset, providers that support it omit the token limit and use provider defaults.
+# Providers that require a limit use an internal fallback derived from model metadata.
 # max_tokens = 12288
 
 # Timeout for tool execution in seconds (0 disables timeout)
@@ -138,11 +139,23 @@ enabled = true
 # base_url = "https://api.moonshot.ai/v1"
 models = ["kimi-k2.5"]
 
+[providers.zen]
+enabled = true
+# api_key = "..."  # Overrides ZEN_API_KEY env var
+# base_url = "https://opencode.ai/zen"
+models = ["big-pickle", "gemini-3-flash", "minimax-m2.5", "minimax-m2.5-free", "kimi-k2.5", "kimi-k2.5-free", "glm-5", "glm-5-free"]
+
 [providers.stepfun]
 enabled = true
 # api_key = "sk-..."  # Overrides STEPFUN_API_KEY env var
 # base_url = "https://api.stepfun.ai/v1"
 models = ["step-3.5-flash"]
+
+[providers.apiyi]
+enabled = false
+# api_key = "..."  # Overrides APIYI_API_KEY env var
+# base_url = "https://api.apiyi.com"
+models = []
 
 [providers.mimo]
 enabled = true

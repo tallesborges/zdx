@@ -26,7 +26,7 @@ const STREAM_PATH: &str = "/v1internal:streamGenerateContent";
 #[derive(Debug, Clone)]
 pub struct GeminiCliConfig {
     pub model: String,
-    pub max_tokens: u32,
+    pub max_tokens: Option<u32>,
     /// Session ID for rate limit grouping (persists across requests in a session).
     pub session_id: String,
     /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
@@ -36,7 +36,7 @@ pub struct GeminiCliConfig {
 impl GeminiCliConfig {
     pub fn new(
         model: String,
-        max_tokens: u32,
+        max_tokens: Option<u32>,
         thinking_config: Option<GeminiThinkingConfig>,
     ) -> Self {
         Self {
@@ -117,7 +117,7 @@ impl GeminiCliClient {
             &CloudCodeRequestParams {
                 model: &self.config.model,
                 project_id: &creds.project_id,
-                max_output_tokens: Some(self.config.max_tokens),
+                max_output_tokens: self.config.max_tokens,
                 session_id: &self.config.session_id,
                 prompt_seq: seq,
                 thinking_config: self.config.thinking_config.as_ref(),

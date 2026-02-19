@@ -38,6 +38,14 @@ pub struct ModelCapabilities {
     pub input_images: bool,
     /// Maximum output tokens supported by the model.
     pub output_limit: u64,
+    /// Optional API routing hint for meta-providers (e.g., zen/apiyi).
+    ///
+    /// Expected values:
+    /// - "anthropic-messages"
+    /// - "openai-responses"
+    /// - "google-generative-ai"
+    /// - "openai-completions"
+    pub api: Option<&'static str>,
 }
 
 /// Definition of an available model.
@@ -98,6 +106,13 @@ impl ModelOption {
             provider_kind == Some(target.kind) && m.id == target.model
         })
     }
+
+    /// Finds a model by explicit provider + model ID.
+    pub fn find_by_provider_and_id(provider: &str, id: &str) -> Option<&'static ModelOption> {
+        available_models()
+            .iter()
+            .find(|m| m.provider.eq_ignore_ascii_case(provider) && m.id.eq_ignore_ascii_case(id))
+    }
 }
 
 /// Returns true if the model supports reasoning, defaulting to true when unknown.
@@ -146,6 +161,8 @@ struct ModelCapabilitiesRecord {
     input_images: bool,
     #[serde(default)]
     output_limit: u64,
+    #[serde(default)]
+    api: Option<String>,
 }
 
 fn load_models_from_path(path: &Path) -> Option<Vec<ModelOption>> {
@@ -212,6 +229,7 @@ fn model_record_to_option(record: ModelRecord) -> Option<ModelOption> {
             reasoning: capabilities.reasoning,
             input_images: capabilities.input_images,
             output_limit: capabilities.output_limit,
+            api: capabilities.api.map(leak_string),
         },
     })
 }

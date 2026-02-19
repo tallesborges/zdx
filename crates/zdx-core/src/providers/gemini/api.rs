@@ -18,7 +18,7 @@ pub struct GeminiConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
-    pub max_output_tokens: u32,
+    pub max_output_tokens: Option<u32>,
     /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
     pub thinking_config: Option<GeminiThinkingConfig>,
 }
@@ -38,7 +38,7 @@ impl GeminiConfig {
     /// Returns an error if the operation fails.
     pub fn from_env(
         model: String,
-        max_output_tokens: u32,
+        max_output_tokens: Option<u32>,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         thinking_config: Option<GeminiThinkingConfig>,
