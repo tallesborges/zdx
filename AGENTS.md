@@ -38,6 +38,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just run` (interactive TUI; pass extra args: `just run --help`)
 - `just bot` (Telegram bot; requires config telegram.\* keys)
 - `just bot-loop` (Telegram bot with auto-restart on exit code 42)
+- `just automations` (automation subcommands; e.g. `just automations list`)
 - `just ci` (full local CI: lint + test)
 - `just lint` (format + clippy)
 - `just fmt` (nightly rustfmt)
