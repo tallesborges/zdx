@@ -11,7 +11,8 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::providers::{
-    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
+    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
+    StreamEvent, Usage,
 };
 
 /// Gemini SSE stream parser.
@@ -329,7 +330,11 @@ impl<S> GeminiSseParser<S> {
                 // Emit signature if we accumulated one
                 if let Some(signature) = self.pending_signature.take() {
                     self.pending
-                        .push_back(StreamEvent::ReasoningSignatureDelta { index, signature });
+                        .push_back(StreamEvent::ReasoningSignatureDelta {
+                            index,
+                            signature,
+                            provider: SignatureProvider::Gemini,
+                        });
                     self.signature_from_function_call = false;
                 }
                 self.pending
@@ -591,6 +596,7 @@ mod tests {
                 StreamEvent::ReasoningSignatureDelta {
                     index: 0,
                     signature,
+                    ..
                 } if signature == "late_arriving_signature_base64"
             )
         });

@@ -140,6 +140,13 @@ pub enum ContentBlockType {
     Reasoning,
 }
 
+/// Provider that produced a reasoning signature delta.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SignatureProvider {
+    Anthropic,
+    Gemini,
+}
+
 impl FromStr for ContentBlockType {
     type Err = String;
 
@@ -361,7 +368,11 @@ pub enum StreamEvent {
     /// Reasoning delta within a reasoning content block
     ReasoningDelta { index: usize, reasoning: String },
     /// Signature delta within a reasoning content block
-    ReasoningSignatureDelta { index: usize, signature: String },
+    ReasoningSignatureDelta {
+        index: usize,
+        signature: String,
+        provider: SignatureProvider,
+    },
     /// `OpenAI` reasoning item with encrypted content (for caching/replay)
     ReasoningCompleted {
         index: usize,

@@ -269,6 +269,7 @@ pub struct ThinkingBuilder {
     pub index: usize,
     pub text: String,
     pub signature: String,
+    pub signature_provider: Option<crate::providers::SignatureProvider>,
     pub replay: Option<ReplayToken>,
     pub had_delta: bool,
 }
@@ -532,7 +533,7 @@ pub async fn run_turn(
             &sender,
         )
         .await?;
-        let mut stream_state = consume_stream(stream, setup.provider, &sender).await?;
+        let mut stream_state = consume_stream(stream, &sender).await?;
 
         if stream_state.needs_tool_execution() {
             let stats =
@@ -563,7 +564,6 @@ pub async fn run_turn(
 }
 
 struct RunTurnSetup {
-    provider: ProviderKind,
     client: ProviderClient,
     tools: Vec<ToolDefinition>,
     enabled_tools: HashSet<String>,
@@ -608,7 +608,6 @@ fn build_run_turn_setup(
     let enabled_tools = tools.iter().map(|t| t.name.clone()).collect();
 
     Ok(RunTurnSetup {
-        provider,
         client,
         tools,
         enabled_tools,
@@ -989,11 +988,7 @@ async fn request_stream(
     }
 }
 
-async fn consume_stream(
-    mut stream: ProviderStream,
-    provider: ProviderKind,
-    sender: &EventSender,
-) -> Result<StreamState> {
+async fn consume_stream(mut stream: ProviderStream, sender: &EventSender) -> Result<StreamState> {
     let mut state = StreamState::new();
 
     loop {
@@ -1004,13 +999,12 @@ async fn consume_stream(
             Ok(None) => return Ok(state),
             Err(_) => continue,
         };
-        handle_stream_event(event, provider, sender, &mut state).await?;
+        handle_stream_event(event, sender, &mut state).await?;
     }
 }
 
 async fn handle_stream_event(
     event: StreamEvent,
-    provider: ProviderKind,
     sender: &EventSender,
     state: &mut StreamState,
 ) -> Result<()> {
@@ -1036,6 +1030,7 @@ async fn handle_stream_event(
                 index,
                 text: String::new(),
                 signature: String::new(),
+                signature_provider: None,
                 replay: None,
                 had_delta: false,
             });
@@ -1053,13 +1048,18 @@ async fn handle_stream_event(
                 sender.send_delta(AgentEvent::ReasoningDelta { text: reasoning });
             }
         }
-        StreamEvent::ReasoningSignatureDelta { index, signature } => {
+        StreamEvent::ReasoningSignatureDelta {
+            index,
+            signature,
+            provider,
+        } => {
             if let Some(tb) = state.turn.find_thinking_mut(index) {
                 tb.signature.push_str(&signature);
+                tb.signature_provider = Some(provider);
             }
         }
         StreamEvent::ContentBlockCompleted { index } => {
-            emit_reasoning_completion(provider, sender, &mut state.turn, index).await;
+            emit_reasoning_completion(sender, &mut state.turn, index).await;
             emit_tool_input_completion(sender, &state.turn, index).await;
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
@@ -1193,18 +1193,20 @@ fn apply_openai_reasoning_completion(
 }
 
 async fn emit_reasoning_completion(
-    provider: ProviderKind,
     sender: &EventSender,
     turn: &mut AssistantTurnBuilder,
     index: usize,
 ) {
     if let Some(tb) = turn.find_thinking_mut(index) {
-        if tb.replay.is_none() && !tb.signature.is_empty() {
-            tb.replay = Some(match provider {
-                ProviderKind::Gemini | ProviderKind::GeminiCli => ReplayToken::Gemini {
+        if tb.replay.is_none()
+            && !tb.signature.is_empty()
+            && let Some(signature_provider) = tb.signature_provider
+        {
+            tb.replay = Some(match signature_provider {
+                crate::providers::SignatureProvider::Gemini => ReplayToken::Gemini {
                     signature: tb.signature.clone(),
                 },
-                _ => ReplayToken::Anthropic {
+                crate::providers::SignatureProvider::Anthropic => ReplayToken::Anthropic {
                     signature: tb.signature.clone(),
                 },
             });
