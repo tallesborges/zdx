@@ -161,7 +161,7 @@ impl UpdateState {
     }
 }
 
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 10] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 12] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -223,6 +223,18 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 10] {
             prefix: Some("gemini-cli"),
             provider_cfg: &config.providers.gemini_cli,
         },
+        ProviderSpec {
+            provider_id: "zen",
+            api_id: "opencode",
+            prefix: Some("zen"),
+            provider_cfg: &config.providers.zen,
+        },
+        ProviderSpec {
+            provider_id: "apiyi",
+            api_id: "apiyi",
+            prefix: Some("apiyi"),
+            provider_cfg: &config.providers.apiyi,
+        },
     ]
 }
 
@@ -242,25 +254,24 @@ fn collect_provider_records(
         return Ok(());
     }
 
-    let Some(provider_entry) = api.providers.get(spec.api_id) else {
+    let all_selected = if let Some(provider_entry) = api.providers.get(spec.api_id) {
+        let Some(models_map) = provider_entry.models.as_ref() else {
+            bail!(
+                "Provider '{}' has no models in models.dev response",
+                spec.api_id
+            );
+        };
+        selected_candidates(spec, models_map)
+    } else if is_meta_provider(spec.provider_id) {
+        selected_meta_candidates(spec, api)
+    } else {
         eprintln!(
             "Warning: provider '{}' not found in models.dev response; falling back to defaults",
             spec.api_id
         );
-        for candidate in fallback_candidates(spec) {
-            state.push_candidate(spec.provider_id, candidate);
-        }
-        return Ok(());
+        fallback_candidates(spec)
     };
 
-    let Some(models_map) = provider_entry.models.as_ref() else {
-        bail!(
-            "Provider '{}' has no models in models.dev response",
-            spec.api_id
-        );
-    };
-
-    let all_selected = selected_candidates(spec, models_map);
     if all_selected.is_empty() {
         eprintln!(
             "Warning: no models matched providers.{}.models",
@@ -303,7 +314,14 @@ fn selected_candidates(
     models_map: &std::collections::BTreeMap<String, ModelEntry>,
 ) -> Vec<ModelCandidate> {
     let candidates = build_candidates(spec.provider_id, spec.prefix, models_map);
-    let select_result = select_candidates(spec.provider_id, &spec.provider_cfg.models, &candidates);
+    selected_candidates_from_candidates(spec, &candidates)
+}
+
+fn selected_candidates_from_candidates(
+    spec: &ProviderSpec<'_>,
+    candidates: &[ModelCandidate],
+) -> Vec<ModelCandidate> {
+    let select_result = select_candidates(spec.provider_id, &spec.provider_cfg.models, candidates);
 
     let mut all_selected = select_result.matched;
     for pattern in &select_result.unmatched_patterns {
@@ -315,6 +333,134 @@ fn selected_candidates(
         all_selected.push(default_candidate);
     }
     all_selected
+}
+
+fn selected_meta_candidates(spec: &ProviderSpec<'_>, api: &ApiResponse) -> Vec<ModelCandidate> {
+    let mut selected = Vec::new();
+
+    for pattern in &spec.provider_cfg.models {
+        let pattern = pattern.trim();
+        if pattern.is_empty() {
+            continue;
+        }
+        if is_pure_wildcard(pattern) {
+            eprintln!(
+                "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
+                pattern, spec.provider_id
+            );
+            continue;
+        }
+
+        if let Some(candidate) = select_meta_candidate_from_official_sources(spec, api, pattern) {
+            selected.push(candidate);
+            continue;
+        }
+
+        let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
+        eprintln!(
+            "Info: creating default entry for '{}' (not found in official providers)",
+            default_candidate.full_id
+        );
+        selected.push(default_candidate);
+    }
+
+    selected
+}
+
+fn select_meta_candidate_from_official_sources(
+    spec: &ProviderSpec<'_>,
+    api: &ApiResponse,
+    pattern: &str,
+) -> Option<ModelCandidate> {
+    use zdx_core::providers::resolve_provider;
+
+    let target_model = resolve_provider(pattern).model;
+    let source_providers = official_source_provider_ids(&target_model);
+
+    for source_provider in source_providers {
+        if let Some(model) = lookup_model_in_provider(api, source_provider, &target_model) {
+            return Some(candidate_from_model_entry(spec, pattern, model));
+        }
+    }
+
+    let normalized = normalize_model_lookup_id(&target_model);
+    if normalized != target_model.to_ascii_lowercase() {
+        for source_provider in source_providers {
+            if let Some(model) = lookup_model_in_provider(api, source_provider, &normalized) {
+                return Some(candidate_from_model_entry(spec, pattern, model));
+            }
+        }
+    }
+
+    None
+}
+
+fn official_source_provider_ids(model_id: &str) -> &'static [&'static str] {
+    let lower = model_id.to_ascii_lowercase();
+    if lower.starts_with("gemini") {
+        &["google", "google-vertex"]
+    } else if lower.starts_with("kimi") {
+        &["moonshotai", "moonshotai-cn"]
+    } else if lower.starts_with("glm") {
+        &["zhipuai", "zai"]
+    } else if lower.starts_with("minimax") {
+        &["minimax", "minimax-cn"]
+    } else {
+        &[]
+    }
+}
+
+fn lookup_model_in_provider<'a>(
+    api: &'a ApiResponse,
+    provider_id: &str,
+    model_id: &str,
+) -> Option<&'a ModelEntry> {
+    let models_map = api.providers.get(provider_id)?.models.as_ref()?;
+
+    // 1) exact key lookup
+    if let Some(model) = models_map.get(model_id)
+        && model.tool_call
+    {
+        return Some(model);
+    }
+
+    // 2) case-insensitive key or model.id lookup
+    models_map.iter().find_map(|(key, model)| {
+        (model.tool_call
+            && (key.eq_ignore_ascii_case(model_id) || model.id.eq_ignore_ascii_case(model_id)))
+        .then_some(model)
+    })
+}
+
+fn candidate_from_model_entry(
+    spec: &ProviderSpec<'_>,
+    pattern: &str,
+    model: &ModelEntry,
+) -> ModelCandidate {
+    let full_id = format_model_id(spec.prefix, pattern);
+    let input_images = model
+        .modalities
+        .input
+        .iter()
+        .any(|modality| modality == "image");
+
+    ModelCandidate {
+        full_id: full_id.clone(),
+        display_name: format_display_name(spec.provider_id, &model.name),
+        pricing: ModelPricingRecord {
+            input: model.cost.input,
+            output: model.cost.output,
+            cache_read: model.cost.cache_read,
+            cache_write: model.cost.cache_write,
+        },
+        context_limit: model.limit.context,
+        capabilities: ModelCapabilitiesRecord {
+            reasoning: model.reasoning,
+            input_images,
+            output_limit: model.limit.output,
+        },
+        match_targets: build_match_targets(spec.provider_id, pattern, &full_id),
+    }
 }
 
 async fn fetch_api(url: &str) -> Result<ApiResponse> {
@@ -433,13 +579,19 @@ fn is_pure_wildcard(pattern: &str) -> bool {
     pattern == "*"
 }
 
+fn is_meta_provider(provider_id: &str) -> bool {
+    matches!(provider_id, "zen" | "apiyi")
+}
+
 /// Looks up a model in the embedded `default_models.toml` by ID.
 /// Uses provider resolution to match models with different prefixes.
 fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
-    use zdx_core::providers::{provider_kind_from_id, resolve_provider};
+    use zdx_core::providers::{ProviderKind, provider_kind_from_id, resolve_provider};
 
     let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml()).ok()?;
     let target = resolve_provider(full_id);
+    let target_model_normalized = normalize_model_lookup_id(&target.model);
+    let is_meta_target = matches!(target.kind, ProviderKind::Zen | ProviderKind::Apiyi);
 
     defaults.models.into_iter().find(|record| {
         // Try exact match first
@@ -449,11 +601,34 @@ fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
         // Fall back to provider-based match using record.provider field
         // This handles cases where record.id has no prefix (e.g., "step-3.5-flash")
         // but record.provider specifies the correct provider (e.g., "stepfun")
-        if let Some(candidate_kind) = provider_kind_from_id(&record.provider) {
-            return candidate_kind == target.kind && record.id == target.model;
+        if let Some(candidate_kind) = provider_kind_from_id(&record.provider)
+            && candidate_kind == target.kind
+            && record.id == target.model
+        {
+            return true;
         }
+
+        // Meta-providers (zen/apiyi) can reuse defaults from underlying providers
+        // when model IDs match (e.g., apiyi:gemini-2.5-flash -> gemini:gemini-2.5-flash).
+        if is_meta_target {
+            let resolved_record = resolve_provider(&record.id);
+            let resolved_match =
+                normalize_model_lookup_id(&resolved_record.model) == target_model_normalized;
+            let raw_match = normalize_model_lookup_id(&record.id) == target_model_normalized;
+            return resolved_match || raw_match;
+        }
+
         false
     })
+}
+
+fn normalize_model_lookup_id(model_id: &str) -> String {
+    let lower = model_id.trim().to_ascii_lowercase();
+    let lower = lower
+        .strip_suffix("-thinking")
+        .or_else(|| lower.strip_suffix("-nothinking"))
+        .unwrap_or(&lower);
+    lower.to_string()
 }
 
 /// Creates a default `ModelCandidate` for a model ID not found in the API.
@@ -682,5 +857,62 @@ mod tests {
         let model = result.unwrap();
         assert_eq!(model.provider, "mimo");
         assert!(!model.display_name.contains("custom"));
+    }
+
+    #[test]
+    fn test_lookup_default_model_meta_provider_uses_underlying_defaults() {
+        let result = lookup_default_model("apiyi:gemini-2.5-flash");
+        assert!(result.is_some(), "Should find gemini model for apiyi");
+    }
+
+    #[test]
+    fn test_lookup_default_model_meta_provider_normalizes_thinking_suffix() {
+        let result = lookup_default_model("apiyi:gemini-3-pro-preview-thinking");
+        assert!(
+            result.is_some(),
+            "Should map -thinking variant to base model default"
+        );
+    }
+
+    #[test]
+    fn test_provider_specs_includes_zen_and_apiyi() {
+        let config = config::Config::default();
+        let specs = provider_specs(&config);
+
+        assert!(specs.iter().any(|s| {
+            s.provider_id == "zen" && s.api_id == "opencode" && s.prefix == Some("zen")
+        }));
+        assert!(specs.iter().any(|s| {
+            s.provider_id == "apiyi" && s.api_id == "apiyi" && s.prefix == Some("apiyi")
+        }));
+    }
+
+    #[test]
+    fn test_official_source_provider_ids_for_apiyi_models() {
+        assert_eq!(official_source_provider_ids("glm-5"), &["zhipuai", "zai"]);
+        assert_eq!(
+            official_source_provider_ids("gemini-2.5-flash"),
+            &["google", "google-vertex"]
+        );
+        assert_eq!(
+            official_source_provider_ids("kimi-k2.5"),
+            &["moonshotai", "moonshotai-cn"]
+        );
+        assert_eq!(
+            official_source_provider_ids("MiniMax-M2.5"),
+            &["minimax", "minimax-cn"]
+        );
+    }
+
+    #[test]
+    fn test_normalize_model_lookup_id_handles_thinking_suffixes() {
+        assert_eq!(
+            normalize_model_lookup_id("gemini-3-pro-preview-thinking"),
+            "gemini-3-pro-preview"
+        );
+        assert_eq!(
+            normalize_model_lookup_id("gemini-3-flash-preview-nothinking"),
+            "gemini-3-flash-preview"
+        );
     }
 }

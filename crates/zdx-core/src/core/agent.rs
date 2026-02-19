@@ -681,7 +681,17 @@ fn build_provider_client(
             reasoning_effort,
             cache_key,
         ),
-        ProviderKind::Apiyi => build_apiyi_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Apiyi => build_apiyi_client(
+            config,
+            model,
+            max_tokens,
+            thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+            gemini_thinking.clone(),
+            reasoning_effort,
+            cache_key,
+        ),
     }
 }
 
@@ -853,20 +863,30 @@ fn build_zen_client(
     )?)))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn build_apiyi_client(
     config: &Config,
     model: &str,
-    cache_key: Option<String>,
+    max_tokens: u32,
     thinking_enabled: bool,
+    thinking_budget_tokens: u32,
+    thinking_effort: Option<AnthropicEffortLevel>,
+    gemini_thinking: Option<GeminiThinkingConfig>,
+    reasoning_effort: Option<String>,
+    cache_key: Option<String>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::Apiyi(ApiyiClient::new(
         ApiyiConfig::from_env(
             model.to_string(),
-            config.max_tokens,
+            max_tokens,
             config.providers.apiyi.effective_base_url(),
             config.providers.apiyi.effective_api_key(),
-            cache_key,
             thinking_enabled,
+            thinking_budget_tokens,
+            thinking_effort,
+            gemini_thinking,
+            reasoning_effort,
+            cache_key,
         )?,
     )))
 }
