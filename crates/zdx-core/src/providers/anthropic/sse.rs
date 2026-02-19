@@ -6,7 +6,8 @@ use serde::Deserialize;
 use serde::de::DeserializeOwned;
 
 use crate::providers::shared::{
-    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
+    ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
+    StreamEvent, Usage,
 };
 
 /// SSE parser that converts a byte stream into `StreamEvents`.
@@ -153,6 +154,7 @@ fn parse_content_block_delta(data: &str) -> ProviderResult<StreamEvent> {
         "signature_delta" => Ok(StreamEvent::ReasoningSignatureDelta {
             index: parsed.index,
             signature: parsed.delta.signature.unwrap_or_default(),
+            provider: SignatureProvider::Anthropic,
         }),
         other => Err(ProviderError::new(
             ProviderErrorKind::Parse,
@@ -713,7 +715,8 @@ data: {"type":"message_stop"}
             events[4],
             StreamEvent::ReasoningSignatureDelta {
                 index: 0,
-                signature: "abc123sig".to_string()
+                signature: "abc123sig".to_string(),
+                provider: SignatureProvider::Anthropic,
             }
         );
 
