@@ -1057,7 +1057,11 @@ fn default_minimax_provider() -> ProviderConfig {
 fn default_zai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["glm-5".to_string(), "glm-4.7".to_string(), "glm-4.7-flash".to_string()],
+        models: vec![
+            "glm-5".to_string(),
+            "glm-4.7".to_string(),
+            "glm-4.7-flash".to_string(),
+        ],
         ..Default::default()
     }
 }
@@ -1065,7 +1069,11 @@ fn default_zai_provider() -> ProviderConfig {
 fn default_xai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["grok-4-1-fast-non-reasoning".to_string(), "grok-4-1-fast".to_string(), "grok-code-fast-1".to_string()],
+        models: vec![
+            "grok-4-1-fast-non-reasoning".to_string(),
+            "grok-4-1-fast".to_string(),
+            "grok-code-fast-1".to_string(),
+        ],
         ..Default::default()
     }
 }
