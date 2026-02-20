@@ -123,6 +123,9 @@ impl ProviderKind {
             "gemini-cli" => Some(ProviderKind::GeminiCli),
             "zen" => Some(ProviderKind::Zen),
             "apiyi" => Some(ProviderKind::Apiyi),
+            "minimax" => Some(ProviderKind::Minimax),
+            "zai" | "zhipu" | "glm" => Some(ProviderKind::Zai),
+            "xai" | "grok" | "x" => Some(ProviderKind::Xai),
             _ => None,
         }
     }
