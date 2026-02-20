@@ -9,7 +9,9 @@ fn test_help_shows_all_commands() {
         .success()
         .stdout(predicate::str::contains("exec"))
         .stdout(predicate::str::contains("automations"))
-        .stdout(predicate::str::contains("threads"));
+        .stdout(predicate::str::contains("threads"))
+        .stdout(predicate::str::contains("--model"))
+        .stdout(predicate::str::contains("--thinking"));
 }
 
 #[test]
