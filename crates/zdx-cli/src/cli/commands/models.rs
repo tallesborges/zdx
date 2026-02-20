@@ -171,7 +171,7 @@ impl UpdateState {
     }
 }
 
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 12] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 15] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -244,6 +244,24 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 12] {
             api_id: "apiyi",
             prefix: Some("apiyi"),
             provider_cfg: &config.providers.apiyi,
+        },
+        ProviderSpec {
+            provider_id: "minimax",
+            api_id: "minimax",
+            prefix: Some("minimax"),
+            provider_cfg: &config.providers.minimax,
+        },
+        ProviderSpec {
+            provider_id: "zai",
+            api_id: "zai",
+            prefix: Some("zai"),
+            provider_cfg: &config.providers.zai,
+        },
+        ProviderSpec {
+            provider_id: "xai",
+            api_id: "xai",
+            prefix: Some("xai"),
+            provider_cfg: &config.providers.xai,
         },
     ]
 }
@@ -764,8 +782,10 @@ fn wildcard_match(pattern: &str, text: &str) -> bool {
         return true;
     }
 
-    let p = pattern.as_bytes();
-    let t = text.as_bytes();
+    let p = pattern.to_ascii_lowercase();
+    let t = text.to_ascii_lowercase();
+    let p = p.as_bytes();
+    let t = t.as_bytes();
     let mut p_idx = 0;
     let mut t_idx = 0;
     let mut star_idx = None;

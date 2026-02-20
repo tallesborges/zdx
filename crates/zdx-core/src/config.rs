@@ -814,6 +814,12 @@ pub struct ProvidersConfig {
     pub zen: ProviderConfig,
     #[serde(default = "default_apiyi_provider")]
     pub apiyi: ProviderConfig,
+    #[serde(default = "default_minimax_provider")]
+    pub minimax: ProviderConfig,
+    #[serde(default = "default_zai_provider")]
+    pub zai: ProviderConfig,
+    #[serde(default = "default_xai_provider")]
+    pub xai: ProviderConfig,
 }
 
 impl ProvidersConfig {
@@ -860,6 +866,9 @@ impl ProvidersConfig {
             ProviderKind::GeminiCli => &self.gemini_cli,
             ProviderKind::Zen => &self.zen,
             ProviderKind::Apiyi => &self.apiyi,
+            ProviderKind::Minimax => &self.minimax,
+            ProviderKind::Zai => &self.zai,
+            ProviderKind::Xai => &self.xai,
         }
     }
 }
@@ -880,6 +889,9 @@ impl Default for ProvidersConfig {
             mistral: default_mistral_provider(),
             zen: default_zen_provider(),
             apiyi: default_apiyi_provider(),
+            minimax: default_minimax_provider(),
+            zai: default_zai_provider(),
+            xai: default_xai_provider(),
         }
     }
 }
@@ -1027,6 +1039,30 @@ fn default_apiyi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(false),
         models: vec![],
+        ..Default::default()
+    }
+}
+
+fn default_minimax_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_zai_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["glm-5".to_string(), "glm-4.7".to_string(), "glm-4.7-flash".to_string()],
+        ..Default::default()
+    }
+}
+
+fn default_xai_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec!["grok-4-1-fast-non-reasoning".to_string(), "grok-4-1-fast".to_string(), "grok-code-fast-1".to_string()],
         ..Default::default()
     }
 }
