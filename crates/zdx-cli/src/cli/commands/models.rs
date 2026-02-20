@@ -575,6 +575,8 @@ fn model_api_hint(
         return None;
     }
 
+    // The npm field reflects which AI-SDK adapter the proxy uses internally,
+    // not necessarily the wire format exposed to us.
     let npm = model
         .provider
         .as_ref()
@@ -582,9 +584,17 @@ fn model_api_hint(
 
     let api = match npm {
         Some("@ai-sdk/openai") => "openai-responses",
-        Some("@ai-sdk/anthropic") => "anthropic-messages",
         Some("@ai-sdk/google") => "google-generative-ai",
         Some("@ai-sdk/openai-compatible") => "openai-completions",
+        Some("@ai-sdk/anthropic") => {
+            // Only claude models actually use the Anthropic messages API.
+            // Others (minimax, big-pickle, etc.) are proxied as chat-completions.
+            if model.id.to_ascii_lowercase().starts_with("claude") {
+                "anthropic-messages"
+            } else {
+                "openai-completions"
+            }
+        }
         _ => source_provider_default_api(source_provider_id.unwrap_or(provider_id)),
     };
 
@@ -1004,7 +1014,11 @@ mod tests {
     }
 
     #[test]
-    fn test_model_api_hint_for_meta_provider_uses_models_dev_npm() {
+    fn test_model_api_hint_for_meta_provider_prefers_source_provider_over_npm() {
+        // The npm field reflects the AI-SDK adapter used internally by the
+        // proxy, which may differ from the actual wire format.  We trust npm
+        // for most adapters but override @ai-sdk/anthropic for known
+        // third-party models like minimax.
         let model = ModelEntry {
             id: "gpt-5".to_string(),
             name: "GPT-5".to_string(),
@@ -1018,9 +1032,48 @@ mod tests {
             }),
         };
 
+        // npm @ai-sdk/openai → openai-responses (trusted)
         assert_eq!(
             model_api_hint("zen", Some("opencode"), &model).as_deref(),
             Some("openai-responses")
+        );
+
+        // npm @ai-sdk/anthropic for minimax → openai-completions (overridden)
+        let minimax_model = ModelEntry {
+            id: "minimax-m2.5-free".to_string(),
+            name: "MiniMax M2.5 Free".to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: Some(ModelProviderEntry {
+                npm: Some("@ai-sdk/anthropic".to_string()),
+            }),
+        };
+
+        assert_eq!(
+            model_api_hint("zen", Some("opencode"), &minimax_model).as_deref(),
+            Some("openai-completions")
+        );
+
+        // npm @ai-sdk/anthropic for claude → anthropic-messages (trusted)
+        let claude_model = ModelEntry {
+            id: "claude-sonnet-4-5".to_string(),
+            name: "Claude Sonnet 4.5".to_string(),
+            tool_call: true,
+            reasoning: true,
+            cost: CostEntry::default(),
+            limit: LimitEntry::default(),
+            modalities: ModalitiesEntry::default(),
+            provider: Some(ModelProviderEntry {
+                npm: Some("@ai-sdk/anthropic".to_string()),
+            }),
+        };
+
+        assert_eq!(
+            model_api_hint("zen", Some("opencode"), &claude_model).as_deref(),
+            Some("anthropic-messages")
         );
     }
 
