@@ -31,6 +31,14 @@ struct Cli {
     #[arg(long)]
     system_prompt: Option<String>,
 
+    /// Override the model from config (chat launch)
+    #[arg(long)]
+    model: Option<String>,
+
+    /// Override the thinking level (off, minimal, low, medium, high, xhigh)
+    #[arg(long)]
+    thinking: Option<String>,
+
     /// Capture raw request/response traces (optional path)
     #[arg(
         long,
@@ -79,7 +87,7 @@ enum Commands {
         #[arg(short, long)]
         model: Option<String>,
 
-        /// Override the thinking level (off, minimal, low, medium, high)
+        /// Override the thinking level (off, minimal, low, medium, high, xhigh)
         #[arg(short, long)]
         thinking: Option<String>,
 
@@ -352,13 +360,23 @@ async fn dispatch(cli: Cli) -> Result<()> {
         command,
         root,
         system_prompt: _,
+        model,
+        thinking,
         thread_args,
         worktree,
         ..
     } = cli;
 
     let Some(command) = command else {
-        return run_chat_command(&root, worktree.as_deref(), &thread_args, &config).await;
+        return run_chat_command(
+            &root,
+            worktree.as_deref(),
+            &thread_args,
+            &config,
+            model.as_deref(),
+            thinking.as_deref(),
+        )
+        .await;
     };
 
     let context = DispatchContext {
@@ -401,11 +419,20 @@ async fn run_chat_command(
     worktree_id: Option<&str>,
     thread_args: &ThreadArgs,
     config: &config::Config,
+    model_override: Option<&str>,
+    thinking_override: Option<&str>,
 ) -> Result<()> {
     let thread_opts: ThreadPersistenceOptions = thread_args.into();
     let root_path = resolve_root(root, worktree_id)?;
     let root_string = root_path.to_string_lossy().to_string();
-    commands::chat::run(&root_string, &thread_opts, config).await
+    commands::chat::run(
+        &root_string,
+        &thread_opts,
+        config,
+        model_override,
+        thinking_override,
+    )
+    .await
 }
 
 struct DispatchContext<'a> {
