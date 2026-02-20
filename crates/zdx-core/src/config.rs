@@ -905,6 +905,7 @@ fn default_anthropic_provider() -> ProviderConfig {
         models: vec![
             "claude-opus-4-6".to_string(),
             "claude-opus-4-5".to_string(),
+            "claude-sonnet-4-6".to_string(),
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
@@ -918,6 +919,7 @@ fn default_claude_cli_provider() -> ProviderConfig {
         models: vec![
             "claude-opus-4-6".to_string(),
             "claude-opus-4-5".to_string(),
+            "claude-sonnet-4-6".to_string(),
             "claude-sonnet-4-5".to_string(),
             "claude-haiku-4-5".to_string(),
         ],
