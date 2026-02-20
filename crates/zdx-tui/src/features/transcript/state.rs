@@ -427,6 +427,22 @@ impl TranscriptState {
         self.active_user_cell_id = None;
     }
 
+    /// Removes a cell by its ID.
+    ///
+    /// Used when a prematurely created cell (e.g., empty streaming assistant)
+    /// needs to be removed to maintain correct cell ordering. Returns true
+    /// if a cell was removed.
+    pub fn remove_cell_by_id(&mut self, id: super::CellId) -> bool {
+        let len_before = self.cells.len();
+        self.cells.retain(|c| c.id() != id);
+        if self.cells.len() < len_before {
+            self.scroll.cell_line_info.clear();
+            true
+        } else {
+            false
+        }
+    }
+
     /// Pushes a cell and invalidates line info.
     pub fn push_cell(&mut self, cell: super::HistoryCell) {
         if let super::HistoryCell::User { id, .. } = &cell {

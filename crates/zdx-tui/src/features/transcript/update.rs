@@ -242,6 +242,41 @@ fn handle_thinking_delta(
         return;
     }
 
+    // When the API sends text → thinking → text (e.g., Anthropic with thinking_mode=auto
+    // emitting an empty text block before thinking), an empty streaming assistant cell
+    // may have been created prematurely. Remove it so the thinking cell takes the correct
+    // position (before the response text that will arrive later).
+    if let AgentState::Streaming {
+        cell_id,
+        pending_delta,
+        ..
+    } = agent_state
+    {
+        let is_empty_assistant = transcript
+            .cells()
+            .iter()
+            .find(|c| c.id() == *cell_id)
+            .is_some_and(|c| {
+                matches!(
+                    c,
+                    HistoryCell::Assistant {
+                        content,
+                        is_streaming: true,
+                        ..
+                    } if content.is_empty() || content.trim().is_empty()
+                )
+            });
+
+        if is_empty_assistant && pending_delta.trim().is_empty() {
+            // Remove the empty assistant cell and discard whitespace-only pending delta.
+            // Leave cell_id as-is: because the cell is gone, future text deltas in
+            // handle_assistant_delta will detect needs_new_cell=true and create a new
+            // assistant cell (which will correctly appear after the thinking cell).
+            transcript.remove_cell_by_id(*cell_id);
+            pending_delta.clear();
+        }
+    }
+
     // Find the last cell and check if it's a streaming thinking cell
     let should_create_new = transcript.cells().last().is_none_or(|cell| {
         !matches!(
