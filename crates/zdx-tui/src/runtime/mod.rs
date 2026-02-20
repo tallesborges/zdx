@@ -153,6 +153,12 @@ impl TuiRuntime {
         let mut dirty = true; // Start dirty to ensure initial render
 
         while !self.state.tui.should_quit {
+            // Check for SIGTERM/SIGHUP — always quit immediately.
+            if interrupt::should_terminate() {
+                self.state.tui.should_quit = true;
+                break;
+            }
+
             // Check for Ctrl+C signal (only quit if agent is idle)
             // If agent is running, the interrupt is meant to cancel it, not quit the app.
             // The agent will send an Interrupted event which resets the flag.

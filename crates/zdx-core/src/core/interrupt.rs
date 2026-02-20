@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use tokio::sync::Notify;
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+static TERMINATE: AtomicBool = AtomicBool::new(false);
 static INTERRUPT_NOTIFY: OnceLock<Notify> = OnceLock::new();
 static RESTORE_HOOK: OnceLock<Box<dyn Fn() + Send + Sync>> = OnceLock::new();
 
@@ -24,6 +25,10 @@ impl std::error::Error for InterruptedError {}
 /// The renderer is responsible for printing the interruption message.
 /// This keeps stdout/stderr ownership in the renderer (per SPEC §10).
 ///
+/// Also registers SIGTERM and SIGHUP handlers for graceful shutdown.
+/// Unlike Ctrl+C (which may cancel a running agent), these signals
+/// always trigger an unconditional quit.
+///
 /// # Panics
 /// Panics if registering the Ctrl+C handler fails.
 pub fn init() {
@@ -31,6 +36,25 @@ pub fn init() {
         trigger_ctrl_c();
     })
     .expect("Error setting Ctrl+C handler");
+
+    // Register SIGTERM and SIGHUP to set the terminate flag.
+    // These are catchable signals (unlike SIGKILL) that should cause a clean exit.
+    #[cfg(unix)]
+    {
+        use signal_hook::consts::{SIGHUP, SIGTERM};
+
+        // SAFETY: These closures only set an AtomicBool, which is async-signal-safe.
+        unsafe {
+            signal_hook::low_level::register(SIGTERM, || {
+                TERMINATE.store(true, Ordering::SeqCst);
+            })
+            .expect("Error registering SIGTERM handler");
+            signal_hook::low_level::register(SIGHUP, || {
+                TERMINATE.store(true, Ordering::SeqCst);
+            })
+            .expect("Error registering SIGHUP handler");
+        }
+    }
 }
 
 fn notify_waiters() {
@@ -53,6 +77,13 @@ pub fn trigger_ctrl_c() {
 /// Checks if an interrupt has been requested.
 pub fn is_interrupted() -> bool {
     INTERRUPTED.load(Ordering::SeqCst)
+}
+
+/// Checks if a terminate signal (SIGTERM/SIGHUP) was received.
+///
+/// Unlike `is_interrupted()`, this always means "quit now" regardless of agent state.
+pub fn should_terminate() -> bool {
+    TERMINATE.load(Ordering::SeqCst)
 }
 
 /// Waits until an interrupt is triggered.
