@@ -79,6 +79,9 @@ impl ProviderKind {
             ProviderKind::GeminiCli,
             ProviderKind::Zen,
             ProviderKind::Apiyi,
+            ProviderKind::Minimax,
+            ProviderKind::Zai,
+            ProviderKind::Xai,
         ]
     }
 

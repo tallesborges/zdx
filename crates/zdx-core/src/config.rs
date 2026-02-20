@@ -843,6 +843,9 @@ impl ProvidersConfig {
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             id if id == ProviderKind::Zen.id() => &self.zen,
             id if id == ProviderKind::Apiyi.id() => &self.apiyi,
+            id if id == ProviderKind::Minimax.id() => &self.minimax,
+            id if id == ProviderKind::Zai.id() => &self.zai,
+            id if id == ProviderKind::Xai.id() => &self.xai,
             _ => return true, // Unknown providers default to enabled
         };
         config.enabled.unwrap_or(true)
@@ -1906,6 +1909,18 @@ available_models = ["codex:gpt-5.3-codex"]
                 apiyi: ProviderConfig {
                     enabled: Some(false),
                     ..default_apiyi_provider()
+                },
+                minimax: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_minimax_provider()
+                },
+                zai: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_zai_provider()
+                },
+                xai: ProviderConfig {
+                    enabled: Some(false),
+                    ..default_xai_provider()
                 },
                 ..Default::default()
             },
