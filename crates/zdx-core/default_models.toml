@@ -36,6 +36,23 @@ input_images = true
 output_limit = 64000
 
 [[model]]
+id = "claude-sonnet-4-6"
+provider = "anthropic"
+display_name = "Claude Sonnet 4.6"
+context_limit = 200000
+
+[model.pricing]
+input = 3.0
+output = 15.0
+cache_read = 0.3
+cache_write = 3.75
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
+[[model]]
 id = "claude-sonnet-4-5"
 provider = "anthropic"
 display_name = "Claude Sonnet 4.5"
@@ -97,6 +114,23 @@ input = 5.0
 output = 25.0
 cache_read = 0.5
 cache_write = 6.25
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 64000
+
+[[model]]
+id = "claude-cli:claude-sonnet-4-6"
+provider = "claude-cli"
+display_name = "Claude Sonnet 4.6"
+context_limit = 200000
+
+[model.pricing]
+input = 3.0
+output = 15.0
+cache_read = 0.3
+cache_write = 3.75
 
 [model.capabilities]
 reasoning = true
