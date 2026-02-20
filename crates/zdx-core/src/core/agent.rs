@@ -1466,7 +1466,15 @@ async fn finalize_tool_calls(
 }
 
 fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
-    level.effort_label().map(std::string::ToString::to_string)
+    match level {
+        ThinkingLevel::Off => None,
+        // OpenAI reasoning.effort doesn't support "minimal"; use the lowest
+        // supported effort instead.
+        ThinkingLevel::Minimal | ThinkingLevel::Low => Some("low".to_string()),
+        ThinkingLevel::Medium => Some("medium".to_string()),
+        ThinkingLevel::High => Some("high".to_string()),
+        ThinkingLevel::XHigh => Some("xhigh".to_string()),
+    }
 }
 
 fn map_thinking_to_anthropic_effort(level: ThinkingLevel) -> Option<AnthropicEffortLevel> {
