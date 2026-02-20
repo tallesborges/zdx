@@ -629,7 +629,7 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 128000
-api = "anthropic-messages"
+api = "openai-completions"
 
 [[model]]
 id = "zen:gemini-3-flash"
@@ -683,7 +683,7 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 131072
-api = "anthropic-messages"
+api = "openai-completions"
 
 [[model]]
 id = "zen:kimi-k2.5"
