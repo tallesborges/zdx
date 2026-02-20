@@ -143,7 +143,10 @@ fn default_base_url(provider: ProviderKind) -> &'static str {
         | ProviderKind::Gemini
         | ProviderKind::GeminiCli
         | ProviderKind::Zen
-        | ProviderKind::Apiyi => DEFAULT_OPENAI_BASE_URL,
+        | ProviderKind::Apiyi
+        | ProviderKind::Minimax
+        | ProviderKind::Zai
+        | ProviderKind::Xai => DEFAULT_OPENAI_BASE_URL,
     }
 }
 
@@ -161,7 +164,10 @@ fn default_model(provider: ProviderKind) -> &'static str {
         | ProviderKind::Gemini
         | ProviderKind::GeminiCli
         | ProviderKind::Zen
-        | ProviderKind::Apiyi => DEFAULT_OPENAI_MODEL,
+        | ProviderKind::Apiyi
+        | ProviderKind::Minimax
+        | ProviderKind::Zai
+        | ProviderKind::Xai => DEFAULT_OPENAI_MODEL,
     }
 }
 

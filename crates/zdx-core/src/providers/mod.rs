@@ -9,6 +9,7 @@ pub mod anthropic;
 pub mod apiyi;
 pub mod gemini;
 pub mod mimo;
+pub mod minimax;
 pub mod mistral;
 pub mod moonshot;
 pub mod oauth;
@@ -16,6 +17,8 @@ pub mod openai;
 pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
+pub mod xai;
+pub mod zai;
 pub mod zen;
 
 pub use debug_trace::{DebugTrace, TraceStream, wrap_stream};
@@ -41,6 +44,9 @@ pub enum ProviderKind {
     GeminiCli,
     Zen,
     Apiyi,
+    Minimax,
+    Zai,
+    Xai,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -92,6 +98,9 @@ impl ProviderKind {
             ProviderKind::GeminiCli => "gemini-cli",
             ProviderKind::Zen => "zen",
             ProviderKind::Apiyi => "apiyi",
+            ProviderKind::Minimax => "minimax",
+            ProviderKind::Zai => "zai",
+            ProviderKind::Xai => "xai",
         }
     }
 
@@ -131,6 +140,9 @@ impl ProviderKind {
             ProviderKind::GeminiCli => "Gemini CLI",
             ProviderKind::Zen => "Zen",
             ProviderKind::Apiyi => "APIYI",
+            ProviderKind::Minimax => "MiniMax",
+            ProviderKind::Zai => "Z.AI",
+            ProviderKind::Xai => "xAI",
         }
     }
 
@@ -159,6 +171,9 @@ impl ProviderKind {
             ProviderKind::Gemini => Some("GEMINI_API_KEY"),
             ProviderKind::Zen => Some("ZEN_API_KEY"),
             ProviderKind::Apiyi => Some("APIYI_API_KEY"),
+            ProviderKind::Minimax => Some("MINIMAX_API_KEY"),
+            ProviderKind::Zai => Some("ZAI_API_KEY"),
+            ProviderKind::Xai => Some("XAI_API_KEY"),
             ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => None,
         }
     }
@@ -177,7 +192,10 @@ impl ProviderKind {
             | ProviderKind::Stepfun
             | ProviderKind::Gemini
             | ProviderKind::Zen
-            | ProviderKind::Apiyi => ProviderAuthMode::ApiKey,
+            | ProviderKind::Apiyi
+            | ProviderKind::Minimax
+            | ProviderKind::Zai
+            | ProviderKind::Xai => ProviderAuthMode::ApiKey,
         }
     }
 }
@@ -236,6 +254,9 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "codex" | "openai-codex" => ProviderKind::OpenAICodex,
                 "zen" | "opencode" => ProviderKind::Zen,
                 "apiyi" => ProviderKind::Apiyi,
+                "minimax" => ProviderKind::Minimax,
+                "zai" | "zhipu" | "glm" => ProviderKind::Zai,
+                "xai" | "grok" | "x" => ProviderKind::Xai,
                 _ => continue,
             };
             return Some((kind, rest));

@@ -27,11 +27,14 @@ use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
 use crate::providers::mimo::{MimoClient, MimoConfig};
+use crate::providers::minimax::{MinimaxClient, MinimaxConfig};
 use crate::providers::mistral::{MistralClient, MistralConfig};
 use crate::providers::moonshot::{MoonshotClient, MoonshotConfig};
 use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig};
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::stepfun::{StepfunClient, StepfunConfig};
+use crate::providers::xai::{XaiClient, XaiConfig};
+use crate::providers::zai::{ZaiClient, ZaiConfig};
 use crate::providers::zen::{ZenClient, ZenConfig};
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
@@ -163,6 +166,9 @@ enum ProviderClient {
     GeminiCli(GeminiCliClient),
     Zen(ZenClient),
     Apiyi(ApiyiClient),
+    Minimax(MinimaxClient),
+    Zai(ZaiClient),
+    Xai(XaiClient),
 }
 
 impl ProviderClient {
@@ -210,6 +216,15 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Apiyi(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Minimax(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Zai(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::Xai(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
         }
@@ -665,6 +680,9 @@ fn build_provider_client(
         ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Stepfun => build_stepfun_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Minimax => build_minimax_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Zai => build_zai_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Xai => build_xai_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Gemini => {
             build_gemini_client(config, model, config.max_tokens, gemini_thinking)
         }
@@ -821,6 +839,56 @@ fn build_stepfun_client(
             thinking_enabled,
         )?,
     )))
+}
+
+fn build_minimax_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Minimax(MinimaxClient::new(
+        MinimaxConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.minimax.effective_base_url(),
+            config.providers.minimax.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+        )?,
+    )))
+}
+
+fn build_zai_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Zai(ZaiClient::new(ZaiConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.zai.effective_base_url(),
+        config.providers.zai.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
+}
+
+fn build_xai_client(
+    config: &Config,
+    model: &str,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::Xai(XaiClient::new(XaiConfig::from_env(
+        model.to_string(),
+        config.max_tokens,
+        config.providers.xai.effective_base_url(),
+        config.providers.xai.effective_api_key(),
+        cache_key,
+        thinking_enabled,
+    )?)))
 }
 
 fn build_gemini_client(

@@ -54,6 +54,9 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
             zdx_core::providers::ProviderKind::Zen => "Zen API Key",
             zdx_core::providers::ProviderKind::Apiyi => "APIYI API Key",
+            zdx_core::providers::ProviderKind::Minimax => "MiniMax API Key",
+            zdx_core::providers::ProviderKind::Zai => "Z.AI API Key",
+            zdx_core::providers::ProviderKind::Xai => "xAI API Key",
         },
     }
 }
