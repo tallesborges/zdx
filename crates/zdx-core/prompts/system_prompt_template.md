@@ -40,7 +40,7 @@
 - Delegate with a specific prompt and expected output.
 - Do not delegate trivial tasks you can complete directly in the current turn.
 {% if subagents_config %}
-- Available model overrides: {% if subagents_config.available_models %}{% for model in subagents_config.available_models %}{{ model | escape }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}(none){% endif %}
+- Available model overrides: {% if subagents_config.available_models %}{% for model in subagents_config.available_models %}{{ model }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}(none){% endif %}
 {% endif %}
 
 ## Verification
@@ -121,9 +121,9 @@ Assistant: [read the skill <path>]
 <available_skills>
 {% for skill in skills_list %}
   <skill>
-    <name>{{ skill.name | escape }}</name>
-    <description>{{ skill.description | escape }}</description>
-    <path>{{ skill.path | escape }}</path>
+    <name>{{ skill.name }}</name>
+    <description>{{ skill.description }}</description>
+    <path>{{ skill.path }}</path>
   </skill>
 {% endfor %}
 </available_skills>
