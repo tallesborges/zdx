@@ -1114,15 +1114,15 @@ mod tests {
         );
 
         let rendered = render_prompt_template(
-            "{% for skill in skills_list %}<name>{{ skill.name|escape }}</name><description>{{ skill.description|escape }}</description><path>{{ skill.path|escape }}</path>{% endfor %}\n{% if subagents_config %}Available model overrides: {% for model in subagents_config.available_models %}{{ model|escape }}{% endfor %}{% endif %}",
+            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
             &vars,
         )
         .unwrap()
         .unwrap();
 
         assert!(rendered.contains("<name>demo-skill</name>"));
-        assert!(rendered.contains("Use &lt;special&gt; syntax"));
-        assert!(rendered.contains("demo&amp;skill"));
+        assert!(rendered.contains("Use <special> syntax"));
+        assert!(rendered.contains("demo&skill"));
         assert!(rendered.contains("codex:gpt-5.3-codex"));
     }
 
