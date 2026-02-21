@@ -150,8 +150,9 @@ impl ZenClient {
             }
             ZenRoute::OpenAICompletions => {
                 // Chat Completions — append /v1 (client appends /chat/completions)
-                // Zen proxy rejects extra fields (`reasoning`, `prompt_cache_key`),
-                // so we intentionally omit them here.
+                // Zen proxy rejects `reasoning` and `prompt_cache_key`, so omit those.
+                // Reasoning models (e.g. Kimi) need `thinking` + `include_reasoning_content`
+                // so `reasoning_content` round-trips in assistant messages.
                 InnerClient::ChatCompletions(OpenAIChatCompletionsClient::new(
                     OpenAIChatCompletionsConfig {
                         api_key: config.api_key,
@@ -163,8 +164,10 @@ impl ZenClient {
                         prompt_cache_key: None,
                         extra_headers: HeaderMap::new(),
                         include_usage: true,
-                        include_reasoning_content: false,
-                        thinking: None,
+                        include_reasoning_content: config.thinking_enabled,
+                        thinking: config
+                            .thinking_enabled
+                            .then(|| config.thinking_enabled.into()),
                     },
                 ))
             }
