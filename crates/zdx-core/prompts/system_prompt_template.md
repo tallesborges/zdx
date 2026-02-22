@@ -16,6 +16,7 @@
 {% else %}
 - In this environment, prefer: `read` for files, `edit`/`write` for changes, `bash` only when no {{ invocation_term }} can do the job (e.g., `rg`, `cargo`, git).
 {% endif %}
+- When a `bash` result has `stdout_truncated` or `stderr_truncated` set to `true`, only the first ~40KB is shown. Use `read` on the `stdout_file`/`stderr_file` path to access the full output.
 - When multiple {{ invocation_term_plural }} calls can be parallelized (file reads + searches + commands), do them in parallel.
 {% if is_openai_codex %}
 - Use `multi_tool_use.parallel` to parallelize tool calls and only this.
