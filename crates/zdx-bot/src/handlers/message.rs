@@ -76,6 +76,24 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
+    // Async topic title: spawn LLM-based title generation + rename for new topics.
+    if synthetic_topic_routed_from_general && let Some(topic_id) = reply_ctx.topic_id {
+        let effective_text = incoming
+            .text
+            .as_deref()
+            .or_else(|| incoming.audios.iter().find_map(|a| a.transcript.as_deref()))
+            .filter(|t| !t.trim().is_empty());
+
+        if let Some(text) = effective_text {
+            crate::topic_title::spawn_topic_title_update(
+                context,
+                incoming.chat_id,
+                topic_id,
+                text.to_string(),
+            );
+        }
+    }
+
     eprintln!(
         "Accepted message from user {} in chat {}{}",
         incoming.user_id,

@@ -659,6 +659,25 @@ impl TelegramClient {
         Ok(topic.message_thread_id)
     }
 
+    /// Rename an existing forum topic.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub async fn edit_forum_topic(
+        &self,
+        chat_id: i64,
+        message_thread_id: i64,
+        name: &str,
+    ) -> Result<()> {
+        let request = EditForumTopicRequest {
+            chat_id,
+            message_thread_id,
+            name,
+        };
+        let _: bool = self.post("editForumTopic", &request).await?;
+        Ok(())
+    }
+
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -948,6 +967,13 @@ struct SendChatActionRequest<'a> {
 #[derive(Debug, Serialize)]
 struct CreateForumTopicRequest<'a> {
     chat_id: i64,
+    name: &'a str,
+}
+
+#[derive(Debug, Serialize)]
+struct EditForumTopicRequest<'a> {
+    chat_id: i64,
+    message_thread_id: i64,
     name: &'a str,
 }
 

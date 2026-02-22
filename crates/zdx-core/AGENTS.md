@@ -22,6 +22,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
 - `core/subagent.rs`: child `zdx exec` subagent runner
+- `core/title_generation.rs`: LLM-based title generation (shared by TUI + bot)
 - `core/thread_persistence.rs`: thread persistence
 - `core/worktree.rs`: git worktree management helpers
 
