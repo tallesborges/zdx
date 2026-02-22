@@ -734,7 +734,7 @@ cache_write = 0.0
 [model.capabilities]
 reasoning = true
 input_images = true
-output_limit = 262144
+output_limit = 65536
 api = "openai-completions"
 
 [[model]]
