@@ -709,13 +709,12 @@ mod tests {
 
     fn setup_temp_zdx_home() -> &'static TempDir {
         static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
-        ZDX_HOME.get_or_init(|| {
-            let temp = TempDir::new().unwrap();
-            unsafe {
-                std::env::set_var("ZDX_HOME", temp.path());
-            }
-            temp
-        })
+        let home = ZDX_HOME.get_or_init(|| TempDir::new().unwrap());
+        // Always re-set the env var in case another test module overwrote it.
+        unsafe {
+            std::env::set_var("ZDX_HOME", home.path());
+        }
+        home
     }
 
     #[test]
