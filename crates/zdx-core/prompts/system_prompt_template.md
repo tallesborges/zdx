@@ -112,6 +112,13 @@ Use the skill guidance as higher-priority task-specific instructions.
 The following skills provide specialized instructions for specific tasks.
 When a task matches a skill description, you MUST read the skill file from <path> and follow its instructions.
 
+### Skill file references
+- If a skill mentions a relative file path, resolve it from the skill root (parent of `SKILL.md`).
+<example>
+- `references/EXAMPLE.md` => `<skill-dir>/references/EXAMPLE.md`
+- `scripts/example.py` => `<skill-dir>/scripts/example.py`
+</example>
+
 <example>
 User: [task matching a skill description]
 Assistant: [read the skill <path>]
