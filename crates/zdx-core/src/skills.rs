@@ -1,7 +1,6 @@
 //! Skills discovery and parsing.
 
 use std::collections::HashSet;
-use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::{fmt, fs};
 
@@ -649,63 +648,6 @@ fn compile_globset(
     }
 }
 
-/// Formats skills metadata for the system prompt.
-pub fn format_skills_for_prompt(skills: &[Skill]) -> Option<String> {
-    if skills.is_empty() {
-        return None;
-    }
-
-    let mut output = String::new();
-    output.push_str("The following skills provide specialized instructions for specific tasks.\n");
-    output.push_str(
-        "When a task matches a skill description, you MUST read the skill file from <path> and follow its instructions.\n\n",
-    );
-
-    output.push_str("<example>\n");
-    output.push_str("User: [task matching a skill description]\n");
-    output.push_str("Assistant: [read the skill <path>]\n");
-    output.push_str("[reads and follows the skill instructions]\n");
-    output.push_str("</example>\n\n");
-
-    output.push_str("<available_skills>\n");
-
-    for skill in skills {
-        output.push_str("  <skill>\n");
-        writeln!(output, "    <name>{}</name>", escape_xml(&skill.name)).expect("write");
-        writeln!(
-            output,
-            "    <description>{}</description>",
-            escape_xml(&skill.description)
-        )
-        .expect("write");
-        writeln!(
-            output,
-            "    <path>{}</path>",
-            escape_xml(&skill.file_path.display().to_string())
-        )
-        .expect("write");
-        output.push_str("  </skill>\n");
-    }
-
-    output.push_str("</available_skills>");
-    Some(output)
-}
-
-fn escape_xml(input: &str) -> String {
-    let mut escaped = String::with_capacity(input.len());
-    for ch in input.chars() {
-        match ch {
-            '&' => escaped.push_str("&amp;"),
-            '<' => escaped.push_str("&lt;"),
-            '>' => escaped.push_str("&gt;"),
-            '"' => escaped.push_str("&quot;"),
-            '\'' => escaped.push_str("&apos;"),
-            _ => escaped.push(ch),
-        }
-    }
-    escaped
-}
-
 #[cfg(test)]
 mod tests {
     use std::fs;
@@ -822,22 +764,6 @@ mod tests {
                 .iter()
                 .any(|warning| warning.message.contains("Duplicate skill name"))
         );
-    }
-
-    #[test]
-    fn test_format_skills_xml_escapes() {
-        let skill = Skill {
-            name: "demo-skill".to_string(),
-            description: "Use <tag> & \"quotes\"".to_string(),
-            file_path: PathBuf::from("/tmp/demo&skill/SKILL.md"),
-            base_dir: PathBuf::from("/tmp/demo&skill"),
-            source: SkillSource::ZdxUser,
-        };
-
-        let formatted = format_skills_for_prompt(&[skill]).unwrap();
-        assert!(formatted.contains("&lt;tag&gt;"));
-        assert!(formatted.contains("&amp;"));
-        assert!(formatted.contains("&quot;"));
     }
 
     #[test]
