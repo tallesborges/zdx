@@ -5,6 +5,12 @@ edition.workspace = true
 license.workspace = true
 default-run = "zdx"
 publish = false
+repository = "https://github.com/tallesborges/zdx"
+description = "Terminal AI assistant"
+homepage = "https://github.com/tallesborges/zdx"
+
+[package.metadata.dist]
+dist = true
 
 [[bin]]
 name = "zdx"
