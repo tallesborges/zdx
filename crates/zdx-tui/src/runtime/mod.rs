@@ -492,6 +492,10 @@ impl TuiRuntime {
             UiEffect::CreateNewThread => {
                 let config = self.state.tui.config.clone();
                 let root = self.state.tui.agent_opts.root.clone();
+
+                let prompt_event = handlers::refresh_system_prompt(&config, &root);
+                self.dispatch_event(prompt_event);
+
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
                     handlers::thread_create(config, root)
                 });

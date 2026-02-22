@@ -59,7 +59,7 @@ impl ModelPickerState {
         render_model_picker(frame, self, area, input_y);
     }
 
-    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -90,10 +90,14 @@ impl ModelPickerState {
                 let model_id = format!("{}:{}", model.provider, model.id);
                 let display_name = model_label(model);
 
+                let root = tui.agent_opts.root.clone();
                 OverlayUpdate::close()
-                    .with_ui_effects(vec![UiEffect::PersistModel {
-                        model: model_id.clone(),
-                    }])
+                    .with_ui_effects(vec![
+                        UiEffect::PersistModel {
+                            model: model_id.clone(),
+                        },
+                        UiEffect::RefreshSystemPrompt { path: root },
+                    ])
                     .with_mutations(vec![
                         StateMutation::Config(ConfigMutation::SetModel(model_id)),
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
