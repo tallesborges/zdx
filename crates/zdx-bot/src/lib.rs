@@ -18,6 +18,7 @@ mod commands;
 mod handlers;
 mod ingest;
 pub mod telegram;
+mod topic_title;
 mod transcribe;
 mod types;
 

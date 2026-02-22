@@ -15,6 +15,7 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 - `src/agent/mod.rs`: thread log + agent turn helpers
 - `src/telegram/mod.rs`: Telegram API client + tool wiring
 - `src/telegram/types.rs`: Telegram API DTOs
+- `src/topic_title.rs`: async LLM-based topic title generation
 - `src/transcribe.rs`: audio transcription helper
 - `src/types.rs`: bot message/media types
 
