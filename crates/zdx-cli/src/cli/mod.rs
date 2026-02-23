@@ -192,6 +192,18 @@ enum ThreadCommands {
         #[arg(value_name = "TITLE")]
         title: String,
     },
+    /// Append a message to an existing thread
+    Append {
+        /// The thread ID to append to
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
+        /// Message role (user or assistant)
+        #[arg(long, default_value = "assistant")]
+        role: String,
+        /// Message text
+        #[arg(long)]
+        text: String,
+    },
     /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
@@ -522,6 +534,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Show { id } => commands::threads::show(&id),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
+        ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
         ThreadCommands::Search {
             query,
             date,
