@@ -192,6 +192,18 @@ enum ThreadCommands {
         #[arg(value_name = "TITLE")]
         title: String,
     },
+    /// Append a message to an existing thread
+    Append {
+        /// The thread ID to append to
+        #[arg(value_name = "THREAD_ID")]
+        id: String,
+        /// Message role (user or assistant)
+        #[arg(long, default_value = "assistant")]
+        role: String,
+        /// Message text
+        #[arg(long)]
+        text: String,
+    },
     /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
@@ -317,6 +329,28 @@ enum TelegramCommands {
             value_parser = ["markdown", "markdown-v2", "html", "plain"]
         )]
         parse_mode: String,
+
+        /// Bot token override
+        #[arg(long, value_name = "TOKEN")]
+        bot_token: Option<String>,
+    },
+    /// Send a document (file) to a chat (optionally to a forum topic)
+    SendDocument {
+        /// Telegram chat ID
+        #[arg(long, value_name = "CHAT_ID")]
+        chat_id: i64,
+
+        /// Path to the file to send
+        #[arg(long, value_name = "PATH")]
+        path: String,
+
+        /// Optional caption
+        #[arg(long, value_name = "CAPTION")]
+        caption: Option<String>,
+
+        /// Optional forum topic thread ID
+        #[arg(long, value_name = "THREAD_ID")]
+        message_thread_id: Option<i64>,
 
         /// Bot token override
         #[arg(long, value_name = "TOKEN")]
@@ -522,6 +556,7 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
         ThreadCommands::Show { id } => commands::threads::show(&id),
         ThreadCommands::Resume { id } => commands::threads::resume(id, context.config).await,
         ThreadCommands::Rename { id, title } => commands::threads::rename(&id, &title),
+        ThreadCommands::Append { id, role, text } => commands::threads::append(&id, &role, &text),
         ThreadCommands::Search {
             query,
             date,
@@ -621,6 +656,23 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
                 message_thread_id,
                 &text,
                 &parse_mode,
+            )
+            .await
+        }
+        TelegramCommands::SendDocument {
+            chat_id,
+            path,
+            caption,
+            message_thread_id,
+            bot_token,
+        } => {
+            commands::telegram::send_document(
+                context.config,
+                bot_token,
+                chat_id,
+                message_thread_id,
+                &path,
+                caption.as_deref(),
             )
             .await
         }

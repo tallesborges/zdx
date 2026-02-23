@@ -9,6 +9,21 @@ use zdx_core::core::thread_persistence;
 
 use crate::modes;
 
+/// Appends a message to an existing thread.
+pub fn append(thread_id: &str, role: &str, text: &str) -> Result<()> {
+    let event = match role {
+        "user" => thread_persistence::ThreadEvent::user_message(text),
+        "assistant" => thread_persistence::ThreadEvent::assistant_message(text),
+        _ => anyhow::bail!("unsupported role '{role}' (use 'user' or 'assistant')"),
+    };
+
+    let mut thread =
+        thread_persistence::Thread::with_id(thread_id.to_string()).context("open thread")?;
+    thread.append(&event).context("append message")?;
+    println!("Appended {role} message to thread '{thread_id}'.");
+    Ok(())
+}
+
 /// Input options for `zdx threads search`.
 #[derive(Debug, Clone)]
 pub struct SearchCommandOptions {

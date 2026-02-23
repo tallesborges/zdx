@@ -88,6 +88,28 @@ fn resolve_parse_mode(parse_mode: &str) -> Result<ParseMode> {
     }
 }
 
+pub async fn send_document(
+    config: &Config,
+    bot_token: Option<String>,
+    chat_id: i64,
+    message_thread_id: Option<i64>,
+    path: &str,
+    caption: Option<&str>,
+) -> Result<()> {
+    let file_path = std::path::Path::new(path);
+    if !file_path.is_file() {
+        bail!("file not found: {path}");
+    }
+
+    let token = resolve_bot_token(config, bot_token.as_deref())?;
+    let client = TelegramClient::new(token);
+    client
+        .send_document_from_path(chat_id, file_path, caption, None, message_thread_id, None)
+        .await?;
+    println!("Sent document to Telegram.");
+    Ok(())
+}
+
 fn resolve_bot_token(config: &Config, override_token: Option<&str>) -> Result<String> {
     if let Some(token) = normalize_optional(override_token) {
         return Ok(token);
