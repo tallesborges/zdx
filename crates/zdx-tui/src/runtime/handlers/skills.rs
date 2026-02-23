@@ -18,7 +18,6 @@ struct RepoSpec {
 #[derive(Debug, Deserialize)]
 struct GitHubContentItem {
     name: String,
-    path: String,
     #[serde(rename = "type")]
     item_type: String,
     download_url: Option<String>,
@@ -103,7 +102,6 @@ async fn install_skill_inner(
     cancel: &CancellationToken,
 ) -> Result<(), String> {
     let spec = parse_repo_spec(repo)?;
-    let client = github_client()?;
     let skill_dir_name = skill_name_from_path(skill_path);
     let install_root = skill_install_root();
     let dest_root = install_root.join(&skill_dir_name);
@@ -112,17 +110,113 @@ async fn install_skill_inner(
         return Err("Skill already exists.".to_string());
     }
 
-    tokio::fs::create_dir_all(&dest_root)
-        .await
-        .map_err(|err| format!("Failed to create skill directory: {err}"))?;
-
     let skill_repo_path = join_repo_path(&spec.path, skill_path);
-    let result = download_repo_dir(&client, &spec, &skill_repo_path, &dest_root, cancel).await;
+    let result = sparse_clone_skill(
+        &spec.owner,
+        &spec.repo,
+        &skill_repo_path,
+        &dest_root,
+        cancel,
+    )
+    .await;
     if result.is_err() {
         let _ = tokio::fs::remove_dir_all(&dest_root).await;
     }
 
     result
+}
+
+async fn sparse_clone_skill(
+    owner: &str,
+    repo: &str,
+    skill_repo_path: &str,
+    dest_root: &std::path::Path,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
+    let repo_url = format!("https://github.com/{owner}/{repo}.git");
+
+    // Use a sibling temp dir so cleanup is easy
+    let tmp_dir = dest_root.with_extension("__tmp");
+    if tmp_dir.exists() {
+        tokio::fs::remove_dir_all(&tmp_dir)
+            .await
+            .map_err(|e| format!("Failed to clean temp dir: {e}"))?;
+    }
+
+    // 1. Init repo with no checkout and blobless filter
+    run_git(
+        &[
+            "clone",
+            "--filter=blob:none",
+            "--no-checkout",
+            "--depth=1",
+            "--sparse",
+            &repo_url,
+            tmp_dir.to_str().unwrap_or("."),
+        ],
+        None,
+        cancel,
+    )
+    .await?;
+
+    // 2. Sparse-checkout the specific skill folder
+    run_git(
+        &["sparse-checkout", "set", "--no-cone", skill_repo_path],
+        Some(&tmp_dir),
+        cancel,
+    )
+    .await?;
+
+    // 3. Checkout
+    run_git(&["checkout"], Some(&tmp_dir), cancel).await?;
+
+    // 4. Move the skill subfolder to the final destination
+    let skill_src = tmp_dir.join(skill_repo_path);
+    if !skill_src.exists() {
+        let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+        return Err(format!("Skill path '{skill_repo_path}' not found in repo."));
+    }
+
+    tokio::fs::rename(&skill_src, dest_root)
+        .await
+        .map_err(|e| format!("Failed to move skill to destination: {e}"))?;
+
+    let _ = tokio::fs::remove_dir_all(&tmp_dir).await;
+    Ok(())
+}
+
+async fn run_git(
+    args: &[&str],
+    cwd: Option<&std::path::Path>,
+    cancel: &CancellationToken,
+) -> Result<(), String> {
+    use tokio::process::Command;
+
+    if cancel.is_cancelled() {
+        return Err("Installation cancelled.".to_string());
+    }
+
+    let mut git_cmd = Command::new("git");
+    git_cmd
+        .args(args)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped());
+
+    if let Some(dir) = cwd {
+        git_cmd.current_dir(dir);
+    }
+
+    let output = git_cmd
+        .output()
+        .await
+        .map_err(|e| format!("Failed to run git: {e}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("git error: {stderr}"));
+    }
+
+    Ok(())
 }
 
 async fn fetch_skill_instructions_inner(
@@ -169,90 +263,6 @@ async fn fetch_skill_instructions_inner(
         .text()
         .await
         .map_err(|err| format!("Failed to read content: {err}"))
-}
-
-async fn download_repo_dir(
-    client: &reqwest::Client,
-    spec: &RepoSpec,
-    repo_path: &str,
-    dest_root: &Path,
-    cancel: &CancellationToken,
-) -> Result<(), String> {
-    let mut stack = vec![(repo_path.to_string(), dest_root.to_path_buf())];
-
-    while let Some((repo_path, dest_root)) = stack.pop() {
-        if cancel.is_cancelled() {
-            return Err("Installation cancelled.".to_string());
-        }
-
-        let url = contents_url(spec, &repo_path)?;
-        let entries = list_directory(client, url, cancel).await?;
-
-        for entry in entries {
-            if cancel.is_cancelled() {
-                return Err("Installation cancelled.".to_string());
-            }
-
-            match entry.item_type.as_str() {
-                "file" => {
-                    let download_url = entry
-                        .download_url
-                        .ok_or_else(|| "Missing download URL.".to_string())?;
-                    download_file(client, &download_url, &dest_root, &repo_path, &entry.path)
-                        .await?;
-                }
-                "dir" => {
-                    let sub_dest = dest_root.join(&entry.name);
-                    tokio::fs::create_dir_all(&sub_dest)
-                        .await
-                        .map_err(|err| format!("Failed to create directory: {err}"))?;
-                    stack.push((entry.path, sub_dest));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    Ok(())
-}
-
-async fn download_file(
-    client: &reqwest::Client,
-    download_url: &str,
-    dest_root: &Path,
-    repo_root: &str,
-    repo_path: &str,
-) -> Result<(), String> {
-    let response = client
-        .get(download_url)
-        .send()
-        .await
-        .map_err(|err| format!("Failed to download file: {err}"))?;
-    if !response.status().is_success() {
-        return Err(format!("Failed to download file ({}).", response.status()));
-    }
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|err| format!("Failed to read file bytes: {err}"))?;
-
-    let relative = repo_path
-        .strip_prefix(repo_root)
-        .unwrap_or(repo_path)
-        .trim_start_matches('/');
-    let dest_path = dest_root.join(relative);
-
-    if let Some(parent) = dest_path.parent() {
-        tokio::fs::create_dir_all(parent)
-            .await
-            .map_err(|err| format!("Failed to create directory: {err}"))?;
-    }
-
-    tokio::fs::write(&dest_path, bytes)
-        .await
-        .map_err(|err| format!("Failed to write file: {err}"))?;
-
-    Ok(())
 }
 
 async fn list_directory(
