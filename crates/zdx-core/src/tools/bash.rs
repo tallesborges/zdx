@@ -33,41 +33,6 @@ fn write_temp_file(bytes: &[u8], stream_name: &str) -> Option<String> {
     Some(path.to_string_lossy().into_owned())
 }
 
-/// Strips ANSI/VT100 escape sequences from a string.
-///
-/// Removes sequences like `ESC[...m` (colors), `ESC[...H` (cursor), etc.
-fn strip_ansi_escapes(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if c == '\x1b' {
-            // Consume the escape sequence
-            match chars.peek() {
-                Some(&'[') => {
-                    chars.next(); // consume '['
-                    // Consume until a letter (the final byte of the sequence)
-                    for ch in chars.by_ref() {
-                        if ch.is_ascii_alphabetic() {
-                            break;
-                        }
-                    }
-                }
-                Some(&('(' | ')')) => {
-                    chars.next(); // consume '(' or ')'
-                    chars.next(); // consume the designator char
-                }
-                _ => {
-                    // Single-char escape (e.g. ESC M); consume next char
-                    chars.next();
-                }
-            }
-        } else {
-            out.push(c);
-        }
-    }
-    out
-}
-
 /// Truncates a byte slice at a valid UTF-8 character boundary.
 ///
 /// Returns the truncated string and whether truncation occurred.
@@ -281,12 +246,10 @@ async fn run_command(
         )
     })?;
 
-    let (stdout_raw, stdout_truncated, stdout_total_bytes) =
+    let (stdout, stdout_truncated, stdout_total_bytes) =
         truncate_at_utf8_boundary(&output.stdout, MAX_OUTPUT_BYTES);
-    let (stderr_raw, stderr_truncated, stderr_total_bytes) =
+    let (stderr, stderr_truncated, stderr_total_bytes) =
         truncate_at_utf8_boundary(&output.stderr, MAX_OUTPUT_BYTES);
-    let stdout = strip_ansi_escapes(&stdout_raw);
-    let stderr = strip_ansi_escapes(&stderr_raw);
 
     // Write full output to temp files when truncated
     let stdout_file = if stdout_truncated {
