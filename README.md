@@ -18,11 +18,23 @@ I added the Telegram bot so I can control it while away from the computer. I don
 
 ## Quickstart
 
-### Install (macOS)
+### Install
 
+**Shell (macOS/Linux):**
 ```bash
-brew tap tallesborges/zdx
-brew install zdx
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/tallesborges/zdx/releases/latest/download/zdx-installer.sh | sh
+```
+
+**Homebrew:**
+```bash
+brew install tallesborges/zdx/zdx
+```
+
+**From source:**
+```bash
+git clone https://github.com/tallesborges/zdx.git
+cd zdx
+cargo install --path crates/zdx-cli
 ```
 
 ### Run
