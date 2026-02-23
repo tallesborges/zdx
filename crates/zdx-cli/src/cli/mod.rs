@@ -334,6 +334,28 @@ enum TelegramCommands {
         #[arg(long, value_name = "TOKEN")]
         bot_token: Option<String>,
     },
+    /// Send a document (file) to a chat (optionally to a forum topic)
+    SendDocument {
+        /// Telegram chat ID
+        #[arg(long, value_name = "CHAT_ID")]
+        chat_id: i64,
+
+        /// Path to the file to send
+        #[arg(long, value_name = "PATH")]
+        path: String,
+
+        /// Optional caption
+        #[arg(long, value_name = "CAPTION")]
+        caption: Option<String>,
+
+        /// Optional forum topic thread ID
+        #[arg(long, value_name = "THREAD_ID")]
+        message_thread_id: Option<i64>,
+
+        /// Bot token override
+        #[arg(long, value_name = "TOKEN")]
+        bot_token: Option<String>,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -634,6 +656,23 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
                 message_thread_id,
                 &text,
                 &parse_mode,
+            )
+            .await
+        }
+        TelegramCommands::SendDocument {
+            chat_id,
+            path,
+            caption,
+            message_thread_id,
+            bot_token,
+        } => {
+            commands::telegram::send_document(
+                context.config,
+                bot_token,
+                chat_id,
+                message_thread_id,
+                &path,
+                caption.as_deref(),
             )
             .await
         }
