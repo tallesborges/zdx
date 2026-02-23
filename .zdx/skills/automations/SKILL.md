@@ -13,13 +13,12 @@ An automation is a headless agent that runs unattended — no human in the loop.
 
 ## Contract (must follow)
 
-- Keep automations global-only in `$ZDX_HOME/automations/` (usually `~/.zdx/automations/`).
+- Keep automations global-only in `$ZDX_HOME/automations/` (usually `$HOME/.zdx/automations/`).
 - Treat one file as one automation.
 - Derive automation identity from file stem (no `id` field).
   - Example: `~/.zdx/automations/morning-report.md` → `morning-report`.
 - Require markdown with YAML frontmatter delimited by `---`.
 - Keep prompt body as non-empty markdown after frontmatter.
-- Never use deprecated `enabled`.
 
 ### Allowed frontmatter keys
 
@@ -65,6 +64,18 @@ ZDX persists automation output to the automation run thread by default.
 When updating an existing automation, preserve its delivery behavior unless user asks to change it.
 
 For detailed delivery patterns (Telegram topics, shell reliability, multi-channel fallback), see `references/delivery-patterns.md` in this skill directory.
+
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `zdx automations list` | List discovered automations (name, source, schedule) |
+| `zdx automations validate` | Validate all automation files (frontmatter + body) |
+| `zdx automations run <name>` | Run one automation by file stem (manual trigger) |
+| `zdx automations runs [name]` | Show run history (oldest first). Supports `--date`, `--date-start`, `--date-end`, `--json` |
+| `zdx automations daemon` | Start the scheduled automations daemon (optional `--poll-interval-secs`, default 30) |
+
+**Reading latest run output:** `zdx automations runs <name> | tail -1` to get the latest run, then use the thread ID to read results.
 
 ## Creation Process
 
@@ -170,181 +181,11 @@ Don't hardcode API calls when a skill exists.
 
 ## Examples
 
-### Daily thread summary (report, scheduled)
-
-```md
----
-schedule: "0 18 * * 1-5"
-timeout_secs: 300
----
-
-# Goal
-Summarize today's ZDX conversation threads into a concise daily digest.
-
-# Inputs
-- All threads modified today (use thread search).
-- Assumptions: "today" means the current calendar date in local time.
-
-# Execution Steps
-1. Search for threads modified today.
-2. For each thread (max 10 most recent), extract: title, key decisions, open questions.
-3. Group by topic if patterns emerge; otherwise list chronologically.
-
-# Output Format
-Return exactly:
-- **Date**: YYYY-MM-DD
-- **Threads Reviewed**: count
-- **Summary**: one bullet per thread (title + one-line takeaway)
-- **Open Questions**: collected list, or `None`
-
-Max 30 bullets total. No tables.
-
-# Empty State
-If no threads were modified today, return:
-`No threads modified today.`
-
-# Failure Policy
-If thread search fails, report the error and return `Thread search unavailable.`
-```
-
-### PR drafter (action, manual)
-
-```md
----
-timeout_secs: 600
-max_retries: 1
----
-
-# Goal
-Draft a pull request for the current branch's uncommitted and committed-but-unpushed changes.
-
-# Inputs
-- Current git branch and its diff against `main`.
-- Recent commit messages on the branch.
-- Assumptions: the repo has a remote named `origin` and a `main` branch.
-
-# Execution Steps
-1. Run `git diff main...HEAD` and `git diff` to collect all changes.
-2. Run `git log main..HEAD --oneline` for commit messages.
-3. Summarize the changes: what was added, modified, removed.
-4. Draft a PR title (conventional commit style, max 72 chars).
-5. Draft a PR body with: Summary, Changes (bulleted), Testing Notes.
-
-# Output Format
-Return exactly:
-- **PR Title**: single line
-- **PR Body**: markdown with Summary, Changes, Testing Notes sections
-
-# Empty State
-If there are no changes vs main, return:
-`No changes found between current branch and main.`
-
-# Failure Policy
-If git commands fail, report the exact error and stop.
-```
-
-### Weekly email digest (report + delivery, scheduled)
-
-```md
----
-schedule: "0 9 * * 1"
-model: "gemini-cli:gemini-2.5-flash"
-timeout_secs: 600
----
-
-# Goal
-Send a weekly summary of completed reminders and upcoming deadlines via email.
-
-# Inputs
-- Completed reminders from the past 7 days (use `apple-reminders` skill).
-- Upcoming reminders due in the next 7 days.
-
-# Execution Steps
-1. Fetch completed reminders from the last 7 days.
-2. Fetch upcoming reminders due within the next 7 days.
-3. Compile into a digest with two sections.
-4. Send via email using `gog` skill.
-
-# Output Format
-- **Week**: date range
-- **Completed**: bulleted list (or `None`)
-- **Upcoming**: bulleted list with due dates (or `None`)
-- **Delivery Status**: sent / failed + error
-
-# Empty State
-If no completed and no upcoming reminders, send email with:
-`Nothing to report this week. No completed or upcoming reminders.`
-
-# Delivery
-- Channel: email (use `gog` skill)
-- Target: user's primary Gmail
-- If delivery fails: report error clearly; digest remains in automation thread.
-
-# Failure Policy
-- If reminders fetch fails, report error and skip that section.
-- If email send fails, report delivery error; run output remains in thread.
-```
+See `references/examples.md` for full examples: daily thread summary (report, scheduled), PR drafter (action, manual), weekly email digest (report + delivery, scheduled).
 
 ## Templates
 
-### Scheduled automation
-
-```md
----
-schedule: "0 8 * * *"
-# model: "gemini-cli:gemini-2.5-flash"
-# timeout_secs: 900
-# max_retries: 1
----
-
-# Goal
-<one-sentence goal>
-
-# Inputs
-- <source 1>
-- <source 2>
-- Assumptions: <explicit assumptions>
-
-# Execution Steps
-1. <step>
-2. <step>
-
-# Output Format
-- <required sections / limits>
-
-# Empty State
-If <nothing to report condition>: `<short message>.`
-
-# Failure Policy
-- If a non-critical source fails, continue with available data and state what failed.
-```
-
-### Manual-only automation
-
-```md
----
-# model: "gemini-cli:gemini-2.5-flash"
-# timeout_secs: 900
----
-
-# Goal
-<one-sentence goal>
-
-# Inputs
-- <source>
-
-# Execution Steps
-1. <step>
-
-# Output Format
-- <required sections / limits>
-
-# Empty State
-<what to return when nothing to do>
-
-# Failure Policy
-- <error handling rules>
-```
+See `references/templates.md` for starter templates: scheduled automation and manual-only automation.
 
 ## Safety
 
