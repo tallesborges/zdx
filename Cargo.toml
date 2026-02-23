@@ -69,3 +69,8 @@ unicode-segmentation = "1.12"
 unicode-width = "0.2"
 url = "2.5"
 uuid = { version = "1.19.0", features = ["v4"] }
+
+# The profile that 'dist' will build with
+[profile.dist]
+inherits = "release"
+lto = "thin"
