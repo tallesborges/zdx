@@ -111,7 +111,7 @@ pub fn runs(options: RunsOptions) -> Result<()> {
         return Ok(());
     }
 
-    for record in filtered.into_iter().rev() {
+    for record in filtered.into_iter() {
         let thread_display = record.thread_id.as_deref().unwrap_or("-");
         println!(
             "{} | {} | {} | {} | {}ms | attempt {}/{} | thread {}",
