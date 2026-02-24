@@ -63,6 +63,14 @@ pub enum InputMutation {
     ClearHistory,
     ClearQueue,
     SetHandoffState(HandoffState),
+    /// Attach an image (`mime_type`, `base64_data`, `source_path`).
+    AttachImage {
+        mime_type: String,
+        data: String,
+        source_path: Option<String>,
+    },
+    /// Reset image counter (on new thread).
+    ResetImageCounter,
 }
 
 /// Thread slice mutations requested by other slices.

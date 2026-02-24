@@ -719,6 +719,7 @@ pub enum HistoryCell {
         created_at: DateTime<Utc>,
         content: String,
         is_interrupted: bool,
+        image_count: usize,
     },
 
     /// Assistant response.
@@ -804,6 +805,18 @@ impl HistoryCell {
             created_at: Utc::now(),
             content: content.into(),
             is_interrupted: false,
+            image_count: 0,
+        }
+    }
+
+    /// Creates a new user cell with attached images.
+    pub fn user_with_images(content: impl Into<String>, image_count: usize) -> Self {
+        HistoryCell::User {
+            id: CellId::new(),
+            created_at: Utc::now(),
+            content: content.into(),
+            is_interrupted: false,
+            image_count,
         }
     }
 
@@ -1094,17 +1107,35 @@ impl HistoryCell {
             HistoryCell::User {
                 content,
                 is_interrupted,
+                image_count,
                 ..
             } => {
                 let prefix = "│ ";
-                let mut lines = render_prefixed_content(
+                let mut lines = Vec::new();
+
+                // Show image attachment indicator before content
+                if *image_count > 0 {
+                    let label = if *image_count == 1 {
+                        "│ 📎 1 image".to_string()
+                    } else {
+                        format!("│ 📎 {image_count} images")
+                    };
+                    lines.push(StyledLine {
+                        spans: vec![StyledSpan {
+                            text: label,
+                            style: Style::SystemPrefix,
+                        }],
+                    });
+                }
+
+                lines.extend(render_prefixed_content(
                     prefix,
                     content,
                     width,
                     Style::UserPrefix,
                     Style::User,
                     true,
-                );
+                ));
 
                 // Append interrupted indicator to last line if request was cancelled
                 if *is_interrupted && let Some(last) = lines.last_mut() {
@@ -1661,10 +1692,11 @@ impl HistoryCell {
             HistoryCell::User {
                 content,
                 is_interrupted,
+                image_count,
                 ..
             } => {
-                // Include is_interrupted in discriminator to invalidate cache when marked
-                content.len() + usize::from(*is_interrupted)
+                // Include is_interrupted and image_count in discriminator to invalidate cache when marked
+                content.len() + usize::from(*is_interrupted) + *image_count
             }
             HistoryCell::Assistant {
                 content,

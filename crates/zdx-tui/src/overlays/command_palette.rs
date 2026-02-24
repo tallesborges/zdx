@@ -354,6 +354,7 @@ fn new_thread_reset_mutations() -> Vec<StateMutation> {
         StateMutation::Thread(ThreadMutation::ResetUsage),
         StateMutation::Input(InputMutation::ClearHistory),
         StateMutation::Input(InputMutation::ClearQueue),
+        StateMutation::Input(InputMutation::ResetImageCounter),
     ]
 }
 

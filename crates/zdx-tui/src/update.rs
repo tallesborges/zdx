@@ -222,7 +222,7 @@ fn maybe_send_next_queued_prompt(
         && app.tui.thread.title.is_none()
         && !app.tui.tasks.state(TaskKind::ThreadTitle).is_running();
     let (queue_effects, queue_mutations) =
-        input::build_send_effects(&text, thread_id, should_suggest_title);
+        input::build_send_effects(&text, thread_id, should_suggest_title, vec![]);
     apply_mutations(&mut app.tui, queue_mutations);
     effects.extend(queue_effects);
 }
@@ -733,10 +733,7 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
             transcript::handle_mouse(&mut app.tui.transcript, mouse, render::TRANSCRIPT_MARGIN);
             vec![]
         }
-        Event::Paste(text) => {
-            input::handle_paste(&mut app.tui.input, &mut app.overlay, &text);
-            vec![]
-        }
+        Event::Paste(text) => input::handle_paste(&mut app.tui.input, &mut app.overlay, &text),
         Event::Resize(_, _) => {
             // Clear wrap cache on resize since line wrapping depends on width
             app.tui.transcript.wrap_cache.clear();

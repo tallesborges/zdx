@@ -209,6 +209,46 @@ impl ChatMessage {
         }
     }
 
+    /// Creates a user message with text and image attachments.
+    ///
+    /// Each image is a tuple of `(mime_type, base64_data, optional_source_path)`.
+    /// When a source path is provided, an `<attached_image>` XML tag is added
+    /// to the text block so the model knows where the image came from.
+    pub fn user_with_images(text: &str, images: &[(String, String, Option<String>)]) -> Self {
+        let mut blocks = Vec::with_capacity(images.len() * 2 + 1);
+
+        for (i, (mime_type, data, source_path)) in images.iter().enumerate() {
+            // Add a text block describing the image source (helps the model)
+            let description = if let Some(path) = source_path {
+                format!(
+                    "<attached_image path=\"{path}\">Image {} is from the path above.</attached_image>",
+                    i + 1
+                )
+            } else {
+                format!(
+                    "<attached_image>Image {} from clipboard.</attached_image>",
+                    i + 1
+                )
+            };
+            blocks.push(ChatContentBlock::Text(description));
+
+            // Add the actual image block
+            blocks.push(ChatContentBlock::Image {
+                mime_type: mime_type.clone(),
+                data: data.clone(),
+            });
+        }
+
+        if !text.is_empty() {
+            blocks.push(ChatContentBlock::Text(text.to_string()));
+        }
+
+        Self {
+            role: "user".to_string(),
+            content: MessageContent::Blocks(blocks),
+        }
+    }
+
     /// Creates an assistant message with content blocks (for tool use).
     pub fn assistant_blocks(blocks: Vec<ChatContentBlock>) -> Self {
         Self {

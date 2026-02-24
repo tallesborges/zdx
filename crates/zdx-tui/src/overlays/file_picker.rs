@@ -607,6 +607,16 @@ mod tests {
             InputMutation::ClearHistory => input.clear_history(),
             InputMutation::ClearQueue => input.queued.clear(),
             InputMutation::SetHandoffState(state) => input.handoff = state,
+            InputMutation::AttachImage {
+                mime_type,
+                data,
+                source_path,
+            } => {
+                input.attach_image(mime_type, data, source_path);
+            }
+            InputMutation::ResetImageCounter => {
+                input.reset_image_counter();
+            }
         }
     }
 

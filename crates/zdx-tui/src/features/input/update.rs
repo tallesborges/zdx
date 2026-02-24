@@ -8,7 +8,9 @@ use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
 use super::CursorMove;
-use super::state::{HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingPaste};
+use super::state::{
+    HandoffState, InputState, LARGE_PASTE_CHAR_THRESHOLD, PendingImage, PendingPaste,
+};
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
 use crate::mutations::{InputMutation, StateMutation, ThreadMutation, TranscriptMutation};
@@ -31,16 +33,44 @@ pub struct InputContext<'a> {
     pub model_id: &'a str,
 }
 
+fn is_image_path(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.contains('\n') {
+        return false;
+    }
+    // Unescape shell-escaped characters for extension detection
+    let unescaped = trimmed.replace("\\ ", " ");
+    let ext = std::path::Path::new(&unescaped)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("");
+    matches!(
+        ext.to_ascii_lowercase().as_str(),
+        "png" | "jpg" | "jpeg" | "gif" | "webp"
+    )
+}
+
 /// Handles paste events for input.
 ///
 /// Sanitizes pasted text by stripping ANSI escapes and expanding tabs to spaces.
 /// For large pastes (>1000 chars), inserts a placeholder and stores the original
 /// content for expansion on submission.
-pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text: &str) {
+pub fn handle_paste(
+    input: &mut InputState,
+    overlay: &mut Option<Overlay>,
+    text: &str,
+) -> Vec<UiEffect> {
     let sanitized = sanitize_for_display(text);
+    if is_image_path(&sanitized) {
+        let path = sanitized.trim();
+        let path = path.trim_matches('\'').trim_matches('"');
+        return vec![UiEffect::AttachImage {
+            path: path.to_string(),
+        }];
+    }
     if let Some(Overlay::Login(LoginState::AwaitingCode { .. })) = overlay {
         // Ignore paste while waiting for OAuth callback.
-        return;
+        return vec![];
     }
 
     let char_count = sanitized.chars().count();
@@ -61,6 +91,8 @@ pub fn handle_paste(input: &mut InputState, overlay: &mut Option<Overlay>, text:
 
     // Sync pending pastes in case the paste replaced selected text containing a placeholder
     input.sync_pending_pastes();
+    input.sync_pending_images();
+    vec![]
 }
 
 /// Handles main key input when no overlay is active.
@@ -160,12 +192,14 @@ fn handle_line_editing(
                 input.textarea.delete_line_by_end();
             }
             input.sync_pending_pastes();
+            input.sync_pending_images();
             Some((vec![], vec![], None))
         }
         // Ctrl+K: kill from cursor to end of line
         KeyCode::Char('k') if mods.only_ctrl() => {
             input.textarea.delete_line_by_end();
             input.sync_pending_pastes();
+            input.sync_pending_images();
             Some((vec![], vec![], None))
         }
         // Ctrl+J: insert newline (like Shift+Enter in some editors)
@@ -193,6 +227,7 @@ fn handle_word_editing(
             if !input.try_delete_placeholder_at_bracket(true) {
                 input.textarea.delete_word_left();
                 input.sync_pending_pastes();
+                input.sync_pending_images();
             }
             Some((vec![], vec![], None))
         }
@@ -203,6 +238,7 @@ fn handle_word_editing(
             if !input.try_delete_placeholder_at_bracket(true) {
                 input.textarea.delete_word_left();
                 input.sync_pending_pastes();
+                input.sync_pending_images();
             }
             Some((vec![], vec![], None))
         }
@@ -284,6 +320,7 @@ fn handle_navigation(input: &mut InputState, key: KeyEvent, mods: &Modifiers) ->
             } else {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
+                input.sync_pending_images();
                 input.snap_to_placeholder_end();
             }
             Some((vec![], vec![], None))
@@ -295,6 +332,7 @@ fn handle_navigation(input: &mut InputState, key: KeyEvent, mods: &Modifiers) ->
             } else {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
+                input.sync_pending_images();
                 input.snap_to_placeholder_end();
             }
             Some((vec![], vec![], None))
@@ -450,6 +488,7 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
             if !input.try_delete_placeholder_at_bracket(true) {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
+                input.sync_pending_images();
             }
             (vec![], vec![], None)
         }
@@ -459,6 +498,7 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
             if !input.try_delete_placeholder_at_bracket(false) {
                 input.textarea.input(key);
                 input.sync_pending_pastes();
+                input.sync_pending_images();
             }
             (vec![], vec![], None)
         }
@@ -470,12 +510,14 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
             input.reset_navigation();
             input.textarea.input(key);
             input.sync_pending_pastes();
+            input.sync_pending_images();
             (vec![], vec![], None)
         }
         // `/` when input is not empty: insert normally
         KeyCode::Char('/') if mods.none() => {
             input.textarea.input(key);
             input.sync_pending_pastes();
+            input.sync_pending_images();
             (vec![], vec![], None)
         }
         // Default: insert character
@@ -483,6 +525,7 @@ fn handle_default_input(input: &mut InputState, key: KeyEvent) -> KeyResult {
             input.reset_navigation();
             input.textarea.input(key);
             input.sync_pending_pastes();
+            input.sync_pending_images();
 
             // Detect `@` trigger for file picker or thread picker (reference insert)
             if key.code == KeyCode::Char('@')
@@ -593,10 +636,11 @@ fn submit_input(
         return (vec![], vec![], None);
     }
 
+    let images = input.take_images();
     input.history.push(text.clone());
     input.reset_navigation();
     input.clear();
-    let (effects, mutations) = build_send_effects(&text, thread_id, should_suggest_title);
+    let (effects, mutations) = build_send_effects(&text, thread_id, should_suggest_title, images);
 
     (effects, mutations, None)
 }
@@ -723,6 +767,7 @@ fn handle_handoff_submission(
                 StateMutation::Thread(ThreadMutation::ClearMessages),
                 StateMutation::Thread(ThreadMutation::ResetUsage),
                 StateMutation::Input(InputMutation::ClearQueue),
+                StateMutation::Input(InputMutation::ResetImageCounter),
             ],
             None,
         ));
@@ -735,6 +780,7 @@ pub fn build_send_effects(
     text: &str,
     thread_id: Option<String>,
     should_suggest_title: bool,
+    images: Vec<PendingImage>,
 ) -> (Vec<UiEffect>, Vec<StateMutation>) {
     let mut effects = if thread_id.is_some() {
         vec![
@@ -747,11 +793,24 @@ pub fn build_send_effects(
         vec![UiEffect::StartAgentTurn]
     };
 
+    let image_count = images.len();
+    let image_pairs: Vec<(String, String, Option<String>)> = images
+        .into_iter()
+        .map(|img| (img.mime_type, img.data, img.source_path))
+        .collect();
+
+    let (cell, message) = if image_count > 0 {
+        (
+            HistoryCell::user_with_images(text, image_count),
+            ChatMessage::user_with_images(text, &image_pairs),
+        )
+    } else {
+        (HistoryCell::user(text), ChatMessage::user(text))
+    };
+
     let mutations = vec![
-        StateMutation::Transcript(TranscriptMutation::AppendCell(Box::new(HistoryCell::user(
-            text,
-        )))),
-        StateMutation::Thread(ThreadMutation::AppendMessage(ChatMessage::user(text))),
+        StateMutation::Transcript(TranscriptMutation::AppendCell(Box::new(cell))),
+        StateMutation::Thread(ThreadMutation::AppendMessage(message)),
     ];
 
     if should_suggest_title && let Some(thread_id) = thread_id {
