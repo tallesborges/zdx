@@ -181,6 +181,14 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
         ));
     }
 
+    for doc in &incoming.documents {
+        parts.push(format!(
+            "Document attachment '{}' saved at {}.",
+            doc.file_name,
+            doc.local_path.display()
+        ));
+    }
+
     if parts.is_empty() {
         "User sent an attachment.".to_string()
     } else {
