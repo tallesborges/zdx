@@ -114,7 +114,6 @@ struct PromptTemplateSubagents {
 
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateVars {
-    agent_identity: String,
     provider: String,
     invocation_term: String,
     invocation_term_plural: String,
@@ -244,15 +243,8 @@ fn build_prompt_template_vars(
     let provider_selection = resolve_provider(model);
     let provider = provider_selection.kind.id().to_string();
     let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
-    let agent_identity = if provider_selection.kind == ProviderKind::ClaudeCli {
-        String::new()
-    } else {
-        "You are Z. You are running as a coding agent in the zdx CLI on a user's computer."
-            .to_string()
-    };
 
     PromptTemplateVars {
-        agent_identity,
         provider,
         invocation_term: if is_openai_codex {
             "function".to_string()
