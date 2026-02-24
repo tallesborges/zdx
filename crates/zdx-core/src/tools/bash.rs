@@ -190,14 +190,64 @@ pub async fn run(command: &str, ctx: &ToolContext, timeout: Option<Duration>) ->
     }
 }
 
+/// Kills all processes in the given process group.
+///
+/// Sends SIGTERM first, waits briefly, then SIGKILL if processes remain.
+/// This ensures child processes (python, curl, gcloud, etc.) spawned by
+/// the shell are also terminated on interrupt/timeout.
+#[cfg(unix)]
+fn kill_process_group(pgid: i32) {
+    unsafe {
+        libc::killpg(pgid, libc::SIGTERM);
+    }
+    std::thread::sleep(Duration::from_millis(100));
+    unsafe {
+        libc::killpg(pgid, libc::SIGKILL);
+    }
+}
+
+/// RAII guard that kills the process group on drop.
+///
+/// Ensures all child processes are cleaned up even if the future is
+/// cancelled (e.g., by tokio task abort on user interrupt).
+#[cfg(unix)]
+struct ProcessGroupGuard {
+    pgid: i32,
+    disarmed: bool,
+}
+
+#[cfg(unix)]
+impl ProcessGroupGuard {
+    fn new(pgid: i32) -> Self {
+        Self {
+            pgid,
+            disarmed: false,
+        }
+    }
+
+    /// Disarm the guard (process completed normally, no cleanup needed).
+    fn disarm(&mut self) {
+        self.disarmed = true;
+    }
+}
+
+#[cfg(unix)]
+impl Drop for ProcessGroupGuard {
+    fn drop(&mut self) {
+        if !self.disarmed {
+            kill_process_group(self.pgid);
+        }
+    }
+}
+
 /// Runs a shell command in the context's root directory.
 async fn run_command(
     command: &str,
     ctx: &ToolContext,
     timeout: Option<Duration>,
 ) -> Result<BashOutput, ToolOutput> {
-    let child = tokio::process::Command::new("sh")
-        .arg("-c")
+    let mut cmd = tokio::process::Command::new("sh");
+    cmd.arg("-c")
         .arg(command)
         .current_dir(&ctx.root)
         // Signal to programs that we are a non-interactive, dumb terminal.
@@ -206,22 +256,49 @@ async fn run_command(
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-        .map_err(|e| {
-            ToolOutput::failure(
-                "spawn_error",
-                format!("Failed to execute command '{command}'"),
-                Some(format!("Error: {e}")),
-            )
-        })?;
+        .stderr(Stdio::piped());
+
+    // On Unix: spawn in a new process group so we can kill all children at once.
+    // Without this, interrupting only kills the shell, leaving python/curl/etc orphaned.
+    #[cfg(unix)]
+    unsafe {
+        cmd.pre_exec(|| {
+            // Create a new process group with this process as the leader.
+            // All child processes inherit this group.
+            libc::setpgid(0, 0);
+            Ok(())
+        });
+    }
+
+    // On non-Unix, fall back to kill_on_drop (kills direct child only).
+    #[cfg(not(unix))]
+    cmd.kill_on_drop(true);
+
+    let child = cmd.spawn().map_err(|e| {
+        ToolOutput::failure(
+            "spawn_error",
+            format!("Failed to execute command '{command}'"),
+            Some(format!("Error: {e}")),
+        )
+    })?;
+
+    // Set up process group guard for cleanup on cancel/drop (Unix only).
+    #[cfg(unix)]
+    let child_pid = child.id().unwrap_or(0) as i32;
+    #[cfg(unix)]
+    let mut pg_guard = ProcessGroupGuard::new(child_pid);
 
     let output_fut = child.wait_with_output();
     let output = match timeout {
-        Some(timeout) => match tokio::time::timeout(timeout, output_fut).await {
-            Ok(result) => result,
-            Err(_) => {
+        Some(timeout) => {
+            if let Ok(result) = tokio::time::timeout(timeout, output_fut).await {
+                result
+            } else {
+                // Timeout: kill the entire process group (guard will handle it on drop,
+                // but we can also be explicit here).
+                #[cfg(unix)]
+                kill_process_group(child_pid);
+
                 return Ok(BashOutput {
                     stdout: String::new(),
                     stderr: format!("Command timed out after {} seconds", timeout.as_secs()),
@@ -235,7 +312,7 @@ async fn run_command(
                     stderr_file: None,
                 });
             }
-        },
+        }
         None => output_fut.await,
     }
     .map_err(|e| {
@@ -245,6 +322,10 @@ async fn run_command(
             Some(format!("Error: {e}")),
         )
     })?;
+
+    // Process completed normally — disarm the guard so we don't kill already-exited processes.
+    #[cfg(unix)]
+    pg_guard.disarm();
 
     let (stdout, stdout_truncated, stdout_total_bytes) =
         truncate_at_utf8_boundary(&output.stdout, MAX_OUTPUT_BYTES);
