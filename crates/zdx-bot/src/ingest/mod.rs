@@ -9,10 +9,11 @@ use zdx_core::config::{Config, paths};
 
 use crate::telegram::{Audio, Document, Message, PhotoSize, TelegramClient, Voice};
 use crate::transcribe;
-use crate::types::{IncomingAudio, IncomingImage, IncomingMessage};
+use crate::types::{IncomingAudio, IncomingDocument, IncomingImage, IncomingMessage};
 
 const MAX_IMAGE_BYTES: u64 = 3_932_160; // 3.75MB
 const MAX_AUDIO_BYTES: u64 = 25 * 1024 * 1024; // 25MB
+const MAX_DOCUMENT_BYTES: u64 = 25 * 1024 * 1024; // 25MB
 const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
 
 pub(crate) struct AllowlistConfig<'a> {
@@ -29,6 +30,7 @@ struct MessageTarget {
 struct AttachmentCollection {
     images: Vec<IncomingImage>,
     audios: Vec<IncomingAudio>,
+    documents: Vec<IncomingDocument>,
     had_attachments: bool,
 }
 
@@ -63,10 +65,11 @@ pub(crate) async fn parse_incoming_message(
     let AttachmentCollection {
         images,
         audios,
+        documents,
         had_attachments,
     } = attachments;
 
-    if text.is_none() && images.is_empty() && audios.is_empty() {
+    if text.is_none() && images.is_empty() && audios.is_empty() && documents.is_empty() {
         return handle_empty_message(client, &target, had_attachments).await;
     }
 
@@ -81,6 +84,7 @@ pub(crate) async fn parse_incoming_message(
         text,
         images,
         audios,
+        documents,
         message_thread_id: target.thread,
         is_forum: message.chat.is_forum_enabled(),
     }))
@@ -135,6 +139,7 @@ async fn collect_attachments(
 ) -> AttachmentCollection {
     let mut images = Vec::new();
     let mut audios = Vec::new();
+    let mut documents = Vec::new();
     let mut had_attachments = false;
 
     if let Some(photos) = message.photo.as_deref() {
@@ -167,6 +172,13 @@ async fn collect_attachments(
                 "document audio",
             )
             .await;
+        } else {
+            push_attachment(
+                &mut documents,
+                load_generic_document(client, target.chat, target.message, document),
+                "generic document",
+            )
+            .await;
         }
     }
 
@@ -193,6 +205,7 @@ async fn collect_attachments(
     AttachmentCollection {
         images,
         audios,
+        documents,
         had_attachments,
     }
 }
@@ -330,6 +343,37 @@ async fn load_document_image(
         local_path,
         mime_type,
         data,
+    }))
+}
+
+async fn load_generic_document(
+    client: &TelegramClient,
+    chat_id: i64,
+    message_id: i64,
+    document: &Document,
+) -> Result<Option<IncomingDocument>> {
+    if document.file_size.unwrap_or(0) > MAX_DOCUMENT_BYTES {
+        eprintln!("Skipping document > max size in chat {chat_id}");
+        return Ok(None);
+    }
+
+    let (file_path, bytes) = download_file_bytes(client, &document.file_id).await?;
+    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+        eprintln!("Downloaded document exceeds max size in chat {chat_id}");
+        return Ok(None);
+    }
+
+    let file_name = document
+        .file_name
+        .as_deref()
+        .and_then(file_name_from_path)
+        .or_else(|| file_name_from_path(&file_path))
+        .unwrap_or_else(|| format!("document_{message_id}.bin"));
+    let local_path = save_media_bytes(chat_id, message_id, &file_name, &bytes)?;
+
+    Ok(Some(IncomingDocument {
+        local_path,
+        file_name,
     }))
 }
 
