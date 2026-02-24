@@ -50,6 +50,7 @@ globset = "0.4"
 nucleo-matcher = "0.3"
 ignore = "0.4"
 infer = "0.19"
+libc = "0.2"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 minijinja = "2.15.1"
 open = "5"
