@@ -19,6 +19,21 @@ pub struct PendingPaste {
     pub content: String,
 }
 
+/// A pending image attached to the input.
+#[derive(Debug, Clone)]
+pub struct PendingImage {
+    /// Unique numeric identifier for this image.
+    pub id: String,
+    /// The placeholder text shown in the textarea.
+    pub placeholder: String,
+    /// MIME type of the image (e.g., "image/png").
+    pub mime_type: String,
+    /// Base64-encoded image data.
+    pub data: String,
+    /// Optional source file path.
+    pub source_path: Option<String>,
+}
+
 /// Handoff feature state machine.
 ///
 /// Models the lifecycle of a handoff operation:
@@ -98,6 +113,12 @@ pub struct InputState {
 
     /// Monotonic counter for generating unique paste IDs.
     paste_counter: u32,
+
+    /// Pending images attached to the input.
+    pub pending_images: Vec<PendingImage>,
+
+    /// Monotonic counter for generating unique image IDs.
+    image_counter: u32,
 }
 
 impl Default for InputState {
@@ -120,6 +141,8 @@ impl InputState {
             queued: std::collections::VecDeque::new(),
             pending_pastes: Vec::new(),
             paste_counter: 0,
+            pending_images: Vec::new(),
+            image_counter: 0,
         }
     }
 
@@ -137,11 +160,16 @@ impl InputState {
     /// all occurrences are expanded to the same content.
     pub fn get_text_with_pending(&mut self) -> String {
         let text = self.get_text();
+        // Expand paste placeholders to their original content
         let expanded = self.pending_pastes.iter().fold(text, |acc, paste| {
             acc.replace(&paste.placeholder, &paste.content)
         });
+        // Replace image placeholders with short references (e.g., "[Image #1]" → "[image 1]")
+        let expanded = self.pending_images.iter().fold(expanded, |acc, img| {
+            acc.replace(&img.placeholder, &format!("[Image {}]", img.id))
+        });
         self.clear_pending_pastes();
-        expanded
+        expanded.trim().to_string()
     }
 
     /// Clears pending pastes but keeps the counter.
@@ -171,7 +199,7 @@ impl InputState {
     /// Returns `true` if a placeholder was deleted (caller should skip normal key handling),
     /// `false` otherwise (caller should proceed with normal key handling).
     pub fn try_delete_placeholder_at_bracket(&mut self, is_backspace: bool) -> bool {
-        if self.pending_pastes.is_empty() {
+        if self.pending_pastes.is_empty() && self.pending_images.is_empty() {
             return false;
         }
 
@@ -205,20 +233,34 @@ impl InputState {
             return false;
         }
 
-        // Find if this `]` is the closing bracket of any placeholder
+        // Find if this `]` is the closing bracket of any paste placeholder
         for paste_idx in 0..self.pending_pastes.len() {
-            let placeholder = &self.pending_pastes[paste_idx].placeholder;
+            let placeholder = self.pending_pastes[paste_idx].placeholder.clone();
 
-            // Find all occurrences of this placeholder in the text
             let mut search_start = 0;
-            while let Some(pos) = text[search_start..].find(placeholder) {
+            while let Some(pos) = text[search_start..].find(&placeholder) {
                 let abs_pos = search_start + pos;
                 let placeholder_end = abs_pos + placeholder.len();
 
-                // The `]` is at placeholder_end - 1 (last byte of placeholder)
                 if delete_byte_offset == placeholder_end - 1 {
-                    // Found! Delete the entire placeholder
                     return self.delete_placeholder_at(paste_idx, abs_pos, &text);
+                }
+
+                search_start = abs_pos + 1;
+            }
+        }
+
+        // Find if this `]` is the closing bracket of any image placeholder
+        for img_idx in 0..self.pending_images.len() {
+            let placeholder = self.pending_images[img_idx].placeholder.clone();
+
+            let mut search_start = 0;
+            while let Some(pos) = text[search_start..].find(&placeholder) {
+                let abs_pos = search_start + pos;
+                let placeholder_end = abs_pos + placeholder.len();
+
+                if delete_byte_offset == placeholder_end - 1 {
+                    return self.delete_image_placeholder_at(img_idx, abs_pos, &text);
                 }
 
                 search_start = abs_pos + 1;
@@ -283,12 +325,12 @@ impl InputState {
         cursor_byte: usize,
         is_left: bool,
     ) -> Option<usize> {
-        for paste in &self.pending_pastes {
-            // Find all occurrences of this placeholder in text
+        let all_placeholders = self.all_placeholder_strings();
+        for placeholder in &all_placeholders {
             let mut search_start = 0;
-            while let Some(pos) = text[search_start..].find(&paste.placeholder) {
+            while let Some(pos) = text[search_start..].find(placeholder) {
                 let start = search_start + pos;
-                let end = start + paste.placeholder.len();
+                let end = start + placeholder.len();
 
                 if is_left {
                     // Moving left: jump to start if cursor is in (start, end]
@@ -314,11 +356,12 @@ impl InputState {
     /// Returns `Some(end)` if cursor is strictly inside a placeholder [start, end),
     /// `None` otherwise.
     fn find_placeholder_end_if_inside(&self, text: &str, cursor_byte: usize) -> Option<usize> {
-        for paste in &self.pending_pastes {
+        let all_placeholders = self.all_placeholder_strings();
+        for placeholder in &all_placeholders {
             let mut search_start = 0;
-            while let Some(pos) = text[search_start..].find(&paste.placeholder) {
+            while let Some(pos) = text[search_start..].find(placeholder) {
                 let start = search_start + pos;
-                let end = start + paste.placeholder.len();
+                let end = start + placeholder.len();
 
                 // Cursor is inside placeholder if in [start, end)
                 if cursor_byte >= start && cursor_byte < end {
@@ -366,7 +409,7 @@ impl InputState {
     ///
     /// Returns `true` if cursor was snapped, `false` otherwise.
     pub fn snap_to_placeholder_end(&mut self) -> bool {
-        if self.pending_pastes.is_empty() {
+        if self.pending_pastes.is_empty() && self.pending_images.is_empty() {
             return false;
         }
 
@@ -402,7 +445,7 @@ impl InputState {
     /// Returns `true` if a jump occurred (caller should skip normal arrow handling),
     /// `false` otherwise (caller should proceed with normal cursor movement).
     pub fn try_jump_over_placeholder(&mut self, is_left: bool) -> bool {
-        if self.pending_pastes.is_empty() {
+        if self.pending_pastes.is_empty() && self.pending_images.is_empty() {
             return false;
         }
 
@@ -440,6 +483,45 @@ impl InputState {
 
         // Remove from pending_pastes
         self.pending_pastes.remove(paste_idx);
+
+        // Calculate new cursor position (at the start of where placeholder was)
+        let (new_row, new_col) = Self::byte_offset_to_cursor(&new_text, byte_start);
+
+        // Set the new text
+        self.textarea.select_all();
+        self.textarea.cut();
+        if !new_text.is_empty() {
+            self.textarea.insert_str(&new_text);
+        }
+
+        // Position cursor at where the placeholder started
+        self.textarea.move_cursor(CursorMove::Top);
+        self.textarea.move_cursor(CursorMove::Head);
+        for _ in 0..new_row {
+            self.textarea.move_cursor(CursorMove::Down);
+        }
+        for _ in 0..new_col {
+            self.textarea.move_cursor(CursorMove::Forward);
+        }
+
+        true
+    }
+
+    /// Deletes an image placeholder at the given byte position and updates cursor.
+    fn delete_image_placeholder_at(
+        &mut self,
+        img_idx: usize,
+        byte_start: usize,
+        text: &str,
+    ) -> bool {
+        let placeholder = &self.pending_images[img_idx].placeholder;
+        let byte_end = byte_start + placeholder.len();
+
+        // Build new text without the placeholder
+        let new_text = format!("{}{}", &text[..byte_start], &text[byte_end..]);
+
+        // Remove from pending_images
+        self.pending_images.remove(img_idx);
 
         // Calculate new cursor position (at the start of where placeholder was)
         let (new_row, new_col) = Self::byte_offset_to_cursor(&new_text, byte_start);
@@ -537,6 +619,68 @@ impl InputState {
         self.paste_counter.to_string()
     }
 
+    pub fn all_placeholder_strings(&self) -> Vec<String> {
+        let mut placeholders: Vec<String> = self
+            .pending_pastes
+            .iter()
+            .map(|p| p.placeholder.clone())
+            .collect();
+        placeholders.extend(
+            self.pending_images
+                .iter()
+                .map(|img| img.placeholder.clone()),
+        );
+        placeholders
+    }
+
+    pub fn next_image_id(&mut self) -> String {
+        self.image_counter = self.image_counter.wrapping_add(1);
+        self.image_counter.to_string()
+    }
+
+    pub fn generate_image_placeholder(id: &str) -> String {
+        format!("[Image #{id}]")
+    }
+
+    pub fn attach_image(&mut self, mime_type: String, data: String, source_path: Option<String>) {
+        let id = self.next_image_id();
+        let placeholder = Self::generate_image_placeholder(&id);
+        self.pending_images.push(PendingImage {
+            id,
+            placeholder: placeholder.clone(),
+            mime_type,
+            data,
+            source_path,
+        });
+        self.textarea.insert_str(&placeholder);
+    }
+
+    pub fn has_images(&self) -> bool {
+        !self.pending_images.is_empty()
+    }
+
+    pub fn take_images(&mut self) -> Vec<PendingImage> {
+        std::mem::take(&mut self.pending_images)
+    }
+
+    pub fn clear_images(&mut self) {
+        self.pending_images.clear();
+    }
+
+    /// Resets the image counter (call on new thread only).
+    pub fn reset_image_counter(&mut self) {
+        self.image_counter = 0;
+    }
+
+    pub fn sync_pending_images(&mut self) {
+        if self.pending_images.is_empty() {
+            return;
+        }
+        let text = self.get_text();
+        self.pending_images
+            .retain(|img| text.contains(&img.placeholder));
+    }
+
     /// Generates a placeholder string for a large paste.
     ///
     /// Format: `[Pasted Content N chars #xxxxxxxx]`
@@ -593,6 +737,16 @@ impl InputState {
             InputMutation::SetHandoffState(state) => {
                 self.handoff.cancel();
                 self.handoff = state;
+            }
+            InputMutation::AttachImage {
+                mime_type,
+                data,
+                source_path,
+            } => {
+                self.attach_image(mime_type, data, source_path);
+            }
+            InputMutation::ResetImageCounter => {
+                self.reset_image_counter();
             }
         }
     }

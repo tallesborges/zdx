@@ -391,6 +391,28 @@ impl TuiRuntime {
                 }
             }
 
+            UiEffect::AttachImage { path } => match read_and_encode_image(&path) {
+                Ok((mime_type, data)) => {
+                    // Store unescaped path for the <attached_image> tag
+                    let clean_path = path
+                        .replace("\\ ", " ")
+                        .replace("\\(", "(")
+                        .replace("\\)", ")");
+                    self.state
+                        .tui
+                        .input
+                        .attach_image(mime_type, data, Some(clean_path));
+                }
+                Err(e) => {
+                    self.state
+                        .tui
+                        .transcript
+                        .push_cell(crate::transcript::HistoryCell::system(format!(
+                            "Failed to attach image: {e}"
+                        )));
+                }
+            },
+
             // ================================================================
             // Cancellation Effects
             // ================================================================
@@ -673,6 +695,56 @@ impl TuiRuntime {
         terminal::enable_input_features()?;
 
         open_result.context(format!("Failed to open {} in editor", path.display()))
+    }
+}
+
+fn read_and_encode_image(path: &str) -> anyhow::Result<(String, String)> {
+    use anyhow::Context;
+    use base64::Engine;
+
+    // Unescape shell-escaped characters (e.g., "\ " → " " from terminal drag-and-drop)
+    let unescaped = path
+        .replace("\\ ", " ")
+        .replace("\\(", "(")
+        .replace("\\)", ")");
+    let path = std::path::Path::new(&unescaped);
+    let path = if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/")) {
+        if let Ok(home) = std::env::var("HOME") {
+            std::path::PathBuf::from(home).join(rest)
+        } else {
+            path.to_path_buf()
+        }
+    } else {
+        path.to_path_buf()
+    };
+
+    let metadata = std::fs::metadata(&path)
+        .with_context(|| format!("Cannot read image: {}", path.display()))?;
+
+    if metadata.len() > 20 * 1024 * 1024 {
+        anyhow::bail!("Image too large (max 20MB)");
+    }
+
+    let data = std::fs::read(&path)?;
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
+
+    let mime_type = mime_type_for_extension(path.to_str().unwrap_or(""))
+        .unwrap_or("image/png")
+        .to_string();
+
+    Ok((mime_type, encoded))
+}
+
+fn mime_type_for_extension(path: &str) -> Option<&'static str> {
+    let ext = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())?;
+    match ext.to_ascii_lowercase().as_str() {
+        "png" => Some("image/png"),
+        "jpg" | "jpeg" => Some("image/jpeg"),
+        "gif" => Some("image/gif"),
+        "webp" => Some("image/webp"),
+        _ => None,
     }
 }
 

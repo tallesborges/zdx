@@ -158,6 +158,9 @@ pub enum UiEffect {
     // These effects trigger cancellation of in-progress async operations.
     // The reducer emits these when user presses Esc or otherwise cancels.
     // The runtime executes by calling `token.cancel()` on the stored token.
+    /// Attach an image from a file path (drag-and-drop).
+    AttachImage { path: String },
+
     /// Cancel an in-progress task.
     CancelTask {
         kind: TaskKind,

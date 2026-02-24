@@ -433,12 +433,7 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
     frame.render_widget(block, area);
 
     // Extract placeholder strings for visual highlighting (unlikely in handoff but consistent)
-    let placeholders: Vec<String> = state
-        .input
-        .pending_pastes
-        .iter()
-        .map(|p| p.placeholder.clone())
-        .collect();
+    let placeholders: Vec<String> = state.input.all_placeholder_strings();
 
     // Use common wrapping helper for Unicode-aware width calculation
     let available_width = inner_area.width as usize;
