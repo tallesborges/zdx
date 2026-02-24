@@ -7,6 +7,7 @@ pub struct IncomingMessage {
     pub text: Option<String>,
     pub images: Vec<IncomingImage>,
     pub audios: Vec<IncomingAudio>,
+    pub documents: Vec<IncomingDocument>,
     /// Forum topic ID (for supergroups with topics enabled).
     pub message_thread_id: Option<i64>,
     /// Whether the group is a forum-enabled supergroup.
@@ -22,4 +23,9 @@ pub struct IncomingImage {
 pub struct IncomingAudio {
     pub local_path: PathBuf,
     pub transcript: Option<String>,
+}
+
+pub struct IncomingDocument {
+    pub local_path: PathBuf,
+    pub file_name: String,
 }
