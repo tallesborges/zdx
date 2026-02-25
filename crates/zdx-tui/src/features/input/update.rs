@@ -793,19 +793,23 @@ pub fn build_send_effects(
         vec![UiEffect::StartAgentTurn]
     };
 
-    let image_count = images.len();
     let image_pairs: Vec<(String, String, Option<String>)> = images
         .into_iter()
         .map(|img| (img.mime_type, img.data, img.source_path))
         .collect();
 
-    let (cell, message) = if image_count > 0 {
+    let image_paths: Vec<String> = image_pairs
+        .iter()
+        .filter_map(|(_, _, path)| path.clone())
+        .collect();
+
+    let (cell, message) = if image_paths.is_empty() {
+        (HistoryCell::user(text), ChatMessage::user(text))
+    } else {
         (
-            HistoryCell::user_with_images(text, image_count),
+            HistoryCell::user_with_images(text, image_paths),
             ChatMessage::user_with_images(text, &image_pairs),
         )
-    } else {
-        (HistoryCell::user(text), ChatMessage::user(text))
     };
 
     let mutations = vec![

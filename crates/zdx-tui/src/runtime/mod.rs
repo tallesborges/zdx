@@ -431,6 +431,21 @@ impl TuiRuntime {
                 }
             }
 
+            UiEffect::DecodeImagePreview { image_path, picker } => {
+                let inbox = self.inbox_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let result = image::ImageReader::open(&image_path)
+                        .map_err(|e| e.to_string())
+                        .and_then(|r| r.decode().map_err(|e| e.to_string()))
+                        .map(|dyn_img| {
+                            crate::events::ImageProtocolPayload(
+                                picker.new_resize_protocol(dyn_img),
+                            )
+                        });
+                    let _ = inbox.send(UiEvent::ImagePreviewDecoded { result });
+                });
+            }
+
             // Auth effects
             UiEffect::SpawnTokenExchange {
                 provider,

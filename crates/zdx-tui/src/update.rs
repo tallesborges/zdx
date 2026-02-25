@@ -1,3 +1,4 @@
+#![allow(clippy::too_many_lines)]
 //! TUI reducer (update function).
 //!
 //! All state mutations happen here. The runtime calls `update(app, event)`
@@ -124,6 +125,15 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
 
         // Thread async result events - delegate to thread feature
         UiEvent::Thread(thread_event) => handle_thread_ui_event(app, thread_event),
+        UiEvent::ImagePreviewDecoded { result } => {
+            if let Some(overlays::Overlay::ImagePreview(state)) = &mut app.overlay {
+                match result {
+                    Ok(payload) => state.set_protocol(payload.0),
+                    Err(e) => state.set_error(e),
+                }
+            }
+            vec![]
+        }
     }
 }
 
@@ -686,6 +696,22 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
                 vec![]
             }
         }
+        overlays::OverlayRequest::ImagePreview {
+            image_path,
+            image_index,
+        } => {
+            if let Some(picker) = &app.tui.image_picker {
+                let state = overlays::ImagePreviewState::open(image_path, *image_index);
+                app.overlay = Some(overlays::Overlay::ImagePreview(state));
+                // Spawn background image decode
+                vec![UiEffect::DecodeImagePreview {
+                    image_path: image_path.clone(),
+                    picker: picker.clone(),
+                }]
+            } else {
+                vec![]
+            }
+        }
     }
 }
 
@@ -730,8 +756,13 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
-            transcript::handle_mouse(&mut app.tui.transcript, mouse, render::TRANSCRIPT_MARGIN);
-            vec![]
+            if let Some(request) =
+                transcript::handle_mouse(&mut app.tui.transcript, mouse, render::TRANSCRIPT_MARGIN)
+            {
+                open_overlay_request(app, &request)
+            } else {
+                vec![]
+            }
         }
         Event::Paste(text) => input::handle_paste(&mut app.tui.input, &mut app.overlay, &text),
         Event::Resize(_, _) => {

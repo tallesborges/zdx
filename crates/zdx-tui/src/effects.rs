@@ -166,4 +166,10 @@ pub enum UiEffect {
         kind: TaskKind,
         token: Option<CancellationToken>,
     },
+
+    /// Decode an image for preview on a background thread.
+    DecodeImagePreview {
+        image_path: String,
+        picker: ratatui_image::picker::Picker,
+    },
 }
