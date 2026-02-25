@@ -59,7 +59,7 @@ impl PartialOrd for VisualPosition {
 pub enum LineInteraction {
     ToggleToolArgs,
     ToggleToolOutput,
-    ImageIndicator,
+    ImagePlaceholder,
 }
 
 #[derive(Debug, Clone)]

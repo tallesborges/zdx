@@ -249,17 +249,17 @@ fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> 
         .iter()
         .any(|span| span.text == "▶" || span.text == "▼");
 
-    let has_image_indicator = styled_line
+    let has_image_placeholder = styled_line
         .spans
         .iter()
-        .any(|span| matches!(span.style, TranscriptStyle::ImageIndicator));
+        .any(|span| matches!(span.style, TranscriptStyle::ImagePlaceholder));
 
     if has_args_label && has_disclosure {
         Some(LineInteraction::ToggleToolArgs)
     } else if has_output_label && has_disclosure {
         Some(LineInteraction::ToggleToolOutput)
-    } else if has_image_indicator {
-        Some(LineInteraction::ImageIndicator)
+    } else if has_image_placeholder {
+        Some(LineInteraction::ImagePlaceholder)
     } else {
         None
     }
@@ -388,6 +388,8 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
             Style::default().fg(Color::Yellow)
         }
-        TranscriptStyle::ImageIndicator => Style::default().fg(Color::Cyan),
+        TranscriptStyle::ImagePlaceholder => Style::default()
+            .fg(Color::Magenta)
+            .add_modifier(Modifier::BOLD | Modifier::UNDERLINED),
     }
 }

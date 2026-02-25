@@ -91,6 +91,6 @@ pub enum Style {
     ListBullet,
     /// List number marker.
     ListNumber,
-    /// Image attachment indicator (clickable).
-    ImageIndicator,
+    /// Image placeholder in message text (e.g., `[Image 1]`), clickable and styled distinctly.
+    ImagePlaceholder,
 }
