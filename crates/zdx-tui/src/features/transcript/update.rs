@@ -320,31 +320,42 @@ fn handle_interrupted(transcript: &mut TranscriptState, agent_state: &mut AgentS
 /// Supports:
 /// - Scroll wheel (up/down) with delta accumulation
 /// - Click-and-drag selection with auto-copy on release
-pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcript_margin: u16) {
+pub fn handle_mouse(
+    transcript: &mut TranscriptState,
+    mouse: MouseEvent,
+    transcript_margin: u16,
+) -> Option<crate::overlays::OverlayRequest> {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
             // Accumulate negative delta (up = negative)
             transcript
                 .scroll_accumulator
                 .accumulate(-(MOUSE_SCROLL_LINES as i32));
+            None
         }
         MouseEventKind::ScrollDown => {
             // Accumulate positive delta (down = positive)
             transcript
                 .scroll_accumulator
                 .accumulate(MOUSE_SCROLL_LINES as i32);
+            None
         }
         MouseEventKind::Down(MouseButton::Left) => {
             // Start selection at clicked position
             if let Some((line, col)) =
                 screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
+                // Check for image indicator click
+                if let Some(request) = check_image_click(transcript, line) {
+                    return Some(request);
+                }
+
                 // If user clicks on tool output/args disclosure rows, toggle expand/collapse
                 // and skip selection behavior.
                 if transcript.toggle_tool_output_for_line(line)
                     || transcript.toggle_tool_args_for_line(line)
                 {
-                    return;
+                    return None;
                 }
 
                 if transcript.register_click(line, col) {
@@ -355,6 +366,7 @@ pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcr
                     transcript.start_selection(line, col);
                 }
             }
+            None
         }
         MouseEventKind::Drag(MouseButton::Left) => {
             // Extend selection while dragging
@@ -364,6 +376,7 @@ pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcr
             {
                 transcript.extend_selection(line, col);
             }
+            None
         }
         MouseEventKind::Up(MouseButton::Left) => {
             // Finish selection and auto-copy if there's selected text
@@ -372,9 +385,41 @@ pub fn handle_mouse(transcript: &mut TranscriptState, mouse: MouseEvent, transcr
                 // Copy to clipboard and schedule visual clear
                 let _ = transcript.copy_and_schedule_clear();
             }
+            None
         }
-        _ => {}
+        _ => None,
     }
+}
+
+/// Checks if a click on the given line is on an image indicator and returns an overlay request.
+fn check_image_click(
+    transcript: &TranscriptState,
+    line: usize,
+) -> Option<crate::overlays::OverlayRequest> {
+    use crate::transcript::LineInteraction;
+
+    let mapping = transcript.position_map.get_by_global_line(line)?;
+    if !matches!(mapping.interaction, Some(LineInteraction::ImageIndicator)) {
+        return None;
+    }
+
+    // Find the cell that owns this line
+    let cell_idx = transcript.scroll.cell_index_for_line(line)?;
+    let cell = transcript.cells().get(cell_idx)?;
+
+    if let HistoryCell::User {
+        image_paths,
+        ..
+    } = cell
+        && let Some(path) = image_paths.first()
+    {
+        return Some(crate::overlays::OverlayRequest::ImagePreview {
+            image_path: path.clone(),
+            image_index: 1,
+        });
+    }
+
+    None
 }
 
 /// Converts screen coordinates to transcript position (line index, grapheme column).

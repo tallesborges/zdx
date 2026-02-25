@@ -719,7 +719,7 @@ pub enum HistoryCell {
         created_at: DateTime<Utc>,
         content: String,
         is_interrupted: bool,
-        image_count: usize,
+        image_paths: Vec<String>,
     },
 
     /// Assistant response.
@@ -805,18 +805,21 @@ impl HistoryCell {
             created_at: Utc::now(),
             content: content.into(),
             is_interrupted: false,
-            image_count: 0,
+            image_paths: Vec::new(),
         }
     }
 
     /// Creates a new user cell with attached images.
-    pub fn user_with_images(content: impl Into<String>, image_count: usize) -> Self {
+    pub fn user_with_images(
+        content: impl Into<String>,
+        image_paths: Vec<String>,
+    ) -> Self {
         HistoryCell::User {
             id: CellId::new(),
             created_at: Utc::now(),
             content: content.into(),
             is_interrupted: false,
-            image_count,
+            image_paths,
         }
     }
 
@@ -1107,23 +1110,30 @@ impl HistoryCell {
             HistoryCell::User {
                 content,
                 is_interrupted,
-                image_count,
+                image_paths,
                 ..
             } => {
                 let prefix = "│ ";
                 let mut lines = Vec::new();
 
                 // Show image attachment indicator before content
-                if *image_count > 0 {
-                    let label = if *image_count == 1 {
-                        "│ 📎 1 image".to_string()
-                    } else {
-                        format!("│ 📎 {image_count} images")
-                    };
+                if !image_paths.is_empty() {
+                    let mut label_parts = Vec::new();
+                    for (i, path) in image_paths.iter().enumerate() {
+                        let path_label = std::path::Path::new(path)
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .map_or_else(
+                                || format!("#{}", i + 1),
+                                |name| format!("#{} {}", i + 1, name),
+                            );
+                        label_parts.push(path_label);
+                    }
+                    let label = format!("│ 📎 {}", label_parts.join("  "));
                     lines.push(StyledLine {
                         spans: vec![StyledSpan {
                             text: label,
-                            style: Style::SystemPrefix,
+                            style: Style::ImageIndicator,
                         }],
                     });
                 }
@@ -1692,11 +1702,11 @@ impl HistoryCell {
             HistoryCell::User {
                 content,
                 is_interrupted,
-                image_count,
+                image_paths,
                 ..
             } => {
-                // Include is_interrupted and image_count in discriminator to invalidate cache when marked
-                content.len() + usize::from(*is_interrupted) + *image_count
+                // Include is_interrupted and image_paths len in discriminator to invalidate cache when marked
+                content.len() + usize::from(*is_interrupted) + image_paths.len()
             }
             HistoryCell::Assistant {
                 content,

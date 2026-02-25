@@ -23,6 +23,7 @@
 
 pub mod command_palette;
 pub mod file_picker;
+pub mod image_preview;
 pub mod login;
 pub mod model_picker;
 pub mod rename;
@@ -36,6 +37,7 @@ mod update;
 pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
+pub use image_preview::ImagePreviewState;
 pub use login::LoginState;
 pub use model_picker::ModelPickerState;
 use ratatui::Frame;
@@ -64,9 +66,15 @@ pub enum OverlayRequest {
     SkillPicker,
     ThinkingPicker,
     Login,
-    FilePicker { trigger_pos: usize },
+    FilePicker {
+        trigger_pos: usize,
+    },
     Timeline,
     Rename,
+    ImagePreview {
+        image_path: String,
+        image_index: usize,
+    },
 }
 
 /// Transition returned by overlay key handlers.
@@ -134,6 +142,7 @@ pub enum Overlay {
     FilePicker(FilePickerState),
     Timeline(TimelineState),
     Rename(RenameState),
+    ImagePreview(ImagePreviewState),
 }
 
 /// Effects that can be emitted by overlays.
@@ -160,6 +169,7 @@ impl Overlay {
             Overlay::Login(l) => l.render(frame, area, input_y),
             Overlay::Timeline(t) => t.render(frame, area, input_y),
             Overlay::Rename(r) => r.render(frame, area, input_y),
+            Overlay::ImagePreview(p) => p.render(frame, area, input_y),
         }
     }
 
@@ -174,6 +184,7 @@ impl Overlay {
             Overlay::Login(l) => l.handle_key(tui, key),
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
+            Overlay::ImagePreview(p) => p.handle_key(tui, key),
         }
     }
 

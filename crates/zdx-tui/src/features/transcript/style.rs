@@ -91,4 +91,6 @@ pub enum Style {
     ListBullet,
     /// List number marker.
     ListNumber,
+    /// Image attachment indicator (clickable).
+    ImageIndicator,
 }
