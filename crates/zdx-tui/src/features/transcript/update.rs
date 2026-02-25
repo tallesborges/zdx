@@ -346,7 +346,7 @@ pub fn handle_mouse(
                 screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
             {
                 // Check for image indicator click
-                if let Some(request) = check_image_click(transcript, line) {
+                if let Some(request) = check_image_click(transcript, line, col) {
                     return Some(request);
                 }
 
@@ -391,34 +391,64 @@ pub fn handle_mouse(
     }
 }
 
-/// Checks if a click on the given line is on an image indicator and returns an overlay request.
+/// Checks if a click on the given line is on an image placeholder and returns an overlay request.
 fn check_image_click(
     transcript: &TranscriptState,
     line: usize,
+    col: usize,
 ) -> Option<crate::overlays::OverlayRequest> {
     use crate::transcript::LineInteraction;
 
     let mapping = transcript.position_map.get_by_global_line(line)?;
-    if !matches!(mapping.interaction, Some(LineInteraction::ImageIndicator)) {
+    if !matches!(mapping.interaction, Some(LineInteraction::ImagePlaceholder)) {
         return None;
     }
 
-    // Find the cell that owns this line
+    // Click on [Image N] in message text — find which placeholder was clicked
+    let text = &mapping.text;
+    let image_index = find_image_placeholder_at_col(text, col)?;
+
     let cell_idx = transcript.scroll.cell_index_for_line(line)?;
     let cell = transcript.cells().get(cell_idx)?;
-
-    if let HistoryCell::User {
-        image_paths,
-        ..
-    } = cell
-        && let Some(path) = image_paths.first()
+    if let HistoryCell::User { image_paths, .. } = cell
+        && let Some(path) = image_paths.get(image_index.saturating_sub(1))
     {
         return Some(crate::overlays::OverlayRequest::ImagePreview {
             image_path: path.clone(),
-            image_index: 1,
+            image_index,
         });
     }
 
+    None
+}
+
+/// Finds which `[Image N]` placeholder the column position falls within.
+/// Returns the image number N (1-indexed) if found.
+fn find_image_placeholder_at_col(text: &str, col: usize) -> Option<usize> {
+    use unicode_segmentation::UnicodeSegmentation;
+
+    let mut search_start = 0;
+
+    while let Some(bracket_pos) = text[search_start..].find("[Image ") {
+        let abs_pos = search_start + bracket_pos;
+        if let Some(close_offset) = text[abs_pos..].find(']') {
+            let close_pos = abs_pos + close_offset + 1;
+            let candidate = &text[abs_pos..close_pos];
+            let inner = &candidate[7..candidate.len() - 1];
+            if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                // Count graphemes up to abs_pos
+                let start_grapheme = text[..abs_pos].graphemes(true).count();
+                let end_grapheme = text[..close_pos].graphemes(true).count();
+
+                if col >= start_grapheme && col < end_grapheme {
+                    return inner.parse().ok();
+                }
+            }
+            search_start = close_pos;
+        } else {
+            break;
+        }
+    }
     None
 }
 

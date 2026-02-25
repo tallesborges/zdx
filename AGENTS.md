@@ -57,8 +57,9 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - Rust edition: 2024 (see `Cargo.toml`)
 - Formatting: rustfmt defaults
 - Errors: prefer `anyhow::Result` + `Context` at I/O boundaries
-- Product stage: early-stage/iterative. Prefer simple, explicit implementations over compatibility/fallback layers.
-  - Do not add backward-compatibility shims or defensive fallback logic unless explicitly requested or required by a documented contract in `docs/SPEC.md`.
+- Product stage: early-stage/iterative (alpha). Prefer simple, explicit implementations over compatibility/fallback layers.
+  - Do not add backward-compatibility shims, defensive fallback logic, or keep dead code paths unless explicitly requested or required by a documented contract in `docs/SPEC.md`.
+  - Remove deprecated code immediately rather than marking it deprecated.
 
 ## Tests (keep it light)
 

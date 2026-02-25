@@ -438,9 +438,7 @@ impl TuiRuntime {
                         .map_err(|e| e.to_string())
                         .and_then(|r| r.decode().map_err(|e| e.to_string()))
                         .map(|dyn_img| {
-                            crate::events::ImageProtocolPayload(
-                                picker.new_resize_protocol(dyn_img),
-                            )
+                            crate::events::ImageProtocolPayload(picker.new_resize_protocol(dyn_img))
                         });
                     let _ = inbox.send(UiEvent::ImagePreviewDecoded { result });
                 });

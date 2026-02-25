@@ -22,11 +22,11 @@ const INPUT_HEIGHT_MIN: u16 = 5;
 /// Maximum height of the input area as a percentage of screen height.
 const INPUT_HEIGHT_MAX_PERCENT: f32 = 0.4;
 
-/// Style for placeholder text (bold cyan to stand out from normal text).
+/// Style for placeholder text (bold magenta underlined to match transcript image placeholders).
 fn placeholder_style() -> Style {
     Style::default()
-        .fg(Color::Cyan)
-        .add_modifier(Modifier::BOLD)
+        .fg(Color::Magenta)
+        .add_modifier(Modifier::BOLD | Modifier::UNDERLINED)
 }
 
 /// Result of wrapping textarea content with Unicode-aware cursor tracking.

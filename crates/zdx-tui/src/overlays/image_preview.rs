@@ -93,8 +93,8 @@ impl ImagePreviewState {
         frame.render_widget(block, popup_area);
 
         if self.loading {
-            let loading = Paragraph::new(Line::from("Loading…"))
-                .style(Style::default().fg(Color::DarkGray));
+            let loading =
+                Paragraph::new(Line::from("Loading…")).style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, inner);
         } else if let Some(error) = &self.error {
             let error_text = Paragraph::new(error.as_str()).style(Style::default().fg(Color::Red));

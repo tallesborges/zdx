@@ -655,6 +655,66 @@ fn build_tool_output_payload(name: &str, data: &Value) -> Option<ToolOutputPaylo
     }
 }
 
+/// Regex pattern matching `[Image N]` placeholders in text (e.g., `[Image 1]`, `[Image 23]`).
+fn highlight_image_placeholders(styled_line: StyledLine) -> StyledLine {
+    let mut new_spans = Vec::new();
+
+    for span in styled_line.spans {
+        if span.style != Style::User {
+            new_spans.push(span);
+            continue;
+        }
+
+        // Split text around [Image N] patterns
+        let text = &span.text;
+        let mut last_end = 0;
+
+        // Simple manual scan for [Image N] patterns
+        let mut search_start = 0;
+        while let Some(bracket_pos) = text[search_start..].find("[Image ") {
+            let abs_pos = search_start + bracket_pos;
+            // Find closing bracket
+            if let Some(close_offset) = text[abs_pos..].find(']') {
+                let close_pos = abs_pos + close_offset + 1;
+                let candidate = &text[abs_pos..close_pos];
+                // Verify it matches [Image <digits>]
+                let inner = &candidate[7..candidate.len() - 1]; // strip "[Image " and "]"
+                if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                    // Emit text before this placeholder
+                    if abs_pos > last_end {
+                        new_spans.push(StyledSpan {
+                            text: text[last_end..abs_pos].to_string(),
+                            style: Style::User,
+                        });
+                    }
+                    // Emit the placeholder with ImagePlaceholder style
+                    new_spans.push(StyledSpan {
+                        text: candidate.to_string(),
+                        style: Style::ImagePlaceholder,
+                    });
+                    last_end = close_pos;
+                    search_start = close_pos;
+                    continue;
+                }
+            }
+            search_start = abs_pos + 1;
+        }
+
+        // Emit remaining text
+        if last_end == 0 {
+            // No placeholders found, keep original span
+            new_spans.push(span);
+        } else if last_end < text.len() {
+            new_spans.push(StyledSpan {
+                text: text[last_end..].to_string(),
+                style: Style::User,
+            });
+        }
+    }
+
+    StyledLine { spans: new_spans }
+}
+
 /// Global counter for generating unique cell IDs.
 static CELL_ID_COUNTER: AtomicU64 = AtomicU64::new(1);
 
@@ -810,10 +870,7 @@ impl HistoryCell {
     }
 
     /// Creates a new user cell with attached images.
-    pub fn user_with_images(
-        content: impl Into<String>,
-        image_paths: Vec<String>,
-    ) -> Self {
+    pub fn user_with_images(content: impl Into<String>, image_paths: Vec<String>) -> Self {
         HistoryCell::User {
             id: CellId::new(),
             created_at: Utc::now(),
@@ -1116,36 +1173,23 @@ impl HistoryCell {
                 let prefix = "│ ";
                 let mut lines = Vec::new();
 
-                // Show image attachment indicator before content
-                if !image_paths.is_empty() {
-                    let mut label_parts = Vec::new();
-                    for (i, path) in image_paths.iter().enumerate() {
-                        let path_label = std::path::Path::new(path)
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .map_or_else(
-                                || format!("#{}", i + 1),
-                                |name| format!("#{} {}", i + 1, name),
-                            );
-                        label_parts.push(path_label);
-                    }
-                    let label = format!("│ 📎 {}", label_parts.join("  "));
-                    lines.push(StyledLine {
-                        spans: vec![StyledSpan {
-                            text: label,
-                            style: Style::ImageIndicator,
-                        }],
-                    });
-                }
-
-                lines.extend(render_prefixed_content(
+                let content_lines = render_prefixed_content(
                     prefix,
                     content,
                     width,
                     Style::UserPrefix,
                     Style::User,
                     true,
-                ));
+                );
+
+                // Post-process lines to style [Image N] placeholders
+                if image_paths.is_empty() {
+                    lines.extend(content_lines);
+                } else {
+                    for styled_line in content_lines {
+                        lines.push(highlight_image_placeholders(styled_line));
+                    }
+                }
 
                 // Append interrupted indicator to last line if request was cancelled
                 if *is_interrupted && let Some(last) = lines.last_mut() {
