@@ -33,6 +33,8 @@ pub struct ImagePreviewState {
     pub image_index: usize,
     /// Base64-encoded PNG data ready to send via Kitty graphics protocol.
     kitty_data: Option<String>,
+    /// Image dimensions in pixels (for aspect ratio calculation).
+    image_dims: Option<(u32, u32)>,
     error: Option<String>,
     loading: bool,
 }
@@ -44,14 +46,16 @@ impl ImagePreviewState {
             image_path: image_path.to_string(),
             image_index,
             kitty_data: None,
+            image_dims: None,
             error: None,
             loading: true,
         }
     }
 
-    /// Sets the base64-encoded PNG data (called from the runtime after background encode).
-    pub fn set_image_data(&mut self, base64_png: String) {
+    /// Sets the base64-encoded PNG data and image dimensions.
+    pub fn set_image_data(&mut self, base64_png: String, width: u32, height: u32) {
         self.kitty_data = Some(base64_png);
+        self.image_dims = Some((width, height));
         self.loading = false;
     }
 
@@ -64,6 +68,11 @@ impl ImagePreviewState {
     /// Returns the base64 PNG data if loaded.
     pub fn kitty_data(&self) -> Option<&str> {
         self.kitty_data.as_deref()
+    }
+
+    /// Returns the image dimensions (width, height) in pixels if loaded.
+    pub fn image_dims(&self) -> Option<(u32, u32)> {
+        self.image_dims
     }
 
     pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
@@ -117,25 +126,61 @@ fn in_tmux() -> bool {
     std::env::var_os("TMUX").is_some()
 }
 
-/// Sends a Kitty graphics protocol image to the terminal at the given cell area.
+/// Sends a Kitty graphics protocol image to the terminal, centered and
+/// aspect-ratio-correct within the given cell area.
 ///
-/// Cursor positioning goes to tmux natively (pane-relative coordinates).
-/// The Kitty APC sequences are wrapped in tmux DCS passthrough when needed.
+/// `image_dims` is `(width, height)` in pixels.
+/// `cell_size` is `(cell_width, cell_height)` in pixels.
 ///
 /// # Errors
 /// Returns an error if writing to stdout fails.
-pub fn send_kitty_image(base64_png: &str, area: Rect) -> std::io::Result<()> {
+pub fn send_kitty_image(
+    base64_png: &str,
+    area: Rect,
+    image_dims: (u32, u32),
+    cell_size: (u16, u16),
+) -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     let tmux = in_tmux();
 
+    let (img_w, img_h) = image_dims;
+    let (cell_w, cell_h) = cell_size;
+
+    // Calculate aspect-ratio-correct display size in cells
+    let (cols, rows, x_off, y_off) = if img_w == 0 || img_h == 0 || cell_w == 0 || cell_h == 0 {
+        (area.width, area.height, 0u16, 0u16)
+    } else {
+        // Available pixel dimensions
+        let area_px_w = f64::from(area.width) * f64::from(cell_w);
+        let area_px_h = f64::from(area.height) * f64::from(cell_h);
+        let img_aspect = f64::from(img_w) / f64::from(img_h);
+        let area_aspect = area_px_w / area_px_h;
+
+        let (fit_cols, fit_rows) = if img_aspect > area_aspect {
+            // Image is wider than area — width-constrained
+            let c = area.width;
+            let r = (f64::from(c) * f64::from(cell_w) / (img_aspect * f64::from(cell_h)))
+                .round() as u16;
+            (c, r.max(1))
+        } else {
+            // Image is taller than area — height-constrained
+            let r = area.height;
+            let c = (f64::from(r) * f64::from(cell_h) * img_aspect / f64::from(cell_w))
+                .round() as u16;
+            (c.max(1), r)
+        };
+
+        let x_off = (area.width.saturating_sub(fit_cols)) / 2;
+        let y_off = (area.height.saturating_sub(fit_rows)) / 2;
+        (fit_cols, fit_rows, x_off, y_off)
+    };
+
     // Cursor positioning — handled by tmux natively (translated to pane coords)
     stdout.queue(cursor::SavePosition)?;
-    stdout.queue(cursor::MoveTo(area.x, area.y))?;
+    stdout.queue(cursor::MoveTo(area.x + x_off, area.y + y_off))?;
     stdout.flush()?;
 
     let data = base64_png.as_bytes();
-    let cols = area.width;
-    let rows = area.height;
 
     if data.len() <= CHUNK_SIZE {
         // Single chunk

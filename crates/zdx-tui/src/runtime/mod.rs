@@ -265,8 +265,25 @@ impl TuiRuntime {
                 }
                 if let Some(Overlay::ImagePreview(state)) = &self.state.overlay
                     && let Some(data) = state.kitty_data()
+                    && let Some(dims) = state.image_dims()
                 {
-                    let _ = image_preview::send_kitty_image(data, inner);
+                    // Get cell pixel size for aspect ratio calculation
+                    let cell_size = crossterm::terminal::window_size()
+                        .map(|ws| {
+                            let cw = if ws.columns > 0 {
+                                ws.width / ws.columns
+                            } else {
+                                8
+                            };
+                            let ch = if ws.rows > 0 {
+                                ws.height / ws.rows
+                            } else {
+                                16
+                            };
+                            (cw, ch)
+                        })
+                        .unwrap_or((8, 16));
+                    let _ = image_preview::send_kitty_image(data, inner, dims, cell_size);
                     self.kitty_image_sent = true;
                     self.kitty_image_area = Some(inner);
                 }
@@ -493,31 +510,43 @@ impl TuiRuntime {
                 tokio::task::spawn_blocking(move || {
                     use base64::Engine;
 
-                    let result = (|| -> Result<String, String> {
-                        let data =
-                            std::fs::read(&image_path).map_err(|e| format!("{image_path}: {e}"))?;
-                        // PNG magic bytes: \x89PNG\r\n\x1a\n
-                        let is_png = data.len() >= 8 && data[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-                        let png_bytes = if is_png {
-                            data
-                        } else {
-                            // Decode and re-encode as PNG
-                            let reader = image::ImageReader::new(std::io::Cursor::new(data))
-                                .with_guessed_format()
-                                .map_err(|e| e.to_string())?;
-                            let dyn_img = reader.decode().map_err(|e| e.to_string())?;
-                            let mut buf = Vec::new();
-                            dyn_img
-                                .write_to(
-                                    &mut std::io::Cursor::new(&mut buf),
-                                    image::ImageFormat::Png,
-                                )
-                                .map_err(|e| e.to_string())?;
-                            buf
-                        };
-                        Ok(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
-                    })();
-                    let result = result.map(crate::events::KittyImageData);
+                    let result =
+                        (|| -> Result<crate::events::KittyImageData, String> {
+                            let data = std::fs::read(&image_path)
+                                .map_err(|e| format!("{image_path}: {e}"))?;
+                            // PNG magic bytes: \x89PNG\r\n\x1a\n
+                            let is_png = data.len() >= 8
+                                && data[..8]
+                                    == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+
+                            // Read dimensions from image header (fast, no full decode)
+                            let (width, height) = image::image_dimensions(&image_path)
+                                .map_err(|e| format!("dimensions: {e}"))?;
+
+                            let png_bytes = if is_png {
+                                data
+                            } else {
+                                // Decode and re-encode as PNG
+                                let reader = image::ImageReader::new(std::io::Cursor::new(data))
+                                    .with_guessed_format()
+                                    .map_err(|e| e.to_string())?;
+                                let dyn_img = reader.decode().map_err(|e| e.to_string())?;
+                                let mut buf = Vec::new();
+                                dyn_img
+                                    .write_to(
+                                        &mut std::io::Cursor::new(&mut buf),
+                                        image::ImageFormat::Png,
+                                    )
+                                    .map_err(|e| e.to_string())?;
+                                buf
+                            };
+                            Ok(crate::events::KittyImageData {
+                                base64_png: base64::engine::general_purpose::STANDARD
+                                    .encode(&png_bytes),
+                                width,
+                                height,
+                            })
+                        })();
                     let _ = inbox.send(UiEvent::ImagePreviewDecoded { result });
                 });
             }

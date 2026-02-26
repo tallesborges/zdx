@@ -172,9 +172,13 @@ pub enum SkillUiEvent {
 /// The reducer (`update`) pattern-matches on these events to update state.
 ///
 /// ## Inbox Pattern
-/// Pre-encoded image data for Kitty graphics protocol (base64 PNG).
+/// Pre-encoded image data for Kitty graphics protocol (base64 PNG + dimensions).
 #[derive(Debug)]
-pub struct KittyImageData(pub String);
+pub struct KittyImageData {
+    pub base64_png: String,
+    pub width: u32,
+    pub height: u32,
+}
 
 ///
 /// With the inbox pattern, async operations send events directly to the runtime's
