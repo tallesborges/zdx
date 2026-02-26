@@ -964,7 +964,7 @@ mod tests {
 
     #[test]
     fn test_lookup_default_model_meta_provider_normalizes_thinking_suffix() {
-        let result = lookup_default_model("apiyi:gemini-3-pro-preview-thinking");
+        let result = lookup_default_model("apiyi:gemini-3.1-pro-preview-thinking");
         assert!(
             result.is_some(),
             "Should map -thinking variant to base model default"
