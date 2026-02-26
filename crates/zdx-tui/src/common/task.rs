@@ -34,6 +34,7 @@ pub enum TaskKind {
     Handoff,
     LoginExchange,
     LoginCallback,
+    ImageDecode,
 }
 
 #[derive(Debug, Clone, Default)]

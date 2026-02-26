@@ -182,3 +182,24 @@ pub fn render_separator(frame: &mut Frame, area: Rect, y_offset: u16) {
         separator_area,
     );
 }
+
+/// Returns a centered rectangle of the given percentage size within `r`.
+pub fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
+    use ratatui::layout::{Constraint, Direction, Layout};
+    let popup_layout = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Percentage((100 - percent_y) / 2),
+            Constraint::Percentage(percent_y),
+            Constraint::Percentage((100 - percent_y) / 2),
+        ])
+        .split(r);
+    Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([
+            Constraint::Percentage((100 - percent_x) / 2),
+            Constraint::Percentage(percent_x),
+            Constraint::Percentage((100 - percent_x) / 2),
+        ])
+        .split(popup_layout[1])[1]
+}

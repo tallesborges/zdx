@@ -50,6 +50,7 @@ pub use timeline::TimelineState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
 
+use crate::common::{TaskKind, Tasks};
 use crate::effects::UiEffect;
 use crate::mutations::StateMutation;
 use crate::state::TuiState;
@@ -90,7 +91,7 @@ pub enum OverlayTransition {
 pub struct OverlayUpdate {
     pub transition: OverlayTransition,
     pub mutations: Vec<StateMutation>,
-    pub effects: Vec<OverlayEffect>,
+    pub effects: Vec<UiEffect>,
 }
 
 impl OverlayUpdate {
@@ -122,7 +123,7 @@ impl OverlayUpdate {
 
     #[must_use]
     pub fn with_ui_effects(mut self, effects: Vec<UiEffect>) -> Self {
-        self.effects = effects.into_iter().map(OverlayEffect::Ui).collect();
+        self.effects = effects;
         self
     }
 }
@@ -145,20 +146,8 @@ pub enum Overlay {
     ImagePreview(ImagePreviewState),
 }
 
-/// Effects that can be emitted by overlays.
-#[derive(Debug)]
-pub enum OverlayEffect {
-    Ui(UiEffect),
-}
-
-impl From<UiEffect> for OverlayEffect {
-    fn from(effect: UiEffect) -> Self {
-        OverlayEffect::Ui(effect)
-    }
-}
-
 impl Overlay {
-    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16, tasks: &Tasks) {
         match self {
             Overlay::CommandPalette(p) => p.render(frame, area, input_y),
             Overlay::ModelPicker(p) => p.render(frame, area, input_y),
@@ -169,7 +158,12 @@ impl Overlay {
             Overlay::Login(l) => l.render(frame, area, input_y),
             Overlay::Timeline(t) => t.render(frame, area, input_y),
             Overlay::Rename(r) => r.render(frame, area, input_y),
-            Overlay::ImagePreview(p) => p.render(frame, area, input_y),
+            Overlay::ImagePreview(p) => p.render(
+                frame,
+                area,
+                input_y,
+                tasks.state(TaskKind::ImageDecode).is_running(),
+            ),
         }
     }
 
@@ -203,13 +197,13 @@ impl Overlay {
 /// Extension trait for `Option<Overlay>` providing convenience render helpers.
 pub trait OverlayExt {
     /// Renders the overlay if one is active.
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16);
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16, tasks: &Tasks);
 }
 
 impl OverlayExt for Option<Overlay> {
-    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
+    fn render(&self, frame: &mut Frame, area: Rect, input_y: u16, tasks: &Tasks) {
         if let Some(overlay) = self {
-            overlay.render(frame, area, input_y);
+            overlay.render(frame, area, input_y, tasks);
         }
     }
 }
