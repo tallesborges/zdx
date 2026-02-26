@@ -128,7 +128,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::ImagePreviewDecoded { result } => {
             if let Some(overlays::Overlay::ImagePreview(state)) = &mut app.overlay {
                 match result {
-                    Ok(data) => state.set_image_data(data.0),
+                    Ok(data) => state.set_image_data(data.base64_png, data.width, data.height),
                     Err(e) => state.set_error(e),
                 }
             }
