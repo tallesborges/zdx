@@ -343,13 +343,20 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
         return;
     }
 
-    // Extract placeholder strings for visual highlighting
-    let placeholders: Vec<String> = state
+    // Extract placeholder strings for visual highlighting (pastes + images)
+    let mut placeholders: Vec<String> = state
         .input
         .pending_pastes
         .iter()
         .map(|p| p.placeholder.clone())
         .collect();
+    placeholders.extend(
+        state
+            .input
+            .pending_images
+            .iter()
+            .map(|img| img.placeholder.clone()),
+    );
 
     // Wrap textarea content with Unicode-aware width calculation
     let wrapped = wrap_textarea(&state.input.textarea, available_width, &placeholders);
