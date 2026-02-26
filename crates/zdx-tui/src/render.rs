@@ -98,7 +98,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     }
 
     // Render overlay (last, so it appears on top)
-    app.overlay.render(frame, area, chunks[2].y);
+    app.overlay.render(frame, area, chunks[2].y, &app.tui.tasks);
 }
 
 struct RenderMetrics {

@@ -7,18 +7,19 @@
 //! Loading is async: the overlay opens immediately with a "Loading…" state,
 //! then a background task reads/encodes the image and delivers base64 PNG data.
 
+use std::fmt::Write as _;
 use std::io::Write;
 
-use crossterm::QueueableCommand;
-use crossterm::cursor;
 use crossterm::event::{KeyCode, KeyEvent};
+use crossterm::{QueueableCommand, cursor};
 use ratatui::Frame;
-use ratatui::layout::{Constraint, Direction, Layout, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Clear, Paragraph};
 
 use super::OverlayUpdate;
+use super::render_utils::centered_rect;
 use crate::state::TuiState;
 
 /// Kitty image placement ID used for the preview overlay.
@@ -36,7 +37,6 @@ pub struct ImagePreviewState {
     /// Image dimensions in pixels (for aspect ratio calculation).
     image_dims: Option<(u32, u32)>,
     error: Option<String>,
-    loading: bool,
 }
 
 impl ImagePreviewState {
@@ -48,7 +48,6 @@ impl ImagePreviewState {
             kitty_data: None,
             image_dims: None,
             error: None,
-            loading: true,
         }
     }
 
@@ -56,13 +55,11 @@ impl ImagePreviewState {
     pub fn set_image_data(&mut self, base64_png: String, width: u32, height: u32) {
         self.kitty_data = Some(base64_png);
         self.image_dims = Some((width, height));
-        self.loading = false;
     }
 
     /// Sets an error (called from the runtime if decode fails).
     pub fn set_error(&mut self, error: String) {
         self.error = Some(error);
-        self.loading = false;
     }
 
     /// Returns the base64 PNG data if loaded.
@@ -82,7 +79,7 @@ impl ImagePreviewState {
         }
     }
 
-    pub fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16) {
+    pub fn render(&self, frame: &mut Frame, area: Rect, _input_y: u16, is_loading: bool) {
         let popup_area = centered_rect(90, 85, area);
 
         frame.render_widget(Clear, popup_area);
@@ -94,7 +91,7 @@ impl ImagePreviewState {
 
         let mut title = format!(" Image #{} — {} ", self.image_index, filename);
         if let Some((w, h)) = self.image_dims {
-            title.push_str(&format!("({}x{}) ", w, h));
+            let _ = write!(&mut title, "({w}x{h}) ");
         }
         let block = Block::default()
             .title(title)
@@ -105,7 +102,7 @@ impl ImagePreviewState {
         let inner = block.inner(popup_area);
         frame.render_widget(block, popup_area);
 
-        if self.loading {
+        if is_loading {
             let loading =
                 Paragraph::new(Line::from("Loading…")).style(Style::default().fg(Color::DarkGray));
             frame.render_widget(loading, inner);
@@ -124,9 +121,11 @@ impl ImagePreviewState {
 // Kitty Graphics Protocol — Direct Placement with tmux DCS Passthrough
 // ============================================================================
 
-/// Whether we are running inside tmux (cached on first call).
+/// Whether we are running inside tmux (cached on first check).
 fn in_tmux() -> bool {
-    std::env::var_os("TMUX").is_some()
+    use std::sync::OnceLock;
+    static IN_TMUX: OnceLock<bool> = OnceLock::new();
+    *IN_TMUX.get_or_init(|| std::env::var_os("TMUX").is_some())
 }
 
 /// Sends a Kitty graphics protocol image to the terminal, centered and
@@ -162,14 +161,14 @@ pub fn send_kitty_image(
         let (fit_cols, fit_rows) = if img_aspect > area_aspect {
             // Image is wider than area — width-constrained
             let c = area.width;
-            let r = (f64::from(c) * f64::from(cell_w) / (img_aspect * f64::from(cell_h)))
-                .round() as u16;
+            let r = (f64::from(c) * f64::from(cell_w) / (img_aspect * f64::from(cell_h))).round()
+                as u16;
             (c, r.max(1))
         } else {
             // Image is taller than area — height-constrained
             let r = area.height;
-            let c = (f64::from(r) * f64::from(cell_h) * img_aspect / f64::from(cell_w))
-                .round() as u16;
+            let c =
+                (f64::from(r) * f64::from(cell_h) * img_aspect / f64::from(cell_w)).round() as u16;
             (c.max(1), r)
         };
 
@@ -248,11 +247,7 @@ pub fn delete_kitty_image() -> std::io::Result<()> {
 /// When running inside tmux, the APC is wrapped in:
 ///   `ESC P tmux ; <content-with-doubled-ESCs> ESC \`
 /// so that tmux forwards it to the underlying terminal (Ghostty/Kitty).
-fn write_passthrough(
-    stdout: &mut impl Write,
-    payload: &[u8],
-    tmux: bool,
-) -> std::io::Result<()> {
+fn write_passthrough(stdout: &mut impl Write, payload: &[u8], tmux: bool) -> std::io::Result<()> {
     if tmux {
         stdout.write_all(b"\x1bPtmux;")?;
         for &byte in payload {
@@ -267,25 +262,6 @@ fn write_passthrough(
         stdout.write_all(payload)?;
     }
     Ok(())
-}
-
-fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
-    let popup_layout = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Percentage((100 - percent_y) / 2),
-            Constraint::Percentage(percent_y),
-            Constraint::Percentage((100 - percent_y) / 2),
-        ])
-        .split(r);
-    Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([
-            Constraint::Percentage((100 - percent_x) / 2),
-            Constraint::Percentage(percent_x),
-            Constraint::Percentage((100 - percent_x) / 2),
-        ])
-        .split(popup_layout[1])[1]
 }
 
 /// Returns the inner content area of the image preview overlay for a given terminal area.

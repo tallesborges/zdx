@@ -346,7 +346,8 @@ fn handle_task_started_event(
         | TaskKind::ThreadFork
         | TaskKind::ThreadWorktree
         | TaskKind::LoginExchange
-        | TaskKind::LoginCallback => {}
+        | TaskKind::LoginCallback
+        | TaskKind::ImageDecode => {}
     }
     vec![]
 }
@@ -574,12 +575,7 @@ fn push_token_exchange(
 }
 
 fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> Vec<UiEffect> {
-    let mut effects = Vec::with_capacity(update.effects.len());
-    for effect in update.effects {
-        match effect {
-            overlays::OverlayEffect::Ui(effect) => effects.push(effect),
-        }
-    }
+    let mut effects = update.effects;
     match update.transition {
         overlays::OverlayTransition::Stay => {}
         overlays::OverlayTransition::Close => {

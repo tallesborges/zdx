@@ -282,7 +282,12 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
 }
 
 /// Renders the input area. When `show_cursor` is false, the terminal cursor is not placed.
-pub fn render_input_with_cursor(state: &TuiState, frame: &mut ratatui::Frame, area: Rect, show_cursor: bool) {
+pub fn render_input_with_cursor(
+    state: &TuiState,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    show_cursor: bool,
+) {
     // Check if in handoff mode (any active handoff state)
     if state.input.handoff.is_active() {
         render_handoff_input(state, frame, area, show_cursor);
@@ -414,7 +419,12 @@ pub fn render_input_with_cursor(state: &TuiState, frame: &mut ratatui::Frame, ar
 }
 
 /// Renders the input area in handoff mode with special styling.
-fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect, show_cursor: bool) {
+fn render_handoff_input(
+    state: &TuiState,
+    frame: &mut ratatui::Frame,
+    area: Rect,
+    show_cursor: bool,
+) {
     // Handoff mode title - varies based on state
     let (title, border_color) = if state.input.handoff.is_generating() {
         (" handoff (generating prompt...) ", Color::Cyan)

@@ -169,7 +169,5 @@ pub enum UiEffect {
 
     /// Decode an image for preview on a background thread.
     /// Reads the file, converts to PNG if needed, and base64-encodes for Kitty protocol.
-    DecodeImagePreview {
-        image_path: String,
-    },
+    DecodeImagePreview { image_path: String },
 }
