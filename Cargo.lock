@@ -3744,7 +3744,6 @@ dependencies = [
  "futures-util",
  "globset",
  "image",
- "infer",
  "libc",
  "minijinja",
  "reqwest",

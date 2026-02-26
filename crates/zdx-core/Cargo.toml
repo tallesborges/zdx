@@ -19,7 +19,6 @@ fast_image_resize.workspace = true
 futures-util.workspace = true
 globset.workspace = true
 image.workspace = true
-infer.workspace = true
 minijinja.workspace = true
 reqwest.workspace = true
 serde.workspace = true

@@ -71,35 +71,9 @@ const MAX_PAGE_BYTES: usize = 40 * 1024; // 40KB
 /// Base64 expands by ~33% (4/3 ratio), so: 5MB ÷ 1.33 ≈ 3.75MB raw.
 const MAX_IMAGE_BYTES: u64 = 3_932_160; // 3.75 * 1024 * 1024
 
-/// Supported image MIME types for Anthropic vision API.
-const SUPPORTED_IMAGE_MIMES: &[&str] = &["image/jpeg", "image/png", "image/gif", "image/webp"];
-
-/// Detects image MIME type from file magic bytes.
-///
-/// Returns `Some(mime_type)` if the file is a supported image format
-/// (JPEG, PNG, GIF, WebP), otherwise returns `None`.
-///
-/// Detection is based on file content (magic bytes), not extension.
-fn detect_image_mime(path: &Path) -> Option<String> {
-    // Read first 4KB for magic byte detection
-    let mut file = File::open(path).ok()?;
-    let mut buffer = [0u8; 4096];
-    let bytes_read = file.read(&mut buffer).ok()?;
-
-    if bytes_read == 0 {
-        return None;
-    }
-
-    // Use infer crate to detect MIME type from magic bytes
-    let kind = infer::get(&buffer[..bytes_read])?;
-    let mime = kind.mime_type();
-
-    // Only return if it's a supported image format
-    if SUPPORTED_IMAGE_MIMES.contains(&mime) {
-        Some(mime.to_string())
-    } else {
-        None
-    }
+/// Detects supported image MIME type from path extension.
+fn image_mime_type(path: &Path) -> Option<&'static str> {
+    crate::images::path_mime::mime_type_for_extension(path.to_string_lossy().as_ref())
 }
 
 /// Returns the tool definition for the read tool.
@@ -158,14 +132,17 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "path cannot be empty", None);
     }
 
-    let file_path = match resolve_existing_path(path, &ctx.root) {
+    let normalized_path = crate::images::path_mime::normalize_input_path(path);
+    let normalized_path_str = normalized_path.to_string_lossy();
+
+    let file_path = match resolve_existing_path(normalized_path_str.as_ref(), &ctx.root) {
         Ok(p) => p,
         Err(e) => return e,
     };
 
-    // Check if this is an image file
-    if let Some(mime_type) = detect_image_mime(&file_path) {
-        return read_image(&file_path, &mime_type);
+    // Check if this is an image file based on extension.
+    if let Some(mime_type) = image_mime_type(&normalized_path) {
+        return read_image(&file_path, mime_type);
     }
 
     // Read as text file with offset/limit
@@ -422,6 +399,21 @@ mod tests {
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "nested content");
+    }
+
+    #[test]
+    fn test_read_shell_escaped_path() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("my file(1).txt");
+        fs::write(&file_path, "escaped path content").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "my\\ file\\(1\\).txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["content"], "escaped path content");
     }
 
     #[test]
@@ -713,86 +705,42 @@ mod tests {
         assert_eq!(data["content"], "line1\nline2\nline3\n");
     }
 
-    // MIME detection tests
+    // MIME detection tests (extension-based).
 
     #[test]
-    fn test_detect_jpeg() {
+    fn test_detect_jpeg_extension() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.jpg");
-        // Minimal JPEG: SOI marker + APP0 + EOI
-        let jpeg_bytes: &[u8] = &[
-            0xFF, 0xD8, 0xFF, 0xE0, 0x00, 0x10, 0x4A, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00,
-            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0xFF, 0xD9,
-        ];
-        fs::write(&path, jpeg_bytes).unwrap();
+        File::create(&path).unwrap();
 
-        assert_eq!(detect_image_mime(&path), Some("image/jpeg".to_string()));
+        assert_eq!(image_mime_type(&path), Some("image/jpeg"));
     }
 
     #[test]
-    fn test_detect_png() {
+    fn test_detect_png_extension() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.png");
-        // Minimal PNG: signature + IHDR chunk + IEND chunk
-        #[rustfmt::skip]
-        let png_bytes: &[u8] = &[
-            // PNG signature
-            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
-            // IHDR chunk
-            0x00, 0x00, 0x00, 0x0D, // length
-            0x49, 0x48, 0x44, 0x52, // "IHDR"
-            0x00, 0x00, 0x00, 0x01, // width
-            0x00, 0x00, 0x00, 0x01, // height
-            0x08, 0x02,             // bit depth, color type
-            0x00, 0x00, 0x00,       // compression, filter, interlace
-            0x90, 0x77, 0x53, 0xDE, // CRC
-            // IEND chunk
-            0x00, 0x00, 0x00, 0x00,
-            0x49, 0x45, 0x4E, 0x44,
-            0xAE, 0x42, 0x60, 0x82,
-        ];
-        fs::write(&path, png_bytes).unwrap();
+        File::create(&path).unwrap();
 
-        assert_eq!(detect_image_mime(&path), Some("image/png".to_string()));
+        assert_eq!(image_mime_type(&path), Some("image/png"));
     }
 
     #[test]
-    fn test_detect_gif() {
+    fn test_detect_gif_extension() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.gif");
-        // Minimal GIF89a header
-        #[rustfmt::skip]
-        let gif_bytes: &[u8] = &[
-            0x47, 0x49, 0x46, 0x38, 0x39, 0x61, // "GIF89a"
-            0x01, 0x00, 0x01, 0x00,             // width, height
-            0x00, 0x00, 0x00,                   // flags, bg, aspect
-            0x3B,                               // trailer
-        ];
-        fs::write(&path, gif_bytes).unwrap();
+        File::create(&path).unwrap();
 
-        assert_eq!(detect_image_mime(&path), Some("image/gif".to_string()));
+        assert_eq!(image_mime_type(&path), Some("image/gif"));
     }
 
     #[test]
-    fn test_detect_webp() {
+    fn test_detect_webp_extension() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.webp");
-        // Minimal WebP header (RIFF + WEBP)
-        #[rustfmt::skip]
-        let webp_bytes: &[u8] = &[
-            0x52, 0x49, 0x46, 0x46, // "RIFF"
-            0x1A, 0x00, 0x00, 0x00, // file size
-            0x57, 0x45, 0x42, 0x50, // "WEBP"
-            0x56, 0x50, 0x38, 0x20, // "VP8 "
-            0x0E, 0x00, 0x00, 0x00, // chunk size
-            0x30, 0x01, 0x00, 0x9D, // VP8 bitstream
-            0x01, 0x2A, 0x01, 0x00,
-            0x01, 0x00, 0x00, 0x34,
-            0x25, 0x9F, 0x00,
-        ];
-        fs::write(&path, webp_bytes).unwrap();
+        File::create(&path).unwrap();
 
-        assert_eq!(detect_image_mime(&path), Some("image/webp".to_string()));
+        assert_eq!(image_mime_type(&path), Some("image/webp"));
     }
 
     #[test]
@@ -801,49 +749,27 @@ mod tests {
         let path = temp.path().join("test.txt");
         fs::write(&path, "Hello, world!").unwrap();
 
-        assert_eq!(detect_image_mime(&path), None);
+        assert_eq!(image_mime_type(&path), None);
     }
 
     #[test]
-    fn test_detect_nonexistent_file_returns_none() {
+    fn test_detect_nonexistent_file_uses_extension() {
         let path = Path::new("/nonexistent/path/to/file.jpg");
-        assert_eq!(detect_image_mime(path), None);
-    }
-
-    #[test]
-    fn test_detect_empty_file_returns_none() {
-        let temp = TempDir::new().unwrap();
-        let path = temp.path().join("empty.jpg");
-        File::create(&path).unwrap();
-
-        assert_eq!(detect_image_mime(&path), None);
+        assert_eq!(image_mime_type(path), Some("image/jpeg"));
     }
 
     #[test]
     fn test_detect_unsupported_image_returns_none() {
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("test.bmp");
-        // BMP header (not supported by Anthropic)
-        #[rustfmt::skip]
-        let bmp_bytes: &[u8] = &[
-            0x42, 0x4D,             // "BM"
-            0x46, 0x00, 0x00, 0x00, // file size
-            0x00, 0x00, 0x00, 0x00, // reserved
-            0x36, 0x00, 0x00, 0x00, // offset to pixel data
-            0x28, 0x00, 0x00, 0x00, // DIB header size
-            0x01, 0x00, 0x00, 0x00, // width
-            0x01, 0x00, 0x00, 0x00, // height
-            0x01, 0x00,             // planes
-            0x18, 0x00,             // bits per pixel
-        ];
-        fs::write(&path, bmp_bytes).unwrap();
+        File::create(&path).unwrap();
 
-        assert_eq!(detect_image_mime(&path), None);
+        assert_eq!(image_mime_type(&path), None);
     }
 
     #[test]
-    fn test_wrong_extension_detected_by_content() {
-        // A PNG file with .txt extension should still be detected as PNG
+    fn test_wrong_extension_not_detected_by_content() {
+        // A PNG file with .txt extension should stay non-image.
         let temp = TempDir::new().unwrap();
         let path = temp.path().join("actually_png.txt");
         #[rustfmt::skip]
@@ -862,7 +788,7 @@ mod tests {
         ];
         fs::write(&path, png_bytes).unwrap();
 
-        assert_eq!(detect_image_mime(&path), Some("image/png".to_string()));
+        assert_eq!(image_mime_type(&path), None);
     }
 
     // Image reading tests
