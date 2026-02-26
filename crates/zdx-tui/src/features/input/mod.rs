@@ -18,7 +18,7 @@ mod update;
 // Re-export state types
 // Re-export reducer functions
 // Re-export view functions
-pub use render::{calculate_input_height, render_input};
+pub use render::{calculate_input_height, render_input, render_input_with_cursor};
 pub use state::{HandoffState, InputState};
 pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{

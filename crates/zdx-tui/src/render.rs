@@ -83,8 +83,9 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         );
     }
 
-    // Input area with model on top-left border and path on bottom-right
-    input::render_input(state, frame, chunks[2]);
+    // Input area — hide cursor when an overlay is covering the screen
+    let show_input_cursor = app.overlay.is_none();
+    input::render_input_with_cursor(state, frame, chunks[2], show_input_cursor);
     state.input_area.set(chunks[2]);
 
     // Status line below input
