@@ -410,15 +410,67 @@ fn check_image_click(
 
     let cell_idx = transcript.scroll.cell_index_for_line(line)?;
     let cell = transcript.cells().get(cell_idx)?;
-    if let HistoryCell::User { image_paths, .. } = cell
-        && let Some(path) = image_paths.get(image_index.saturating_sub(1))
+    if let HistoryCell::User {
+        image_paths,
+        content,
+        ..
+    } = cell
     {
+        // Map global image number to local index within this cell's content.
+        // The cell's content may use non-sequential image IDs (e.g., [Image 3])
+        // but image_paths is ordered by appearance. Find the ordinal position of
+        // the clicked image number among all [Image N] placeholders in the content.
+        let local_index = find_local_image_index(content, image_index)?;
+        let path = image_paths.get(local_index)?;
         return Some(crate::overlays::OverlayRequest::ImagePreview {
             image_path: path.clone(),
             image_index,
         });
     }
 
+    None
+}
+
+/// Maps a global image number (from `[Image N]`) to its ordinal position (0-indexed)
+/// among all image placeholders in the cell's content text.
+///
+/// For example, if content is `"[Image 3] what's this?"`, image number 3 is at
+/// local index 0 (the first placeholder in this cell).
+fn find_local_image_index(content: &str, target_image_number: usize) -> Option<usize> {
+    let mut search_start = 0;
+    let mut ordinal = 0;
+
+    loop {
+        let bracket_pos = content[search_start..]
+            .find("[Image ")
+            .or_else(|| content[search_start..].find("[Image\u{00A0}"));
+        let Some(bracket_pos) = bracket_pos else {
+            break;
+        };
+        let abs_pos = search_start + bracket_pos;
+        if let Some(close_offset) = content[abs_pos..].find(']') {
+            let close_pos = abs_pos + close_offset + 1;
+            let candidate = &content[abs_pos..close_pos];
+            let after_image = &candidate["[Image".len()..];
+            let inner = after_image
+                .strip_prefix(' ')
+                .or_else(|| after_image.strip_prefix('\u{00A0}'))
+                .and_then(|s| s.strip_suffix(']'));
+            if let Some(inner) = inner
+                && !inner.is_empty()
+                && inner.chars().all(|c| c.is_ascii_digit())
+                && let Ok(n) = inner.parse::<usize>()
+            {
+                if n == target_image_number {
+                    return Some(ordinal);
+                }
+                ordinal += 1;
+            }
+            search_start = close_pos;
+        } else {
+            break;
+        }
+    }
     None
 }
 
@@ -429,13 +481,29 @@ fn find_image_placeholder_at_col(text: &str, col: usize) -> Option<usize> {
 
     let mut search_start = 0;
 
-    while let Some(bracket_pos) = text[search_start..].find("[Image ") {
+    // Match both regular space and non-breaking space (\u{00A0}) in "[Image N]"
+    while search_start < text.len() {
+        // Find next "[Image" followed by a space (regular or non-breaking)
+        let bracket_pos = text[search_start..]
+            .find("[Image ")
+            .or_else(|| text[search_start..].find("[Image\u{00A0}"));
+        let Some(bracket_pos) = bracket_pos else {
+            break;
+        };
         let abs_pos = search_start + bracket_pos;
         if let Some(close_offset) = text[abs_pos..].find(']') {
             let close_pos = abs_pos + close_offset + 1;
             let candidate = &text[abs_pos..close_pos];
-            let inner = &candidate[7..candidate.len() - 1];
-            if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+            // Strip "[Image" + separator (space or NBSP, which can be multi-byte) + "]"
+            let after_image = &candidate["[Image".len()..];
+            let inner = after_image
+                .strip_prefix(' ')
+                .or_else(|| after_image.strip_prefix('\u{00A0}'))
+                .and_then(|s| s.strip_suffix(']'));
+            if let Some(inner) = inner
+                && !inner.is_empty()
+                && inner.chars().all(|c| c.is_ascii_digit())
+            {
                 // Count graphemes up to abs_pos
                 let start_grapheme = text[..abs_pos].graphemes(true).count();
                 let end_grapheme = text[..close_pos].graphemes(true).count();
@@ -572,5 +640,68 @@ pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
         transcript.scroll_up(lines);
     } else {
         transcript.scroll_down(lines);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn find_image_placeholder_first() {
+        let text = "You: [Image 1] [Image 2]";
+        assert_eq!(find_image_placeholder_at_col(text, 5), Some(1));
+        assert_eq!(find_image_placeholder_at_col(text, 13), Some(1));
+    }
+
+    #[test]
+    fn find_image_placeholder_second() {
+        let text = "You: [Image 1] [Image 2]";
+        assert_eq!(find_image_placeholder_at_col(text, 15), Some(2));
+        assert_eq!(find_image_placeholder_at_col(text, 23), Some(2));
+    }
+
+    #[test]
+    fn find_image_placeholder_between() {
+        let text = "You: [Image 1] [Image 2]";
+        assert_eq!(find_image_placeholder_at_col(text, 14), None);
+    }
+
+    #[test]
+    fn find_image_placeholder_bare() {
+        let text = "[Image 1] [Image 2]";
+        assert_eq!(find_image_placeholder_at_col(text, 0), Some(1));
+        assert_eq!(find_image_placeholder_at_col(text, 10), Some(2));
+    }
+
+    #[test]
+    fn find_image_placeholder_nbsp() {
+        // Non-breaking space variant (used to prevent wrapping)
+        let text = "[Image\u{00A0}1] [Image\u{00A0}2]";
+        assert_eq!(find_image_placeholder_at_col(text, 0), Some(1));
+        assert_eq!(find_image_placeholder_at_col(text, 10), Some(2));
+    }
+
+    #[test]
+    fn local_image_index_sequential() {
+        let content = "[Image 1] hello [Image 2]";
+        assert_eq!(find_local_image_index(content, 1), Some(0));
+        assert_eq!(find_local_image_index(content, 2), Some(1));
+        assert_eq!(find_local_image_index(content, 3), None);
+    }
+
+    #[test]
+    fn local_image_index_non_sequential() {
+        // Second message has [Image 3] as its only image
+        let content = "[Image 3] what's this?";
+        assert_eq!(find_local_image_index(content, 3), Some(0));
+        assert_eq!(find_local_image_index(content, 1), None);
+    }
+
+    #[test]
+    fn local_image_index_nbsp() {
+        let content = "[Image\u{00A0}5] test [Image\u{00A0}6]";
+        assert_eq!(find_local_image_index(content, 5), Some(0));
+        assert_eq!(find_local_image_index(content, 6), Some(1));
     }
 }

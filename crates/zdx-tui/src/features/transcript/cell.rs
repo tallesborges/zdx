@@ -665,21 +665,34 @@ fn highlight_image_placeholders(styled_line: StyledLine) -> StyledLine {
             continue;
         }
 
-        // Split text around [Image N] patterns
+        // Split text around [Image N] patterns (regular space or non-breaking space)
         let text = &span.text;
         let mut last_end = 0;
 
         // Simple manual scan for [Image N] patterns
         let mut search_start = 0;
-        while let Some(bracket_pos) = text[search_start..].find("[Image ") {
+        loop {
+            let bracket_pos = text[search_start..]
+                .find("[Image ")
+                .or_else(|| text[search_start..].find("[Image\u{00A0}"));
+            let Some(bracket_pos) = bracket_pos else {
+                break;
+            };
             let abs_pos = search_start + bracket_pos;
             // Find closing bracket
             if let Some(close_offset) = text[abs_pos..].find(']') {
                 let close_pos = abs_pos + close_offset + 1;
                 let candidate = &text[abs_pos..close_pos];
-                // Verify it matches [Image <digits>]
-                let inner = &candidate[7..candidate.len() - 1]; // strip "[Image " and "]"
-                if !inner.is_empty() && inner.chars().all(|c| c.is_ascii_digit()) {
+                // Strip "[Image" + separator (space or NBSP) and verify digits remain
+                let after_image = &candidate["[Image".len()..];
+                let inner = after_image
+                    .strip_prefix(' ')
+                    .or_else(|| after_image.strip_prefix('\u{00A0}'))
+                    .and_then(|s| s.strip_suffix(']'));
+                if let Some(inner) = inner
+                    && !inner.is_empty()
+                    && inner.chars().all(|c| c.is_ascii_digit())
+                {
                     // Emit text before this placeholder
                     if abs_pos > last_end {
                         new_spans.push(StyledSpan {
