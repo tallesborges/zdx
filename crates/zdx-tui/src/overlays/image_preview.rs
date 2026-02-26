@@ -177,55 +177,64 @@ pub fn send_kitty_image(
         (fit_cols, fit_rows, x_off, y_off)
     };
 
-    // Cursor positioning — handled by tmux natively (translated to pane coords)
+    // Cursor positioning — handled by tmux natively (translated to pane coords).
+    // Always try to restore cursor even if sending the image fails.
     stdout.queue(cursor::SavePosition)?;
-    stdout.queue(cursor::MoveTo(area.x + x_off, area.y + y_off))?;
-    stdout.flush()?;
+    let send_result = (|| -> std::io::Result<()> {
+        stdout.queue(cursor::MoveTo(area.x + x_off, area.y + y_off))?;
+        stdout.flush()?;
 
-    let data = base64_png.as_bytes();
+        let data = base64_png.as_bytes();
 
-    if data.len() <= CHUNK_SIZE {
-        // Single chunk
-        let mut seq = Vec::with_capacity(data.len() + 80);
-        write!(
-            seq,
-            "\x1b_Ga=T,f=100,q=2,i={KITTY_IMAGE_ID},c={cols},r={rows},m=0;"
-        )?;
-        seq.extend_from_slice(data);
-        seq.extend_from_slice(b"\x1b\\");
-        write_passthrough(&mut stdout, &seq, tmux)?;
-    } else {
-        // Multi-chunk transfer
-        let mut offset = 0;
-        let mut first = true;
-        while offset < data.len() {
-            let end = (offset + CHUNK_SIZE).min(data.len());
-            let chunk = &data[offset..end];
-            let more = u8::from(end < data.len());
-
-            let mut seq = Vec::with_capacity(chunk.len() + 80);
-            if first {
-                write!(
-                    seq,
-                    "\x1b_Ga=T,f=100,q=2,i={KITTY_IMAGE_ID},c={cols},r={rows},m={more};"
-                )?;
-                first = false;
-            } else {
-                write!(seq, "\x1b_Gm={more};")?;
-            }
-            seq.extend_from_slice(chunk);
+        if data.len() <= CHUNK_SIZE {
+            // Single chunk
+            let mut seq = Vec::with_capacity(data.len() + 80);
+            write!(
+                seq,
+                "\x1b_Ga=T,f=100,q=2,i={KITTY_IMAGE_ID},c={cols},r={rows},z=1,m=0;"
+            )?;
+            seq.extend_from_slice(data);
             seq.extend_from_slice(b"\x1b\\");
             write_passthrough(&mut stdout, &seq, tmux)?;
+        } else {
+            // Multi-chunk transfer
+            let mut offset = 0;
+            let mut first = true;
+            while offset < data.len() {
+                let end = (offset + CHUNK_SIZE).min(data.len());
+                let chunk = &data[offset..end];
+                let more = u8::from(end < data.len());
 
-            offset = end;
+                let mut seq = Vec::with_capacity(chunk.len() + 80);
+                if first {
+                    write!(
+                        seq,
+                        "\x1b_Ga=T,f=100,q=2,i={KITTY_IMAGE_ID},c={cols},r={rows},z=1,m={more};"
+                    )?;
+                    first = false;
+                } else {
+                    write!(seq, "\x1b_Gm={more};")?;
+                }
+                seq.extend_from_slice(chunk);
+                seq.extend_from_slice(b"\x1b\\");
+                write_passthrough(&mut stdout, &seq, tmux)?;
+
+                offset = end;
+            }
         }
+
+        Ok(())
+    })();
+
+    let restore_result = stdout
+        .queue(cursor::RestorePosition)
+        .and_then(std::io::Write::flush);
+
+    match (send_result, restore_result) {
+        (Err(send_err), _) => Err(send_err),
+        (Ok(()), Err(restore_err)) => Err(restore_err),
+        (Ok(()), Ok(())) => Ok(()),
     }
-
-    // Restore cursor
-    stdout.queue(cursor::RestorePosition)?;
-    stdout.flush()?;
-
-    Ok(())
 }
 
 /// Deletes the Kitty graphics image with ID [`KITTY_IMAGE_ID`].
@@ -249,15 +258,18 @@ pub fn delete_kitty_image() -> std::io::Result<()> {
 /// so that tmux forwards it to the underlying terminal (Ghostty/Kitty).
 fn write_passthrough(stdout: &mut impl Write, payload: &[u8], tmux: bool) -> std::io::Result<()> {
     if tmux {
-        stdout.write_all(b"\x1bPtmux;")?;
+        // Build a single wrapped DCS payload to avoid many tiny writes.
+        let mut wrapped = Vec::with_capacity(payload.len() + 64);
+        wrapped.extend_from_slice(b"\x1bPtmux;");
         for &byte in payload {
             if byte == 0x1b {
                 // Double every ESC inside the DCS passthrough content
-                stdout.write_all(&[0x1b])?;
+                wrapped.push(0x1b);
             }
-            stdout.write_all(&[byte])?;
+            wrapped.push(byte);
         }
-        stdout.write_all(b"\x1b\\")?;
+        wrapped.extend_from_slice(b"\x1b\\");
+        stdout.write_all(&wrapped)?;
     } else {
         stdout.write_all(payload)?;
     }

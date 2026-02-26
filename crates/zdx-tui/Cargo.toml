@@ -16,6 +16,7 @@ chrono.workspace = true
 comfy-table.workspace = true
 crossterm.workspace = true
 enum-map.workspace = true
+fast_image_resize.workspace = true
 ignore.workspace = true
 image.workspace = true
 nucleo-matcher.workspace = true

@@ -3,6 +3,7 @@
 pub mod automations;
 pub mod config;
 pub mod core;
+pub mod images;
 pub mod models;
 pub mod prompts;
 pub mod providers;
