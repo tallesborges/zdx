@@ -703,10 +703,20 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             if let Some(picker) = &app.tui.image_picker {
                 let state = overlays::ImagePreviewState::open(image_path, *image_index);
                 app.overlay = Some(overlays::Overlay::ImagePreview(state));
-                // Spawn background image decode
+                // Compute the expected inner area of the overlay so the background task can
+                // pre-encode the image at the right size, making the first render instant.
+                let (tw, th) = app.tui.transcript.terminal_size;
+                let terminal_area = ratatui::layout::Rect {
+                    x: 0,
+                    y: 0,
+                    width: tw,
+                    height: th,
+                };
+                // Spawn background image decode + pre-encode
                 vec![UiEffect::DecodeImagePreview {
                     image_path: image_path.clone(),
                     picker: picker.clone(),
+                    terminal_area,
                 }]
             } else {
                 vec![]
@@ -756,6 +766,19 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
+            // Check if click is in the input area first
+            let input_area = app.tui.input_area.get();
+            if mouse.row >= input_area.y
+                && mouse.row < input_area.y + input_area.height
+                && mouse.column >= input_area.x
+                && mouse.column < input_area.x + input_area.width
+            {
+                if let Some(request) = input::handle_mouse(&app.tui.input, mouse, input_area) {
+                    return open_overlay_request(app, &request);
+                }
+                return vec![];
+            }
+
             if let Some(request) =
                 transcript::handle_mouse(&mut app.tui.transcript, mouse, render::TRANSCRIPT_MARGIN)
             {

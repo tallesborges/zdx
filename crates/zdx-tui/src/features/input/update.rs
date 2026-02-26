@@ -872,3 +872,149 @@ pub fn handle_handoff_result(
         }
     }
 }
+
+// =============================================================================
+// Mouse event handling (image placeholder clicks)
+// =============================================================================
+
+/// Handles mouse clicks in the input area.
+///
+/// Detects clicks on `[Image #N]` placeholders and opens image preview.
+/// Returns `None` for non-placeholder clicks (let default behavior proceed).
+pub fn handle_mouse(
+    input: &InputState,
+    mouse: crossterm::event::MouseEvent,
+    area: ratatui::layout::Rect,
+) -> Option<crate::overlays::OverlayRequest> {
+    use crossterm::event::{MouseButton, MouseEventKind};
+    use unicode_width::UnicodeWidthStr;
+
+    if !matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) {
+        return None;
+    }
+
+    if input.pending_images.is_empty() {
+        return None;
+    }
+
+    // Inner area: block has Borders::ALL so offset by 1 on each side
+    let inner_x = area.x + 1;
+    let inner_y = area.y + 1;
+    let inner_w = area.width.saturating_sub(2) as usize;
+    let inner_h = area.height.saturating_sub(2) as usize;
+
+    if mouse.column < inner_x || mouse.row < inner_y || inner_w == 0 || inner_h == 0 {
+        return None;
+    }
+
+    let click_col = (mouse.column - inner_x) as usize;
+    let click_row = (mouse.row - inner_y) as usize;
+
+    // Build visual rows tracking placeholder hit regions (display-width based).
+    // This mirrors wrap_textarea's character-by-character wrapping.
+    let (cursor_line, _) = input.textarea.cursor();
+
+    // Collect placeholder info: (placeholder_text, image_index)
+    let placeholders: Vec<(&str, usize)> = input
+        .pending_images
+        .iter()
+        .enumerate()
+        .map(|(i, img)| (img.placeholder.as_str(), i))
+        .collect();
+
+    // Each visual row stores: Vec<(display_col_start, display_col_end, image_index)>
+    let mut rows: Vec<Vec<(usize, usize, usize)>> = Vec::new();
+    let mut cursor_visual_row = 0usize;
+
+    for (line_idx, logical_line) in input.textarea.lines().iter().enumerate() {
+        if logical_line.is_empty() {
+            rows.push(vec![]);
+            if line_idx == cursor_line {
+                cursor_visual_row = rows.len() - 1;
+            }
+            continue;
+        }
+
+        // Find all placeholder byte ranges in this line
+        let mut ph_hits: Vec<(usize, usize, usize)> = Vec::new(); // (byte_start, byte_end, img_idx)
+        for &(ph_text, img_idx) in &placeholders {
+            let mut search = 0;
+            while let Some(pos) = logical_line[search..].find(ph_text) {
+                let abs = search + pos;
+                ph_hits.push((abs, abs + ph_text.len(), img_idx));
+                search = abs + 1;
+            }
+        }
+        ph_hits.sort_by_key(|(s, _, _)| *s);
+
+        // Walk character by character, tracking display width and active placeholder
+        let mut display_w = 0usize;
+        let mut row_hits: Vec<(usize, usize, usize)> = Vec::new();
+        let mut active: Option<(usize, usize, usize)> = None; // (display_start, byte_end, img_idx)
+
+        for (byte_off, ch) in logical_line.char_indices() {
+            let ch_w = ch.to_string().width();
+
+            // Line wrap
+            if display_w + ch_w > inner_w && display_w > 0 {
+                // Truncate any active placeholder spanning across wrap boundary
+                active = None;
+                rows.push(std::mem::take(&mut row_hits));
+                display_w = 0;
+            }
+
+            // Check if entering a placeholder
+            if active.is_none()
+                && let Some(&(_, end, idx)) = ph_hits.iter().find(|(s, _, _)| *s == byte_off)
+            {
+                active = Some((display_w, end, idx));
+            }
+
+            display_w += ch_w;
+
+            // Check if leaving a placeholder
+            if let Some((start, end, idx)) = active
+                && byte_off + ch.len_utf8() >= end
+            {
+                row_hits.push((start, display_w, idx));
+                active = None;
+            }
+        }
+
+        rows.push(row_hits);
+        if line_idx == cursor_line {
+            cursor_visual_row = rows.len() - 1;
+        }
+    }
+
+    // Compute scroll offset (mirrors render_input logic)
+    let total_rows = rows.len();
+    let scroll_offset = if total_rows <= inner_h {
+        0
+    } else {
+        let ideal = inner_h / 2;
+        if cursor_visual_row < ideal {
+            0
+        } else if cursor_visual_row >= total_rows.saturating_sub(ideal) {
+            total_rows.saturating_sub(inner_h)
+        } else {
+            cursor_visual_row.saturating_sub(ideal)
+        }
+    };
+
+    let target_row = scroll_offset + click_row;
+    let hits = rows.get(target_row)?;
+
+    for &(col_start, col_end, img_idx) in hits {
+        if click_col >= col_start && click_col < col_end {
+            let img = input.pending_images.get(img_idx)?;
+            let path = img.source_path.as_ref()?;
+            return Some(crate::overlays::OverlayRequest::ImagePreview {
+                image_path: path.clone(),
+                image_index: img_idx + 1,
+            });
+        }
+    }
+
+    None
+}

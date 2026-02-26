@@ -431,14 +431,28 @@ impl TuiRuntime {
                 }
             }
 
-            UiEffect::DecodeImagePreview { image_path, picker } => {
+            UiEffect::DecodeImagePreview {
+                image_path,
+                picker,
+                terminal_area,
+            } => {
                 let inbox = self.inbox_tx.clone();
                 tokio::task::spawn_blocking(move || {
                     let result = image::ImageReader::open(&image_path)
                         .map_err(|e| e.to_string())
                         .and_then(|r| r.decode().map_err(|e| e.to_string()))
                         .map(|dyn_img| {
-                            crate::events::ImageProtocolPayload(picker.new_resize_protocol(dyn_img))
+                            let mut protocol = picker.new_resize_protocol(dyn_img);
+                            // Pre-encode at the expected overlay inner area so the first
+                            // render_stateful_widget call is instant (no encoding on UI thread).
+                            let inner_area =
+                                crate::overlays::image_preview::overlay_inner_area(terminal_area);
+                            if inner_area.width > 0 && inner_area.height > 0 {
+                                use ratatui_image::ResizeEncodeRender;
+                                protocol
+                                    .resize_encode(&ratatui_image::Resize::Fit(None), inner_area);
+                            }
+                            crate::events::ImageProtocolPayload(protocol)
                         });
                     let _ = inbox.send(UiEvent::ImagePreviewDecoded { result });
                 });

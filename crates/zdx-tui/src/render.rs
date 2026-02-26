@@ -85,6 +85,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Input area with model on top-left border and path on bottom-right
     input::render_input(state, frame, chunks[2]);
+    state.input_area.set(chunks[2]);
 
     // Status line below input
     render_status_line(state, frame, chunks[3]);

@@ -130,3 +130,16 @@ fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
         ])
         .split(popup_layout[1])[1]
 }
+
+/// Returns the inner content area of the image preview overlay for a given terminal area.
+/// Used to pre-encode the image at the expected render size before delivering it to state.
+pub fn overlay_inner_area(terminal_area: Rect) -> Rect {
+    let popup = centered_rect(90, 85, terminal_area);
+    // Shrink by the Block borders (1 cell on each side)
+    Rect {
+        x: popup.x + 1,
+        y: popup.y + 1,
+        width: popup.width.saturating_sub(2),
+        height: popup.height.saturating_sub(2),
+    }
+}
