@@ -17,6 +17,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 
 - `runtime/mod.rs`: runtime event loop and dispatcher
 - `runtime/inbox.rs`: runtime inbox channel types
+- `runtime/image_ops.rs`: shared image loading/transform helpers (preview + attachments)
 - `runtime/handlers/`: side-effect handlers (thread ops, agent spawn, auth, skills)
 - `runtime/handoff.rs`: handoff generation handlers
 - `runtime/thread_title.rs`: auto-title handlers

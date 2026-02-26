@@ -22,9 +22,11 @@
 //! - `handlers/`: Effect handler implementations (I/O, spawning, etc.)
 //! - `handoff.rs`: Handoff generation handlers (subagent spawning)
 //! - `thread_title.rs`: Auto-title generation handlers (subagent spawning)
+//! - `image_ops.rs`: shared image loading/transform helpers (preview + attachments)
 
 mod handlers;
 mod handoff;
+mod image_ops;
 mod inbox;
 mod thread_title;
 
@@ -61,6 +63,7 @@ pub const IDLE_POLL_DURATION: std::time::Duration = std::time::Duration::from_mi
 struct KittyImageManager {
     sent: bool,
     last_area: Option<ratatui::layout::Rect>,
+    last_cell_size: Option<(u16, u16)>,
 }
 
 impl KittyImageManager {
@@ -68,7 +71,26 @@ impl KittyImageManager {
         Self {
             sent: false,
             last_area: None,
+            last_cell_size: None,
         }
+    }
+
+    fn current_cell_size() -> (u16, u16) {
+        crossterm::terminal::window_size()
+            .map(|ws| {
+                let cw = if ws.columns > 0 {
+                    (ws.width / ws.columns).max(1)
+                } else {
+                    8
+                };
+                let ch = if ws.rows > 0 {
+                    (ws.height / ws.rows).max(1)
+                } else {
+                    16
+                };
+                (cw, ch)
+            })
+            .unwrap_or((8, 16))
     }
 
     fn flush(
@@ -86,8 +108,10 @@ impl KittyImageManager {
         if has_image {
             let inner = image_preview::overlay_inner_area(terminal_size);
             let area_changed = self.last_area != Some(inner);
+            let cell_size = Self::current_cell_size();
+            let cell_size_changed = self.last_cell_size != Some(cell_size);
 
-            if !self.sent || area_changed {
+            if !self.sent || area_changed || cell_size_changed {
                 if self.sent {
                     let _ = image_preview::delete_kitty_image();
                 }
@@ -95,26 +119,23 @@ impl KittyImageManager {
                     && let Some(data) = state.kitty_data()
                     && let Some(dims) = state.image_dims()
                 {
-                    let cell_size = crossterm::terminal::window_size()
-                        .map(|ws| {
-                            let cw = if ws.columns > 0 {
-                                ws.width / ws.columns
-                            } else {
-                                8
-                            };
-                            let ch = if ws.rows > 0 { ws.height / ws.rows } else { 16 };
-                            (cw, ch)
-                        })
-                        .unwrap_or((8, 16));
-                    let _ = image_preview::send_kitty_image(data, inner, dims, cell_size);
-                    self.sent = true;
-                    self.last_area = Some(inner);
+                    if image_preview::send_kitty_image(data, inner, dims, cell_size).is_ok() {
+                        self.sent = true;
+                        self.last_area = Some(inner);
+                        self.last_cell_size = Some(cell_size);
+                    } else {
+                        // Keep `sent = false` so we retry on the next flush.
+                        self.sent = false;
+                        self.last_area = None;
+                        self.last_cell_size = None;
+                    }
                 }
             }
         } else if self.sent {
             let _ = image_preview::delete_kitty_image();
             self.sent = false;
             self.last_area = None;
+            self.last_cell_size = None;
         }
     }
 }
@@ -254,9 +275,10 @@ impl TuiRuntime {
                     self.last_terminal_event = std::time::Instant::now();
                 }
 
-                // Only Tick triggers render - this caps frame rate at tick cadence
-                // Terminal events update state but batch renders to next Tick
-                let marks_dirty = matches!(&event, UiEvent::Tick);
+                // Render on any non-frame event. This keeps interaction
+                // responsive (key/mouse/task transitions) while still allowing
+                // `Frame` housekeeping without forcing a redraw.
+                let marks_dirty = !matches!(&event, UiEvent::Frame { .. });
 
                 let effects = update::update(&mut self.state, event);
                 if marks_dirty {
@@ -299,12 +321,12 @@ impl TuiRuntime {
     /// APC in DCS passthrough when inside tmux. Tracks the display area to
     /// re-send on resize and delete on overlay close.
     fn flush_kitty_image(&mut self) {
-        let size = self.terminal.size().unwrap_or_default();
+        let (width, height) = self.state.tui.transcript.terminal_size;
         let terminal_area = ratatui::layout::Rect {
             x: 0,
             y: 0,
-            width: size.width,
-            height: size.height,
+            width,
+            height,
         };
         self.kitty.flush(self.state.overlay.as_ref(), terminal_area);
     }
@@ -427,6 +449,9 @@ impl TuiRuntime {
     /// Spawns an async task with a uniform TaskStarted/TaskCompleted lifecycle.
     ///
     /// Task IDs are allocated here in the runtime, keeping reducers deterministic.
+    ///
+    /// `TaskStarted` is dispatched synchronously so ultra-fast tasks (like small
+    /// image decodes) still expose running state immediately to the reducer/UI.
     fn spawn_task<F, Fut>(&mut self, kind: TaskKind, meta: TaskMeta, cancelable: bool, f: F)
     where
         F: FnOnce(Option<CancellationToken>) -> Fut + Send + 'static,
@@ -440,7 +465,7 @@ impl TuiRuntime {
             cancel: cancel.clone(),
             meta,
         };
-        let _ = tx.send(UiEvent::TaskStarted { kind, started });
+        self.dispatch_event(UiEvent::TaskStarted { kind, started });
         tokio::spawn(async move {
             let inner = f(cancel).await;
             let completed = TaskCompleted {
@@ -479,7 +504,7 @@ impl TuiRuntime {
                 }
             }
 
-            UiEffect::AttachImage { path } => match read_and_encode_image(&path) {
+            UiEffect::AttachImage { path } => match image_ops::read_and_encode_image(&path) {
                 Ok((mime_type, data)) => {
                     // Store unescaped path for the <attached_image> tag
                     let clean_path = path
@@ -526,39 +551,7 @@ impl TuiRuntime {
                     false,
                     move |_| async move {
                         let result = tokio::task::spawn_blocking(move || {
-                            use base64::Engine;
-                            (|| -> Result<crate::events::KittyImageData, String> {
-                                let data = std::fs::read(&image_path)
-                                    .map_err(|e| format!("{image_path}: {e}"))?;
-                                let is_png = data.len() >= 8
-                                    && data[..8]
-                                        == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
-                                let (width, height) = image::image_dimensions(&image_path)
-                                    .map_err(|e| format!("dimensions: {e}"))?;
-                                let png_bytes = if is_png {
-                                    data
-                                } else {
-                                    let reader =
-                                        image::ImageReader::new(std::io::Cursor::new(data))
-                                            .with_guessed_format()
-                                            .map_err(|e| e.to_string())?;
-                                    let dyn_img = reader.decode().map_err(|e| e.to_string())?;
-                                    let mut buf = Vec::new();
-                                    dyn_img
-                                        .write_to(
-                                            &mut std::io::Cursor::new(&mut buf),
-                                            image::ImageFormat::Png,
-                                        )
-                                        .map_err(|e| e.to_string())?;
-                                    buf
-                                };
-                                Ok(crate::events::KittyImageData {
-                                    base64_png: base64::engine::general_purpose::STANDARD
-                                        .encode(&png_bytes),
-                                    width,
-                                    height,
-                                })
-                            })()
+                            image_ops::decode_image_preview(&image_path)
                         })
                         .await
                         .unwrap_or_else(|e| Err(e.to_string()));
@@ -830,56 +823,6 @@ impl TuiRuntime {
         terminal::enable_input_features()?;
 
         open_result.context(format!("Failed to open {} in editor", path.display()))
-    }
-}
-
-fn read_and_encode_image(path: &str) -> anyhow::Result<(String, String)> {
-    use anyhow::Context;
-    use base64::Engine;
-
-    // Unescape shell-escaped characters (e.g., "\ " → " " from terminal drag-and-drop)
-    let unescaped = path
-        .replace("\\ ", " ")
-        .replace("\\(", "(")
-        .replace("\\)", ")");
-    let path = std::path::Path::new(&unescaped);
-    let path = if let Some(rest) = path.to_str().and_then(|s| s.strip_prefix("~/")) {
-        if let Ok(home) = std::env::var("HOME") {
-            std::path::PathBuf::from(home).join(rest)
-        } else {
-            path.to_path_buf()
-        }
-    } else {
-        path.to_path_buf()
-    };
-
-    let metadata = std::fs::metadata(&path)
-        .with_context(|| format!("Cannot read image: {}", path.display()))?;
-
-    if metadata.len() > 20 * 1024 * 1024 {
-        anyhow::bail!("Image too large (max 20MB)");
-    }
-
-    let data = std::fs::read(&path)?;
-    let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
-
-    let mime_type = mime_type_for_extension(path.to_str().unwrap_or(""))
-        .unwrap_or("image/png")
-        .to_string();
-
-    Ok((mime_type, encoded))
-}
-
-fn mime_type_for_extension(path: &str) -> Option<&'static str> {
-    let ext = std::path::Path::new(path)
-        .extension()
-        .and_then(|e| e.to_str())?;
-    match ext.to_ascii_lowercase().as_str() {
-        "png" => Some("image/png"),
-        "jpg" | "jpeg" => Some("image/jpeg"),
-        "gif" => Some("image/gif"),
-        "webp" => Some("image/webp"),
-        _ => None,
     }
 }
 

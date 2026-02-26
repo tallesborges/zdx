@@ -10,6 +10,9 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/models.rs`: model registry for model picker
 - `src/prompts.rs`: prompt template helpers
 - `src/skills.rs`: skills discovery + parsing
+- `src/images/mod.rs`: shared image utilities module exports
+- `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
+- `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
 - `prompts/system_prompt_template.md`: unified MiniJinja system prompt template
