@@ -22,7 +22,6 @@ nucleo-matcher.workspace = true
 open.workspace = true
 pulldown-cmark.workspace = true
 ratatui.workspace = true
-ratatui-image.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

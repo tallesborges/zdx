@@ -24,7 +24,6 @@
 //! - Cancellation is initiated via `UiEffect::CancelTask` which calls `token.cancel()`
 //! - This keeps the runtime as a "dumb executor" and reducer as the source of truth
 
-use std::fmt;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -173,14 +172,9 @@ pub enum SkillUiEvent {
 /// The reducer (`update`) pattern-matches on these events to update state.
 ///
 /// ## Inbox Pattern
-/// Wrapper for `StatefulProtocol` that implements `Debug`.
-pub struct ImageProtocolPayload(pub ratatui_image::protocol::StatefulProtocol);
-
-impl fmt::Debug for ImageProtocolPayload {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("ImageProtocolPayload(..)")
-    }
-}
+/// Pre-encoded image data for Kitty graphics protocol (base64 PNG).
+#[derive(Debug)]
+pub struct KittyImageData(pub String);
 
 ///
 /// With the inbox pattern, async operations send events directly to the runtime's
@@ -273,6 +267,6 @@ pub enum UiEvent {
 
     /// Image preview decode completed (from background thread).
     ImagePreviewDecoded {
-        result: Result<ImageProtocolPayload, String>,
+        result: Result<KittyImageData, String>,
     },
 }

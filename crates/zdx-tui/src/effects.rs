@@ -168,11 +168,8 @@ pub enum UiEffect {
     },
 
     /// Decode an image for preview on a background thread.
-    /// `terminal_area` is used to pre-encode the image at the expected render size so the first
-    /// render is non-blocking.
+    /// Reads the file, converts to PNG if needed, and base64-encodes for Kitty protocol.
     DecodeImagePreview {
         image_path: String,
-        picker: ratatui_image::picker::Picker,
-        terminal_area: ratatui::layout::Rect,
     },
 }
