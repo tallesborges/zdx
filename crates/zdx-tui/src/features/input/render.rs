@@ -278,9 +278,14 @@ pub fn calculate_input_height(state: &TuiState, terminal_height: u16) -> u16 {
 
 /// Renders the input area with model info on top border and path on bottom border.
 pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
+    render_input_with_cursor(state, frame, area, true);
+}
+
+/// Renders the input area. When `show_cursor` is false, the terminal cursor is not placed.
+pub fn render_input_with_cursor(state: &TuiState, frame: &mut ratatui::Frame, area: Rect, show_cursor: bool) {
     // Check if in handoff mode (any active handoff state)
     if state.input.handoff.is_active() {
-        render_handoff_input(state, frame, area);
+        render_handoff_input(state, frame, area, show_cursor);
         return;
     }
 
@@ -400,13 +405,16 @@ pub fn render_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
     let cursor_x = inner_area.x + wrapped.cursor_col as u16;
     let cursor_y = inner_area.y + (wrapped.cursor_row.saturating_sub(scroll_offset) as u16);
 
-    if cursor_x < inner_area.x + inner_area.width && cursor_y < inner_area.y + inner_area.height {
+    if show_cursor
+        && cursor_x < inner_area.x + inner_area.width
+        && cursor_y < inner_area.y + inner_area.height
+    {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
 
 /// Renders the input area in handoff mode with special styling.
-fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect) {
+fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect, show_cursor: bool) {
     // Handoff mode title - varies based on state
     let (title, border_color) = if state.input.handoff.is_generating() {
         (" handoff (generating prompt...) ", Color::Cyan)
@@ -479,7 +487,10 @@ fn render_handoff_input(state: &TuiState, frame: &mut ratatui::Frame, area: Rect
     // Show cursor
     let cursor_y = inner_area.y + (wrapped.cursor_row.saturating_sub(scroll_offset)) as u16;
     let cursor_x = inner_area.x + wrapped.cursor_col as u16;
-    if cursor_y < inner_area.y + inner_area.height && cursor_x < inner_area.x + inner_area.width {
+    if show_cursor
+        && cursor_y < inner_area.y + inner_area.height
+        && cursor_x < inner_area.x + inner_area.width
+    {
         frame.set_cursor_position((cursor_x, cursor_y));
     }
 }
