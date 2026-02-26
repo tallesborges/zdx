@@ -92,7 +92,10 @@ impl ImagePreviewState {
             .and_then(|n| n.to_str())
             .unwrap_or(&self.image_path);
 
-        let title = format!(" Image #{} — {} ", self.image_index, filename);
+        let mut title = format!(" Image #{} — {} ", self.image_index, filename);
+        if let Some((w, h)) = self.image_dims {
+            title.push_str(&format!("({}x{}) ", w, h));
+        }
         let block = Block::default()
             .title(title)
             .borders(Borders::ALL)
