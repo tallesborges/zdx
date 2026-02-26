@@ -478,6 +478,23 @@ input_images = true
 output_limit = 65536
 
 [[model]]
+id = "gemini:gemini-3.1-flash-image-preview"
+provider = "gemini"
+display_name = "Gemini 3.1 Flash Image Preview"
+context_limit = 128000
+
+[model.pricing]
+input = 0.25
+output = 0.067
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
+
+[[model]]
 id = "gemini:gemini-3-flash-preview"
 provider = "gemini"
 display_name = "Gemini 3 Flash Preview"
@@ -561,6 +578,23 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 65536
+
+[[model]]
+id = "gemini-cli:gemini-3.1-flash-image-preview"
+provider = "gemini-cli"
+display_name = "Gemini 3.1 Flash Image Preview"
+context_limit = 128000
+
+[model.pricing]
+input = 0.25
+output = 0.067
+cache_read = 0.0
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 32768
 
 [[model]]
 id = "gemini-cli:gemini-3-flash-preview"

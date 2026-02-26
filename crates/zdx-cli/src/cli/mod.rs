@@ -100,6 +100,29 @@ enum Commands {
         no_tools: bool,
     },
 
+    /// Generate images with Gemini image models
+    Imagine {
+        /// The prompt to generate an image from
+        #[arg(short, long)]
+        prompt: String,
+
+        /// Output image path (writes multiple files when model returns multiple images)
+        #[arg(short, long, value_name = "PATH")]
+        out: Option<String>,
+
+        /// Model to use (must be a Gemini API model)
+        #[arg(long, value_name = "MODEL")]
+        model: Option<String>,
+
+        /// Aspect ratio (1:1, 3:4, 4:3, 9:16, 16:9)
+        #[arg(long, value_name = "RATIO", value_parser = parse_aspect_ratio)]
+        aspect: Option<String>,
+
+        /// Output size preset (1K, 2K, 4K)
+        #[arg(long, value_name = "SIZE", value_parser = parse_image_size)]
+        size: Option<String>,
+    },
+
     /// Manage saved threads
     Threads {
         #[command(subcommand)]
@@ -484,6 +507,14 @@ struct ExecCommandInput {
     no_tools: bool,
 }
 
+struct ImagineCommandInput {
+    prompt: String,
+    out: Option<String>,
+    model: Option<String>,
+    aspect: Option<String>,
+    size: Option<String>,
+}
+
 async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput) -> Result<()> {
     let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
     let root_path = resolve_root(context.root, context.worktree_id)?;
@@ -498,6 +529,23 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         thinking_override: input.thinking.as_deref(),
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
+    })
+    .await
+}
+
+async fn run_imagine_command(
+    context: &DispatchContext<'_>,
+    input: ImagineCommandInput,
+) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    commands::imagine::run(commands::imagine::ImagineRunOptions {
+        root: &root_path,
+        prompt: &input.prompt,
+        out: input.out.as_deref(),
+        model_override: input.model.as_deref(),
+        aspect: input.aspect.as_deref(),
+        size: input.size.as_deref(),
+        config: context.config,
     })
     .await
 }
@@ -525,6 +573,25 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Threads { command } => dispatch_threads(command, context).await,
+        Commands::Imagine {
+            prompt,
+            out,
+            model,
+            aspect,
+            size,
+        } => {
+            run_imagine_command(
+                context,
+                ImagineCommandInput {
+                    prompt,
+                    out,
+                    model,
+                    aspect,
+                    size,
+                },
+            )
+            .await
+        }
         Commands::Automations { command } => dispatch_automations(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
@@ -542,6 +609,26 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Models { command } => dispatch_models(command, context).await,
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
         Commands::Worktree { command } => dispatch_worktree(command, context),
+    }
+}
+
+fn parse_aspect_ratio(value: &str) -> std::result::Result<String, String> {
+    let trimmed = value.trim();
+    match trimmed {
+        "1:1" | "3:4" | "4:3" | "9:16" | "16:9" => Ok(trimmed.to_string()),
+        _ => Err(format!(
+            "Invalid aspect ratio '{value}'. Valid values: 1:1, 3:4, 4:3, 9:16, 16:9"
+        )),
+    }
+}
+
+fn parse_image_size(value: &str) -> std::result::Result<String, String> {
+    let normalized = value.trim().to_ascii_uppercase();
+    match normalized.as_str() {
+        "1K" | "2K" | "4K" => Ok(normalized),
+        _ => Err(format!(
+            "Invalid image size '{value}'. Valid values: 1K, 2K, 4K"
+        )),
     }
 }
 

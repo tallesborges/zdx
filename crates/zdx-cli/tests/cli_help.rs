@@ -8,10 +8,42 @@ fn test_help_shows_all_commands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("exec"))
+        .stdout(predicate::str::contains("imagine"))
         .stdout(predicate::str::contains("automations"))
         .stdout(predicate::str::contains("threads"))
         .stdout(predicate::str::contains("--model"))
         .stdout(predicate::str::contains("--thinking"));
+}
+
+#[test]
+fn test_imagine_help_shows_flags() {
+    cargo_bin_cmd!("zdx")
+        .args(["imagine", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--prompt"))
+        .stdout(predicate::str::contains("--out"))
+        .stdout(predicate::str::contains("--model"))
+        .stdout(predicate::str::contains("--aspect"))
+        .stdout(predicate::str::contains("--size"));
+}
+
+#[test]
+fn test_imagine_rejects_invalid_aspect_ratio() {
+    cargo_bin_cmd!("zdx")
+        .args(["imagine", "-p", "test", "--aspect", "2:1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid aspect ratio"));
+}
+
+#[test]
+fn test_imagine_rejects_invalid_image_size() {
+    cargo_bin_cmd!("zdx")
+        .args(["imagine", "-p", "test", "--size", "8K"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("Invalid image size"));
 }
 
 #[test]

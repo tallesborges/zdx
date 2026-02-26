@@ -37,3 +37,29 @@ pub fn mime_type_for_extension(path: &str) -> Option<&'static str> {
         _ => None,
     }
 }
+
+/// Returns file extension inferred from MIME type for supported image formats.
+#[must_use]
+pub fn extension_for_mime_type(mime: &str) -> Option<&'static str> {
+    match mime.trim().to_ascii_lowercase().as_str() {
+        "image/png" => Some("png"),
+        "image/jpeg" => Some("jpg"),
+        "image/gif" => Some("gif"),
+        "image/webp" => Some("webp"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maps_mime_to_extension() {
+        assert_eq!(extension_for_mime_type("image/png"), Some("png"));
+        assert_eq!(extension_for_mime_type("image/jpeg"), Some("jpg"));
+        assert_eq!(extension_for_mime_type("image/gif"), Some("gif"));
+        assert_eq!(extension_for_mime_type("image/webp"), Some("webp"));
+        assert_eq!(extension_for_mime_type("application/pdf"), None);
+    }
+}
