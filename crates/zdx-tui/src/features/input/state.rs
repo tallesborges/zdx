@@ -166,7 +166,7 @@ impl InputState {
         });
         // Replace image placeholders with short references (e.g., "[Image #1]" → "[image 1]")
         let expanded = self.pending_images.iter().fold(expanded, |acc, img| {
-            acc.replace(&img.placeholder, &format!("[Image {}]", img.id))
+            acc.replace(&img.placeholder, &format!("[Image\u{00A0}{}]", img.id))
         });
         self.clear_pending_pastes();
         expanded.trim().to_string()
