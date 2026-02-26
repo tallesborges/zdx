@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
 use zdx_core::config;
+use zdx_core::images::path_mime;
 use zdx_core::providers::gemini::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GeneratedImage,
 };
@@ -102,7 +103,7 @@ fn resolve_output_paths(root: &Path, out: Option<&str>, images: &[GeneratedImage
                 .iter()
                 .enumerate()
                 .map(|(idx, image)| {
-                    let ext = extension_for_mime(&image.mime_type);
+                    let ext = path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
                     parent.join(format!("{stem}-{}.{}", idx + 1, ext))
                 })
                 .collect()
@@ -110,27 +111,19 @@ fn resolve_output_paths(root: &Path, out: Option<&str>, images: &[GeneratedImage
         None => {
             let ts = Utc::now().format("%Y%m%d-%H%M%S");
             if images.len() == 1 {
-                let ext = extension_for_mime(&images[0].mime_type);
+                let ext = path_mime::extension_for_mime_type(&images[0].mime_type).unwrap_or("png");
                 vec![root.join(format!("image-{ts}.{ext}"))]
             } else {
                 images
                     .iter()
                     .enumerate()
                     .map(|(idx, image)| {
-                        let ext = extension_for_mime(&image.mime_type);
+                        let ext =
+                            path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
                         root.join(format!("image-{ts}-{}.{}", idx + 1, ext))
                     })
                     .collect()
             }
         }
-    }
-}
-
-fn extension_for_mime(mime: &str) -> &'static str {
-    match mime {
-        "image/jpeg" => "jpg",
-        "image/webp" => "webp",
-        "image/gif" => "gif",
-        _ => "png",
     }
 }
