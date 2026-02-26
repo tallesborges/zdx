@@ -495,23 +495,6 @@ input_images = true
 output_limit = 65536
 
 [[model]]
-id = "gemini:gemini-3-pro-preview"
-provider = "gemini"
-display_name = "Gemini 3 Pro Preview"
-context_limit = 1000000
-
-[model.pricing]
-input = 2.0
-output = 12.0
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
-
-[[model]]
 id = "gemini:gemini-2.5-flash"
 provider = "gemini"
 display_name = "Gemini 2.5 Flash"
@@ -595,23 +578,6 @@ cache_write = 0.0
 reasoning = true
 input_images = true
 output_limit = 65536
-
-[[model]]
-id = "gemini-cli:gemini-3-pro-preview"
-provider = "gemini-cli"
-display_name = "Gemini 3 Pro Preview"
-context_limit = 1000000
-
-[model.pricing]
-input = 2.0
-output = 12.0
-cache_read = 0.2
-cache_write = 0.0
-
-[model.capabilities]
-reasoning = true
-input_images = true
-output_limit = 64000
 
 [[model]]
 id = "gemini-cli:gemini-2.5-flash"
