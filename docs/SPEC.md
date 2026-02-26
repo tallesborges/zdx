@@ -78,6 +78,7 @@ ZDX solves this with a boring, reliable core:
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT>` — run one prompt non-interactively
+- `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
 - `zdx threads list|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
@@ -92,6 +93,11 @@ ZDX solves this with a boring, reliable core:
 
 - **stdout:** assistant text only (or JSON if/when `--format json` ships).
 - **stderr:** diagnostics, warnings, tool status, errors.
+
+### `zdx imagine` (non-interactive, scriptable)
+
+- **stdout:** generated image file path(s), one per line.
+- **stderr:** diagnostics and errors.
 
 ### `zdx` (interactive)
 
