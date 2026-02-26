@@ -8,6 +8,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/`: argument structs + command dispatch
 - `src/cli/commands/automations.rs`: automations commands (`list`, `validate`, `run`)
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
+- `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `src/modes/exec.rs`: non-interactive streaming mode

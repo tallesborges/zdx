@@ -5,6 +5,8 @@ pub mod cli;
 pub mod shared;
 mod sse;
 
-pub use api::{GeminiClient, GeminiConfig};
+pub use api::{
+    GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GenerateImageResponse, GeneratedImage,
+};
 pub use cli::{GeminiCliClient, GeminiCliConfig};
 pub use shared::GeminiThinkingConfig;
