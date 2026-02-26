@@ -167,8 +167,6 @@ pub struct TuiState {
     pub status_line: crate::statusline::StatusLineAccumulator,
     /// Whether to show the debug status line.
     pub show_debug_status: bool,
-    /// Image protocol picker for terminal image rendering.
-    pub image_picker: Option<ratatui_image::picker::Picker>,
     /// Input area rect (set during render, used for mouse click routing).
     pub input_area: std::cell::Cell<ratatui::layout::Rect>,
 }
@@ -239,11 +237,6 @@ impl TuiState {
             display_path,
             status_line: crate::statusline::StatusLineAccumulator::new(),
             show_debug_status: false,
-            image_picker: if cfg!(test) {
-                None
-            } else {
-                ratatui_image::picker::Picker::from_query_stdio().ok()
-            },
             input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         }
     }

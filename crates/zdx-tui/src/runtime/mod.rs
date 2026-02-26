@@ -76,6 +76,10 @@ pub struct TuiRuntime {
     last_render: std::time::Instant,
     /// Last time a terminal event was received (for fast tick during interaction).
     last_terminal_event: std::time::Instant,
+    /// Whether a Kitty image is currently displayed on the terminal.
+    kitty_image_sent: bool,
+    /// The area the Kitty image was last rendered at (for resize detection).
+    kitty_image_area: Option<ratatui::layout::Rect>,
 }
 
 impl TuiRuntime {
@@ -130,6 +134,8 @@ impl TuiRuntime {
             last_tick: now,
             last_render: now,
             last_terminal_event: now,
+            kitty_image_sent: false,
+            kitty_image_area: None,
         })
     }
 
@@ -211,6 +217,9 @@ impl TuiRuntime {
                     render::render(&self.state, frame);
                 })?;
 
+                // Post-render: manage Kitty graphics image lifecycle
+                self.flush_kitty_image();
+
                 dirty = false;
 
                 // Update FPS based on actual render interval
@@ -219,6 +228,54 @@ impl TuiRuntime {
         }
 
         Ok(())
+    }
+
+    // ========================================================================
+    // Kitty Graphics Lifecycle
+    // ========================================================================
+
+    /// Sends or deletes a Kitty graphics protocol image after ratatui render.
+    ///
+    /// Uses cursor positioning (handled by tmux natively) and wraps the Kitty
+    /// APC in DCS passthrough when inside tmux. Tracks the display area to
+    /// re-send on resize and delete on overlay close.
+    fn flush_kitty_image(&mut self) {
+        use crate::overlays::{Overlay, image_preview};
+
+        let has_image = matches!(
+            &self.state.overlay,
+            Some(Overlay::ImagePreview(state)) if state.kitty_data().is_some()
+        );
+
+        if has_image {
+            let size = self.terminal.size().unwrap_or_default();
+            let terminal_area = ratatui::layout::Rect {
+                x: 0,
+                y: 0,
+                width: size.width,
+                height: size.height,
+            };
+            let inner = image_preview::overlay_inner_area(terminal_area);
+            let area_changed = self.kitty_image_area != Some(inner);
+
+            if !self.kitty_image_sent || area_changed {
+                // Delete previous placement if resizing
+                if self.kitty_image_sent {
+                    let _ = image_preview::delete_kitty_image();
+                }
+                if let Some(Overlay::ImagePreview(state)) = &self.state.overlay
+                    && let Some(data) = state.kitty_data()
+                {
+                    let _ = image_preview::send_kitty_image(data, inner);
+                    self.kitty_image_sent = true;
+                    self.kitty_image_area = Some(inner);
+                }
+            }
+        } else if self.kitty_image_sent {
+            let _ = image_preview::delete_kitty_image();
+            self.kitty_image_sent = false;
+            self.kitty_image_area = None;
+        }
     }
 
     // ========================================================================
@@ -431,29 +488,36 @@ impl TuiRuntime {
                 }
             }
 
-            UiEffect::DecodeImagePreview {
-                image_path,
-                picker,
-                terminal_area,
-            } => {
+            UiEffect::DecodeImagePreview { image_path } => {
                 let inbox = self.inbox_tx.clone();
                 tokio::task::spawn_blocking(move || {
-                    let result = image::ImageReader::open(&image_path)
-                        .map_err(|e| e.to_string())
-                        .and_then(|r| r.decode().map_err(|e| e.to_string()))
-                        .map(|dyn_img| {
-                            let mut protocol = picker.new_resize_protocol(dyn_img);
-                            // Pre-encode at the expected overlay inner area so the first
-                            // render_stateful_widget call is instant (no encoding on UI thread).
-                            let inner_area =
-                                crate::overlays::image_preview::overlay_inner_area(terminal_area);
-                            if inner_area.width > 0 && inner_area.height > 0 {
-                                use ratatui_image::ResizeEncodeRender;
-                                protocol
-                                    .resize_encode(&ratatui_image::Resize::Fit(None), inner_area);
-                            }
-                            crate::events::ImageProtocolPayload(protocol)
-                        });
+                    use base64::Engine;
+
+                    let result = (|| -> Result<String, String> {
+                        let data =
+                            std::fs::read(&image_path).map_err(|e| format!("{image_path}: {e}"))?;
+                        // PNG magic bytes: \x89PNG\r\n\x1a\n
+                        let is_png = data.len() >= 8 && data[..8] == [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
+                        let png_bytes = if is_png {
+                            data
+                        } else {
+                            // Decode and re-encode as PNG
+                            let reader = image::ImageReader::new(std::io::Cursor::new(data))
+                                .with_guessed_format()
+                                .map_err(|e| e.to_string())?;
+                            let dyn_img = reader.decode().map_err(|e| e.to_string())?;
+                            let mut buf = Vec::new();
+                            dyn_img
+                                .write_to(
+                                    &mut std::io::Cursor::new(&mut buf),
+                                    image::ImageFormat::Png,
+                                )
+                                .map_err(|e| e.to_string())?;
+                            buf
+                        };
+                        Ok(base64::engine::general_purpose::STANDARD.encode(&png_bytes))
+                    })();
+                    let result = result.map(crate::events::KittyImageData);
                     let _ = inbox.send(UiEvent::ImagePreviewDecoded { result });
                 });
             }

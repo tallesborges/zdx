@@ -128,7 +128,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::ImagePreviewDecoded { result } => {
             if let Some(overlays::Overlay::ImagePreview(state)) = &mut app.overlay {
                 match result {
-                    Ok(payload) => state.set_protocol(payload.0),
+                    Ok(data) => state.set_image_data(data.0),
                     Err(e) => state.set_error(e),
                 }
             }
@@ -700,27 +700,11 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             image_path,
             image_index,
         } => {
-            if let Some(picker) = &app.tui.image_picker {
-                let state = overlays::ImagePreviewState::open(image_path, *image_index);
-                app.overlay = Some(overlays::Overlay::ImagePreview(state));
-                // Compute the expected inner area of the overlay so the background task can
-                // pre-encode the image at the right size, making the first render instant.
-                let (tw, th) = app.tui.transcript.terminal_size;
-                let terminal_area = ratatui::layout::Rect {
-                    x: 0,
-                    y: 0,
-                    width: tw,
-                    height: th,
-                };
-                // Spawn background image decode + pre-encode
-                vec![UiEffect::DecodeImagePreview {
-                    image_path: image_path.clone(),
-                    picker: picker.clone(),
-                    terminal_area,
-                }]
-            } else {
-                vec![]
-            }
+            let state = overlays::ImagePreviewState::open(image_path, *image_index);
+            app.overlay = Some(overlays::Overlay::ImagePreview(state));
+            vec![UiEffect::DecodeImagePreview {
+                image_path: image_path.clone(),
+            }]
         }
     }
 }
