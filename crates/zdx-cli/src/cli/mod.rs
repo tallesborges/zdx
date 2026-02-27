@@ -121,6 +121,10 @@ enum Commands {
         /// Output size preset (1K, 2K, 4K)
         #[arg(long, value_name = "SIZE", value_parser = parse_image_size)]
         size: Option<String>,
+
+        /// Source image(s) for editing (can be repeated for multi-image composition)
+        #[arg(short = 's', long, value_name = "IMAGE")]
+        source: Vec<String>,
     },
 
     /// Manage saved threads
@@ -513,6 +517,7 @@ struct ImagineCommandInput {
     model: Option<String>,
     aspect: Option<String>,
     size: Option<String>,
+    source: Vec<String>,
 }
 
 async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput) -> Result<()> {
@@ -545,6 +550,7 @@ async fn run_imagine_command(
         model_override: input.model.as_deref(),
         aspect: input.aspect.as_deref(),
         size: input.size.as_deref(),
+        source: &input.source,
         config: context.config,
     })
     .await
@@ -579,6 +585,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             model,
             aspect,
             size,
+            source,
         } => {
             run_imagine_command(
                 context,
@@ -588,6 +595,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     model,
                     aspect,
                     size,
+                    source,
                 },
             )
             .await
@@ -615,9 +623,10 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
 fn parse_aspect_ratio(value: &str) -> std::result::Result<String, String> {
     let trimmed = value.trim();
     match trimmed {
-        "1:1" | "3:4" | "4:3" | "9:16" | "16:9" => Ok(trimmed.to_string()),
+        "1:1" | "2:3" | "3:2" | "3:4" | "4:3" | "4:5" | "5:4" | "9:16" | "16:9" | "21:9"
+        | "1:4" | "4:1" | "1:8" | "8:1" => Ok(trimmed.to_string()),
         _ => Err(format!(
-            "Invalid aspect ratio '{value}'. Valid values: 1:1, 3:4, 4:3, 9:16, 16:9"
+            "Invalid aspect ratio '{value}'. Valid values: 1:1, 2:3, 3:2, 3:4, 4:3, 4:5, 5:4, 9:16, 16:9, 21:9, 4:1, 1:4, 8:1, 1:8"
         )),
     }
 }
