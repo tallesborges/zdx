@@ -59,11 +59,11 @@ pub(crate) fn build_thinking_and_output_config(
     let output_config = if thinking_enabled && supports_effort_control(normalized_model) {
         thinking_effort
             .map(|effort| {
-                if effort == EffortLevel::Max && !is_opus_4_6_model(normalized_model) {
+                if effort == EffortLevel::Max && !supports_max_effort(normalized_model) {
                     bail!(
                         "Anthropic model '{normalized_model}' does not support output_config.effort=\"max\". \
                          thinking_level=\"xhigh\" currently maps to effort=\"max\". \
-                         Use a lower thinking level or switch to claude-opus-4-6."
+                         Use a lower thinking level or switch to claude-opus-4-6 / claude-sonnet-4-6."
                     );
                 }
                 Ok(OutputConfig::new(effort))
@@ -95,8 +95,8 @@ fn normalize_model_id(model: &str) -> &str {
     model.rsplit(':').next().unwrap_or(model)
 }
 
-fn is_opus_4_6_model(model: &str) -> bool {
-    model.starts_with("claude-opus-4-6")
+fn supports_max_effort(model: &str) -> bool {
+    model.starts_with("claude-opus-4-6") || model.starts_with("claude-sonnet-4-6")
 }
 
 fn supports_adaptive_thinking(model: &str) -> bool {
@@ -375,19 +375,22 @@ mod tests {
     }
 
     #[test]
-    fn max_effort_errors_on_sonnet_46() {
-        let err = build_thinking_and_output_config(
+    fn max_effort_allowed_on_sonnet_46() {
+        let (thinking, output_config) = build_thinking_and_output_config(
             "claude-sonnet-4-6",
             true,
-            1024,
+            4096,
             Some(EffortLevel::Max),
         )
-        .expect_err("max effort should fail on sonnet 4.6");
+        .unwrap();
 
-        assert!(
-            err.to_string()
-                .contains("does not support output_config.effort=\"max\""),
-            "unexpected error: {err}"
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "max"})
         );
     }
 
