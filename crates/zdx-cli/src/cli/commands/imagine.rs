@@ -60,7 +60,8 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
         bail!("Model returned no images");
     }
 
-    let output_paths = resolve_output_paths(options.root, options.out, &response.images);
+    let default_dir = config::paths::zdx_home().join("artifacts");
+    let output_paths = resolve_output_paths(options.root, options.out, &default_dir, &response.images);
     for (image, path) in response.images.iter().zip(output_paths.iter()) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
@@ -74,7 +75,12 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
     Ok(())
 }
 
-fn resolve_output_paths(root: &Path, out: Option<&str>, images: &[GeneratedImage]) -> Vec<PathBuf> {
+fn resolve_output_paths(
+    root: &Path,
+    out: Option<&str>,
+    default_dir: &Path,
+    images: &[GeneratedImage],
+) -> Vec<PathBuf> {
     let out_path = out
         .map(str::trim)
         .filter(|v| !v.is_empty())
@@ -112,7 +118,7 @@ fn resolve_output_paths(root: &Path, out: Option<&str>, images: &[GeneratedImage
             let ts = Utc::now().format("%Y%m%d-%H%M%S");
             if images.len() == 1 {
                 let ext = path_mime::extension_for_mime_type(&images[0].mime_type).unwrap_or("png");
-                vec![root.join(format!("image-{ts}.{ext}"))]
+                vec![default_dir.join(format!("image-{ts}.{ext}"))]
             } else {
                 images
                     .iter()
@@ -120,7 +126,7 @@ fn resolve_output_paths(root: &Path, out: Option<&str>, images: &[GeneratedImage
                     .map(|(idx, image)| {
                         let ext =
                             path_mime::extension_for_mime_type(&image.mime_type).unwrap_or("png");
-                        root.join(format!("image-{ts}-{}.{}", idx + 1, ext))
+                        default_dir.join(format!("image-{ts}-{}.{}", idx + 1, ext))
                     })
                     .collect()
             }
