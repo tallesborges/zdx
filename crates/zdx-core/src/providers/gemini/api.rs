@@ -69,6 +69,13 @@ pub struct GeminiClient {
     http: reqwest::Client,
 }
 
+/// A source image for editing / composition.
+#[derive(Debug, Clone)]
+pub struct SourceImage {
+    pub mime_type: String,
+    pub data: Vec<u8>,
+}
+
 /// Optional image generation settings.
 #[derive(Debug, Clone, Default)]
 pub struct GeminiImageGenerationOptions {
@@ -76,6 +83,8 @@ pub struct GeminiImageGenerationOptions {
     pub aspect_ratio: Option<String>,
     /// Output image size preset (e.g. "1K", "2K", "4K").
     pub image_size: Option<String>,
+    /// Source images for editing / multi-image composition.
+    pub source_images: Vec<SourceImage>,
 }
 
 /// A generated image from Gemini image models.
@@ -193,8 +202,16 @@ impl GeminiClient {
 }
 
 fn build_image_generation_request(prompt: &str, options: &GeminiImageGenerationOptions) -> Value {
+    let is_editing = !options.source_images.is_empty();
+
+    let modalities = if is_editing {
+        json!(["TEXT", "IMAGE"])
+    } else {
+        json!(["IMAGE"])
+    };
+
     let mut generation_config = json!({
-        "responseModalities": ["IMAGE"]
+        "responseModalities": modalities
     });
 
     let mut image_config = serde_json::Map::new();
@@ -212,13 +229,19 @@ fn build_image_generation_request(prompt: &str, options: &GeminiImageGenerationO
         generation_config["imageConfig"] = Value::Object(image_config);
     }
 
+    let mut parts = vec![json!({"text": prompt})];
+    for image in &options.source_images {
+        let b64 = base64::engine::general_purpose::STANDARD.encode(&image.data);
+        parts.push(json!({
+            "inlineData": {
+                "mimeType": image.mime_type,
+                "data": b64
+            }
+        }));
+    }
+
     json!({
-        "contents": [{
-            "role": "user",
-            "parts": [{
-                "text": prompt
-            }]
-        }],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": generation_config,
     })
 }
@@ -334,6 +357,7 @@ mod tests {
             &GeminiImageGenerationOptions {
                 aspect_ratio: Some("16:9".to_string()),
                 image_size: Some("2K".to_string()),
+                source_images: vec![],
             },
         );
 
@@ -348,6 +372,47 @@ mod tests {
         assert_eq!(
             request["generationConfig"]["imageConfig"]["imageSize"],
             json!("2K")
+        );
+    }
+
+    #[test]
+    fn build_image_generation_request_includes_source_images() {
+        let request = build_image_generation_request(
+            "Make the sky purple",
+            &GeminiImageGenerationOptions {
+                aspect_ratio: None,
+                image_size: None,
+                source_images: vec![
+                    SourceImage {
+                        mime_type: "image/png".to_string(),
+                        data: vec![1, 2, 3],
+                    },
+                    SourceImage {
+                        mime_type: "image/jpeg".to_string(),
+                        data: vec![4, 5],
+                    },
+                ],
+            },
+        );
+
+        // Editing mode → TEXT + IMAGE
+        assert_eq!(
+            request["generationConfig"]["responseModalities"],
+            json!(["TEXT", "IMAGE"])
+        );
+
+        let parts = request["contents"][0]["parts"].as_array().unwrap();
+        assert_eq!(parts.len(), 3);
+        assert_eq!(parts[0]["text"], "Make the sky purple");
+        assert_eq!(parts[1]["inlineData"]["mimeType"], "image/png");
+        assert_eq!(
+            parts[1]["inlineData"]["data"],
+            base64::engine::general_purpose::STANDARD.encode([1, 2, 3])
+        );
+        assert_eq!(parts[2]["inlineData"]["mimeType"], "image/jpeg");
+        assert_eq!(
+            parts[2]["inlineData"]["data"],
+            base64::engine::general_purpose::STANDARD.encode([4, 5])
         );
     }
 }

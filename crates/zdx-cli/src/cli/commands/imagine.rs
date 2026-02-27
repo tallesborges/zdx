@@ -8,7 +8,7 @@ use chrono::Utc;
 use zdx_core::config;
 use zdx_core::images::path_mime;
 use zdx_core::providers::gemini::{
-    GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GeneratedImage,
+    GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GeneratedImage, SourceImage,
 };
 use zdx_core::providers::{ProviderKind, resolve_provider};
 
@@ -21,6 +21,7 @@ pub struct ImagineRunOptions<'a> {
     pub model_override: Option<&'a str>,
     pub aspect: Option<&'a str>,
     pub size: Option<&'a str>,
+    pub source: &'a [String],
     pub config: &'a config::Config,
 }
 
@@ -41,6 +42,22 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
         None,
     )?;
 
+    let source_images = options
+        .source
+        .iter()
+        .map(|path_str| {
+            let path = path_mime::normalize_input_path(path_str);
+            let mime_type = path_mime::mime_type_for_extension(path_str)
+                .context(format!("unsupported image format: {path_str}"))?;
+            let data = fs::read(&path)
+                .with_context(|| format!("read source image '{}'", path.display()))?;
+            Ok(SourceImage {
+                mime_type: mime_type.to_string(),
+                data,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
     let client = GeminiClient::new(gemini_config);
     let response = client
         .generate_images(
@@ -48,6 +65,7 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
             &GeminiImageGenerationOptions {
                 aspect_ratio: options.aspect.map(std::string::ToString::to_string),
                 image_size: options.size.map(std::string::ToString::to_string),
+                source_images,
             },
         )
         .await
