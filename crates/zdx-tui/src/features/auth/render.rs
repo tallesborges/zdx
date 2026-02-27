@@ -46,7 +46,7 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
             zdx_core::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
             zdx_core::providers::ProviderKind::OpenAI => "OpenAI Login",
             zdx_core::providers::ProviderKind::OpenRouter => "OpenRouter Login",
-            zdx_core::providers::ProviderKind::Mimo => "MiMo API Key",
+            zdx_core::providers::ProviderKind::Xiomi => "Xiomi API Key",
             zdx_core::providers::ProviderKind::Mistral => "Mistral API Key",
             zdx_core::providers::ProviderKind::Moonshot => "Moonshot API Key",
             zdx_core::providers::ProviderKind::Stepfun => "StepFun API Key",

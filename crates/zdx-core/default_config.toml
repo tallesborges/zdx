@@ -157,9 +157,9 @@ enabled = false
 # base_url = "https://api.apiyi.com"
 models = []
 
-[providers.mimo]
+[providers.xiomi]
 enabled = true
-# api_key = "sk-..."  # Overrides MIMO_API_KEY env var
+# api_key = "sk-..."  # Overrides XIOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
 models = ["mimo-v2-flash"]
 

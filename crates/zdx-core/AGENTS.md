@@ -54,7 +54,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `providers/apiyi.rs`: APIYI provider
 - `providers/moonshot.rs`: Moonshot provider
 - `providers/stepfun.rs`: StepFun provider
-- `providers/mimo.rs`: MiMo provider
+- `providers/xiomi.rs`: Xiomi provider
 
 ## Conventions
 

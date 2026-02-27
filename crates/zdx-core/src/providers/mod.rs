@@ -8,7 +8,6 @@ pub mod thinking_parser;
 pub mod anthropic;
 pub mod apiyi;
 pub mod gemini;
-pub mod mimo;
 pub mod minimax;
 pub mod mistral;
 pub mod moonshot;
@@ -18,6 +17,7 @@ pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
 pub mod xai;
+pub mod xiomi;
 pub mod zai;
 pub mod zen;
 
@@ -36,7 +36,7 @@ pub enum ProviderKind {
     OpenAICodex,
     OpenAI,
     OpenRouter,
-    Mimo,
+    Xiomi,
     Mistral,
     Moonshot,
     Stepfun,
@@ -71,7 +71,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex,
             ProviderKind::OpenAI,
             ProviderKind::OpenRouter,
-            ProviderKind::Mimo,
+            ProviderKind::Xiomi,
             ProviderKind::Mistral,
             ProviderKind::Moonshot,
             ProviderKind::Stepfun,
@@ -93,7 +93,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "openai-codex",
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
-            ProviderKind::Mimo => "mimo",
+            ProviderKind::Xiomi => "xiomi",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Stepfun => "stepfun",
@@ -115,7 +115,7 @@ impl ProviderKind {
             "openai-codex" | "codex" => Some(ProviderKind::OpenAICodex),
             "openai" => Some(ProviderKind::OpenAI),
             "openrouter" => Some(ProviderKind::OpenRouter),
-            "mimo" => Some(ProviderKind::Mimo),
+            "xiomi" => Some(ProviderKind::Xiomi),
             "mistral" => Some(ProviderKind::Mistral),
             "moonshot" => Some(ProviderKind::Moonshot),
             "stepfun" => Some(ProviderKind::Stepfun),
@@ -138,7 +138,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "OpenAI Codex",
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
-            ProviderKind::Mimo => "MiMo",
+            ProviderKind::Xiomi => "Xiomi",
             ProviderKind::Mistral => "Mistral",
             ProviderKind::Moonshot => "Moonshot",
             ProviderKind::Stepfun => "StepFun",
@@ -170,7 +170,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
-            ProviderKind::Mimo => Some("MIMO_API_KEY"),
+            ProviderKind::Xiomi => Some("XIOMI_API_KEY"),
             ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
@@ -192,7 +192,7 @@ impl ProviderKind {
             ProviderKind::Anthropic
             | ProviderKind::OpenAI
             | ProviderKind::OpenRouter
-            | ProviderKind::Mimo
+            | ProviderKind::Xiomi
             | ProviderKind::Mistral
             | ProviderKind::Moonshot
             | ProviderKind::Stepfun
@@ -251,7 +251,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "claude-cli" => ProviderKind::ClaudeCli,
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
-                "mimo" => ProviderKind::Mimo,
+                "xiomi" => ProviderKind::Xiomi,
                 "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "stepfun" => ProviderKind::Stepfun,

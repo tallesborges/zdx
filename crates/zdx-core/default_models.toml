@@ -427,8 +427,8 @@ input_images = false
 output_limit = 256000
 
 [[model]]
-id = "mimo:mimo-v2-flash"
-provider = "mimo"
+id = "xiomi:mimo-v2-flash"
+provider = "xiomi"
 display_name = "MiMo-V2-Flash"
 context_limit = 256000
 

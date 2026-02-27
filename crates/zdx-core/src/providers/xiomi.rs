@@ -1,4 +1,4 @@
-//! `MiMo` provider (Xiaomi `MiMo` OpenAI-compatible Chat Completions).
+//! `Xiomi` provider (Xiaomi `MiMo` OpenAI-compatible Chat Completions).
 
 use anyhow::Result;
 use reqwest::header::HeaderMap;
@@ -12,9 +12,9 @@ use crate::tools::ToolDefinition;
 
 const DEFAULT_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 
-/// `MiMo` API configuration.
+/// `Xiomi` API configuration.
 #[derive(Debug, Clone)]
-pub struct MimoConfig {
+pub struct XiomiConfig {
     pub api_key: String,
     pub base_url: String,
     pub model: String,
@@ -23,16 +23,16 @@ pub struct MimoConfig {
     pub thinking_enabled: bool,
 }
 
-impl MimoConfig {
+impl XiomiConfig {
     /// Creates a new config from environment.
     ///
     /// Authentication resolution order:
     /// 1. `config_api_key` parameter (from config file)
-    /// 2. `MIMO_API_KEY` environment variable
+    /// 2. `XIOMI_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `MIMO_API_KEY` (fallback if not in config)
-    /// - `MIMO_BASE_URL` (optional)
+    /// - `XIOMI_API_KEY` (fallback if not in config)
+    /// - `XIOMI_BASE_URL` (optional)
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -44,9 +44,9 @@ impl MimoConfig {
         prompt_cache_key: Option<String>,
         thinking_enabled: bool,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "MIMO_API_KEY", "mimo")?;
+        let api_key = resolve_api_key(config_api_key, "XIOMI_API_KEY", "xiomi")?;
         let base_url =
-            resolve_base_url(config_base_url, "MIMO_BASE_URL", DEFAULT_BASE_URL, "MiMo")?;
+            resolve_base_url(config_base_url, "XIOMI_BASE_URL", DEFAULT_BASE_URL, "Xiomi")?;
 
         Ok(Self {
             api_key,
@@ -59,13 +59,13 @@ impl MimoConfig {
     }
 }
 
-/// `MiMo` client.
-pub struct MimoClient {
+/// `Xiomi` client.
+pub struct XiomiClient {
     inner: OpenAIChatCompletionsClient,
 }
 
-impl MimoClient {
-    pub fn new(config: MimoConfig) -> Self {
+impl XiomiClient {
+    pub fn new(config: XiomiConfig) -> Self {
         Self {
             inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
                 api_key: config.api_key,
