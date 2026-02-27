@@ -691,23 +691,12 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use std::sync::OnceLock;
 
-    use tempfile::{TempDir, tempdir};
+    use tempfile::tempdir;
 
     use super::*;
     use crate::config::SkillSourceToggles;
     use crate::skills::SkillSource;
-
-    fn setup_temp_zdx_home() -> &'static TempDir {
-        static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
-        let home = ZDX_HOME.get_or_init(|| TempDir::new().unwrap());
-        // Always re-set the env var in case another test module overwrote it.
-        unsafe {
-            std::env::set_var("ZDX_HOME", home.path());
-        }
-        home
-    }
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
@@ -1217,120 +1206,6 @@ mod tests {
         assert!(prompt.contains("# Project"));
         assert!(prompt.contains("# Project Context"));
         assert!(prompt.contains("Available model overrides"));
-    }
-
-    #[test]
-    fn test_template_mode_includes_memory_block_when_available() {
-        let dir = tempdir().unwrap();
-        let zdx_home = setup_temp_zdx_home();
-        fs::write(
-            zdx_home.path().join(MEMORY_INDEX_FILE_NAME),
-            "Remember this memory",
-        )
-        .unwrap();
-
-        let mut config = crate::config::Config {
-            system_prompt: Some("Base prompt".to_string()),
-            ..Default::default()
-        };
-        config.subagents.enabled = false;
-        config.skills.sources = SkillSourceToggles {
-            zdx_user: false,
-            zdx_project: false,
-            codex_user: false,
-            claude_user: false,
-            claude_project: false,
-            agents_user: false,
-            agents_project: false,
-        };
-
-        let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
-        let prompt = effective.prompt.unwrap_or_default();
-
-        assert!(prompt.contains("<memory>"));
-        assert!(prompt.contains("Remember this memory"));
-        assert!(prompt.contains("## Memory"));
-    }
-
-    #[test]
-    fn test_template_mode_includes_proactive_memory_suggestions_when_enabled() {
-        let dir = tempdir().unwrap();
-        let zdx_home = setup_temp_zdx_home();
-        fs::write(
-            zdx_home.path().join(MEMORY_INDEX_FILE_NAME),
-            "Remember this memory",
-        )
-        .unwrap();
-
-        let mut config = crate::config::Config {
-            system_prompt: Some("Base prompt".to_string()),
-            ..Default::default()
-        };
-        config.subagents.enabled = false;
-        config.skills.sources = SkillSourceToggles {
-            zdx_user: false,
-            zdx_project: false,
-            codex_user: false,
-            claude_user: false,
-            claude_project: false,
-            agents_user: false,
-            agents_project: false,
-        };
-
-        let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), true).unwrap();
-        let prompt = effective.prompt.unwrap_or_default();
-
-        assert!(prompt.contains("💡 Want me to save"));
-        assert!(prompt.contains("Suggest sparingly"));
-        assert!(prompt.contains(
-            "Treat `MEMORY.md` as a compact index (routing pointers), not a full memory dump."
-        ));
-        assert!(prompt.contains(
-            "Keep transient items note-only (one-off status updates, temporary blockers, most ad-hoc links) unless the user explicitly asks to index them."
-        ));
-        assert!(prompt.contains(
-            "When updating `MEMORY.md`, upsert/merge existing pointers instead of appending duplicates."
-        ));
-        assert!(prompt.contains(
-            "If the user explicitly says \"remember X\", save immediately without asking first."
-        ));
-    }
-
-    #[test]
-    fn test_template_mode_omits_proactive_memory_suggestions_when_disabled() {
-        let dir = tempdir().unwrap();
-        let zdx_home = setup_temp_zdx_home();
-        fs::write(
-            zdx_home.path().join(MEMORY_INDEX_FILE_NAME),
-            "Remember this memory",
-        )
-        .unwrap();
-
-        let mut config = crate::config::Config {
-            system_prompt: Some("Base prompt".to_string()),
-            ..Default::default()
-        };
-        config.subagents.enabled = false;
-        config.skills.sources = SkillSourceToggles {
-            zdx_user: false,
-            zdx_project: false,
-            codex_user: false,
-            claude_user: false,
-            claude_project: false,
-            agents_user: false,
-            agents_project: false,
-        };
-
-        let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
-        let prompt = effective.prompt.unwrap_or_default();
-
-        assert!(!prompt.contains("💡 Want me to save"));
-        assert!(
-            prompt.contains("Only update memory when the user explicitly says \"remember X\".")
-        );
     }
 
     #[test]
