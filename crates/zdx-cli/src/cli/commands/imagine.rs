@@ -79,7 +79,8 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
     }
 
     let default_dir = config::paths::zdx_home().join("artifacts");
-    let output_paths = resolve_output_paths(options.root, options.out, &default_dir, &response.images);
+    let output_paths =
+        resolve_output_paths(options.root, options.out, &default_dir, &response.images);
     for (image, path) in response.images.iter().zip(output_paths.iter()) {
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)
