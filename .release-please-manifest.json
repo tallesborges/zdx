@@ -1,7 +1,7 @@
 {
-  "crates/zdx-cli": "0.3.0",
-  "crates/xtask": "0.2.1",
-  "crates/zdx-bot": "0.2.1",
-  "crates/zdx-core": "0.2.1",
-  "crates/zdx-tui": "0.2.1"
+  "crates/zdx-cli": "0.4.0",
+  "crates/xtask": "0.2.2",
+  "crates/zdx-bot": "0.2.2",
+  "crates/zdx-core": "0.2.2",
+  "crates/zdx-tui": "0.2.2"
 }

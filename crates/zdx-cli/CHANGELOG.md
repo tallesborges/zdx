@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.0](https://github.com/tallesborges/zdx/compare/v0.3.0...v0.4.0) (2026-02-27)
+
+
+### Features
+
+* **cli:** add zdx imagine command for Gemini image generation ([#32](https://github.com/tallesborges/zdx/issues/32)) ([a4f4dbd](https://github.com/tallesborges/zdx/commit/a4f4dbddfc0bbc12d7e91ac8046de7cd0a77018e))
+* **imagine:** add image editing support with --source flag ([c7f3071](https://github.com/tallesborges/zdx/commit/c7f3071abea77ee878798b74d5a5e60f44839451))
+* **imagine:** default output to $ZDX_HOME/artifacts/ ([3fdbc90](https://github.com/tallesborges/zdx/commit/3fdbc90454ac4faea9c958a7a1074251e9d78ab1))
+
+
+### Bug Fixes
+
+* **models:** remove deprecated gemini-3-pro-preview defaults ([2d51b8b](https://github.com/tallesborges/zdx/commit/2d51b8bcb7106332461e77f06e300325d37d23cd))
+* **providers:** rename mimo provider to xiomi ([c6e7ef1](https://github.com/tallesborges/zdx/commit/c6e7ef17d63fce8b8d0e6324d27e9ed3d2daa645))
+
 ## [0.3.0](https://github.com/tallesborges/zdx/compare/v0.2.0...v0.3.0) (2026-02-22)
 
 
