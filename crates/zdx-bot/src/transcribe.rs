@@ -137,7 +137,7 @@ fn default_base_url(provider: ProviderKind) -> &'static str {
         | ProviderKind::ClaudeCli
         | ProviderKind::OpenAICodex
         | ProviderKind::OpenRouter
-        | ProviderKind::Mimo
+        | ProviderKind::Xiomi
         | ProviderKind::Moonshot
         | ProviderKind::Stepfun
         | ProviderKind::Gemini
@@ -158,7 +158,7 @@ fn default_model(provider: ProviderKind) -> &'static str {
         | ProviderKind::ClaudeCli
         | ProviderKind::OpenAICodex
         | ProviderKind::OpenRouter
-        | ProviderKind::Mimo
+        | ProviderKind::Xiomi
         | ProviderKind::Moonshot
         | ProviderKind::Stepfun
         | ProviderKind::Gemini
