@@ -1,9 +1,11 @@
 //! Async topic title generation.
 //!
 //! After a topic is created from General, spawns a background LLM call
-//! to generate a descriptive title and renames the topic via Telegram API.
+//! to generate a descriptive title, renames the topic via Telegram API,
+//! and syncs the persisted ZDX thread title.
 
 use zdx_core::core::title_generation;
+use zdx_core::core::thread_persistence;
 
 use crate::bot::context::BotContext;
 
@@ -25,6 +27,14 @@ pub(crate) fn spawn_topic_title_update(
                 if let Err(err) = client.edit_forum_topic(chat_id, topic_id, &title).await {
                     eprintln!("Failed to rename topic {topic_id}: {err}");
                 } else {
+                    let thread_id = format!("telegram-{chat_id}-topic-{topic_id}");
+                    if let Err(err) =
+                        thread_persistence::set_thread_title(&thread_id, Some(title.clone()))
+                    {
+                        eprintln!(
+                            "Renamed topic {topic_id} but failed to update thread title for {thread_id}: {err}"
+                        );
+                    }
                     eprintln!("Renamed topic {topic_id} to '{title}'");
                 }
             }
