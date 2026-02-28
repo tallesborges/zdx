@@ -28,11 +28,11 @@ impl XiomiConfig {
     ///
     /// Authentication resolution order:
     /// 1. `config_api_key` parameter (from config file)
-    /// 2. `XIOMI_API_KEY` environment variable
+    /// 2. `XIAOMI_API_KEY` environment variable
     ///
     /// Environment variables:
-    /// - `XIOMI_API_KEY` (fallback if not in config)
-    /// - `XIOMI_BASE_URL` (optional)
+    /// - `XIAOMI_API_KEY` (fallback if not in config)
+    /// - `XIAOMI_BASE_URL` (optional)
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -44,9 +44,13 @@ impl XiomiConfig {
         prompt_cache_key: Option<String>,
         thinking_enabled: bool,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "XIOMI_API_KEY", "xiomi")?;
-        let base_url =
-            resolve_base_url(config_base_url, "XIOMI_BASE_URL", DEFAULT_BASE_URL, "Xiomi")?;
+        let api_key = resolve_api_key(config_api_key, "XIAOMI_API_KEY", "xiaomi")?;
+        let base_url = resolve_base_url(
+            config_base_url,
+            "XIAOMI_BASE_URL",
+            DEFAULT_BASE_URL,
+            "Xiomi",
+        )?;
 
         Ok(Self {
             api_key,

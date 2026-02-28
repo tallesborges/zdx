@@ -17,7 +17,7 @@ pub mod openrouter;
 pub mod shared;
 pub mod stepfun;
 pub mod xai;
-pub mod xiomi;
+pub mod xiaomi;
 pub mod zai;
 pub mod zen;
 
@@ -93,7 +93,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "openai-codex",
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
-            ProviderKind::Xiomi => "xiomi",
+            ProviderKind::Xiomi => "xiaomi",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
             ProviderKind::Stepfun => "stepfun",
@@ -115,7 +115,7 @@ impl ProviderKind {
             "openai-codex" | "codex" => Some(ProviderKind::OpenAICodex),
             "openai" => Some(ProviderKind::OpenAI),
             "openrouter" => Some(ProviderKind::OpenRouter),
-            "xiomi" => Some(ProviderKind::Xiomi),
+            "xiaomi" => Some(ProviderKind::Xiomi),
             "mistral" => Some(ProviderKind::Mistral),
             "moonshot" => Some(ProviderKind::Moonshot),
             "stepfun" => Some(ProviderKind::Stepfun),
@@ -170,7 +170,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
-            ProviderKind::Xiomi => Some("XIOMI_API_KEY"),
+            ProviderKind::Xiomi => Some("XIAOMI_API_KEY"),
             ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
             ProviderKind::Stepfun => Some("STEPFUN_API_KEY"),
@@ -251,7 +251,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "claude-cli" => ProviderKind::ClaudeCli,
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
-                "xiomi" => ProviderKind::Xiomi,
+                "xiaomi" => ProviderKind::Xiomi,
                 "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
                 "stepfun" => ProviderKind::Stepfun,

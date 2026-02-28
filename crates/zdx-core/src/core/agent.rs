@@ -33,7 +33,7 @@ use crate::providers::openai::{OpenAIClient, OpenAICodexClient, OpenAICodexConfi
 use crate::providers::openrouter::{OpenRouterClient, OpenRouterConfig};
 use crate::providers::stepfun::{StepfunClient, StepfunConfig};
 use crate::providers::xai::{XaiClient, XaiConfig};
-use crate::providers::xiomi::{XiomiClient, XiomiConfig};
+use crate::providers::xiaomi::{XiomiClient, XiomiConfig};
 use crate::providers::zai::{ZaiClient, ZaiConfig};
 use crate::providers::zen::{ZenClient, ZenConfig};
 use crate::providers::{
@@ -676,7 +676,7 @@ fn build_provider_client(
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, model, reasoning_effort, cache_key)
         }
-        ProviderKind::Xiomi => build_xiomi_client(config, model, thinking_enabled),
+        ProviderKind::Xiomi => build_xiaomi_client(config, model, thinking_enabled),
         ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
         ProviderKind::Stepfun => build_stepfun_client(config, model, cache_key, thinking_enabled),
@@ -772,7 +772,7 @@ fn build_openrouter_client(
     )))
 }
 
-fn build_xiomi_client(
+fn build_xiaomi_client(
     config: &Config,
     model: &str,
     thinking_enabled: bool,
@@ -781,8 +781,8 @@ fn build_xiomi_client(
         XiomiConfig::from_env(
             model.to_string(),
             config.max_tokens,
-            config.providers.xiomi.effective_base_url(),
-            config.providers.xiomi.effective_api_key(),
+            config.providers.xiaomi.effective_base_url(),
+            config.providers.xiaomi.effective_api_key(),
             None,
             thinking_enabled,
         )?,
