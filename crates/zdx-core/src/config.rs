@@ -802,8 +802,8 @@ pub struct ProvidersConfig {
     pub moonshot: ProviderConfig,
     #[serde(default = "default_stepfun_provider")]
     pub stepfun: ProviderConfig,
-    #[serde(default = "default_xiomi_provider")]
-    pub xiomi: ProviderConfig,
+    #[serde(default = "default_xiaomi_provider")]
+    pub xiaomi: ProviderConfig,
     #[serde(default = "default_gemini_provider")]
     pub gemini: ProviderConfig,
     #[serde(default = "default_gemini_cli_provider")]
@@ -838,7 +838,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::OpenRouter.id() => &self.openrouter,
             id if id == ProviderKind::Moonshot.id() => &self.moonshot,
             id if id == ProviderKind::Stepfun.id() => &self.stepfun,
-            id if id == ProviderKind::Xiomi.id() => &self.xiomi,
+            id if id == ProviderKind::Xiomi.id() => &self.xiaomi,
             id if id == ProviderKind::Gemini.id() => &self.gemini,
             id if id == ProviderKind::GeminiCli.id() => &self.gemini_cli,
             id if id == ProviderKind::Zen.id() => &self.zen,
@@ -864,7 +864,7 @@ impl ProvidersConfig {
             ProviderKind::Mistral => &self.mistral,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Stepfun => &self.stepfun,
-            ProviderKind::Xiomi => &self.xiomi,
+            ProviderKind::Xiomi => &self.xiaomi,
             ProviderKind::Gemini => &self.gemini,
             ProviderKind::GeminiCli => &self.gemini_cli,
             ProviderKind::Zen => &self.zen,
@@ -888,7 +888,7 @@ impl Default for ProvidersConfig {
             openrouter: default_openrouter_provider(),
             moonshot: default_moonshot_provider(),
             stepfun: default_stepfun_provider(),
-            xiomi: default_xiomi_provider(),
+            xiaomi: default_xiaomi_provider(),
             mistral: default_mistral_provider(),
             zen: default_zen_provider(),
             apiyi: default_apiyi_provider(),
@@ -977,7 +977,7 @@ fn default_stepfun_provider() -> ProviderConfig {
     }
 }
 
-fn default_xiomi_provider() -> ProviderConfig {
+fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec!["mimo-v2-flash".to_string()],
@@ -1894,9 +1894,9 @@ available_models = ["codex:gpt-5.3-codex"]
                     enabled: Some(false),
                     ..default_stepfun_provider()
                 },
-                xiomi: ProviderConfig {
+                xiaomi: ProviderConfig {
                     enabled: Some(false),
-                    ..default_xiomi_provider()
+                    ..default_xiaomi_provider()
                 },
                 gemini: ProviderConfig {
                     enabled: Some(false),

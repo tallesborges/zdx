@@ -216,10 +216,10 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 15] {
             provider_cfg: &config.providers.stepfun,
         },
         ProviderSpec {
-            provider_id: "xiomi",
+            provider_id: "xiaomi",
             api_id: "xiaomi",
-            prefix: Some("xiomi"),
-            provider_cfg: &config.providers.xiomi,
+            prefix: Some("xiaomi"),
+            provider_cfg: &config.providers.xiaomi,
         },
         ProviderSpec {
             provider_id: "gemini",
@@ -946,13 +946,13 @@ mod tests {
     }
 
     #[test]
-    fn test_lookup_default_model_xiomi() {
-        // Also test xiomi which has similar structure
-        let result = lookup_default_model("xiomi:mimo-v2-flash");
-        assert!(result.is_some(), "Should find xiomi model in defaults");
+    fn test_lookup_default_model_xiaomi() {
+        // Also test xiaomi which has similar structure
+        let result = lookup_default_model("xiaomi:mimo-v2-flash");
+        assert!(result.is_some(), "Should find xiaomi model in defaults");
 
         let model = result.unwrap();
-        assert_eq!(model.provider, "xiomi");
+        assert_eq!(model.provider, "xiaomi");
         assert!(!model.display_name.contains("custom"));
     }
 
