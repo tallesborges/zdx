@@ -40,11 +40,11 @@
 ## Slice 1: Fuzzy scoring in `score_thread_match`
 - **Goal**: Replace substring scoring with nucleo for thread search queries.
 - **Scope checklist**:
-  - [ ] Add `nucleo-matcher` dependency to `zdx-core/Cargo.toml`.
-  - [ ] Replace `score_thread_match` to use `nucleo_matcher::pattern::Pattern::score()`.
-  - [ ] Score title and searchable_text separately, weight title matches higher.
-  - [ ] Keep the existing `search_threads` flow (index building, date filters, sorting) unchanged.
-  - [ ] Keep `score: u32` field in `ThreadSearchResult` (nucleo returns `Option<u32>`).
+  - [x] Add `nucleo-matcher` dependency to `zdx-core/Cargo.toml`.
+  - [x] Replace `score_thread_match` to use `nucleo_matcher::pattern::Pattern::score()`.
+  - [x] Score title and searchable_text separately, weight title matches higher.
+  - [x] Keep the existing `search_threads` flow (index building, date filters, sorting) unchanged.
+  - [x] Keep `score: u32` field in `ThreadSearchResult` (nucleo returns `Option<u32>`).
 - **✅ Demo**: `zdx threads search "dploy"` returns threads about "deploy"; `zdx threads search "oh my pi"` returns relevant threads.
 - **Risks / failure modes**:
   - Nucleo scores on individual pattern atoms — very long searchable_text may need truncation or per-segment scoring.
@@ -52,8 +52,8 @@
 ## Slice 2: Fuzzy filtering in TUI thread picker
 - **Goal**: Replace `.contains()` in thread picker with nucleo fuzzy matching + sorting by score.
 - **Scope checklist**:
-  - [ ] Replace `thread_matches_filter` with nucleo `Pattern::score()` against title + ID.
-  - [ ] Sort filtered results by score descending (best match first).
+  - [x] Replace `thread_matches_filter` with nucleo `Pattern::score()` against title + ID.
+  - [x] Sort filtered results by score descending (best match first).
 - **✅ Demo**: typing `"dply"` in thread picker shows threads with "deploy" in title.
 - **Risks / failure modes**:
   - Thread picker currently filters a small list — performance is not a concern.
@@ -77,7 +77,7 @@
 
 # Polish phases (after MVP)
 
-## Phase 1: Preview alignment with fuzzy matches
+## Phase 1: Preview alignment with fuzzy matches ✅
 - Use `Pattern::indices()` to find which part of the thread matched, improve preview snippet selection.
 - ✅ Check-in demo: preview shows the text segment where the fuzzy match occurred.
 

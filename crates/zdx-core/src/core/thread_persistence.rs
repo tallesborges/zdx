@@ -883,7 +883,7 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
         .as_deref()
         .map(str::trim)
         .filter(|q| !q.is_empty())
-        .map(str::to_lowercase);
+        .map(String::from);
     let limit = options.limit.max(1);
 
     let mut ranked: Vec<(ThreadSearchResult, Option<DateTime<Utc>>)> = Vec::new();
@@ -1012,24 +1012,28 @@ fn push_search_text(searchable_text: &mut String, value: &str) {
 }
 
 fn score_thread_match(title: Option<&str>, searchable_text: &str, query: &str) -> u32 {
-    let mut score = 0;
+    use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
 
-    if let Some(title) = title
-        && title.to_lowercase().contains(query)
-    {
-        score += 20;
-    }
+    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
 
-    let searchable_lower = searchable_text.to_lowercase();
-    score += count_occurrences(&searchable_lower, query) as u32;
-    score
-}
+    let title_score = title
+        .map(|t| {
+            let mut buf = Vec::new();
+            let haystack = Utf32Str::new(t, &mut buf);
+            pattern.score(haystack, &mut matcher).unwrap_or(0)
+        })
+        .unwrap_or(0);
 
-fn count_occurrences(haystack: &str, needle: &str) -> usize {
-    if needle.is_empty() {
-        return 0;
-    }
-    haystack.match_indices(needle).count()
+    let content_score = {
+        let mut buf = Vec::new();
+        let haystack = Utf32Str::new(searchable_text, &mut buf);
+        pattern.score(haystack, &mut matcher).unwrap_or(0)
+    };
+
+    // Title matches are weighted 2x to preserve title preference
+    std::cmp::max(title_score.saturating_mul(2), content_score)
 }
 
 fn matches_thread_date_filters(
@@ -1066,16 +1070,34 @@ fn matches_thread_date_filters(
 
 fn build_thread_preview(title: Option<&str>, candidates: &[String], query: Option<&str>) -> String {
     if let Some(query) = query {
-        if let Some(title) = title
-            && title.to_lowercase().contains(query)
-        {
-            return truncate_preview(title);
+        // Use nucleo to find the best-matching candidate for the preview
+        use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+        use nucleo_matcher::{Config, Matcher, Utf32Str};
+
+        let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
+        let mut matcher = Matcher::new(Config::DEFAULT);
+
+        // Check title first (preferred)
+        if let Some(title) = title {
+            let mut buf = Vec::new();
+            let haystack = Utf32Str::new(title, &mut buf);
+            if pattern.score(haystack, &mut matcher).is_some() {
+                return truncate_preview(title);
+            }
         }
 
-        for candidate in candidates {
-            if candidate.to_lowercase().contains(query) {
-                return truncate_preview(candidate);
-            }
+        // Find the best-scoring candidate
+        let best = candidates
+            .iter()
+            .filter_map(|c| {
+                let mut buf = Vec::new();
+                let haystack = Utf32Str::new(c, &mut buf);
+                pattern.score(haystack, &mut matcher).map(|s| (c, s))
+            })
+            .max_by_key(|(_, s)| *s);
+
+        if let Some((candidate, _)) = best {
+            return truncate_preview(candidate);
         }
     }
 
@@ -2348,6 +2370,34 @@ mod tests {
         // Test is_empty
         assert!(!u1.is_empty());
         assert!(Usage::default().is_empty());
+    }
+
+    #[test]
+    fn test_fuzzy_score_thread_match_typo() {
+        // Exact substring
+        assert!(score_thread_match(Some("deploy pipeline"), "", "deploy") > 0);
+        // Typo/partial — nucleo fuzzy should still match
+        assert!(score_thread_match(Some("deploy pipeline"), "", "dploy") > 0);
+        // Title weighted higher than content for the same text
+        let title_score = score_thread_match(Some("deploy"), "", "deploy");
+        let content_score = score_thread_match(None, "deploy", "deploy");
+        assert!(title_score > content_score);
+        // No match at all
+        assert_eq!(score_thread_match(None, "hello world", "zzzzqqqq"), 0);
+    }
+
+    #[test]
+    fn test_fuzzy_preview_picks_best_candidate() {
+        let candidates = vec![
+            "hello world".to_string(),
+            "deploying the new service".to_string(),
+            "unrelated stuff".to_string(),
+        ];
+        let preview = build_thread_preview(None, &candidates, Some("dploy"));
+        assert!(
+            preview.contains("deploying"),
+            "expected preview to contain 'deploying', got: {preview}"
+        );
     }
 
     /// Regression test: orphaned `tool_use` (bot crashed mid-execution) followed by
