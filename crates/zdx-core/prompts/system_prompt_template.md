@@ -73,20 +73,24 @@ Current date: {{ date }}
 {% if memory_index %}
 ## Memory
 You have a lightweight memory system. 
-All detailed memory lives in NotePlan (second brain) and must be read on demand.
+All detailed memory lives in your memory notes and must be read on demand.
+
+### Memory Paths
+- Notes: {{ memory_notes_path }}
+- Daily: {{ memory_daily_path }}
 
 ### Memory Boundaries
 - AGENTS/project guidance = how to work here (build/test commands, code conventions, workflow).
 - Memory = durable interaction context (preferences, learnings, recurring decisions, useful history).
 
 ### How It Works
-1. Use the index to locate relevant NotePlan notes.
-2. Load only the specific NotePlan note(s) needed for the task.
+1. Use the index to locate relevant memory notes.
+2. Load only the specific note(s) needed for the task.
 3. Never load everything by default.
 {% if memory_suggestions %}
 4. Suggest saving clearly noteworthy items (decisions, preferences, facts, useful links, learnings, recurring patterns) with one line at the end of the response: `💡 Want me to save [specific item] to [specific note]?`
 5. Suggest sparingly: at most once per response, only when the item is genuinely useful later.
-6. If user says yes, save immediately: write full detail to the NotePlan note first.
+6. If user says yes, save immediately: write full detail to the memory note first.
 7. Treat `MEMORY.md` as a compact index (routing pointers), not a full memory dump.
 8. Promote to `MEMORY.md` only when info is durable/reusable (stable preferences, key personal facts, long-lived project decisions, recurring patterns).
 9. Keep transient items note-only (one-off status updates, temporary blockers, most ad-hoc links) unless the user explicitly asks to index them.
@@ -99,8 +103,8 @@ All detailed memory lives in NotePlan (second brain) and must be read on demand.
 {% endif %}
 
 ### Updating Memory
-- Write new facts into the appropriate NotePlan note.
-- If you create or rename a NotePlan note, update `$ZDX_HOME/MEMORY.md`.
+- Write new facts into the appropriate memory note.
+- If you create or rename a memory note, update `MEMORY.md`.
 - Keep `MEMORY.md` short (core facts + pointers only).
 <memory>
 {{ memory_index }}

@@ -127,6 +127,8 @@ struct PromptTemplateVars {
     subagents_config: Option<PromptTemplateSubagents>,
     cwd: String,
     date: String,
+    memory_notes_path: String,
+    memory_daily_path: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -214,6 +216,7 @@ fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, 
 fn build_prompt_template_vars(
     root: &Path,
     model: &str,
+    config: &Config,
     sections: PromptTemplateSections<'_>,
 ) -> PromptTemplateVars {
     let base_prompt = sections.base_prompt.unwrap_or_default().trim().to_string();
@@ -266,6 +269,8 @@ fn build_prompt_template_vars(
         subagents_config,
         cwd: root.display().to_string(),
         date: Utc::now().format("%Y-%m-%d").to_string(),
+        memory_notes_path: config.memory.effective_notes_path().display().to_string(),
+        memory_daily_path: config.memory.effective_daily_path().display().to_string(),
     }
 }
 
@@ -425,12 +430,12 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
 /// Empty files are skipped silently.
 /// Unreadable files generate a warning but don't fail.
 /// Large files are truncated with a warning.
-fn load_memory_index() -> Option<LoadedMemoryIndex> {
-    load_memory_index_with_zdx_home(&paths::zdx_home())
+fn load_memory_index(config: &Config) -> Option<LoadedMemoryIndex> {
+    let path = config.memory.effective_index_file();
+    load_memory_index_from_path(&path)
 }
 
-fn load_memory_index_with_zdx_home(zdx_home: &Path) -> Option<LoadedMemoryIndex> {
-    let path = zdx_home.join(MEMORY_INDEX_FILE_NAME);
+fn load_memory_index_from_path(path: &Path) -> Option<LoadedMemoryIndex> {
     let mut warnings: Vec<ContextWarning> = Vec::new();
 
     if !path.exists() {
@@ -458,7 +463,7 @@ fn load_memory_index_with_zdx_home(zdx_home: &Path) -> Option<LoadedMemoryIndex>
             } else {
                 Some(LoadedMemoryIndex {
                     content: trimmed.to_string(),
-                    loaded_paths: vec![path],
+                    loaded_paths: vec![path.to_path_buf()],
                     warnings,
                 })
             }
@@ -492,7 +497,7 @@ struct PromptContextSectionsResult {
     memory_index: Option<String>,
 }
 
-fn load_prompt_context_sections(root: &Path) -> PromptContextSectionsResult {
+fn load_prompt_context_sections(root: &Path, config: &Config) -> PromptContextSectionsResult {
     let mut result = PromptContextSectionsResult::default();
     let mut agents_content: Option<String> = None;
 
@@ -508,7 +513,7 @@ fn load_prompt_context_sections(root: &Path) -> PromptContextSectionsResult {
     result.project_context_block =
         format_project_context_block(agents_content.as_deref().unwrap_or_default());
 
-    if let Some(loaded_memory_index) = load_memory_index() {
+    if let Some(loaded_memory_index) = load_memory_index(config) {
         result.warnings.extend(loaded_memory_index.warnings);
 
         if !loaded_memory_index.content.trim().is_empty() {
@@ -627,7 +632,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
         mut warnings,
         project_context_block,
         memory_index,
-    } = load_prompt_context_sections(root);
+    } = load_prompt_context_sections(root, config);
 
     let skills_result = load_skills_with_config(config, root);
     let LoadSkillsResult {
@@ -644,6 +649,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
     let vars = build_prompt_template_vars(
         root,
         &config.model,
+        config,
         PromptTemplateSections {
             base_prompt: base_prompt.as_deref(),
             project_context: project_context_block.as_deref(),
@@ -866,7 +872,7 @@ mod tests {
 
         fs::write(zdx_home.path().join(MEMORY_INDEX_FILE_NAME), "Global facts").unwrap();
 
-        let loaded = load_memory_index_with_zdx_home(zdx_home.path()).unwrap();
+        let loaded = load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
 
         assert!(loaded.content.contains("Global facts"));
         assert_eq!(loaded.loaded_paths.len(), 1);
@@ -881,7 +887,7 @@ mod tests {
         let large_content = "x".repeat(MAX_MEMORY_FILE_SIZE + 1000);
         fs::write(&memory_md, &large_content).unwrap();
 
-        let loaded = load_memory_index_with_zdx_home(zdx_home.path()).unwrap();
+        let loaded = load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
 
         assert!(
             loaded
@@ -995,6 +1001,7 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1016,6 +1023,7 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1045,6 +1053,7 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1081,6 +1090,7 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "codex:gpt-5.3-codex",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1111,6 +1121,7 @@ mod tests {
         let anthropic = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1130,6 +1141,7 @@ mod tests {
         let codex = build_prompt_template_vars(
             Path::new("/tmp"),
             "codex:gpt-5.3-codex",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1213,6 +1225,7 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
+            &Config::default(),
             PromptTemplateSections {
                 base_prompt: None,
                 project_context: None,

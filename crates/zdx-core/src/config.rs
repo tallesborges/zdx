@@ -417,6 +417,69 @@ pub struct TranscriptionConfig {
     pub language: Option<String>,
 }
 
+/// Memory system configuration.
+///
+/// Configures where memory notes, daily notes, and the memory index are stored.
+/// Defaults to `$ZDX_HOME/memory/` when unconfigured.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct MemoryConfig {
+    /// Root directory for memory notes.
+    /// Supports `~` for home directory expansion.
+    /// Default: `$ZDX_HOME/memory/notes`
+    pub notes_path: Option<String>,
+
+    /// Directory for daily notes (calendar).
+    /// Supports `~` for home directory expansion.
+    /// Default: `$ZDX_HOME/memory/calendar`
+    pub daily_path: Option<String>,
+
+    /// Path to the memory index file.
+    /// Supports `~` for home directory expansion.
+    /// Default: `$ZDX_HOME/MEMORY.md`
+    pub index_file: Option<String>,
+}
+
+impl MemoryConfig {
+    /// Returns the effective notes path, expanding `~` and falling back to default.
+    pub fn effective_notes_path(&self) -> std::path::PathBuf {
+        self.notes_path
+            .as_deref()
+            .map(|p| expand_tilde(p))
+            .unwrap_or_else(|| paths::zdx_home().join("memory").join("notes"))
+    }
+
+    /// Returns the effective daily notes path, expanding `~` and falling back to default.
+    pub fn effective_daily_path(&self) -> std::path::PathBuf {
+        self.daily_path
+            .as_deref()
+            .map(|p| expand_tilde(p))
+            .unwrap_or_else(|| paths::zdx_home().join("memory").join("calendar"))
+    }
+
+    /// Returns the effective memory index file path, expanding `~` and falling back to default.
+    pub fn effective_index_file(&self) -> std::path::PathBuf {
+        self.index_file
+            .as_deref()
+            .map(|p| expand_tilde(p))
+            .unwrap_or_else(|| paths::zdx_home().join("MEMORY.md"))
+    }
+}
+
+/// Expands `~` at the start of a path to the user's home directory.
+fn expand_tilde(path: &str) -> std::path::PathBuf {
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = paths::home_dir() {
+            return home.join(rest);
+        }
+    } else if path == "~" {
+        if let Some(home) = paths::home_dir() {
+            return home;
+        }
+    }
+    std::path::PathBuf::from(path)
+}
+
 /// Main configuration structure.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -467,6 +530,10 @@ pub struct Config {
     /// System prompt template rendering configuration
     #[serde(default)]
     pub prompt_template: PromptTemplateConfig,
+
+    /// Memory system configuration (notes, daily notes, index file paths)
+    #[serde(default)]
+    pub memory: MemoryConfig,
 
     /// Telegram bot configuration
     #[serde(default)]
@@ -779,6 +846,7 @@ impl Default for Config {
             skills: SkillsConfig::default(),
             subagents: SubagentsConfig::default(),
             prompt_template: PromptTemplateConfig::default(),
+            memory: MemoryConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
