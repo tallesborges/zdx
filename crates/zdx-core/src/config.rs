@@ -443,26 +443,25 @@ pub struct MemoryConfig {
 impl MemoryConfig {
     /// Returns the effective notes path, expanding `~` and falling back to default.
     pub fn effective_notes_path(&self) -> std::path::PathBuf {
-        self.notes_path
-            .as_deref()
-            .map(|p| expand_tilde(p))
-            .unwrap_or_else(|| paths::zdx_home().join("memory").join("notes"))
+        self.notes_path.as_deref().map_or_else(
+            || paths::zdx_home().join("memory").join("notes"),
+            expand_tilde,
+        )
     }
 
     /// Returns the effective daily notes path, expanding `~` and falling back to default.
     pub fn effective_daily_path(&self) -> std::path::PathBuf {
-        self.daily_path
-            .as_deref()
-            .map(|p| expand_tilde(p))
-            .unwrap_or_else(|| paths::zdx_home().join("memory").join("calendar"))
+        self.daily_path.as_deref().map_or_else(
+            || paths::zdx_home().join("memory").join("calendar"),
+            expand_tilde,
+        )
     }
 
     /// Returns the effective memory index file path, expanding `~` and falling back to default.
     pub fn effective_index_file(&self) -> std::path::PathBuf {
         self.index_file
             .as_deref()
-            .map(|p| expand_tilde(p))
-            .unwrap_or_else(|| paths::zdx_home().join("MEMORY.md"))
+            .map_or_else(|| paths::zdx_home().join("MEMORY.md"), expand_tilde)
     }
 }
 
@@ -472,10 +471,10 @@ fn expand_tilde(path: &str) -> std::path::PathBuf {
         if let Some(home) = paths::home_dir() {
             return home.join(rest);
         }
-    } else if path == "~" {
-        if let Some(home) = paths::home_dir() {
-            return home;
-        }
+    } else if path == "~"
+        && let Some(home) = paths::home_dir()
+    {
+        return home;
     }
     std::path::PathBuf::from(path)
 }

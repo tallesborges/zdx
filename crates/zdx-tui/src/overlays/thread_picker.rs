@@ -257,14 +257,14 @@ impl ThreadPickerState {
         if self.filter.is_empty() {
             scoped
         } else {
-            let mut scored: Vec<_> = scoped
+            let mut ranked: Vec<_> = scoped
                 .into_iter()
                 .filter_map(|thread| {
                     thread_fuzzy_score(thread, &self.filter).map(|score| (thread, score))
                 })
                 .collect();
-            scored.sort_by(|(_, a), (_, b)| b.cmp(a));
-            scored.into_iter().map(|(thread, _)| thread).collect()
+            ranked.sort_by(|(_, a), (_, b)| b.cmp(a));
+            ranked.into_iter().map(|(thread, _)| thread).collect()
         }
     }
 
