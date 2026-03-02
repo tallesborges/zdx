@@ -7,6 +7,8 @@ pub mod apply_patch;
 pub mod bash;
 pub mod edit;
 pub mod fetch_webpage;
+pub mod glob;
+pub mod grep;
 pub mod read;
 pub mod read_thread;
 pub mod subagent;
@@ -330,6 +332,8 @@ impl ToolSet {
                 "bash",
                 "edit",
                 "fetch_webpage",
+                "glob",
+                "grep",
                 "invoke_subagent",
                 "read",
                 "read_thread",
@@ -341,6 +345,8 @@ impl ToolSet {
                 "bash",
                 "apply_patch",
                 "fetch_webpage",
+                "glob",
+                "grep",
                 "invoke_subagent",
                 "read",
                 "read_thread",
@@ -577,6 +583,24 @@ impl ToolRegistry {
                 Box::pin(async move { fetch_webpage::execute(&input, &ctx).await })
             }),
         );
+
+        self.register(
+            grep::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_grep(&input, &ctx).await })
+            }),
+        );
+
+        self.register(
+            glob::definition(),
+            Arc::new(|input, ctx| {
+                let input = input.clone();
+                let ctx = ctx.clone();
+                Box::pin(async move { execute_glob(&input, &ctx).await })
+            }),
+        );
     }
 }
 
@@ -681,6 +705,24 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
         let input = input.clone();
         let ctx = ctx.clone();
         move || thread_search::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_grep(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || grep::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_glob(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || glob::execute(&input, &ctx)
     })
     .await
 }

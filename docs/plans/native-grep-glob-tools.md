@@ -43,15 +43,15 @@
 ### Slice 1: Basic grep tool (pattern + path)
 - **Goal**: Working grep tool with minimum viable params — pattern and optional path
 - **Scope checklist**:
-  - [ ] Add `crates/zdx-core/Cargo.toml`: `grep-regex`, `grep-searcher`, `grep-matcher` (ripgrep internals)
-  - [ ] Create `src/tools/grep.rs` with `definition()` and `execute()`
-  - [ ] Input schema: `pattern` (required), `path` (optional, defaults to root), `case_insensitive` (optional bool)
-  - [ ] Output: `{ matches: [{file, line_number, text}], total_matches, truncated }`
-  - [ ] Cap results at 200 matches (prevent context flooding)
-  - [ ] Skip files > 4MB
-  - [ ] Brace sanitization: auto-escape `${var}` in patterns
-  - [ ] Register in `src/tools/mod.rs`
-  - [ ] Update `crates/zdx-core/AGENTS.md`
+  - [x] Add `crates/zdx-core/Cargo.toml`: `grep-regex`, `grep-searcher`, `grep-matcher` (ripgrep internals)
+  - [x] Create `src/tools/grep.rs` with `definition()` and `execute()`
+  - [x] Input schema: `pattern` (required), `path` (optional, defaults to root), `case_insensitive` (optional bool)
+  - [x] Output: `{ matches: [{file, line_number, text}], total_matches, truncated }`
+  - [x] Cap results at 200 matches (prevent context flooding)
+  - [x] Skip files > 4MB
+  - [x] Brace sanitization: auto-escape `${var}` in patterns
+  - [x] Register in `src/tools/mod.rs`
+  - [x] Update `crates/zdx-core/AGENTS.md`
 - **✅ Demo**: Ask agent "find all uses of ToolOutput in zdx-core" → agent calls Grep → gets structured JSON with file paths and line numbers
 - **Risks / failure modes**:
   - ripgrep crates API surface — check `grep-searcher` docs for correct builder usage
@@ -60,12 +60,12 @@
 ### Slice 2: Glob filtering + context lines
 - **Goal**: Make grep useful for scoped searches and code review
 - **Scope checklist**:
-  - [ ] Add `glob` param (e.g. `"*.rs"`, `"src/**/*.ts"`) using `globset` crate
-  - [ ] Add `context_lines` param (0–5, default 0) — returns lines before/after match
-  - [ ] Output: `{ matches: [{file, line_number, col, text, context_before[], context_after[]}] }`
-  - [ ] Add `.gitignore` respect via `ignore` crate (WalkBuilder)
-  - [ ] Column truncation: truncate lines beyond 500 chars (match zdx Read tool's MAX_LINE_LENGTH)
-  - [ ] Round-robin match selection across files (prevents all results from one file)
+  - [x] Add `glob` param (e.g. `"*.rs"`, `"src/**/*.ts"`) using `globset` crate
+  - [x] Add `context_lines` param (0–5, default 0) — returns lines before/after match
+  - [x] Output: `{ matches: [{file, line_number, col, text, context_before[], context_after[]}] }`
+  - [x] Add `.gitignore` respect via `ignore` crate (WalkBuilder)
+  - [x] Column truncation: truncate lines beyond 500 chars (match zdx Read tool's MAX_LINE_LENGTH)
+  - [x] Round-robin match selection across files (prevents all results from one file)
 - **✅ Demo**: Ask agent to "find all TODO comments in Rust files" → Grep called with `glob: "*.rs"` → clean typed list
 - **Risks / failure modes**:
   - `ignore` crate integration — needs WalkBuilder configured with root path
@@ -73,16 +73,16 @@
 ### Slice 3: Glob tool (file name search)
 - **Goal**: Let agent find files by name pattern (replaces `rg --files -g`, `find . -name`)
 - **Scope checklist**:
-  - [ ] Create `src/tools/glob.rs` with `definition()` and `execute()`
-  - [ ] Uses `ignore::WalkBuilder` + `globset` to walk + filter by filename pattern
-  - [ ] Input schema: `pattern` (required, e.g. `"*.rs"`, `"**/AGENTS.md"`), `path` (optional)
-  - [ ] Returns `{ files: [string], total, truncated }` — flat list of matching paths
-  - [ ] Respects `.gitignore` by default; retry without gitignore if 0 results
-  - [ ] Auto-recursive: `"*.rs"` → `"**/*.rs"`
-  - [ ] Cap at 500 files
-  - [ ] Sort results alphabetically
-  - [ ] Register in `src/tools/mod.rs`
-  - [ ] Update `crates/zdx-core/AGENTS.md`
+  - [x] Create `src/tools/glob.rs` with `definition()` and `execute()`
+  - [x] Uses `ignore::WalkBuilder` + `globset` to walk + filter by filename pattern
+  - [x] Input schema: `pattern` (required, e.g. `"*.rs"`, `"**/AGENTS.md"`), `path` (optional)
+  - [x] Returns `{ files: [string], total, truncated }` — flat list of matching paths
+  - [x] Respects `.gitignore` by default; retry without gitignore if 0 results
+  - [x] Auto-recursive: `"*.rs"` → `"**/*.rs"`
+  - [x] Cap at 500 files
+  - [x] Sort results alphabetically
+  - [x] Register in `src/tools/mod.rs`
+  - [x] Update `crates/zdx-core/AGENTS.md`
 - **✅ Demo**: Ask agent "find all AGENTS.md files in the repo" → structured list, no bash needed
 - **Risks / failure modes**:
   - Large repos: ensure walk is bounded by result cap + timeout

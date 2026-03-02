@@ -35,6 +35,8 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `tools/apply_patch/parser.rs`: patch parser
 - `tools/apply_patch/types.rs`: patch parser shared types
 - `tools/fetch_webpage.rs`: webpage extraction tool
+- `tools/glob.rs`: native glob tool (file discovery by name pattern)
+- `tools/grep.rs`: native grep tool (structured regex search using ripgrep internals)
 - `tools/read_thread.rs`: read saved thread transcript tool
 - `tools/subagent.rs`: invoke_subagent tool
 - `tools/thread_search.rs`: thread discovery tool
