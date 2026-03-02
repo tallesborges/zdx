@@ -442,11 +442,11 @@ fn load_memory_index_from_path(path: &Path) -> Option<LoadedMemoryIndex> {
         return None;
     }
 
-    match fs::read(&path) {
+    match fs::read(path) {
         Ok(bytes) => {
             let content_bytes = if bytes.len() > MAX_MEMORY_FILE_SIZE {
                 warnings.push(ContextWarning::truncated_with_limit(
-                    &path,
+                    path,
                     bytes.len(),
                     MAX_MEMORY_FILE_SIZE,
                 ));
@@ -471,7 +471,7 @@ fn load_memory_index_from_path(path: &Path) -> Option<LoadedMemoryIndex> {
         Err(error) => Some(LoadedMemoryIndex {
             content: String::new(),
             loaded_paths: Vec::new(),
-            warnings: vec![ContextWarning::unreadable(&path, &error)],
+            warnings: vec![ContextWarning::unreadable(path, &error)],
         }),
     }
 }
@@ -872,7 +872,8 @@ mod tests {
 
         fs::write(zdx_home.path().join(MEMORY_INDEX_FILE_NAME), "Global facts").unwrap();
 
-        let loaded = load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
+        let loaded =
+            load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
 
         assert!(loaded.content.contains("Global facts"));
         assert_eq!(loaded.loaded_paths.len(), 1);
@@ -887,7 +888,8 @@ mod tests {
         let large_content = "x".repeat(MAX_MEMORY_FILE_SIZE + 1000);
         fs::write(&memory_md, &large_content).unwrap();
 
-        let loaded = load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
+        let loaded =
+            load_memory_index_from_path(&zdx_home.path().join(MEMORY_INDEX_FILE_NAME)).unwrap();
 
         assert!(
             loaded

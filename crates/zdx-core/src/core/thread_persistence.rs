@@ -1018,13 +1018,11 @@ fn score_thread_match(title: Option<&str>, searchable_text: &str, query: &str) -
     let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
     let mut matcher = Matcher::new(Config::DEFAULT);
 
-    let title_score = title
-        .map(|t| {
-            let mut buf = Vec::new();
-            let haystack = Utf32Str::new(t, &mut buf);
-            pattern.score(haystack, &mut matcher).unwrap_or(0)
-        })
-        .unwrap_or(0);
+    let title_score = title.map_or(0, |t| {
+        let mut buf = Vec::new();
+        let haystack = Utf32Str::new(t, &mut buf);
+        pattern.score(haystack, &mut matcher).unwrap_or(0)
+    });
 
     let content_score = {
         let mut buf = Vec::new();
