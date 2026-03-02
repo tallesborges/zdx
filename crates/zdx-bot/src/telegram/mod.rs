@@ -253,6 +253,9 @@ impl TelegramClient {
         self.post("getUpdates", &request).await
     }
 
+    /// Register bot commands for all relevant Telegram scopes (default,
+    /// private chats, group chats). This ensures commands appear in the `/`
+    /// menu regardless of any previously-set narrower scopes.
     ///
     /// # Errors
     /// Returns an error if the operation fails.
@@ -260,15 +263,29 @@ impl TelegramClient {
         &self,
         command_specs: &[crate::commands::TelegramCommandSpec],
     ) -> Result<()> {
-        let commands = command_specs
+        let commands: Vec<TelegramBotCommand<'_>> = command_specs
             .iter()
             .map(|spec| TelegramBotCommand {
                 command: spec.command,
                 description: spec.description,
             })
             .collect();
-        let request = SetMyCommandsRequest { commands };
-        let _: bool = self.post("setMyCommands", &request).await?;
+
+        for scope in BOT_COMMAND_SCOPES {
+            // Delete any stale commands for this scope first
+            let delete_req = DeleteMyCommandsRequest {
+                scope: Some(scope.clone()),
+            };
+            let _: bool = self.post("deleteMyCommands", &delete_req).await?;
+
+            // Set commands for this scope
+            let set_req = SetMyCommandsRequest {
+                commands: commands.clone(),
+                scope: Some(scope.clone()),
+            };
+            let _: bool = self.post("setMyCommands", &set_req).await?;
+        }
+
         Ok(())
     }
 
@@ -906,9 +923,32 @@ struct GetUpdatesRequest {
 #[derive(Debug, Serialize)]
 struct SetMyCommandsRequest<'a> {
     commands: Vec<TelegramBotCommand<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<BotCommandScopeValue>,
 }
 
 #[derive(Debug, Serialize)]
+struct DeleteMyCommandsRequest {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    scope: Option<BotCommandScopeValue>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct BotCommandScopeValue {
+    r#type: &'static str,
+}
+
+const BOT_COMMAND_SCOPES: &[BotCommandScopeValue] = &[
+    BotCommandScopeValue { r#type: "default" },
+    BotCommandScopeValue {
+        r#type: "all_private_chats",
+    },
+    BotCommandScopeValue {
+        r#type: "all_group_chats",
+    },
+];
+
+#[derive(Debug, Clone, Serialize)]
 struct TelegramBotCommand<'a> {
     command: &'a str,
     description: &'a str,
