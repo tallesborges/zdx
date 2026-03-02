@@ -632,11 +632,16 @@ fn parse_aspect_ratio(value: &str) -> std::result::Result<String, String> {
 }
 
 fn parse_image_size(value: &str) -> std::result::Result<String, String> {
-    let normalized = value.trim().to_ascii_uppercase();
+    let trimmed = value.trim();
+    // 512px is case-sensitive per Gemini API docs
+    if trimmed == "512px" {
+        return Ok("512px".to_string());
+    }
+    let normalized = trimmed.to_ascii_uppercase();
     match normalized.as_str() {
         "1K" | "2K" | "4K" => Ok(normalized),
         _ => Err(format!(
-            "Invalid image size '{value}'. Valid values: 1K, 2K, 4K"
+            "Invalid image size '{value}'. Valid values: 512px, 1K, 2K, 4K"
         )),
     }
 }
