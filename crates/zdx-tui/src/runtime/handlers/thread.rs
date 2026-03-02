@@ -366,6 +366,26 @@ fn fork_thread_sync(
     })
 }
 
+/// Removes a worktree and returns the result.
+pub async fn thread_remove_worktree(root: PathBuf) -> UiEvent {
+    tokio::task::spawn_blocking(move || match worktree::remove_worktree_at(&root) {
+        Ok(info) => UiEvent::Thread(ThreadUiEvent::WorktreeRemoved {
+            project_root: info.project_root,
+            removed_path: info.worktree_path,
+            branch: info.branch,
+        }),
+        Err(error) => UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
+            error: format!("Failed to remove worktree: {error}"),
+        }),
+    })
+    .await
+    .unwrap_or_else(|e| {
+        UiEvent::Thread(ThreadUiEvent::WorktreeFailed {
+            error: format!("Task failed: {e}"),
+        })
+    })
+}
+
 /// Renames a thread.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.

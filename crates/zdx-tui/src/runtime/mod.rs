@@ -676,6 +676,31 @@ impl TuiRuntime {
                     handlers::thread_load(thread_id, root)
                 });
             }
+            UiEffect::OpenTerminal => {
+                let root = self.state.tui.agent_opts.root.clone();
+                match open_terminal_at(&root) {
+                    Ok(name) => {
+                        self.state.tui.transcript.push_cell(
+                            crate::transcript::HistoryCell::system(format!(
+                                "Opening {name} at {}",
+                                root.display()
+                            )),
+                        );
+                    }
+                    Err(e) => {
+                        self.state
+                            .tui
+                            .transcript
+                            .push_cell(crate::transcript::HistoryCell::system(format!("{e}")));
+                    }
+                }
+            }
+            UiEffect::RemoveWorktree => {
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_task(TaskKind::ThreadWorktree, TaskMeta::None, false, move |_| {
+                    handlers::thread_remove_worktree(root)
+                });
+            }
             UiEffect::EnsureWorktree => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref() {
                     let thread_id = thread_handle.id.clone();
@@ -830,6 +855,96 @@ impl Drop for TuiRuntime {
     fn drop(&mut self) {
         let _ = terminal::restore_terminal();
     }
+}
+
+/// Info about a resolved terminal emulator.
+///
+/// All known terminals support the Kitty graphics protocol, which zdx
+/// requires for image rendering.
+struct ResolvedTerminal {
+    name: &'static str,
+    bin: &'static str,
+    args: &'static [&'static str],
+}
+
+/// Known terminal emulators with their working-directory args.
+///
+/// Order matters: if `$TERM_PROGRAM` doesn't match, we probe each in this order.
+/// Only terminals that support the Kitty graphics protocol are listed.
+const KNOWN_TERMINALS: &[ResolvedTerminal] = &[
+    ResolvedTerminal {
+        name: "ghostty",
+        bin: "ghostty",
+        args: &[], // uses --working-directory=<path> (special)
+    },
+    ResolvedTerminal {
+        name: "kitty",
+        bin: "kitty",
+        args: &["--directory"],
+    },
+    ResolvedTerminal {
+        name: "WezTerm",
+        bin: "wezterm",
+        args: &["start", "--cwd"],
+    },
+];
+
+/// Resolves the terminal emulator to use.
+///
+/// Checks `$TERM_PROGRAM` first, then probes known terminals in priority order.
+/// Returns `None` if no known terminal is found (macOS Terminal.app fallback).
+fn resolve_terminal() -> Option<&'static ResolvedTerminal> {
+    use std::process::{Command, Stdio};
+
+    let term_program = std::env::var("TERM_PROGRAM").unwrap_or_default();
+
+    KNOWN_TERMINALS
+        .iter()
+        .find(|t| term_program.eq_ignore_ascii_case(t.name))
+        .or_else(|| {
+            KNOWN_TERMINALS.iter().find(|t| {
+                Command::new("which")
+                    .arg(t.bin)
+                    .stdout(Stdio::null())
+                    .stderr(Stdio::null())
+                    .status()
+                    .is_ok_and(|s| s.success())
+            })
+        })
+}
+
+/// Opens a new terminal window at the given path.
+///
+/// Only opens terminals that support the Kitty graphics protocol (used for
+/// image rendering in the TUI). Returns an error if no compatible terminal
+/// is found.
+fn open_terminal_at(path: &std::path::Path) -> anyhow::Result<String> {
+    use std::process::{Command, Stdio};
+
+    let Some(t) = resolve_terminal() else {
+        anyhow::bail!(
+            "No compatible terminal found. \
+             Install ghostty, kitty, or wezterm (Kitty graphics protocol required)."
+        );
+    };
+
+    let mut cmd = {
+        let mut c = Command::new(t.bin);
+        if t.name == "ghostty" {
+            c.arg(format!("--working-directory={}", path.display()));
+        } else {
+            c.args(t.args).arg(path);
+        }
+        c
+    };
+
+    cmd.stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .context("open terminal")?;
+
+    Ok(t.name.to_string())
 }
 
 /// Opens a file in the user's preferred editor.

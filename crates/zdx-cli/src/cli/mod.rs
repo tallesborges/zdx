@@ -393,6 +393,12 @@ enum WorktreeCommands {
         #[arg(value_name = "ID")]
         id: String,
     },
+    /// Remove a worktree and its branch
+    Remove {
+        /// Path of the worktree to remove (default: current directory)
+        #[arg(value_name = "PATH")]
+        path: Option<String>,
+    },
 }
 
 pub fn run() -> Result<()> {
@@ -783,6 +789,7 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
 fn dispatch_worktree(command: WorktreeCommands, context: &DispatchContext<'_>) -> Result<()> {
     match command {
         WorktreeCommands::Ensure { id } => commands::worktree::ensure(context.root, &id),
+        WorktreeCommands::Remove { path } => commands::worktree::remove(path.as_deref()),
     }
 }
 

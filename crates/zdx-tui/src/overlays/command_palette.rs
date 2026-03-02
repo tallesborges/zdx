@@ -119,6 +119,7 @@ impl CommandPaletteState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn execute_command(
     tui: &TuiState,
     cmd_name: &str,
@@ -164,6 +165,35 @@ fn execute_command(
                 }],
                 vec![],
             )
+        }
+        "pwd" => {
+            let path = tui.agent_opts.root.display().to_string();
+            match Clipboard::copy(&path) {
+                Ok(()) => (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!("Root: {path} (copied)")),
+                    )],
+                ),
+                Err(e) => (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(format!(
+                            "Root: {path} (copy failed: {e})"
+                        )),
+                    )],
+                ),
+            }
+        }
+        "open" => (None, vec![UiEffect::OpenTerminal], vec![]),
+        "worktree-remove" => {
+            if tui.tasks.state(TaskKind::ThreadWorktree).is_running() {
+                (None, vec![], vec![])
+            } else {
+                (None, vec![UiEffect::RemoveWorktree], vec![])
+            }
         }
         "worktree" => {
             if tui.tasks.state(TaskKind::ThreadWorktree).is_running() {

@@ -141,6 +141,27 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "worktree-remove",
+        aliases: &["wt-remove", "wt-rm"],
+        description: "Remove current worktree and switch to project root",
+        category: "git",
+        shortcut: None,
+    },
+    Command {
+        name: "open",
+        aliases: &["terminal", "term"],
+        description: "Open a new terminal at the current root",
+        category: "app",
+        shortcut: None,
+    },
+    Command {
+        name: "pwd",
+        aliases: &[],
+        description: "Copy current root path to clipboard",
+        category: "git",
+        shortcut: None,
+    },
+    Command {
         name: "root-new",
         aliases: &["root"],
         description: "Start a new thread from the original project root",
@@ -224,6 +245,12 @@ mod tests {
         assert_eq!(find_command("quit").display_name(), "quit (q, exit)");
         assert_eq!(find_command("threads").display_name(), "threads (history)");
         assert_eq!(find_command("worktree").display_name(), "worktree (wt)");
+        assert_eq!(
+            find_command("worktree-remove").display_name(),
+            "worktree-remove (wt-remove, wt-rm)"
+        );
+        assert_eq!(find_command("open").display_name(), "open (terminal, term)");
+        assert_eq!(find_command("pwd").display_name(), "pwd");
         assert_eq!(find_command("root-new").display_name(), "root-new (root)");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
