@@ -43,6 +43,14 @@ thinking_level = "off"
 handoff_model = "gemini:gemini-3-flash-preview"
 title_model = "gemini:gemini-2.5-flash"
 
+# Memory system configuration
+# Paths for memory notes, daily notes, and the memory index file.
+# All paths support ~ for home directory expansion.
+[memory]
+# notes_path = "~/SecondBrain/Notes"    # default: $ZDX_HOME/memory/notes
+# daily_path = "~/SecondBrain/Calendar"  # default: $ZDX_HOME/memory/calendar
+# index_file = "~/.zdx/MEMORY.md"       # default: $ZDX_HOME/MEMORY.md
+
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
 # available_models: Auto-populated from enabled providers + model registry (TUI picker source).

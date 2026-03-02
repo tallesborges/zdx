@@ -185,7 +185,7 @@ Error:
 
 - Location: `<base>/config.toml`
 - Format: TOML
-- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `prompt_template.*`, `thinking_level`, `subagents.*`
+- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `prompt_template.*`, `thinking_level`, `subagents.*`, `memory.*`
   - `max_tokens` is optional; when unset, providers that support omitted limits use provider defaults.
   - Providers that require a token limit use an internal fallback derived from model metadata.
 - Provider base URLs:
@@ -231,18 +231,31 @@ ZDX composes project/user context in this order before skills/subagents sections
 
 1. Base/system prompt from config (`system_prompt` / `system_prompt_file`)
 2. Hierarchical `AGENTS.md` context (global + user + project ancestry)
-3. Optional memory index from `$ZDX_HOME/MEMORY.md`
+3. Optional memory index from configured path (default: `$ZDX_HOME/MEMORY.md`)
 
-Contracts:
+### Memory configuration
+
+```toml
+[memory]
+# notes_path = "~/SecondBrain/Notes"    # default: $ZDX_HOME/memory/notes
+# daily_path = "~/SecondBrain/Calendar"  # default: $ZDX_HOME/memory/calendar
+# index_file = "~/.zdx/MEMORY.md"       # default: $ZDX_HOME/MEMORY.md
+```
+
+- All paths support `~` expansion.
+- Defaults place memory under `$ZDX_HOME/memory/` (notes + calendar subdirs) with the index at `$ZDX_HOME/MEMORY.md`.
+- The `memory` skill provides full guidelines for working with memory notes (NotePlan-compatible conventions).
+
+### Contracts
 
 - Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
 - `MEMORY.md` content is capped at 16 KiB with truncation warning.
-- Only `MEMORY.md` index content is injected. Detailed memory lives in NotePlan and is accessed on-demand via the `noteplan-notes` skill.
-- Built-in template emits a `## Memory` section (with `<memory>` block) only when memory index content is present.
+- Only `MEMORY.md` index content is injected. Detailed memory lives in the configured notes/daily paths and is accessed on-demand via the `memory` skill.
+- Built-in template emits a `## Memory` section (with `<memory>` block and configured paths) only when memory index content is present.
 - Proactive memory-save suggestion instructions are surface-gated: enabled for TUI and Telegram sessions, disabled for exec mode, automations, and subagent runs.
 - Explicit `remember X` still means immediate save regardless of proactive suggestion mode.
-- When proactive suggestions are enabled, memory instructions are note-first: save full detail in NotePlan notes, and only promote durable/reusable items into `MEMORY.md`.
+- When proactive suggestions are enabled, memory instructions are note-first: save full detail in memory notes, and only promote durable/reusable items into `MEMORY.md`.
 - `MEMORY.md` entries should be concise routing pointers; updates should prefer upsert/merge over append-only duplication.
 
 ---
@@ -293,6 +306,16 @@ Contracts:
   - Supported entry formats:
     - `<media>/absolute/path/to/file</media>`
     - `<medias><media>/absolute/path/to/file1</media><media>/absolute/path/to/file2</media></medias>`
+- Any `<media>` directives are stripped from the user-visible reply text.
+- Routing by file type:
+  - Image-like extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) are sent via Telegram `sendPhoto`.
+  - Other files (including `.pdf`) are sent via Telegram `sendDocument`.
+- When multiple valid media paths are present, the bot attempts to send each one in order.
+- Bot only uses local absolute file paths for this flow (no URL fetch in this slice).
+- Preflight upload size checks:
+  - photos > 10 MB are rejected before upload
+  - documents > 50 MB are rejected before upload
+/media></medias>`
 - Any `<media>` directives are stripped from the user-visible reply text.
 - Routing by file type:
   - Image-like extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) are sent via Telegram `sendPhoto`.
