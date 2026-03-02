@@ -115,6 +115,13 @@ pub enum ThreadUiEvent {
     /// Worktree setup failed.
     WorktreeFailed { error: String },
 
+    /// Worktree removed successfully.
+    WorktreeRemoved {
+        project_root: PathBuf,
+        removed_path: PathBuf,
+        branch: Option<String>,
+    },
+
     /// Auto thread title suggestion completed (None if skipped/failed).
     TitleSuggested {
         thread_id: String,

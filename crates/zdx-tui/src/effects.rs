@@ -111,6 +111,12 @@ pub enum UiEffect {
     /// Ensure a git worktree for the active thread and switch root to it.
     EnsureWorktree,
 
+    /// Open a new terminal window at the given path.
+    OpenTerminal,
+
+    /// Remove the current worktree and switch root to project root.
+    RemoveWorktree,
+
     /// Create a new thread using the original project root.
     CreateNewThreadFromProjectRoot,
 

@@ -184,6 +184,27 @@ pub fn handle_thread_event(
             ));
             vec![]
         }
+        ThreadUiEvent::WorktreeRemoved {
+            project_root,
+            removed_path,
+            branch,
+        } => {
+            let effects = vec![
+                UiEffect::ResolveRootDisplay {
+                    path: project_root.clone(),
+                },
+                UiEffect::RefreshSystemPrompt { path: project_root },
+            ];
+            let mut msg = format!("Worktree removed: {}", removed_path.display());
+            if let Some(branch) = branch {
+                use std::fmt::Write;
+                let _ = write!(msg, " (branch {branch} deleted)");
+            }
+            mutations.push(StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(msg),
+            ));
+            effects
+        }
     };
 
     (effects, mutations, overlay_action)

@@ -222,6 +222,140 @@ fn sanitize_branch_name(input: &str) -> String {
     trimmed.chars().take(64).collect()
 }
 
+/// Info about a removed worktree.
+pub struct RemovedWorktree {
+    pub worktree_path: PathBuf,
+    pub branch: Option<String>,
+    pub project_root: PathBuf,
+}
+
+/// Removes the worktree at `worktree_path` and deletes its associated branch.
+///
+/// The path must be a git worktree (not the main working tree).
+/// Uses `--git-common-dir` to find the main repo, then:
+/// 1. `git worktree remove --force <path>`
+/// 2. `git branch -D <branch>` (if branch found)
+///
+/// Returns info about what was removed.
+///
+/// # Errors
+/// Returns an error if the path is not a worktree or removal fails.
+pub fn remove_worktree_at(worktree_path: &Path) -> Result<RemovedWorktree> {
+    let worktree_path = worktree_path
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_path.to_path_buf());
+
+    // 1. Find the main .git dir via --git-common-dir
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&worktree_path)
+        .args(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+        .output()
+        .context("git rev-parse --git-common-dir")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git rev-parse failed: {}", stderr.trim());
+    }
+
+    let git_common_dir = PathBuf::from(String::from_utf8_lossy(&output.stdout).trim());
+
+    // 2. project_root = parent of git-common-dir
+    let project_root = git_common_dir
+        .parent()
+        .ok_or_else(|| {
+            anyhow!(
+                "cannot derive project root from {}",
+                git_common_dir.display()
+            )
+        })?
+        .to_path_buf();
+
+    let project_root = project_root
+        .canonicalize()
+        .unwrap_or_else(|_| project_root.clone());
+
+    // 3. Must not be the main working tree
+    if project_root == worktree_path {
+        bail!(
+            "Not a worktree: {} is the main working tree",
+            worktree_path.display()
+        );
+    }
+
+    // 4. Get branch from porcelain worktree list
+    let branch = extract_worktree_branch(&project_root, &worktree_path)?;
+
+    // 5. Remove the worktree
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(&project_root)
+        .args(["worktree", "remove", "--force"])
+        .arg(&worktree_path)
+        .output()
+        .context("git worktree remove")?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        bail!("git worktree remove failed: {}", stderr.trim());
+    }
+
+    // 6. Delete the branch if found
+    if let Some(ref branch) = branch {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(&project_root)
+            .args(["branch", "-D", branch])
+            .output()
+            .context("git branch -D")?;
+
+        if !output.status.success() {
+            // Non-fatal: worktree was removed, branch deletion is best-effort
+        }
+    }
+
+    Ok(RemovedWorktree {
+        worktree_path,
+        branch,
+        project_root,
+    })
+}
+
+/// Extracts the branch name for a worktree path from porcelain output.
+fn extract_worktree_branch(project_root: &Path, worktree_path: &Path) -> Result<Option<String>> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(project_root)
+        .args(["worktree", "list", "--porcelain"])
+        .output()
+        .context("git worktree list --porcelain")?;
+
+    if !output.status.success() {
+        return Ok(None);
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let target = worktree_path
+        .canonicalize()
+        .unwrap_or_else(|_| worktree_path.to_path_buf());
+
+    let mut current_path: Option<PathBuf> = None;
+    for line in stdout.lines() {
+        if let Some(rest) = line.strip_prefix("worktree ") {
+            let p = PathBuf::from(rest.trim());
+            current_path = Some(p.canonicalize().unwrap_or(p));
+        } else if let Some(rest) = line.strip_prefix("branch refs/heads/") {
+            if current_path.as_ref() == Some(&target) {
+                return Ok(Some(rest.trim().to_string()));
+            }
+        } else if line.is_empty() {
+            current_path = None;
+        }
+    }
+
+    Ok(None)
+}
+
 fn stable_hash(input: &str) -> String {
     // FNV-1a 64-bit
     const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
