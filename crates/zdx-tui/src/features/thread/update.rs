@@ -189,21 +189,32 @@ pub fn handle_thread_event(
             removed_path,
             branch,
         } => {
-            let effects = vec![
-                UiEffect::ResolveRootDisplay {
-                    path: project_root.clone(),
-                },
-                UiEffect::RefreshSystemPrompt { path: project_root },
-            ];
             let mut msg = format!("Worktree removed: {}", removed_path.display());
             if let Some(branch) = branch {
                 use std::fmt::Write;
                 let _ = write!(msg, " (branch {branch} deleted)");
             }
+
+            // Reset state for a fresh thread at the project root.
+            mutations.push(StateMutation::Transcript(TranscriptMutation::Clear));
+            mutations.push(StateMutation::Thread(ThreadMutation::ClearMessages));
+            mutations.push(StateMutation::Thread(ThreadMutation::ResetUsage));
+            mutations.push(StateMutation::Input(InputMutation::ClearHistory));
+            mutations.push(StateMutation::Input(InputMutation::ClearQueue));
+            mutations.push(StateMutation::Input(InputMutation::ResetImageCounter));
             mutations.push(StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage(msg),
             ));
-            effects
+
+            vec![
+                UiEffect::ResolveRootDisplay {
+                    path: project_root.clone(),
+                },
+                UiEffect::RefreshSystemPrompt {
+                    path: project_root.clone(),
+                },
+                UiEffect::CreateNewThread,
+            ]
         }
     };
 
