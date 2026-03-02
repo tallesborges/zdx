@@ -253,14 +253,18 @@ impl ThreadPickerState {
                 .collect(),
         };
 
-        // Apply search filter
+        // Apply fuzzy search filter
         if self.filter.is_empty() {
             scoped
         } else {
-            scoped
+            let mut scored: Vec<_> = scoped
                 .into_iter()
-                .filter(|thread| thread_matches_filter(thread, &self.filter))
-                .collect()
+                .filter_map(|thread| {
+                    thread_fuzzy_score(thread, &self.filter).map(|score| (thread, score))
+                })
+                .collect();
+            scored.sort_by(|(_, a), (_, b)| b.cmp(a));
+            scored.into_iter().map(|(thread, _)| thread).collect()
         }
     }
 
@@ -379,30 +383,39 @@ impl ThreadPickerState {
     }
 }
 
-/// Returns true if the thread matches the given filter text.
+/// Returns a fuzzy match score if the thread matches the filter, or `None` if no match.
 ///
-/// Matches against thread ID (case-insensitive) and title (case-insensitive).
-fn thread_matches_filter(thread: &ThreadSummary, filter: &str) -> bool {
+/// Matches against thread ID and title using nucleo fuzzy matching.
+fn thread_fuzzy_score(thread: &ThreadSummary, filter: &str) -> Option<u32> {
+    use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
+    use nucleo_matcher::{Config, Matcher, Utf32Str};
+
     if filter.is_empty() {
-        return true;
+        return Some(0);
     }
 
-    let filter_lower = filter.to_lowercase();
-    let id_lower = thread.id.to_lowercase();
+    let pattern = Pattern::parse(filter, CaseMatching::Ignore, Normalization::Smart);
+    let mut matcher = Matcher::new(Config::DEFAULT);
 
-    // Match against ID
-    if id_lower.contains(&filter_lower) {
-        return true;
+    let id_score = {
+        let mut buf = Vec::new();
+        let haystack = Utf32Str::new(&thread.id, &mut buf);
+        pattern.score(haystack, &mut matcher)
+    };
+
+    let title_score = thread.title.as_deref().and_then(|t| {
+        let mut buf = Vec::new();
+        let haystack = Utf32Str::new(t, &mut buf);
+        pattern.score(haystack, &mut matcher)
+    });
+
+    // Take the best score from either field
+    match (id_score, title_score) {
+        (Some(a), Some(b)) => Some(a.max(b)),
+        (Some(a), None) => Some(a),
+        (None, Some(b)) => Some(b),
+        (None, None) => None,
     }
-
-    // Match against title if present
-    if let Some(title) = &thread.title
-        && title.to_lowercase().contains(&filter_lower)
-    {
-        return true;
-    }
-
-    false
 }
 
 /// Clears characters from the end of the string back to the previous word boundary.
