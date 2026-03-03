@@ -83,6 +83,10 @@ enum Commands {
         #[arg(short, long)]
         prompt: String,
 
+        /// Disable all system prompt/context composition (system prompt, AGENTS.md, memory, skills)
+        #[arg(long = "no-system-prompt")]
+        no_system_prompt: bool,
+
         /// Override the model from config
         #[arg(short, long)]
         model: Option<String>,
@@ -515,6 +519,7 @@ struct ExecCommandInput {
     thinking: Option<String>,
     tools: Option<String>,
     no_tools: bool,
+    no_system_prompt: bool,
 }
 
 struct ImagineCommandInput {
@@ -540,6 +545,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         thinking_override: input.thinking.as_deref(),
         tools_override: input.tools.as_deref(),
         no_tools: input.no_tools,
+        no_system_prompt: input.no_system_prompt,
     })
     .await
 }
@@ -567,6 +573,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Bot => dispatch_bot(context).await,
         Commands::Exec {
             prompt,
+            no_system_prompt,
             model,
             thinking,
             tools,
@@ -580,6 +587,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                     thinking,
                     tools,
                     no_tools,
+                    no_system_prompt,
                 },
             )
             .await

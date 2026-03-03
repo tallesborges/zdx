@@ -24,6 +24,8 @@ pub struct ExecOptions {
     pub root: PathBuf,
     /// Tool configuration.
     pub tool_config: ToolConfig,
+    /// Disable all system prompt/context composition.
+    pub no_system_prompt: bool,
 }
 
 impl From<&ExecOptions> for AgentOptions {
@@ -51,15 +53,23 @@ pub async fn run_exec(
 ) -> Result<String> {
     use std::io::Write;
 
-    let effective = zdx_core::core::context::build_effective_system_prompt_with_paths(
-        config,
-        &options.root,
-        false,
-    )?;
+    let effective = if options.no_system_prompt {
+        None
+    } else {
+        Some(
+            zdx_core::core::context::build_effective_system_prompt_with_paths(
+                config,
+                &options.root,
+                false,
+            )?,
+        )
+    };
 
-    // Emit warnings from context loading to stderr
-    for warning in &effective.warnings {
-        let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
+    if let Some(effective) = &effective {
+        // Emit warnings from context loading to stderr
+        for warning in &effective.warnings {
+            let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
+        }
     }
 
     // Emit config path info (only if config exists on disk).
@@ -69,7 +79,9 @@ pub async fn run_exec(
     }
 
     // Emit loaded AGENTS.md paths info (per SPEC §10)
-    if !effective.loaded_agents_paths.is_empty() {
+    if let Some(effective) = &effective
+        && !effective.loaded_agents_paths.is_empty()
+    {
         let paths_str: Vec<String> = effective
             .loaded_agents_paths
             .iter()
@@ -83,7 +95,9 @@ pub async fn run_exec(
     }
 
     // Emit loaded skills info
-    if !effective.loaded_skills.is_empty() {
+    if let Some(effective) = &effective
+        && !effective.loaded_skills.is_empty()
+    {
         let names: Vec<String> = effective
             .loaded_skills
             .iter()
@@ -133,7 +147,7 @@ pub async fn run_exec(
         messages,
         config,
         &agent_opts,
-        effective.prompt.as_deref(),
+        effective.as_ref().and_then(|e| e.prompt.as_deref()),
         thread_id.as_deref(),
         agent_tx,
     )

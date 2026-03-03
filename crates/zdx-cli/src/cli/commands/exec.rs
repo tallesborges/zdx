@@ -20,6 +20,7 @@ pub struct ExecRunOptions<'a> {
     pub thinking_override: Option<&'a str>,
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
+    pub no_system_prompt: bool,
 }
 
 pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
@@ -53,6 +54,7 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         } else {
             ToolSelection::default()
         }),
+        no_system_prompt: options.no_system_prompt,
     };
 
     // Use streaming variant - response is printed incrementally, final newline added at end

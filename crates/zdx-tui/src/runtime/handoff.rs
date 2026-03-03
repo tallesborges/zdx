@@ -82,6 +82,7 @@ async fn run_subagent(
         .args([
             "--no-thread",
             "exec",
+            "--no-system-prompt",
             "-m",
             &handoff_model,
             "-t",

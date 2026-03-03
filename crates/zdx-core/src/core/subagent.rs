@@ -20,6 +20,8 @@ pub struct ExecSubagentOptions {
     pub thinking_level: Option<crate::config::ThinkingLevel>,
     /// Disable tools for the child run (`--no-tools`).
     pub no_tools: bool,
+    /// Disable system prompt/context composition for the child run (`--no-system-prompt`).
+    pub no_system_prompt: bool,
     /// Optional timeout for the child process.
     pub timeout: Option<Duration>,
 }
@@ -77,6 +79,10 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
 
     if options.no_tools {
         args.push(OsString::from("--no-tools"));
+    }
+
+    if options.no_system_prompt {
+        args.push(OsString::from("--no-system-prompt"));
     }
 
     if let Some(model) = normalize_optional(options.model.as_deref()) {
@@ -152,6 +158,7 @@ mod tests {
                 model: Some("openai:gpt-5.2".to_string()),
                 thinking_level: Some(crate::config::ThinkingLevel::Low),
                 no_tools: true,
+                no_system_prompt: true,
                 timeout: None,
             },
         );
@@ -170,6 +177,7 @@ mod tests {
                 "-p",
                 "task",
                 "--no-tools",
+                "--no-system-prompt",
                 "-m",
                 "openai:gpt-5.2",
                 "-t",
