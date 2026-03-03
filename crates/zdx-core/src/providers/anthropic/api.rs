@@ -7,11 +7,9 @@ use super::shared::{
     build_tool_defs, send_streaming_request, should_enable_interleaved_thinking_beta,
 };
 use super::types::{EffortLevel, StreamingMessagesRequest};
-use crate::providers::shared::{ChatMessage, ProviderStream, resolve_api_key, resolve_base_url};
+use crate::providers::ProviderKind;
+use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
-
-/// Default base URL for the Anthropic API.
-pub const DEFAULT_BASE_URL: &str = "https://api.anthropic.com";
 
 const API_VERSION: &str = "2023-06-01";
 const INTERLEAVED_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
@@ -59,13 +57,8 @@ impl AnthropicConfig {
         thinking_budget_tokens: u32,
         thinking_effort: Option<EffortLevel>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "ANTHROPIC_API_KEY", "anthropic")?;
-        let base_url = resolve_base_url(
-            config_base_url,
-            "ANTHROPIC_BASE_URL",
-            DEFAULT_BASE_URL,
-            "Anthropic",
-        )?;
+        let api_key = ProviderKind::Anthropic.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::Anthropic.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,
@@ -98,7 +91,7 @@ impl AnthropicClient {
         // Compile-time guard for unit tests
         #[cfg(test)]
         assert!(
-            (config.base_url != DEFAULT_BASE_URL),
+            (config.base_url != ProviderKind::Anthropic.default_base_url()),
             "Tests must not use the production Anthropic API!\n\
                  Set ANTHROPIC_BASE_URL to a mock server (e.g., wiremock).\n\
                  Found base_url: {}",
@@ -108,7 +101,7 @@ impl AnthropicClient {
         // Runtime guard for integration tests (set ZDX_BLOCK_REAL_API=1 in test harness)
         #[cfg(not(test))]
         if std::env::var("ZDX_BLOCK_REAL_API").is_ok_and(|v| v == "1")
-            && config.base_url == DEFAULT_BASE_URL
+            && config.base_url == ProviderKind::Anthropic.default_base_url()
         {
             panic!(
                 "ZDX_BLOCK_REAL_API=1 but trying to use production Anthropic API!\n\

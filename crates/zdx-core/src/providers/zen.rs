@@ -4,7 +4,6 @@
 use anyhow::Result;
 use reqwest::header::HeaderMap;
 
-use crate::providers::ProviderStream;
 use crate::providers::anthropic::api::{AnthropicClient, AnthropicConfig};
 use crate::providers::anthropic::types::EffortLevel as AnthropicEffortLevel;
 use crate::providers::gemini::api::{GeminiClient, GeminiConfig};
@@ -13,10 +12,9 @@ use crate::providers::openai::api::{OpenAIClient, OpenAIConfig};
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
+use crate::providers::shared::merge_system_prompt;
+use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
-
-const DEFAULT_BASE_URL: &str = "https://opencode.ai/zen";
 
 #[derive(Debug, Clone)]
 pub struct ZenConfig {
@@ -52,8 +50,8 @@ impl ZenConfig {
         reasoning_effort: Option<String>,
         cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "ZEN_API_KEY", "zen")?;
-        let base_url = resolve_base_url(config_base_url, "ZEN_BASE_URL", DEFAULT_BASE_URL, "Zen")?;
+        let api_key = ProviderKind::Zen.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::Zen.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,

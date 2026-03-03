@@ -6,11 +6,9 @@ use reqwest::header::HeaderMap;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
-use crate::providers::{ChatMessage, ProviderStream};
+use crate::providers::shared::merge_system_prompt;
+use crate::providers::{ChatMessage, ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
-
-const DEFAULT_BASE_URL: &str = "https://api.z.ai/api/paas/v4";
 
 /// `Z.AI` API configuration.
 #[derive(Debug, Clone)]
@@ -44,8 +42,8 @@ impl ZaiConfig {
         prompt_cache_key: Option<String>,
         thinking_enabled: bool,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "ZAI_API_KEY", "zai")?;
-        let base_url = resolve_base_url(config_base_url, "ZAI_BASE_URL", DEFAULT_BASE_URL, "Z.AI")?;
+        let api_key = ProviderKind::Zai.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::Zai.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,

@@ -8,11 +8,11 @@ use serde_json::{Value, json};
 use super::shared::{GeminiThinkingConfig, build_gemini_request, classify_reqwest_error};
 use super::sse::GeminiSseParser;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
-use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
-use crate::providers::{ChatMessage, DebugTrace, ProviderError, ProviderStream, wrap_stream};
+use crate::providers::shared::merge_system_prompt;
+use crate::providers::{
+    ChatMessage, DebugTrace, ProviderError, ProviderKind, ProviderStream, wrap_stream,
+};
 use crate::tools::ToolDefinition;
-
-const DEFAULT_BASE_URL: &str = "https://generativelanguage.googleapis.com/v1beta";
 
 /// Gemini API configuration.
 #[derive(Debug, Clone)]
@@ -45,13 +45,8 @@ impl GeminiConfig {
         config_api_key: Option<&str>,
         thinking_config: Option<GeminiThinkingConfig>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "GEMINI_API_KEY", "gemini")?;
-        let base_url = resolve_base_url(
-            config_base_url,
-            "GEMINI_BASE_URL",
-            DEFAULT_BASE_URL,
-            "Gemini",
-        )?;
+        let api_key = ProviderKind::Gemini.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::Gemini.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,

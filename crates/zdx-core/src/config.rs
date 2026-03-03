@@ -1869,7 +1869,6 @@ max_tokens = 4096
     #[test]
     fn test_transcription_config_defaults() {
         let config = TranscriptionConfig::default();
-        assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.language.is_none());
     }

@@ -21,6 +21,6 @@ mod shared;
 mod sse;
 pub(crate) mod types;
 
-pub use api::{AnthropicClient, AnthropicConfig, DEFAULT_BASE_URL};
+pub use api::{AnthropicClient, AnthropicConfig};
 pub use cli::{ClaudeCliClient, ClaudeCliConfig};
 pub use types::EffortLevel;

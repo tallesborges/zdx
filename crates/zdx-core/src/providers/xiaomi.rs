@@ -3,14 +3,12 @@
 use anyhow::Result;
 use reqwest::header::HeaderMap;
 
-use crate::providers::ProviderStream;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
+use crate::providers::shared::merge_system_prompt;
+use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
-
-const DEFAULT_BASE_URL: &str = "https://api.xiaomimimo.com/v1";
 
 /// `Xiomi` API configuration.
 #[derive(Debug, Clone)]
@@ -44,13 +42,8 @@ impl XiomiConfig {
         prompt_cache_key: Option<String>,
         thinking_enabled: bool,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "XIAOMI_API_KEY", "xiaomi")?;
-        let base_url = resolve_base_url(
-            config_base_url,
-            "XIAOMI_BASE_URL",
-            DEFAULT_BASE_URL,
-            "Xiomi",
-        )?;
+        let api_key = ProviderKind::Xiomi.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::Xiomi.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,

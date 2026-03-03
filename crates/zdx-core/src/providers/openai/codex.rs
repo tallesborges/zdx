@@ -5,12 +5,11 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::ProviderStream;
 use crate::providers::oauth::openai_codex as oauth_codex;
 use crate::providers::openai::responses::{ResponsesConfig, send_responses_stream};
+use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
 
-const DEFAULT_BASE_URL: &str = "https://chatgpt.com/backend-api";
 const RESPONSES_PATH: &str = "/codex/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
@@ -137,7 +136,7 @@ impl OpenAICodexClient {
             self.config.prompt_cache_key.as_deref(),
         );
         let config = ResponsesConfig {
-            base_url: DEFAULT_BASE_URL.to_string(),
+            base_url: ProviderKind::OpenAICodex.default_base_url().to_string(),
             path: RESPONSES_PATH.to_string(),
             model: self.config.model.clone(),
             max_output_tokens: None,
