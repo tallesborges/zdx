@@ -213,6 +213,7 @@ pub async fn run_definition(
             thinking_override: None,
             tools_override: None,
             no_tools: false,
+            no_system_prompt: false,
         })
         .await;
 

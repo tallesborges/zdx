@@ -35,6 +35,7 @@ pub async fn run(
             thinking_override,
             tools_override: None,
             no_tools: false,
+            no_system_prompt: false,
         })
         .await;
     }

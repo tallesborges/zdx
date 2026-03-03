@@ -24,6 +24,7 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         model: Some(title_model.to_string()),
         thinking_level: Some(ThinkingLevel::Minimal),
         no_tools: true,
+        no_system_prompt: true,
         timeout: Some(Duration::from_secs(60)),
     };
 

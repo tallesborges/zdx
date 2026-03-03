@@ -87,6 +87,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         model: Some(model),
         thinking_level: ctx.thinking_level,
         no_tools: false,
+        no_system_prompt: false,
         timeout: ctx.timeout,
     };
 

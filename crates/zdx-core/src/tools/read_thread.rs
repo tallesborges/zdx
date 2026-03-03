@@ -107,6 +107,7 @@ async fn run_subagent(prompt: String, ctx: &ToolContext) -> Result<String, Strin
         ),
         thinking_level: ctx.thinking_level,
         no_tools: true,
+        no_system_prompt: true,
         timeout: ctx.timeout,
     };
 
