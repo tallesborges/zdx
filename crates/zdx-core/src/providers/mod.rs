@@ -184,6 +184,71 @@ impl ProviderKind {
         }
     }
 
+    /// Returns the default base URL for this provider's API.
+    pub fn default_base_url(&self) -> &'static str {
+        match self {
+            Self::Anthropic | Self::ClaudeCli => "https://api.anthropic.com",
+            Self::OpenAI => "https://api.openai.com/v1",
+            Self::OpenAICodex => "https://chatgpt.com/backend-api",
+            Self::OpenRouter => "https://openrouter.ai/api/v1",
+            Self::Mistral => "https://api.mistral.ai/v1",
+            Self::Moonshot => "https://api.moonshot.ai/v1",
+            Self::Stepfun => "https://api.stepfun.ai/v1",
+            Self::Gemini | Self::GeminiCli => "https://generativelanguage.googleapis.com/v1beta",
+            Self::Xiomi => "https://api.xiaomimimo.com/v1",
+            Self::Zen => "https://opencode.ai/zen",
+            Self::Apiyi => "https://api.apiyi.com",
+            Self::Minimax => "https://api.minimax.io/v1",
+            Self::Zai => "https://api.z.ai/api/paas/v4",
+            Self::Xai => "https://api.x.ai/v1",
+        }
+    }
+
+    /// Returns the environment variable name for the base URL override.
+    pub fn base_url_env_var(&self) -> Option<&'static str> {
+        match self {
+            Self::Anthropic | Self::ClaudeCli => Some("ANTHROPIC_BASE_URL"),
+            Self::OpenAI => Some("OPENAI_BASE_URL"),
+            Self::OpenAICodex => None,
+            Self::OpenRouter => Some("OPENROUTER_BASE_URL"),
+            Self::Mistral => Some("MISTRAL_BASE_URL"),
+            Self::Moonshot => Some("MOONSHOT_BASE_URL"),
+            Self::Stepfun => Some("STEPFUN_BASE_URL"),
+            Self::Gemini | Self::GeminiCli => Some("GEMINI_BASE_URL"),
+            Self::Xiomi => Some("XIAOMI_BASE_URL"),
+            Self::Zen => Some("ZEN_BASE_URL"),
+            Self::Apiyi => Some("APIYI_BASE_URL"),
+            Self::Minimax => Some("MINIMAX_BASE_URL"),
+            Self::Zai => Some("ZAI_BASE_URL"),
+            Self::Xai => Some("XAI_BASE_URL"),
+        }
+    }
+
+    /// Resolves the base URL: env var > config > default.
+    ///
+    /// # Errors
+    /// Returns an error if the resolved URL is invalid.
+    pub fn resolve_base_url(&self, config_base_url: Option<&str>) -> anyhow::Result<String> {
+        shared::resolve_base_url(
+            config_base_url,
+            self.base_url_env_var().unwrap_or_default(),
+            self.default_base_url(),
+            self.label(),
+        )
+    }
+
+    /// Resolves the API key: config > env var.
+    ///
+    /// # Errors
+    /// Returns an error if no API key is found.
+    pub fn resolve_api_key(&self, config_api_key: Option<&str>) -> anyhow::Result<String> {
+        shared::resolve_api_key(
+            config_api_key,
+            self.api_key_env_var().unwrap_or_default(),
+            self.id(),
+        )
+    }
+
     pub fn auth_mode(&self) -> ProviderAuthMode {
         match self {
             ProviderKind::ClaudeCli | ProviderKind::OpenAICodex | ProviderKind::GeminiCli => {

@@ -3,14 +3,12 @@
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::ProviderStream;
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
 };
-use crate::providers::shared::{merge_system_prompt, resolve_api_key, resolve_base_url};
+use crate::providers::shared::merge_system_prompt;
+use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
-
-const DEFAULT_BASE_URL: &str = "https://openrouter.ai/api/v1";
 
 /// `OpenRouter` API configuration.
 #[derive(Debug, Clone)]
@@ -45,13 +43,8 @@ impl OpenRouterConfig {
         reasoning_effort: Option<String>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "OPENROUTER_API_KEY", "openrouter")?;
-        let base_url = resolve_base_url(
-            config_base_url,
-            "OPENROUTER_BASE_URL",
-            DEFAULT_BASE_URL,
-            "OpenRouter",
-        )?;
+        let api_key = ProviderKind::OpenRouter.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::OpenRouter.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,

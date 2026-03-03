@@ -2,7 +2,6 @@
 
 use anyhow::{Context, Result};
 
-use super::api::DEFAULT_BASE_URL;
 use super::shared::{
     build_api_messages_with_cache_control, build_system_blocks, build_thinking_and_output_config,
     build_tool_defs, send_streaming_request, should_enable_interleaved_thinking_beta,
@@ -39,7 +38,9 @@ impl ClaudeCliConfig {
         thinking_budget_tokens: u32,
         thinking_effort: Option<EffortLevel>,
     ) -> Self {
-        let base_url = base_url.unwrap_or(DEFAULT_BASE_URL).to_string();
+        let base_url = base_url
+            .unwrap_or(crate::providers::ProviderKind::Anthropic.default_base_url())
+            .to_string();
         Self {
             model,
             max_tokens,

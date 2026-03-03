@@ -3,12 +3,10 @@
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::ProviderStream;
 use crate::providers::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
-use crate::providers::shared::{resolve_api_key, resolve_base_url};
+use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
 
-const DEFAULT_BASE_URL: &str = "https://api.openai.com/v1";
 const RESPONSES_PATH: &str = "/responses";
 const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
@@ -42,13 +40,8 @@ impl OpenAIConfig {
         config_api_key: Option<&str>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
-        let api_key = resolve_api_key(config_api_key, "OPENAI_API_KEY", "openai")?;
-        let base_url = resolve_base_url(
-            config_base_url,
-            "OPENAI_BASE_URL",
-            DEFAULT_BASE_URL,
-            "OpenAI",
-        )?;
+        let api_key = ProviderKind::OpenAI.resolve_api_key(config_api_key)?;
+        let base_url = ProviderKind::OpenAI.resolve_base_url(config_base_url)?;
 
         Ok(Self {
             api_key,
