@@ -2,12 +2,10 @@
 
 use anyhow::{Context, Result, anyhow};
 use zdx_core::config::Config;
-use zdx_core::providers::{ProviderKind, resolve_api_key, resolve_base_url};
+use zdx_core::providers::{ProviderKind, resolve_provider};
 
 const DEFAULT_OPENAI_MODEL: &str = "whisper-1";
 const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
-const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
-const DEFAULT_MISTRAL_BASE_URL: &str = "https://api.mistral.ai/v1";
 
 #[derive(serde::Deserialize)]
 struct TranscriptionResponse {
@@ -29,24 +27,14 @@ pub async fn transcribe_audio_if_configured(
     filename: &str,
     mime_type: Option<&str>,
 ) -> Result<Option<String>> {
-    let Some(provider) = detect_provider(config) else {
+    let Some((provider, model)) = resolve_model(config)? else {
         return Ok(None);
     };
 
     let provider_config = config.providers.get(provider);
-    let api_key = resolve_api_key(
-        provider_config.api_key.as_deref(),
-        provider.api_key_env_var().unwrap_or_default(),
-        provider.id(),
-    )?;
-    let base_url = resolve_base_url(
-        provider_config.base_url.as_deref(),
-        &format!("{}_BASE_URL", provider.id().to_uppercase()),
-        default_base_url(provider),
-        provider.label(),
-    )?;
+    let api_key = provider.resolve_api_key(provider_config.api_key.as_deref())?;
+    let base_url = provider.resolve_base_url(provider_config.base_url.as_deref())?;
 
-    let model = resolve_model(config, provider);
     let language = config
         .telegram
         .transcription
@@ -75,119 +63,43 @@ pub async fn transcribe_audio_if_configured(
     }
 }
 
-/// Detects which transcription provider to use.
+/// Resolves the transcription provider and model.
 ///
-/// Priority: env var > config > auto-detect (first available).
-fn detect_provider(config: &Config) -> Option<ProviderKind> {
-    // Check env var override
-    if let Some(provider) = parse_provider_from_env("ZDX_TRANSCRIPTION_PROVIDER") {
-        return Some(provider);
-    }
+/// Priority: `ZDX_TRANSCRIPTION_MODEL` env var > config > auto-detect first provider with API key.
+/// Returns `Ok(None)` if no provider is available.
+fn resolve_model(config: &Config) -> Result<Option<(ProviderKind, String)>> {
+    let model_str = std::env::var("ZDX_TRANSCRIPTION_MODEL")
+        .ok()
+        .or_else(|| config.telegram.transcription.model.clone())
+        .map(|v| v.trim().to_string())
+        .filter(|v| !v.is_empty());
 
-    // Check config setting
-    if let Some(provider) = config
-        .telegram
-        .transcription
-        .provider
-        .as_deref()
-        .and_then(parse_provider_str)
-    {
-        return Some(provider);
+    if let Some(model_str) = model_str {
+        let selection = resolve_provider(&model_str);
+        if !TRANSCRIPTION_PROVIDERS.contains(&selection.kind) {
+            return Err(anyhow!(
+                "Unsupported transcription provider: {}. Only OpenAI and Mistral are supported.",
+                selection.kind.label()
+            ));
+        }
+        return Ok(Some((selection.kind, selection.model)));
     }
 
     // Auto-detect: first provider with available API key
-    for &provider in TRANSCRIPTION_PROVIDERS {
+    Ok(TRANSCRIPTION_PROVIDERS.iter().find_map(|&provider| {
         let provider_config = config.providers.get(provider);
-        if resolve_api_key(
-            provider_config.api_key.as_deref(),
-            provider.api_key_env_var().unwrap_or_default(),
-            provider.id(),
-        )
-        .is_ok()
-        {
-            return Some(provider);
-        }
-    }
-
-    None
-}
-
-fn parse_provider_from_env(var: &str) -> Option<ProviderKind> {
-    std::env::var(var)
-        .ok()
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .and_then(parse_provider_str)
-}
-
-fn parse_provider_str(s: &str) -> Option<ProviderKind> {
-    match s.to_lowercase().as_str() {
-        "openai" => Some(ProviderKind::OpenAI),
-        "mistral" => Some(ProviderKind::Mistral),
-        _ => None,
-    }
-}
-
-fn default_base_url(provider: ProviderKind) -> &'static str {
-    match provider {
-        ProviderKind::Mistral => DEFAULT_MISTRAL_BASE_URL,
-        ProviderKind::OpenAI
-        | ProviderKind::Anthropic
-        | ProviderKind::ClaudeCli
-        | ProviderKind::OpenAICodex
-        | ProviderKind::OpenRouter
-        | ProviderKind::Xiomi
-        | ProviderKind::Moonshot
-        | ProviderKind::Stepfun
-        | ProviderKind::Gemini
-        | ProviderKind::GeminiCli
-        | ProviderKind::Zen
-        | ProviderKind::Apiyi
-        | ProviderKind::Minimax
-        | ProviderKind::Zai
-        | ProviderKind::Xai => DEFAULT_OPENAI_BASE_URL,
-    }
+        provider
+            .resolve_api_key(provider_config.api_key.as_deref())
+            .ok()
+            .map(|_| (provider, default_model(provider).to_string()))
+    }))
 }
 
 fn default_model(provider: ProviderKind) -> &'static str {
     match provider {
         ProviderKind::Mistral => DEFAULT_MISTRAL_MODEL,
-        ProviderKind::OpenAI
-        | ProviderKind::Anthropic
-        | ProviderKind::ClaudeCli
-        | ProviderKind::OpenAICodex
-        | ProviderKind::OpenRouter
-        | ProviderKind::Xiomi
-        | ProviderKind::Moonshot
-        | ProviderKind::Stepfun
-        | ProviderKind::Gemini
-        | ProviderKind::GeminiCli
-        | ProviderKind::Zen
-        | ProviderKind::Apiyi
-        | ProviderKind::Minimax
-        | ProviderKind::Zai
-        | ProviderKind::Xai => DEFAULT_OPENAI_MODEL,
+        _ => DEFAULT_OPENAI_MODEL,
     }
-}
-
-fn resolve_model(config: &Config, provider: ProviderKind) -> String {
-    // env var > config > default per provider
-    std::env::var("ZDX_TELEGRAM_AUDIO_MODEL")
-        .ok()
-        .map(|v| v.trim().to_string())
-        .filter(|v| !v.is_empty())
-        .or_else(|| {
-            config
-                .telegram
-                .transcription
-                .model
-                .as_deref()
-                .map(str::trim)
-                .filter(|s| !s.is_empty())
-                .map(String::from)
-        })
-        .unwrap_or_else(|| default_model(provider).to_string())
 }
 
 struct TranscriptionRequest<'a> {
