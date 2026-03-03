@@ -658,108 +658,63 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
 }
 
 /// Reads only the meta line to extract title (backward compatible).
+/// Parsed meta fields from the first line of a thread file.
+struct ThreadMeta {
+    title: Option<String>,
+    root_path: Option<String>,
+    handoff_from: Option<String>,
+}
+
+/// Reads and parses the meta line from a thread file (single open + parse).
+fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
+    if !path.exists() {
+        return Ok(None);
+    }
+
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let mut reader = BufReader::new(file);
+    let mut first_line = String::new();
+
+    // Read first non-empty line
+    loop {
+        first_line.clear();
+        let bytes = reader.read_line(&mut first_line)?;
+        if bytes == 0 {
+            return Ok(None);
+        }
+        if !first_line.trim().is_empty() {
+            break;
+        }
+    }
+
+    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
+        Ok(event) => event,
+        Err(_) => return Ok(None),
+    };
+
+    if let ThreadEvent::Meta {
+        title,
+        root_path,
+        handoff_from,
+        ..
+    } = parsed
+    {
+        Ok(Some(ThreadMeta {
+            title,
+            root_path,
+            handoff_from,
+        }))
+    } else {
+        Ok(None)
+    }
+}
+
 fn read_meta_title(path: &PathBuf) -> Result<Option<String>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let file = fs::File::open(path).context("Failed to open thread file")?;
-    let mut reader = BufReader::new(file);
-    let mut first_line = String::new();
-
-    // Read first non-empty line
-    loop {
-        first_line.clear();
-        let bytes = reader.read_line(&mut first_line)?;
-        if bytes == 0 {
-            return Ok(None);
-        }
-        if !first_line.trim().is_empty() {
-            break;
-        }
-    }
-
-    // Parse meta event, defaulting title to None if missing
-    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
-        Ok(event) => event,
-        Err(_) => return Ok(None),
-    };
-
-    if let ThreadEvent::Meta { title, .. } = parsed {
-        Ok(title)
-    } else {
-        Ok(None)
-    }
+    Ok(read_meta(path)?.and_then(|m| m.title))
 }
 
-/// Reads only the meta line to extract root path (backward compatible).
 fn read_meta_root_path(path: &PathBuf) -> Result<Option<String>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let file = fs::File::open(path).context("Failed to open thread file")?;
-    let mut reader = BufReader::new(file);
-    let mut first_line = String::new();
-
-    // Read first non-empty line
-    loop {
-        first_line.clear();
-        let bytes = reader.read_line(&mut first_line)?;
-        if bytes == 0 {
-            return Ok(None);
-        }
-        if !first_line.trim().is_empty() {
-            break;
-        }
-    }
-
-    // Parse meta event, defaulting root_path to None if missing
-    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
-        Ok(event) => event,
-        Err(_) => return Ok(None),
-    };
-
-    if let ThreadEvent::Meta { root_path, .. } = parsed {
-        Ok(root_path)
-    } else {
-        Ok(None)
-    }
-}
-
-/// Reads only the meta line to extract `handoff_from` (backward compatible).
-fn read_meta_handoff_from(path: &PathBuf) -> Result<Option<String>> {
-    if !path.exists() {
-        return Ok(None);
-    }
-
-    let file = fs::File::open(path).context("Failed to open thread file")?;
-    let mut reader = BufReader::new(file);
-    let mut first_line = String::new();
-
-    // Read first non-empty line
-    loop {
-        first_line.clear();
-        let bytes = reader.read_line(&mut first_line)?;
-        if bytes == 0 {
-            return Ok(None);
-        }
-        if !first_line.trim().is_empty() {
-            break;
-        }
-    }
-
-    // Parse meta event, defaulting handoff_from to None if missing
-    let parsed: ThreadEvent = match serde_json::from_str(&first_line) {
-        Ok(event) => event,
-        Err(_) => return Ok(None),
-    };
-
-    if let ThreadEvent::Meta { handoff_from, .. } = parsed {
-        Ok(handoff_from)
-    } else {
-        Ok(None)
-    }
+    Ok(read_meta(path)?.and_then(|m| m.root_path))
 }
 
 /// Generates a unique thread ID using UUID v4.
@@ -886,8 +841,35 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
         .map(String::from);
     let limit = options.limit.max(1);
 
+    // Build a grep matcher once for the whole search. Used to pre-filter raw
+    // files before the expensive JSON deserialisation + nucleo scoring path.
+    let grep_matcher = normalized_query.as_deref().and_then(build_grep_matcher);
+    let mut grep_searcher = grep_searcher::Searcher::new();
+
     let mut ranked: Vec<(ThreadSearchResult, Option<DateTime<Utc>>)> = Vec::new();
     for summary in list_threads()? {
+        // Fast grep pre-filter: check title first (already in memory from
+        // list_threads), then scan the raw JSONL file for query terms.
+        // Threads that can't possibly match are skipped before deserialising.
+        if let Some(ref matcher) = grep_matcher {
+            let title_contains_any_word = normalized_query.as_deref().is_some_and(|q| {
+                let title_lower = summary
+                    .title
+                    .as_deref()
+                    .map(str::to_lowercase)
+                    .unwrap_or_default();
+                q.split_whitespace()
+                    .any(|word| title_lower.contains(&word.to_lowercase()))
+            });
+
+            if !title_contains_any_word {
+                let thread_path = threads_dir().join(format!("{}.jsonl", &summary.id));
+                if !grep_file_has_match(&mut grep_searcher, matcher, &thread_path) {
+                    continue;
+                }
+            }
+        }
+
         let events = load_thread_events(&summary.id).unwrap_or_default();
         let index = build_thread_search_index(&events);
         let activity_at = index
@@ -1034,11 +1016,55 @@ fn score_thread_match(title: Option<&str>, searchable_text: &str, query: &str) -
     std::cmp::max(title_score.saturating_mul(2), content_score)
 }
 
+fn has_date_filters(options: &ThreadSearchOptions) -> bool {
+    options.date.is_some() || options.date_start.is_some() || options.date_end.is_some()
+}
+
+/// Builds a case-insensitive grep matcher from query words (compiled once,
+/// reused across all thread files). Uses `fixed_strings` mode so words are
+/// matched literally without regex escaping.
+fn build_grep_matcher(query: &str) -> Option<grep_regex::RegexMatcher> {
+    let words: Vec<&str> = query.split_whitespace().filter(|w| !w.is_empty()).collect();
+
+    if words.is_empty() {
+        return None;
+    }
+
+    grep_regex::RegexMatcherBuilder::new()
+        .case_insensitive(true)
+        .fixed_strings(true)
+        .build_literals(&words)
+        .ok()
+}
+
+/// Returns `true` if the file at `path` contains at least one line matching the
+/// pre-compiled matcher. Uses grep-searcher for fast, SIMD-optimised scanning
+/// over raw bytes — much cheaper than deserialising every JSONL event.
+fn grep_file_has_match(
+    searcher: &mut grep_searcher::Searcher,
+    matcher: &grep_regex::RegexMatcher,
+    path: &Path,
+) -> bool {
+    use grep_searcher::sinks::Bytes;
+
+    let mut found = false;
+    let _ = searcher.search_path(
+        matcher,
+        path,
+        Bytes(|_line_num, _bytes| {
+            found = true;
+            Ok(false) // stop on first match
+        }),
+    );
+
+    found
+}
+
 fn matches_thread_date_filters(
     activity_at: Option<&DateTime<Utc>>,
     options: &ThreadSearchOptions,
 ) -> bool {
-    if options.date.is_none() && options.date_start.is_none() && options.date_end.is_none() {
+    if !has_date_filters(options) {
         return true;
     }
 
@@ -1144,16 +1170,14 @@ pub fn list_threads() -> Result<Vec<ThreadSummary>> {
         {
             let id = stem.to_string_lossy().to_string();
             let modified = entry.metadata().ok().and_then(|m| m.modified().ok());
-            let title = read_meta_title(&path).unwrap_or(None);
-            let root_path = read_meta_root_path(&path).unwrap_or(None);
-            let handoff_from = read_meta_handoff_from(&path).unwrap_or(None);
+            let meta = read_meta(&path).unwrap_or(None);
 
             threads.push(ThreadSummary {
                 id,
-                title,
-                root_path,
+                title: meta.as_ref().and_then(|m| m.title.clone()),
+                root_path: meta.as_ref().and_then(|m| m.root_path.clone()),
                 modified,
-                handoff_from,
+                handoff_from: meta.and_then(|m| m.handoff_from),
             });
         }
     }
