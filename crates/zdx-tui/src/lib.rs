@@ -57,12 +57,13 @@ pub async fn run_interactive_chat_with_history(
         );
     }
 
-    let effective = zdx_core::core::context::build_effective_system_prompt_with_paths(
-        config,
-        &root,
-        true,
-        thread_handle.as_ref().map(|t| t.id.as_str()),
-    )?;
+    let thread_id_ref = thread_handle.as_ref().map(|t| t.id.as_str());
+
+    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
+    zdx_core::core::context::set_runtime_env(config, thread_id_ref);
+
+    let effective =
+        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &root, true)?;
 
     // Print pre-TUI info to stderr (will be replaced by alternate screen)
     let mut err = stderr();

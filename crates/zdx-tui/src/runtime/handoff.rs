@@ -131,12 +131,12 @@ pub fn execute_handoff_submit(
     let thread_handle = thread_persistence::Thread::new_with_root_and_source(root, handoff_from)
         .map_err(|e| e.to_string())?;
 
-    let context_paths = match zdx_core::core::context::build_effective_system_prompt_with_paths(
-        config, root, true, None,
-    ) {
-        Ok(effective) => effective.loaded_agents_paths,
-        Err(_) => Vec::new(),
-    };
+    let context_paths =
+        match zdx_core::core::context::build_effective_system_prompt_with_paths(config, root, true)
+        {
+            Ok(effective) => effective.loaded_agents_paths,
+            Err(_) => Vec::new(),
+        };
 
     Ok((thread_handle, context_paths))
 }

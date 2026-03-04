@@ -57,11 +57,9 @@ If a quick, relevant check exists (fmt/lint/targeted tests), run it; otherwise s
 {% endif %}
 
 <environment>
-  <cwd>{{ cwd }}</cwd>
-  <date>{{ date }}</date>
-  <artifact_dir>{{ artifact_dir }}</artifact_dir>
-{% if thread_id %}  <thread_id>{{ thread_id }}</thread_id>
-{% endif %}</environment>
+Current directory: {{ cwd }}
+Current date: {{ date }}
+</environment>
 
 {% if base_prompt %}
 {{ base_prompt }}
