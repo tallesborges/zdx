@@ -946,6 +946,9 @@ const BOT_COMMAND_SCOPES: &[BotCommandScopeValue] = &[
     BotCommandScopeValue {
         r#type: "all_group_chats",
     },
+    BotCommandScopeValue {
+        r#type: "all_chat_administrators",
+    },
 ];
 
 #[derive(Debug, Clone, Serialize)]
