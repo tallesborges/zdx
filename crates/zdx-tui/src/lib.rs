@@ -57,8 +57,12 @@ pub async fn run_interactive_chat_with_history(
         );
     }
 
-    let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &root, true)?;
+    let effective = zdx_core::core::context::build_effective_system_prompt_with_paths(
+        config,
+        &root,
+        true,
+        thread_handle.as_ref().map(|t| t.id.as_str()),
+    )?;
 
     // Print pre-TUI info to stderr (will be replaced by alternate screen)
     let mut err = stderr();

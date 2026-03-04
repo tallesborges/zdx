@@ -2495,20 +2495,29 @@ mod tests {
         // Message 1: assistant with reasoning + tool_use + partial text
         assert_eq!(messages[1].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[1].content {
-            assert!(blocks.len() >= 2, "Expected reasoning + tool_use + text blocks, got: {blocks:#?}");
+            assert!(
+                blocks.len() >= 2,
+                "Expected reasoning + tool_use + text blocks, got: {blocks:#?}"
+            );
             // Should have reasoning block
             assert!(
-                blocks.iter().any(|b| matches!(b, ChatContentBlock::Reasoning(..))),
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ChatContentBlock::Reasoning(..))),
                 "Missing reasoning block in interrupted assistant message"
             );
             // Should have tool_use block
             assert!(
-                blocks.iter().any(|b| matches!(b, ChatContentBlock::ToolUse { .. })),
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ChatContentBlock::ToolUse { .. })),
                 "Missing tool_use block in interrupted assistant message"
             );
             // Should have partial text
             assert!(
-                blocks.iter().any(|b| matches!(b, ChatContentBlock::Text(t) if t.contains("files I found"))),
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ChatContentBlock::Text(t) if t.contains("files I found"))),
                 "Missing partial text in interrupted assistant message"
             );
         } else {
@@ -2521,7 +2530,10 @@ mod tests {
             match &blocks[0] {
                 ChatContentBlock::ToolResult(result) => {
                     assert_eq!(result.tool_use_id, "t1");
-                    assert!(result.is_error, "Cancelled tool result should be marked as error");
+                    assert!(
+                        result.is_error,
+                        "Cancelled tool result should be marked as error"
+                    );
                 }
                 other => panic!("expected ToolResult, got {other:?}"),
             }
@@ -2567,7 +2579,9 @@ mod tests {
         assert_eq!(messages[3].role, "assistant");
         if let MessageContent::Blocks(blocks) = &messages[3].content {
             assert!(
-                blocks.iter().any(|b| matches!(b, ChatContentBlock::ToolUse { name, .. } if name == "bash")),
+                blocks
+                    .iter()
+                    .any(|b| matches!(b, ChatContentBlock::ToolUse { name, .. } if name == "bash")),
                 "Missing tool_use for t2 in interrupted assistant message"
             );
         } else {
