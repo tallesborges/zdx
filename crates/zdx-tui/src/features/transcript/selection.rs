@@ -445,5 +445,4 @@ mod tests {
         let text = map.get_text_range(VisualPosition::new(0, 1), VisualPosition::new(0, 4));
         assert_eq!(text, "你好A");
     }
-
 }
