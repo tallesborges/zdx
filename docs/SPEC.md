@@ -182,7 +182,26 @@ Error:
 
 ---
 
-## 11) Configuration
+## 11) Environment Variables (Runtime Context)
+
+ZDX exposes runtime context to agent processes via `ZDX_*` environment variables.
+These are the canonical source of truth for paths and session context — skills, automations, and bash commands reference these env vars directly.
+
+### Mechanism
+
+`set_runtime_env()` in `zdx-core/src/core/context.rs` sets all `ZDX_*` env vars once at agent startup (TUI, exec, bot). Child processes (bash tool, subagents) inherit them automatically.
+
+### System prompt `<environment>` block
+
+The `<environment>` block in the system prompt contains only non-path metadata that the model needs for reasoning without running commands (current directory, date). Paths are not duplicated in the prompt — the model uses `$ZDX_*` env vars directly in bash commands.
+
+### Subagent inheritance
+
+Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automatically. No explicit forwarding needed.
+
+---
+
+## 12) Configuration
 
 - Location: `<base>/config.toml`
 - Format: TOML
@@ -226,7 +245,7 @@ Error:
 
 ---
 
-## 12) Project Context + Memory (`AGENTS.md`, `MEMORY.md`)
+## 13) Project Context + Memory (`AGENTS.md`, `MEMORY.md`)
 
 ZDX composes project/user context in this order before skills/subagents sections:
 
@@ -261,7 +280,7 @@ ZDX composes project/user context in this order before skills/subagents sections
 
 ---
 
-## 13) Skills (SKILL.md)
+## 14) Skills (SKILL.md)
 
 Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `description`) and Markdown instructions. At startup, only metadata is loaded. The model uses the `read` tool to load full instructions when a task matches a skill.
 
@@ -296,7 +315,7 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ---
 
-## 14) Telegram bot media response (`zdx-bot`)
+## 15) Telegram bot media response (`zdx-bot`)
 
 When using the Telegram bot runtime, assistant turns may include media file directives.
 

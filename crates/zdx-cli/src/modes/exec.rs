@@ -53,6 +53,11 @@ pub async fn run_exec(
 ) -> Result<String> {
     use std::io::Write;
 
+    let thread_id_ref = thread.as_ref().map(|t| t.id.as_str());
+
+    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
+    zdx_core::core::context::set_runtime_env(config, thread_id_ref);
+
     let effective = if options.no_system_prompt {
         None
     } else {
@@ -61,7 +66,6 @@ pub async fn run_exec(
                 config,
                 &options.root,
                 false,
-                None,
             )?,
         )
     };

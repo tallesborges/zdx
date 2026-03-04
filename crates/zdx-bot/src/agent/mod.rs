@@ -94,13 +94,15 @@ pub(crate) fn spawn_agent_turn(
     thread: &Thread,
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
+    // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
+    zdx_core::core::context::set_runtime_env(config, Some(thread_id));
+
     // Build effective system prompt from config + AGENTS.md + memory + skills + optional surface rules.
     let effective = build_effective_system_prompt_with_paths_and_surface_rules(
         config,
         root,
         bot_surface_rules,
         true,
-        Some(thread_id),
     )
     .context("build system prompt")?;
     let system_prompt = effective.prompt;
