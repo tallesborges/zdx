@@ -57,8 +57,8 @@ If a quick, relevant check exists (fmt/lint/targeted tests), run it; otherwise s
 {% endif %}
 
 <environment>
-Current directory: {{ cwd }}
-Current date: {{ date }}
+  <cwd>{{ cwd }}</cwd>
+  <date>{{ date }}</date>
 </environment>
 
 {% if base_prompt %}
