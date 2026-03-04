@@ -61,6 +61,7 @@ pub async fn run_exec(
                 config,
                 &options.root,
                 false,
+                None,
             )?,
         )
     };

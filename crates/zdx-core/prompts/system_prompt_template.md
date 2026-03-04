@@ -59,6 +59,7 @@ If a quick, relevant check exists (fmt/lint/targeted tests), run it; otherwise s
 <environment>
   <cwd>{{ cwd }}</cwd>
   <date>{{ date }}</date>
+  <artifact_dir>{{ artifact_dir }}</artifact_dir>
 </environment>
 
 {% if base_prompt %}

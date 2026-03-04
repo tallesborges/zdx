@@ -100,6 +100,7 @@ pub(crate) fn spawn_agent_turn(
         root,
         bot_surface_rules,
         true,
+        Some(thread_id),
     )
     .context("build system prompt")?;
     let system_prompt = effective.prompt;

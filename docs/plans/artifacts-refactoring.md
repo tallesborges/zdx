@@ -16,7 +16,7 @@ This makes it impossible to:
 
 ## Goals
 
-- Single canonical artifact root with optional env override
+- Single canonical artifact root: `$ZDX_HOME/artifacts`
 - Per-thread artifact directories resolved at runtime
 - Artifact dir injected into the agent's `<environment>` block (same as `cwd` and `date`)
 - All artifact-producing paths (skills, tools, automations) default to the resolved dir
@@ -33,7 +33,7 @@ This makes it impossible to:
 ### Path resolution
 
 ```
-artifact_root = $ZDX_ARTIFACTS || $ZDX_HOME/artifacts
+artifact_root = $ZDX_HOME/artifacts
 ```
 
 Per-context artifact dir:
@@ -125,7 +125,6 @@ Skills read `artifact_dir` from the `<environment>` block — no code change in 
 
 ### Slice 1: Artifact path resolution + env injection
 - Add `artifact_root()` and `artifact_dir_for_thread()` to `config::paths`
-- Add `ZDX_ARTIFACTS` env var support
 - Add `artifact_dir` to `PromptTemplateVars`
 - Thread `thread_id` through the prompt-building call chain
 - Render `Artifact directory:` in `<environment>` block
@@ -144,7 +143,7 @@ Skills read `artifact_dir` from the `<environment>` block — no code change in 
 
 ## Testing
 
-- Unit test: `artifact_root()` returns `ZDX_ARTIFACTS` env when set, falls back to default
+- Unit test: `artifact_root()` returns `$ZDX_HOME/artifacts`
 - Unit test: `artifact_dir_for_thread(Some("abc"))` → `{root}/threads/abc/`
 - Unit test: `artifact_dir_for_thread(None)` → `{root}/scratch/`
 - Unit test: `PromptTemplateVars` includes `artifact_dir` field

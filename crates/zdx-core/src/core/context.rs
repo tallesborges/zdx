@@ -129,6 +129,7 @@ struct PromptTemplateVars {
     date: String,
     memory_notes_path: String,
     memory_daily_path: String,
+    artifact_dir: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -218,6 +219,7 @@ fn build_prompt_template_vars(
     model: &str,
     config: &Config,
     sections: PromptTemplateSections<'_>,
+    thread_id: Option<&str>,
 ) -> PromptTemplateVars {
     let base_prompt = sections.base_prompt.unwrap_or_default().trim().to_string();
     let project_context = sections
@@ -271,6 +273,9 @@ fn build_prompt_template_vars(
         date: Utc::now().format("%Y-%m-%d").to_string(),
         memory_notes_path: config.memory.effective_notes_path().display().to_string(),
         memory_daily_path: config.memory.effective_daily_path().display().to_string(),
+        artifact_dir: paths::artifact_dir_for_thread(thread_id)
+            .display()
+            .to_string(),
     }
 }
 
@@ -605,12 +610,14 @@ pub fn build_effective_system_prompt_with_paths(
     config: &Config,
     root: &Path,
     memory_suggestions: bool,
+    thread_id: Option<&str>,
 ) -> Result<EffectivePrompt> {
     build_effective_system_prompt_with_paths_and_surface_rules(
         config,
         root,
         None,
         memory_suggestions,
+        thread_id,
     )
 }
 
@@ -625,6 +632,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
     root: &Path,
     surface_rules: Option<&str>,
     memory_suggestions: bool,
+    thread_id: Option<&str>,
 ) -> Result<EffectivePrompt> {
     let base_prompt = config.effective_system_prompt()?;
     let PromptContextSectionsResult {
@@ -660,6 +668,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
         },
+        thread_id,
     );
 
     let system_prompt = render_system_prompt_with_fallback(
@@ -1014,6 +1023,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         let err = render_prompt_template("{{unknown}}", &vars).unwrap_err();
@@ -1036,6 +1046,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         let rendered = render_prompt_template(
@@ -1066,6 +1077,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         let rendered = render_prompt_template(
@@ -1103,6 +1115,7 @@ mod tests {
                 subagents_enabled: true,
                 subagent_models: &models,
             },
+            None,
         );
 
         let rendered = render_prompt_template(
@@ -1134,6 +1147,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         assert_eq!(anthropic.provider, "anthropic");
@@ -1154,6 +1168,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         assert_eq!(codex.provider, "openai-codex");
@@ -1181,7 +1196,7 @@ mod tests {
         };
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(!prompt.contains(
@@ -1211,7 +1226,7 @@ mod tests {
         config.prompt_template.file = None;
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("<environment>"));
@@ -1238,6 +1253,7 @@ mod tests {
                 subagents_enabled: false,
                 subagent_models: &[],
             },
+            None,
         );
 
         let rendered = render_prompt_template(
@@ -1275,6 +1291,7 @@ mod tests {
             dir.path(),
             Some("Telegram output rules"),
             false,
+            None,
         )
         .unwrap();
         let prompt = effective.prompt.unwrap_or_default();
@@ -1311,7 +1328,7 @@ mod tests {
         };
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("Prompt=Base prompt"));
         assert!(prompt.contains(&format!("Root={}", dir.path().display())));
@@ -1342,7 +1359,7 @@ mod tests {
         };
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
@@ -1374,7 +1391,7 @@ mod tests {
         };
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains("Base prompt"));
@@ -1402,7 +1419,7 @@ mod tests {
         };
 
         let effective =
-            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+            build_effective_system_prompt_with_paths(&config, dir.path(), false, None).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
         assert!(!prompt.contains("Available model overrides"));
     }

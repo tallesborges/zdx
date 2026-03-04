@@ -388,6 +388,21 @@ pub mod paths {
     pub fn threads_dir() -> PathBuf {
         zdx_home().join("threads")
     }
+
+    /// Returns the artifact root directory (`$ZDX_HOME/artifacts`).
+    pub fn artifact_root() -> PathBuf {
+        zdx_home().join("artifacts")
+    }
+
+    /// Returns the artifact directory for a specific thread.
+    /// Does NOT create the directory — the agent creates it when needed.
+    pub fn artifact_dir_for_thread(thread_id: Option<&str>) -> PathBuf {
+        let root = artifact_root();
+        match thread_id {
+            Some(id) => root.join("threads").join(id),
+            None => root.join("scratch"),
+        }
+    }
 }
 
 /// Default value for serde when `handoff_model` is missing.
