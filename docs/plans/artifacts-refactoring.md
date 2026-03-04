@@ -1,6 +1,6 @@
 # Artifacts Refactoring — Thread-Scoped Folders
 
-## Status: Planned (2026-03-04)
+## Status: Done (2026-03-04)
 
 ## Problem
 
