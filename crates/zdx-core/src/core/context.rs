@@ -130,6 +130,7 @@ struct PromptTemplateVars {
     memory_notes_path: String,
     memory_daily_path: String,
     artifact_dir: String,
+    thread_id: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -276,6 +277,7 @@ fn build_prompt_template_vars(
         artifact_dir: paths::artifact_dir_for_thread(thread_id)
             .display()
             .to_string(),
+        thread_id: thread_id.unwrap_or_default().to_string(),
     }
 }
 
