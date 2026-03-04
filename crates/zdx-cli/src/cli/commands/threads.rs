@@ -127,11 +127,6 @@ pub fn search(options: SearchCommandOptions) -> Result<()> {
         return Ok(());
     }
 
-    let query_supplied = search_options
-        .query
-        .as_deref()
-        .is_some_and(|q| !q.trim().is_empty());
-
     for result in results {
         println!("[{}] {}", result.thread_id, result.display_title());
         if let Some(activity_at) = &result.activity_at {
@@ -139,9 +134,6 @@ pub fn search(options: SearchCommandOptions) -> Result<()> {
         }
         if !result.preview.is_empty() {
             println!("  Preview: {}", result.preview);
-        }
-        if query_supplied {
-            println!("  Score: {}", result.score);
         }
         println!();
     }

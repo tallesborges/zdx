@@ -804,7 +804,6 @@ pub struct ThreadSearchResult {
     pub title: Option<String>,
     pub root_path: Option<String>,
     pub activity_at: Option<String>,
-    pub score: u32,
     pub preview: String,
 }
 
@@ -819,16 +818,11 @@ impl ThreadSearchResult {
 
 const SEARCH_PREVIEW_MAX_BYTES: usize = 200;
 
-struct ThreadSearchIndex {
-    searchable_text: String,
-    preview_candidates: Vec<String>,
-    latest_timestamp: Option<DateTime<Utc>>,
-}
-
 /// Searches threads by optional query and/or date filters.
 ///
-/// Results are sorted by relevance then recency when a query is provided,
-/// otherwise by recency only.
+/// Results are ordered by recency (`list_threads()` already returns
+/// newest-first). When a query is provided the grep pre-filter narrows
+/// candidates; we collect up to `limit` matches (early termination).
 ///
 /// # Errors
 /// Returns an error if thread listing fails.
@@ -842,11 +836,13 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
     let limit = options.limit.max(1);
 
     // Build a grep matcher once for the whole search. Used to pre-filter raw
-    // files before the expensive JSON deserialisation + nucleo scoring path.
+    // files before expensive JSON deserialisation.
     let grep_matcher = normalized_query.as_deref().and_then(build_grep_matcher);
     let mut grep_searcher = grep_searcher::Searcher::new();
 
-    let mut ranked: Vec<(ThreadSearchResult, Option<DateTime<Utc>>)> = Vec::new();
+    let mut results: Vec<ThreadSearchResult> = Vec::new();
+
+    // list_threads() is already sorted by modified time (newest first).
     for summary in list_threads()? {
         // Fast grep pre-filter: check title first (already in memory from
         // list_threads), then scan the raw JSONL file for query terms.
@@ -870,29 +866,22 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
             }
         }
 
-        let events = load_thread_events(&summary.id).unwrap_or_default();
-        let index = build_thread_search_index(&events);
-        let activity_at = index
-            .latest_timestamp
-            .or_else(|| summary.modified.map(DateTime::<Utc>::from));
+        // When date filters are active, derive activity_at from event
+        // timestamps (accurate); otherwise use the cheap file modified time.
+        let activity_at = if has_date_filters(options) {
+            let events = load_thread_events(&summary.id).unwrap_or_default();
+            latest_event_timestamp(&events).or_else(|| summary.modified.map(DateTime::<Utc>::from))
+        } else {
+            summary.modified.map(DateTime::<Utc>::from)
+        };
 
         if !matches_thread_date_filters(activity_at.as_ref(), options) {
             continue;
         }
 
-        let score = normalized_query.as_deref().map_or(0, |query| {
-            score_thread_match(summary.title.as_deref(), &index.searchable_text, query)
-        });
-
-        if normalized_query.is_some() && score == 0 {
-            continue;
-        }
-
-        let preview = build_thread_preview(
-            summary.title.as_deref(),
-            &index.preview_candidates,
-            normalized_query.as_deref(),
-        );
+        // Build preview from first assistant message (loads events only for
+        // matched threads that survived the filter).
+        let preview = build_thread_preview_simple(&summary);
 
         let result = ThreadSearchResult {
             thread_id: summary.id,
@@ -901,123 +890,42 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
             activity_at: activity_at
                 .as_ref()
                 .map(|dt| dt.to_rfc3339_opts(chrono::SecondsFormat::Secs, true)),
-            score,
             preview,
         };
-        ranked.push((result, activity_at));
+        results.push(result);
+
+        // Early termination — list is already sorted by recency.
+        if results.len() >= limit {
+            break;
+        }
     }
 
-    if normalized_query.is_some() {
-        ranked.sort_by(|(a, a_ts), (b, b_ts)| {
-            b.score
-                .cmp(&a.score)
-                .then_with(|| b_ts.cmp(a_ts))
-                .then_with(|| a.thread_id.cmp(&b.thread_id))
-        });
-    } else {
-        ranked.sort_by(|(a, a_ts), (b, b_ts)| {
-            b_ts.cmp(a_ts).then_with(|| a.thread_id.cmp(&b.thread_id))
-        });
-    }
-
-    let mut results: Vec<ThreadSearchResult> =
-        ranked.into_iter().map(|(result, _)| result).collect();
-    results.truncate(limit);
     Ok(results)
-}
-
-fn build_thread_search_index(events: &[ThreadEvent]) -> ThreadSearchIndex {
-    let mut searchable_text = String::new();
-    let mut preview_candidates = Vec::new();
-    let mut latest_timestamp = None;
-
-    for event in events {
-        if let Some(timestamp) = parse_thread_event_timestamp(event)
-            && latest_timestamp.is_none_or(|current| timestamp > current)
-        {
-            latest_timestamp = Some(timestamp);
-        }
-
-        match event {
-            ThreadEvent::Message { text, .. }
-            | ThreadEvent::Reasoning {
-                text: Some(text), ..
-            } => {
-                push_search_text(&mut searchable_text, text);
-                preview_candidates.push(text.clone());
-            }
-            ThreadEvent::ToolUse { name, input, .. } => {
-                let tool_line = format!(
-                    "{name} {}",
-                    serde_json::to_string(input).unwrap_or_default()
-                );
-                push_search_text(&mut searchable_text, &tool_line);
-                preview_candidates.push(tool_line);
-            }
-            _ => {}
-        }
-    }
-
-    ThreadSearchIndex {
-        searchable_text,
-        preview_candidates,
-        latest_timestamp,
-    }
-}
-
-fn parse_thread_event_timestamp(event: &ThreadEvent) -> Option<DateTime<Utc>> {
-    let ts = match event {
-        ThreadEvent::Meta { ts, .. }
-        | ThreadEvent::Message { ts, .. }
-        | ThreadEvent::ToolUse { ts, .. }
-        | ThreadEvent::ToolResult { ts, .. }
-        | ThreadEvent::Interrupted { ts, .. }
-        | ThreadEvent::Reasoning { ts, .. }
-        | ThreadEvent::Usage { ts, .. } => ts,
-    };
-
-    DateTime::parse_from_rfc3339(ts)
-        .ok()
-        .map(|dt| dt.with_timezone(&Utc))
-}
-
-fn push_search_text(searchable_text: &mut String, value: &str) {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return;
-    }
-
-    if !searchable_text.is_empty() {
-        searchable_text.push('\n');
-    }
-    searchable_text.push_str(trimmed);
-}
-
-fn score_thread_match(title: Option<&str>, searchable_text: &str, query: &str) -> u32 {
-    use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-    use nucleo_matcher::{Config, Matcher, Utf32Str};
-
-    let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
-    let mut matcher = Matcher::new(Config::DEFAULT);
-
-    let title_score = title.map_or(0, |t| {
-        let mut buf = Vec::new();
-        let haystack = Utf32Str::new(t, &mut buf);
-        pattern.score(haystack, &mut matcher).unwrap_or(0)
-    });
-
-    let content_score = {
-        let mut buf = Vec::new();
-        let haystack = Utf32Str::new(searchable_text, &mut buf);
-        pattern.score(haystack, &mut matcher).unwrap_or(0)
-    };
-
-    // Title matches are weighted 2x to preserve title preference
-    std::cmp::max(title_score.saturating_mul(2), content_score)
 }
 
 fn has_date_filters(options: &ThreadSearchOptions) -> bool {
     options.date.is_some() || options.date_start.is_some() || options.date_end.is_some()
+}
+
+/// Returns the latest RFC-3339 timestamp found across all events in a thread.
+fn latest_event_timestamp(events: &[ThreadEvent]) -> Option<DateTime<Utc>> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let ts = match event {
+                ThreadEvent::Meta { ts, .. }
+                | ThreadEvent::Message { ts, .. }
+                | ThreadEvent::ToolUse { ts, .. }
+                | ThreadEvent::ToolResult { ts, .. }
+                | ThreadEvent::Interrupted { ts, .. }
+                | ThreadEvent::Reasoning { ts, .. }
+                | ThreadEvent::Usage { ts, .. } => ts,
+            };
+            DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.with_timezone(&Utc))
+        })
+        .max()
 }
 
 /// Builds a case-insensitive grep matcher from query words (compiled once,
@@ -1092,44 +1000,26 @@ fn matches_thread_date_filters(
     true
 }
 
-fn build_thread_preview(title: Option<&str>, candidates: &[String], query: Option<&str>) -> String {
-    if let Some(query) = query {
-        // Use nucleo to find the best-matching candidate for the preview
-        use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
-        use nucleo_matcher::{Config, Matcher, Utf32Str};
+/// Returns a short preview string for a thread: first assistant message, or title fallback.
+fn build_thread_preview_simple(summary: &ThreadSummary) -> String {
+    let events = load_thread_events(&summary.id).unwrap_or_default();
 
-        let pattern = Pattern::parse(query, CaseMatching::Ignore, Normalization::Smart);
-        let mut matcher = Matcher::new(Config::DEFAULT);
-
-        // Check title first (preferred)
-        if let Some(title) = title {
-            let mut buf = Vec::new();
-            let haystack = Utf32Str::new(title, &mut buf);
-            if pattern.score(haystack, &mut matcher).is_some() {
-                return truncate_preview(title);
+    for event in &events {
+        if let ThreadEvent::Message { role, text, .. } = event
+            && role == "assistant"
+        {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                return truncate_preview(trimmed);
             }
         }
-
-        // Find the best-scoring candidate
-        let best = candidates
-            .iter()
-            .filter_map(|c| {
-                let mut buf = Vec::new();
-                let haystack = Utf32Str::new(c, &mut buf);
-                pattern.score(haystack, &mut matcher).map(|s| (c, s))
-            })
-            .max_by_key(|(_, s)| *s);
-
-        if let Some((candidate, _)) = best {
-            return truncate_preview(candidate);
-        }
     }
 
-    if let Some(first) = candidates.first() {
-        return truncate_preview(first);
-    }
-
-    title.map(truncate_preview).unwrap_or_default()
+    summary
+        .title
+        .as_deref()
+        .map(truncate_preview)
+        .unwrap_or_default()
 }
 
 fn truncate_preview(value: &str) -> String {
@@ -2392,34 +2282,6 @@ mod tests {
         // Test is_empty
         assert!(!u1.is_empty());
         assert!(Usage::default().is_empty());
-    }
-
-    #[test]
-    fn test_fuzzy_score_thread_match_typo() {
-        // Exact substring
-        assert!(score_thread_match(Some("deploy pipeline"), "", "deploy") > 0);
-        // Typo/partial — nucleo fuzzy should still match
-        assert!(score_thread_match(Some("deploy pipeline"), "", "dploy") > 0);
-        // Title weighted higher than content for the same text
-        let title_score = score_thread_match(Some("deploy"), "", "deploy");
-        let content_score = score_thread_match(None, "deploy", "deploy");
-        assert!(title_score > content_score);
-        // No match at all
-        assert_eq!(score_thread_match(None, "hello world", "zzzzqqqq"), 0);
-    }
-
-    #[test]
-    fn test_fuzzy_preview_picks_best_candidate() {
-        let candidates = vec![
-            "hello world".to_string(),
-            "deploying the new service".to_string(),
-            "unrelated stuff".to_string(),
-        ];
-        let preview = build_thread_preview(None, &candidates, Some("dploy"));
-        assert!(
-            preview.contains("deploying"),
-            "expected preview to contain 'deploying', got: {preview}"
-        );
     }
 
     /// Regression test: orphaned `tool_use` (bot crashed mid-execution) followed by
