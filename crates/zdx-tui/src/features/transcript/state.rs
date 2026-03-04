@@ -693,13 +693,19 @@ impl TranscriptState {
     /// Starts a new selection at the given visual position.
     pub fn start_selection(&mut self, line: usize, column: usize) {
         use super::selection::VisualPosition;
-        self.selection.start(VisualPosition::new(line, column));
+        self.selection.start(VisualPosition::new(
+            line,
+            self.clamp_selection_column(line, column),
+        ));
     }
 
     /// Extends the selection to the given visual position.
     pub fn extend_selection(&mut self, line: usize, column: usize) {
         use super::selection::VisualPosition;
-        self.selection.extend(VisualPosition::new(line, column));
+        self.selection.extend(VisualPosition::new(
+            line,
+            self.clamp_selection_column(line, column),
+        ));
     }
 
     /// Finishes an active selection (mouse button released).
@@ -851,6 +857,15 @@ impl TranscriptState {
         } else {
             false
         }
+    }
+
+    fn clamp_selection_column(&self, line: usize, column: usize) -> usize {
+        self.position_map
+            .get_by_global_line(line)
+            .map_or(column, |mapping| {
+                let prefix = usize::from(mapping.text.starts_with("│ ")) * 2;
+                column.max(prefix)
+            })
     }
 }
 
@@ -1041,10 +1056,10 @@ mod tests {
 
         let mut transcript = TranscriptState::with_cells(vec![tool]);
         transcript.position_map.clear();
-        transcript.position_map.push(LineMapping {
-            text: "  args (json) ▶".to_string(),
-            interaction: Some(LineInteraction::ToggleToolArgs),
-        });
+        transcript.position_map.push(LineMapping::new(
+            "  args (json) ▶".to_string(),
+            Some(LineInteraction::ToggleToolArgs),
+        ));
         transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
 
         assert!(transcript.toggle_tool_args_for_line(0));
@@ -1065,10 +1080,9 @@ mod tests {
         let mut transcript = TranscriptState::with_cells(vec![tool]);
 
         transcript.position_map.clear();
-        transcript.position_map.push(LineMapping {
-            text: "read: a".to_string(),
-            interaction: None,
-        });
+        transcript
+            .position_map
+            .push(LineMapping::new("read: a".to_string(), None));
         transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
 
         assert!(!transcript.toggle_tool_args_for_line(0));
@@ -1085,10 +1099,10 @@ mod tests {
 
         let mut transcript = TranscriptState::with_cells(vec![tool]);
         transcript.position_map.clear();
-        transcript.position_map.push(LineMapping {
-            text: "─ output ─ ▶".to_string(),
-            interaction: Some(LineInteraction::ToggleToolOutput),
-        });
+        transcript.position_map.push(LineMapping::new(
+            "─ output ─ ▶".to_string(),
+            Some(LineInteraction::ToggleToolOutput),
+        ));
         transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
 
         assert!(transcript.toggle_tool_output_for_line(0));
@@ -1108,13 +1122,27 @@ mod tests {
         let mut transcript = TranscriptState::with_cells(vec![tool]);
 
         transcript.position_map.clear();
-        transcript.position_map.push(LineMapping {
-            text: "output line".to_string(),
-            interaction: None,
-        });
+        transcript
+            .position_map
+            .push(LineMapping::new("output line".to_string(), None));
         transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
 
         assert!(!transcript.toggle_tool_output_for_line(0));
+    }
+
+    #[test]
+    fn test_selection_clamps_non_selectable_prefix() {
+        let mut transcript = TranscriptState::with_cells(vec![]);
+        transcript.position_map.clear();
+        transcript
+            .position_map
+            .push(LineMapping::new("│ hello".to_string(), None));
+
+        transcript.start_selection(0, 0);
+        transcript.extend_selection(0, 7);
+        transcript.finish_selection();
+
+        assert_eq!(transcript.get_selected_text().as_deref(), Some("hello"));
     }
 
     #[test]
