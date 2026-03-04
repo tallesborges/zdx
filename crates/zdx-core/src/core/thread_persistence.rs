@@ -2455,4 +2455,140 @@ mod tests {
             panic!("expected blocks content for tool_result message");
         }
     }
+
+    /// Verifies that when a turn is interrupted mid-stream, the partial assistant
+    /// content (reasoning, tool calls, and streamed text) is preserved in the
+    /// reconstructed messages so the model sees them on the next request.
+    #[test]
+    fn test_interrupted_turn_preserves_reasoning_tools_and_partial_text() {
+        use crate::providers::{ChatContentBlock, MessageContent};
+
+        let events = vec![
+            ThreadEvent::user_message("analyze the codebase"),
+            // Reasoning arrived before interruption
+            ThreadEvent::reasoning(
+                Some("Let me look at the project structure first...".to_string()),
+                Some(ReplayToken::Anthropic {
+                    signature: "sig_abc".to_string(),
+                }),
+            ),
+            // Tool was requested but not completed
+            ThreadEvent::tool_use("t1", "bash", json!({"command": "find . -name '*.rs'"})),
+            // User interrupted here — no tool_result, no assistant_message
+            ThreadEvent::interrupted(Some("Here are the files I found so far".to_string())),
+            // User sends a new message
+            ThreadEvent::user_message("actually, just focus on the tests"),
+        ];
+
+        let messages = thread_events_to_messages(events);
+
+        // Expected structure:
+        // 1. user: "analyze the codebase"
+        // 2. assistant: [reasoning, tool_use, partial text]
+        // 3. user (tool_results): [cancelled tool_result for t1]
+        // 4. user: "actually, just focus on the tests"
+        assert_eq!(messages.len(), 4, "messages: {messages:#?}");
+
+        // Message 0: user input
+        assert_eq!(messages[0].role, "user");
+
+        // Message 1: assistant with reasoning + tool_use + partial text
+        assert_eq!(messages[1].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[1].content {
+            assert!(blocks.len() >= 2, "Expected reasoning + tool_use + text blocks, got: {blocks:#?}");
+            // Should have reasoning block
+            assert!(
+                blocks.iter().any(|b| matches!(b, ChatContentBlock::Reasoning(..))),
+                "Missing reasoning block in interrupted assistant message"
+            );
+            // Should have tool_use block
+            assert!(
+                blocks.iter().any(|b| matches!(b, ChatContentBlock::ToolUse { .. })),
+                "Missing tool_use block in interrupted assistant message"
+            );
+            // Should have partial text
+            assert!(
+                blocks.iter().any(|b| matches!(b, ChatContentBlock::Text(t) if t.contains("files I found"))),
+                "Missing partial text in interrupted assistant message"
+            );
+        } else {
+            panic!("Expected blocks content for interrupted assistant message");
+        }
+
+        // Message 2: cancelled tool result
+        assert_eq!(messages[2].role, "user"); // tool_results use "user" role
+        if let MessageContent::Blocks(blocks) = &messages[2].content {
+            match &blocks[0] {
+                ChatContentBlock::ToolResult(result) => {
+                    assert_eq!(result.tool_use_id, "t1");
+                    assert!(result.is_error, "Cancelled tool result should be marked as error");
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        } else {
+            panic!("expected blocks content for tool_result message");
+        }
+
+        // Message 3: new user message
+        assert_eq!(messages[3].role, "user");
+    }
+
+    /// Verifies that an interrupted turn with NO partial content still preserves
+    /// reasoning and tool blocks (e.g., interrupt during API request after tools).
+    #[test]
+    fn test_interrupted_turn_without_partial_text_preserves_tools() {
+        use crate::providers::{ChatContentBlock, MessageContent};
+
+        let events = vec![
+            ThreadEvent::user_message("do something"),
+            ThreadEvent::tool_use("t1", "read", json!({"path": "src/main.rs"})),
+            ThreadEvent::tool_result("t1", json!({"ok": true, "data": "fn main() {}"}), true),
+            // Second tool requested but user interrupted before completion
+            ThreadEvent::tool_use("t2", "bash", json!({"command": "cargo test"})),
+            ThreadEvent::interrupted(None),
+            ThreadEvent::user_message("stop, let me rethink"),
+        ];
+
+        let messages = thread_events_to_messages(events);
+
+        // Expected: user, assistant(t1+t2), tool_results(t1), assistant(t2 only), cancelled(t2), user
+        // Actually let me trace through MessageReplay:
+        // - user_message → messages.push(user)
+        // - tool_use t1 → open_tool_uses=[t1], pending_tool_uses=[(t1,...)]
+        // - tool_result t1 → removes t1 from open, adds to pending_results, flushes assistant blocks (t1 tool_use), then flushes tool_results
+        // - tool_use t2 → open_tool_uses=[t2], pending_tool_uses=[(t2,...)]
+        // - interrupted(None) → flush_tool_results (empty), take_assistant_blocks → [t2 tool_use], push assistant, cancel open t2
+        // - user_message → push user
+        //
+        // Result: user, assistant(tool_use t1), user(tool_result t1), assistant(tool_use t2), user(cancelled t2), user
+        assert_eq!(messages.len(), 6, "messages: {messages:#?}");
+
+        // The interrupted assistant turn should have the t2 tool_use
+        assert_eq!(messages[3].role, "assistant");
+        if let MessageContent::Blocks(blocks) = &messages[3].content {
+            assert!(
+                blocks.iter().any(|b| matches!(b, ChatContentBlock::ToolUse { name, .. } if name == "bash")),
+                "Missing tool_use for t2 in interrupted assistant message"
+            );
+        } else {
+            panic!("Expected blocks for interrupted assistant");
+        }
+
+        // Cancelled tool result for t2
+        assert_eq!(messages[4].role, "user");
+        if let MessageContent::Blocks(blocks) = &messages[4].content {
+            match &blocks[0] {
+                ChatContentBlock::ToolResult(result) => {
+                    assert_eq!(result.tool_use_id, "t2");
+                    assert!(result.is_error);
+                }
+                other => panic!("expected ToolResult, got {other:?}"),
+            }
+        } else {
+            panic!("expected blocks for cancelled tool result");
+        }
+
+        // New user message
+        assert_eq!(messages[5].role, "user");
+    }
 }
