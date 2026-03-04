@@ -9,6 +9,9 @@ readme = "../../README.md"
 keywords = ["zdx", "ai", "agent", "telegram", "bot"]
 categories = ["command-line-utilities"]
 
+[lib]
+doctest = false
+
 [lints]
 workspace = true
 [dependencies]
