@@ -70,6 +70,13 @@ pub struct LineMapping {
     pub interaction: Option<LineInteraction>,
 }
 
+impl LineMapping {
+    /// Creates a line mapping.
+    pub fn new(text: String, interaction: Option<LineInteraction>) -> Self {
+        Self { text, interaction }
+    }
+}
+
 /// Maps visual positions to cell text positions.
 ///
 /// Rebuilt on each render to track which cell/text each visual line comes from.
@@ -419,14 +426,8 @@ mod tests {
     fn test_position_map_get_text_range() {
         let map = PositionMap::new();
 
-        map.push(LineMapping {
-            text: "Hello".to_string(),
-            interaction: None,
-        });
-        map.push(LineMapping {
-            text: "World!".to_string(),
-            interaction: None,
-        });
+        map.push(LineMapping::new("Hello".to_string(), None));
+        map.push(LineMapping::new("World!".to_string(), None));
 
         // Select "llo\nWor"
         let text = map.get_text_range(VisualPosition::new(0, 2), VisualPosition::new(1, 3));
@@ -438,13 +439,11 @@ mod tests {
         let map = PositionMap::new();
 
         // Text with emoji and CJK
-        map.push(LineMapping {
-            text: "🎉你好AB".to_string(), // 5 graphemes: 🎉, 你, 好, A, B
-            interaction: None,
-        });
+        map.push(LineMapping::new("🎉你好AB".to_string(), None)); // 5 graphemes: 🎉, 你, 好, A, B
 
         // Select graphemes 1-3 (你好A)
         let text = map.get_text_range(VisualPosition::new(0, 1), VisualPosition::new(0, 4));
         assert_eq!(text, "你好A");
     }
+
 }

@@ -67,15 +67,17 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
 
         for styled_line in styled_lines {
             let interaction = detect_line_interaction(&styled_line);
+            let non_selectable_prefix_graphemes =
+                non_selectable_prefix_graphemes_for_line(&styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
 
             // Add to position map
-            state.transcript.position_map.push(LineMapping {
-                text: line_text,
-                interaction,
-            });
+            state
+                .transcript
+                .position_map
+                .push(LineMapping::new(line_text, interaction));
 
             // Convert and add the line
             let line_idx = lines.len();
@@ -84,15 +86,16 @@ fn render_transcript_full(state: &TuiState, width: usize) -> Vec<Line<'static>> 
                 &state.transcript.selection,
                 line_idx,
                 grapheme_count,
+                non_selectable_prefix_graphemes,
             );
             lines.push(converted);
         }
 
         // Add blank line between cells (also tracked in position map)
-        state.transcript.position_map.push(LineMapping {
-            text: String::new(),
-            interaction: None,
-        });
+        state
+            .transcript
+            .position_map
+            .push(LineMapping::new(String::new(), None));
         lines.push(Line::default());
     }
 
@@ -153,15 +156,17 @@ fn render_transcript_lazy(
             }
 
             let interaction = detect_line_interaction(&styled_line);
+            let non_selectable_prefix_graphemes =
+                non_selectable_prefix_graphemes_for_line(&styled_line);
             // Build the line text for position mapping
             let line_text: String = styled_line.spans.iter().map(|s| s.text.as_str()).collect();
             let grapheme_count = line_text.graphemes(true).count();
 
             // Add to position map - stores text for selection extraction
-            state.transcript.position_map.push(LineMapping {
-                text: line_text,
-                interaction,
-            });
+            state
+                .transcript
+                .position_map
+                .push(LineMapping::new(line_text, interaction));
 
             // Convert with global line index for selection highlighting
             let converted = convert_styled_line_with_selection(
@@ -169,6 +174,7 @@ fn render_transcript_lazy(
                 &state.transcript.selection,
                 global_line_idx,
                 grapheme_count,
+                non_selectable_prefix_graphemes,
             );
             lines.push(converted);
             global_line_idx += 1;
@@ -176,10 +182,10 @@ fn render_transcript_lazy(
 
         // Add blank line after each cell (matching full render behavior)
         // This keeps line counts consistent between full and lazy render
-        state.transcript.position_map.push(LineMapping {
-            text: String::new(),
-            interaction: None,
-        });
+        state
+            .transcript
+            .position_map
+            .push(LineMapping::new(String::new(), None));
         lines.push(Line::default());
         global_line_idx += 1;
     }
@@ -265,6 +271,18 @@ fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> 
     }
 }
 
+fn non_selectable_prefix_graphemes_for_line(styled_line: &StyledLine) -> usize {
+    if styled_line
+        .spans
+        .first()
+        .is_some_and(|span| span.style == TranscriptStyle::UserPrefix && span.text == "│ ")
+    {
+        2
+    } else {
+        0
+    }
+}
+
 /// Converts a `StyledLine` to a ratatui Line with selection highlighting.
 ///
 /// If the line (at `line_idx`) is within the selection range, the selected
@@ -274,6 +292,7 @@ fn convert_styled_line_with_selection(
     selection: &SelectionState,
     line_idx: usize,
     grapheme_count: usize,
+    non_selectable_prefix_graphemes: usize,
 ) -> Line<'static> {
     use unicode_segmentation::UnicodeSegmentation;
 
@@ -282,6 +301,13 @@ fn convert_styled_line_with_selection(
         // No selection on this line, use normal rendering
         return convert_styled_line(styled_line);
     };
+
+    let sel_start = sel_start.max(non_selectable_prefix_graphemes.min(grapheme_count));
+    let sel_end = sel_end.max(non_selectable_prefix_graphemes.min(grapheme_count));
+
+    if sel_start >= sel_end {
+        return convert_styled_line(styled_line);
+    }
 
     // Build spans with selection highlighting
     let mut result_spans: Vec<Span<'static>> = Vec::new();
