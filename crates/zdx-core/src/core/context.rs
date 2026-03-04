@@ -1215,7 +1215,7 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("<environment>"));
-        assert!(prompt.contains("Current directory:"));
+        assert!(prompt.contains("<cwd>"));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("# Project"));
         assert!(prompt.contains("# Project Context"));
