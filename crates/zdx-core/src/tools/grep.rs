@@ -17,10 +17,13 @@ use super::{ToolContext, ToolDefinition};
 use crate::core::events::ToolOutput;
 
 /// Maximum number of matches to return (prevents context flooding).
-const MAX_MATCHES: usize = 200;
+const MAX_MATCHES: usize = 2000;
+
+/// Default number of matches when `max_count` is not specified.
+const DEFAULT_MAX_COUNT: usize = 200;
 
 /// Internal per-file cap when collecting before round-robin selection.
-const INTERNAL_CAP_PER_FILE: usize = MAX_MATCHES * 2;
+const INTERNAL_CAP_PER_FILE: usize = MAX_MATCHES;
 
 /// Maximum file size to search (skip files larger than this).
 const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024; // 4MB
@@ -61,6 +64,19 @@ pub fn definition() -> ToolDefinition {
                 "context_lines": {
                     "type": "integer",
                     "description": "Number of context lines before and after each match (0-5, default: 0)"
+                },
+                "max_count": {
+                    "type": "integer",
+                    "description": "Maximum number of matches to return (default: 200, max: 2000)",
+                    "default": 200,
+                    "minimum": 1,
+                    "maximum": 2000
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of matches to skip before collecting results (default: 0). Use with max_count for pagination.",
+                    "default": 0,
+                    "minimum": 0
                 }
             },
             "required": ["pattern"],
@@ -78,6 +94,10 @@ struct GrepInput {
     case_insensitive: bool,
     #[serde(default, deserialize_with = "deserialize_context_lines")]
     context_lines: usize,
+    #[serde(default, deserialize_with = "deserialize_optional_usize")]
+    max_count: Option<usize>,
+    #[serde(default, deserialize_with = "deserialize_optional_usize")]
+    offset: Option<usize>,
 }
 
 /// Deserialize `context_lines` from integer, string, or null, clamped to `0..=MAX_CONTEXT_LINES`.
@@ -100,6 +120,27 @@ where
         IntOrString::Null => 0,
     };
     Ok(n.min(MAX_CONTEXT_LINES))
+}
+
+/// Deserialize an optional `usize` from integer, string, or null.
+fn deserialize_optional_usize<'de, D>(deserializer: D) -> Result<Option<usize>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntOrString {
+        Int(i64),
+        String(String),
+        Null,
+    }
+
+    let val = Option::<IntOrString>::deserialize(deserializer)?;
+    match val {
+        Some(IntOrString::Int(v)) => Ok(Some(v.max(0) as usize)),
+        Some(IntOrString::String(s)) => Ok(s.trim().parse::<usize>().ok()),
+        Some(IntOrString::Null) | None => Ok(None),
+    }
 }
 
 /// A single search match.
@@ -245,69 +286,26 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         None => None,
     };
 
-    let context_lines = input.context_lines;
+    let max_count = input
+        .max_count
+        .unwrap_or(DEFAULT_MAX_COUNT)
+        .clamp(1, MAX_MATCHES);
+    let offset = input.offset.unwrap_or(0);
 
-    // Collect matches grouped by file for round-robin selection.
-    let mut per_file: Vec<Vec<Match>> = Vec::new();
-    let mut total_collected: usize = 0;
+    let per_file = collect_matches(
+        &search_path,
+        &matcher,
+        &ctx.root,
+        glob_matcher.as_ref(),
+        input.context_lines,
+    );
 
-    // If the search path is a file, search it directly.
-    if search_path.is_file() {
-        let mut file_matches = Vec::new();
-        search_file(
-            &search_path,
-            &matcher,
-            &ctx.root,
-            context_lines,
-            &mut file_matches,
-            &mut total_collected,
-        );
-        if !file_matches.is_empty() {
-            per_file.push(file_matches);
-        }
-    } else {
-        // Walk directory tree respecting .gitignore.
-        let walker = WalkBuilder::new(&search_path).build();
+    let (all_matches, truncated_by_cap) = round_robin_select(per_file, MAX_MATCHES);
 
-        for entry in walker {
-            let Ok(entry) = entry else { continue };
-
-            // Skip directories and non-files.
-            if !entry.file_type().is_some_and(|ft| ft.is_file()) {
-                continue;
-            }
-
-            // Apply glob filter.
-            if let Some(ref gm) = glob_matcher {
-                let rel = entry.path().strip_prefix(&ctx.root).unwrap_or(entry.path());
-                if !gm.is_match(rel) {
-                    continue;
-                }
-            }
-
-            // Skip files larger than MAX_FILE_SIZE.
-            if let Ok(metadata) = entry.metadata()
-                && metadata.len() > MAX_FILE_SIZE
-            {
-                continue;
-            }
-
-            let mut file_matches = Vec::new();
-            search_file(
-                entry.path(),
-                &matcher,
-                &ctx.root,
-                context_lines,
-                &mut file_matches,
-                &mut total_collected,
-            );
-            if !file_matches.is_empty() {
-                per_file.push(file_matches);
-            }
-        }
-    }
-
-    let (selected, truncated) = round_robin_select(per_file, MAX_MATCHES);
+    // Apply offset then max_count.
+    let after_offset: Vec<Match> = all_matches.into_iter().skip(offset).collect();
+    let truncated = truncated_by_cap || after_offset.len() > max_count;
+    let selected: Vec<Match> = after_offset.into_iter().take(max_count).collect();
     let total_matches = selected.len();
 
     ToolOutput::success(json!({
@@ -315,6 +313,72 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         "total_matches": total_matches,
         "truncated": truncated,
     }))
+}
+
+/// Collect matches grouped by file for round-robin selection.
+fn collect_matches(
+    search_path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    root: &Path,
+    glob_matcher: Option<&GlobMatcher>,
+    context_lines: usize,
+) -> Vec<Vec<Match>> {
+    let mut per_file: Vec<Vec<Match>> = Vec::new();
+    let mut total_collected: usize = 0;
+
+    if search_path.is_file() {
+        let mut file_matches = Vec::new();
+        search_file(
+            search_path,
+            matcher,
+            root,
+            context_lines,
+            &mut file_matches,
+            &mut total_collected,
+        );
+        if !file_matches.is_empty() {
+            per_file.push(file_matches);
+        }
+        return per_file;
+    }
+
+    let walker = WalkBuilder::new(search_path).build();
+
+    for entry in walker {
+        let Ok(entry) = entry else { continue };
+
+        if !entry.file_type().is_some_and(|ft| ft.is_file()) {
+            continue;
+        }
+
+        if let Some(gm) = glob_matcher {
+            let rel = entry.path().strip_prefix(root).unwrap_or(entry.path());
+            if !gm.is_match(rel) {
+                continue;
+            }
+        }
+
+        if let Ok(metadata) = entry.metadata()
+            && metadata.len() > MAX_FILE_SIZE
+        {
+            continue;
+        }
+
+        let mut file_matches = Vec::new();
+        search_file(
+            entry.path(),
+            matcher,
+            root,
+            context_lines,
+            &mut file_matches,
+            &mut total_collected,
+        );
+        if !file_matches.is_empty() {
+            per_file.push(file_matches);
+        }
+    }
+
+    per_file
 }
 
 /// Search a single file and append matches to the result vec.
@@ -588,8 +652,8 @@ mod tests {
     #[test]
     fn test_max_matches_cap() {
         let temp = TempDir::new().unwrap();
-        // Create a file with more lines than MAX_MATCHES
-        let content: String = (0..MAX_MATCHES + 50).fold(String::new(), |mut s, i| {
+        // Create a file with more lines than DEFAULT_MAX_COUNT
+        let content: String = (0..DEFAULT_MAX_COUNT + 50).fold(String::new(), |mut s, i| {
             let _ = writeln!(s, "match line {i}");
             s
         });
@@ -601,7 +665,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total_matches"], MAX_MATCHES);
+        assert_eq!(data["total_matches"], DEFAULT_MAX_COUNT);
         assert_eq!(data["truncated"], true);
     }
 
@@ -887,7 +951,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total_matches"], MAX_MATCHES);
+        assert_eq!(data["total_matches"], DEFAULT_MAX_COUNT);
         assert_eq!(data["truncated"], true);
 
         // Count matches per file — should be roughly balanced (100 each for 200 total)
@@ -921,7 +985,7 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
-        assert_eq!(data["total_matches"], MAX_MATCHES);
+        assert_eq!(data["total_matches"], DEFAULT_MAX_COUNT);
         assert_eq!(data["truncated"], true);
 
         let matches = data["matches"].as_array().unwrap();
@@ -930,6 +994,141 @@ mod tests {
 
         // All 10 from A should be included, rest from B
         assert_eq!(count_a, 10);
-        assert_eq!(count_b, MAX_MATCHES - 10);
+        assert_eq!(count_b, DEFAULT_MAX_COUNT - 10);
+    }
+
+    #[test]
+    fn test_max_count_custom() {
+        let temp = TempDir::new().unwrap();
+        let content: String = (0..50).fold(String::new(), |mut s, i| {
+            let _ = writeln!(s, "line {i}");
+            s
+        });
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "line", "max_count": 10});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 10);
+        assert_eq!(data["truncated"], true);
+    }
+
+    #[test]
+    fn test_max_count_clamped_to_max() {
+        let temp = TempDir::new().unwrap();
+        let content: String = (0..10).fold(String::new(), |mut s, i| {
+            let _ = writeln!(s, "line {i}");
+            s
+        });
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        // Request more than MAX_MATCHES — should be clamped
+        let input = json!({"pattern": "line", "max_count": 99999});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        // All 10 lines match, well under the clamped cap
+        assert_eq!(data["total_matches"], 10);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_offset_skips_matches() {
+        let temp = TempDir::new().unwrap();
+        let content: String = (0..20).fold(String::new(), |mut s, i| {
+            let _ = writeln!(s, "line_{i:02}");
+            s
+        });
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "line", "offset": 15, "max_count": 100});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        // 20 total matches, skip 15, get 5
+        assert_eq!(data["total_matches"], 5);
+        assert_eq!(data["truncated"], false);
+
+        let matches = data["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["text"], "line_15");
+    }
+
+    #[test]
+    fn test_offset_and_max_count_pagination() {
+        let temp = TempDir::new().unwrap();
+        let content: String = (0..30).fold(String::new(), |mut s, i| {
+            let _ = writeln!(s, "item_{i:02}");
+            s
+        });
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+
+        // Page 1: first 10
+        let input = json!({"pattern": "item", "offset": 0, "max_count": 10});
+        let result = execute(&input, &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 10);
+        assert_eq!(data["truncated"], true);
+        let matches = data["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["text"], "item_00");
+        assert_eq!(matches[9]["text"], "item_09");
+
+        // Page 2: next 10
+        let input = json!({"pattern": "item", "offset": 10, "max_count": 10});
+        let result = execute(&input, &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 10);
+        assert_eq!(data["truncated"], true);
+        let matches = data["matches"].as_array().unwrap();
+        assert_eq!(matches[0]["text"], "item_10");
+
+        // Page 3: last 10
+        let input = json!({"pattern": "item", "offset": 20, "max_count": 10});
+        let result = execute(&input, &ctx);
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 10);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_offset_beyond_results() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "match\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "match", "offset": 100});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 0);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_max_count_as_string() {
+        let temp = TempDir::new().unwrap();
+        let content: String = (0..20).fold(String::new(), |mut s, i| {
+            let _ = writeln!(s, "line {i}");
+            s
+        });
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "line", "max_count": "5"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 5);
+        assert_eq!(data["truncated"], true);
     }
 }
