@@ -162,23 +162,22 @@ Error:
 
 ## 10) Providers
 
-**Shipped:** Anthropic Claude (API key; streaming + tool loop), Claude CLI (Anthropic Messages API + OAuth), OpenAI Codex (Responses API + OAuth), OpenAI API (Responses + API key), OpenRouter (OpenAI-compatible chat completions + API key), Moonshot (Kimi API; OpenAI-compatible chat completions + API key), Xiomi (Xiaomi MiMo; OpenAI-compatible chat completions + API key), Gemini (Generative Language API + API key), Gemini CLI (Cloud Code Assist + OAuth).
+Providers are the bridge between the agent and LLM APIs. New providers can be added without updating this spec as long as they follow these contracts.
 
-- API keys are env-only (never stored in config):
-  - `ANTHROPIC_API_KEY`
-  - `OPENAI_API_KEY`
-  - `OPENROUTER_API_KEY`
-  - `MOONSHOT_API_KEY`
-  - `XIOMI_API_KEY`
-  - `GEMINI_API_KEY`
-- Anthropic uses API key auth only.
-- OAuth tokens may be cached in `<base>/oauth.json` (Claude CLI, OpenAI Codex, Gemini CLI).
-- Claude CLI uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --claude-cli`).
-- OpenAI Codex uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --openai-codex`).
-- Gemini CLI uses OAuth tokens from `<base>/oauth.json` (login via `zdx login --gemini-cli`).
-- Provider selection:
-  - Explicit prefixes: `openai:`, `openrouter:`, `moonshot:`, `kimi:`, `xiomi:`, `gemini:`, `gemini-cli:`, `google-gemini-cli:`, `anthropic:`, `claude-cli:`, `codex:` (also `openrouter/`).
-  - Heuristics: models containing `codex` → OpenAI Codex; `gpt-*`/`o*` → OpenAI; `kimi-*`/`moonshot-*` → Moonshot; `mimo-*` → Xiomi; `gemini-*` → Gemini; `claude-*` → Anthropic.
+### Auth contracts
+
+- **API-key providers:** keys come from environment variables (`<PROVIDER>_API_KEY`), never stored in config.
+- **OAuth providers:** tokens are cached in `<base>/oauth.json` (0600 perms). Login via `zdx login --<provider-slug>`.
+
+### Model routing
+
+- **Explicit prefix** (canonical): `<provider>:<model>` (e.g., `anthropic:claude-sonnet-4-5`). Always wins.
+- **Heuristic fallback:** when no prefix is given, the model name is matched against provider-specific patterns (e.g., `claude-*` → Anthropic). Heuristics are implementation details and may change.
+
+### Provider-level config
+
+- Each provider may expose `base_url` and `tools` overrides under `[providers.<id>]` in config.
+- Provider implementations live in `zdx-core`; the models registry (`models.toml`) tracks available models per provider.
 
 ---
 
@@ -205,43 +204,25 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Location: `<base>/config.toml`
 - Format: TOML
-- Keys: `model`, `max_tokens`, `tool_timeout_secs`, `system_prompt`, `system_prompt_file`, `prompt_template.*`, `thinking_level`, `subagents.*`, `memory.*`
-  - `max_tokens` is optional; when unset, providers that support omitted limits use provider defaults.
-  - Providers that require a token limit use an internal fallback derived from model metadata.
-- Provider base URLs:
-  - `[providers.anthropic].base_url`
-  - `[providers.claude_cli].base_url`
-  - `[providers.openai].base_url`
-  - `[providers.openai_codex].base_url` (unused; reserved)
-  - `[providers.openrouter].base_url`
-  - `[providers.moonshot].base_url`
-  - `[providers.xiomi].base_url`
-  - `[providers.gemini].base_url`
-  - `[providers.gemini_cli].base_url` (unused; reserved)
-- Provider tool configuration:
-  - `[providers.<provider>].tools` — list of enabled tools
-  - Available tools: `bash`, `apply_patch`, `edit`, `fetch_webpage`, `invoke_subagent`, `read`, `read_thread`, `thread_search`, `web_search`, `write`
-  - Default tool sets:
-    - Most providers: `["bash", "edit", "fetch_webpage", "invoke_subagent", "read", "read_thread", "thread_search", "web_search", "write"]`
-    - OpenAI Codex: `["bash", "apply_patch", "fetch_webpage", "invoke_subagent", "read", "read_thread", "thread_search", "web_search"]`
-- Models registry:
-  - `[providers.<provider>]` (`enabled`, `models`)
-  - `models` entries support `*` wildcards for `zdx models update`.
-  - Registry path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
-- Skills:
-  - `[skills.sources]` source flags (`zdx_user`, `zdx_project`, `codex_user`, `claude_user`, `claude_project`, `agents_user`, `agents_project`).
-  - `skill_repositories`: list of GitHub repo paths (`owner/repo/path`) used by the skill installer overlay.
-  - Optional glob filters: `ignored_skills`, `include_skills`.
-- Subagents:
-  - `[subagents].enabled` — enable/disable `invoke_subagent` tool exposure.
-  - `[subagents].allowed_models` — allowed models for `invoke_subagent` (empty means any).
-- Prompt templating:
-  - `[prompt_template].file` — optional template file path (relative paths resolve from `ZDX_HOME`).
-  - Template syntax uses MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
-  - Render context includes: `provider`, `invocation_term`, `invocation_term_plural`, `is_openai_codex`, `base_prompt`, `project_context`, `memory_index`, `memory_suggestions`, `surface_rules`, `skills_list`, `subagents_config`, `cwd`, `date`.
-  - Built-in template emits `<surface_rules>` only when `surface_rules` is present/non-empty.
-  - On custom template load/render failure, ZDX warns and falls back to the built-in template.
-  - Providers do not prepend hidden/provider-specific coding system prompts; they consume the caller-composed prompt.
+
+### Contracts
+
+- Config is the single source of truth for user preferences (model, tokens, timeouts, prompt customization, memory paths, skill sources, subagent settings).
+- Adding a new config key or provider section should not require a spec update — the config struct in code (`zdx-core`) is authoritative for the full schema.
+- `max_tokens` is optional; when unset, providers that support omitted limits use provider defaults. Providers that require a limit use an internal fallback from model metadata.
+- Provider base URLs and tool overrides live under `[providers.<id>]`.
+
+### Prompt templating
+
+- Template syntax: MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
+- `[prompt_template].file` — optional template path (relative paths resolve from `ZDX_HOME`).
+- The built-in template is the fallback. On custom template load/render failure, ZDX warns and falls back to the built-in.
+- Providers consume the caller-composed prompt; they do not prepend hidden coding system prompts.
+
+### Models registry
+
+- Path: `<base>/models.toml` (falls back to `default_models.toml` when missing).
+- Tracks available models per provider. Entries support `*` wildcards for `zdx models update`.
 
 ---
 
@@ -326,16 +307,6 @@ Contracts:
   - Supported entry formats:
     - `<media>/absolute/path/to/file</media>`
     - `<medias><media>/absolute/path/to/file1</media><media>/absolute/path/to/file2</media></medias>`
-- Any `<media>` directives are stripped from the user-visible reply text.
-- Routing by file type:
-  - Image-like extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) are sent via Telegram `sendPhoto`.
-  - Other files (including `.pdf`) are sent via Telegram `sendDocument`.
-- When multiple valid media paths are present, the bot attempts to send each one in order.
-- Bot only uses local absolute file paths for this flow (no URL fetch in this slice).
-- Preflight upload size checks:
-  - photos > 10 MB are rejected before upload
-  - documents > 50 MB are rejected before upload
-/media></medias>`
 - Any `<media>` directives are stripped from the user-visible reply text.
 - Routing by file type:
   - Image-like extensions (`.png`, `.jpg`, `.jpeg`, `.webp`) are sent via Telegram `sendPhoto`.
