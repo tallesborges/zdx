@@ -78,7 +78,7 @@ pub async fn run(options: ImagineRunOptions<'_>) -> Result<()> {
         bail!("Model returned no images");
     }
 
-    let default_dir = config::paths::zdx_home().join("artifacts");
+    let default_dir = config::paths::artifact_root();
     let output_paths =
         resolve_output_paths(options.root, options.out, &default_dir, &response.images);
     for (image, path) in response.images.iter().zip(output_paths.iter()) {
