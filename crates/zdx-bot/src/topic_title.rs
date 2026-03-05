@@ -24,21 +24,19 @@ pub(crate) fn spawn_topic_title_update(
         match title_generation::generate_title(&message_text, &title_model, &root).await {
             Ok(title) => {
                 if let Err(err) = client.edit_forum_topic(chat_id, topic_id, &title).await {
-                    eprintln!("Failed to rename topic {topic_id}: {err}");
+                    tracing::error!(topic_id, %err, "Failed to rename topic");
                 } else {
                     let thread_id = format!("telegram-{chat_id}-topic-{topic_id}");
                     if let Err(err) =
                         thread_persistence::set_thread_title(&thread_id, Some(title.clone()))
                     {
-                        eprintln!(
-                            "Renamed topic {topic_id} but failed to update thread title for {thread_id}: {err}"
-                        );
+                        tracing::warn!(topic_id, thread_id = %thread_id, %err, "Renamed topic but failed to update thread title");
                     }
-                    eprintln!("Renamed topic {topic_id} to '{title}'");
+                    tracing::info!(topic_id, title = %title, "Renamed topic");
                 }
             }
             Err(err) => {
-                eprintln!("Topic title generation failed for topic {topic_id}: {err}");
+                tracing::error!(topic_id, %err, "Topic title generation failed");
             }
         }
     });

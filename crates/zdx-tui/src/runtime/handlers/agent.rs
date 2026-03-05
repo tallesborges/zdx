@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use zdx_core::core::{interrupt, thread_persistence};
 
 use crate::events::UiEvent;
@@ -33,15 +35,26 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     // Spawn the agent task - it will send TurnCompleted when done
     tokio::spawn(async move {
-        let _ = zdx_core::core::agent::run_turn(
+        if let Err(err) = zdx_core::core::agent::run_turn(
             messages,
             &config,
             &agent_opts,
             system_prompt.as_deref(),
             thread_id.as_deref(),
-            agent_tx,
+            agent_tx.clone(),
         )
-        .await;
+        .await
+        {
+            let message = format!("{err}");
+            let details = err.chain().nth(1).map(|cause| format!("{cause}"));
+            let _ = agent_tx
+                .send(Arc::new(zdx_core::core::events::AgentEvent::Error {
+                    kind: zdx_core::core::events::ErrorKind::Internal,
+                    message,
+                    details,
+                }))
+                .await;
+        }
     });
 
     UiEvent::AgentSpawned { rx: tui_rx }

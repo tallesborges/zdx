@@ -76,14 +76,11 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         return Ok(());
     }
 
-    eprintln!(
-        "Accepted message from user {} in chat {}{}",
-        incoming.user_id,
-        incoming.chat_id,
-        reply_ctx
-            .topic_id
-            .map(|id| format!(" (topic {id})"))
-            .unwrap_or_default()
+    tracing::info!(
+        user_id = incoming.user_id,
+        chat_id = incoming.chat_id,
+        topic_id = ?reply_ctx.topic_id,
+        "Accepted message",
     );
 
     let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
@@ -412,7 +409,7 @@ async fn spawn_or_fail(
     match handle {
         Ok(handle) => Ok(handle),
         Err(err) => {
-            eprintln!("Failed to spawn agent turn: {err}");
+            tracing::error!(%err, "Failed to spawn agent turn");
             if let Some(msg_id) = status.message_id {
                 let _ = context
                     .client()
@@ -459,7 +456,7 @@ async fn stream_turn_events(
                         got_result = true;
                     }
                     AgentEvent::Error { message, .. } => {
-                        eprintln!("Agent error event: {message}");
+                        tracing::error!(message, "Agent error event");
                         had_error = true;
                     }
                     AgentEvent::Interrupted { partial_content } => {
@@ -525,13 +522,10 @@ async fn finalize_turn(
     result: TurnResult,
 ) -> Result<()> {
     if status.token.is_cancelled() {
-        eprintln!(
-            "Agent turn cancelled for chat {}{}",
-            incoming.chat_id,
-            reply_ctx
-                .topic_id
-                .map(|id| format!(" topic {id}"))
-                .unwrap_or_default()
+        tracing::info!(
+            chat_id = incoming.chat_id,
+            topic_id = ?reply_ctx.topic_id,
+            "Agent turn cancelled",
         );
         if let Some(msg_id) = status.message_id {
             let _ = context
@@ -590,7 +584,7 @@ async fn send_final_response(
                 .delete_message(incoming.chat_id, msg_id)
                 .await
         {
-            eprintln!("Failed to delete empty status message {msg_id}: {err}");
+            tracing::warn!(msg_id, %err, "Failed to delete empty status message");
         }
         return Ok(());
     }
@@ -610,7 +604,7 @@ async fn send_final_response(
             .delete_message(incoming.chat_id, msg_id)
             .await
     {
-        eprintln!("Failed to delete empty status message {msg_id}: {err}");
+        tracing::warn!(msg_id, %err, "Failed to delete empty status message");
     }
 
     send_media_responses(context, incoming, reply_ctx, &parsed.media_paths, has_text).await
@@ -623,7 +617,7 @@ async fn send_text_response(
     status_message_id: Option<i64>,
     text: &str,
 ) -> Result<()> {
-    eprintln!("Sending reply for chat {}", incoming.chat_id);
+    tracing::info!(chat_id = incoming.chat_id, "Sending reply");
 
     if let Some(ref reply_parameters) = reply_ctx.cross_topic_reply_parameters {
         if let Some(msg_id) = status_message_id
@@ -632,7 +626,7 @@ async fn send_text_response(
                 .delete_message(incoming.chat_id, msg_id)
                 .await
         {
-            eprintln!("Failed to delete status message {msg_id}: {err}");
+            tracing::warn!(msg_id, %err, "Failed to delete status message");
         }
 
         context
@@ -653,16 +647,13 @@ async fn send_text_response(
             .edit_message_text(incoming.chat_id, msg_id, text, None)
             .await;
         if let Err(ref err) = edit_result {
-            eprintln!(
-                "Failed to edit status message {} in chat {}: {}",
-                msg_id, incoming.chat_id, err
-            );
+            tracing::warn!(msg_id, chat_id = incoming.chat_id, %err, "Failed to edit status message");
             if let Err(del_err) = context
                 .client()
                 .delete_message(incoming.chat_id, msg_id)
                 .await
             {
-                eprintln!("Failed to delete stale status message {msg_id}: {del_err}");
+                tracing::warn!(msg_id, err = %del_err, "Failed to delete stale status message");
             }
             let send_result = context
                 .client()
@@ -776,7 +767,7 @@ async fn send_media_responses(
         };
 
         if let Err(err) = send_result {
-            eprintln!("Failed to send media file {}: {err}", media_path.display());
+            tracing::error!(path = %media_path.display(), %err, "Failed to send media file");
             context
                 .client()
                 .send_message(

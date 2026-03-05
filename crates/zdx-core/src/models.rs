@@ -174,7 +174,7 @@ fn load_models_from_str(contents: &str) -> Option<Vec<ModelOption>> {
     let file: ModelsFile = match toml::from_str(contents) {
         Ok(file) => file,
         Err(err) => {
-            eprintln!("Warning: failed to parse models file: {err}");
+            tracing::warn!(%err, "Failed to parse models file");
             return None;
         }
     };

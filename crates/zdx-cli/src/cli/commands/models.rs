@@ -275,7 +275,7 @@ fn collect_provider_records(
     // The registry is used for model lookups (e.g., checking reasoning support)
     // which should work even if the provider isn't currently enabled.
     if spec.provider_cfg.models.is_empty() {
-        eprintln!(
+        println!(
             "Warning: providers.{}.models is empty; skipping.",
             spec.provider_id
         );
@@ -293,7 +293,7 @@ fn collect_provider_records(
     } else if is_meta_provider(spec.provider_id) {
         selected_meta_candidates(spec, api)
     } else {
-        eprintln!(
+        println!(
             "Warning: provider '{}' not found in models.dev response; falling back to defaults",
             spec.api_id
         );
@@ -301,7 +301,7 @@ fn collect_provider_records(
     };
 
     if all_selected.is_empty() {
-        eprintln!(
+        println!(
             "Warning: no models matched providers.{}.models",
             spec.provider_id
         );
@@ -322,7 +322,7 @@ fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
             continue;
         }
         if is_pure_wildcard(pattern) {
-            eprintln!(
+            println!(
                 "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
                 pattern, spec.provider_id
             );
@@ -354,7 +354,7 @@ fn selected_candidates_from_candidates(
     let mut all_selected = select_result.matched;
     for pattern in &select_result.unmatched_patterns {
         let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
-        eprintln!(
+        println!(
             "Info: creating default entry for '{}' (not found in models.dev)",
             default_candidate.full_id
         );
@@ -372,7 +372,7 @@ fn selected_meta_candidates(spec: &ProviderSpec<'_>, api: &ApiResponse) -> Vec<M
             continue;
         }
         if is_pure_wildcard(pattern) {
-            eprintln!(
+            println!(
                 "Warning: wildcard pattern '{}' for provider '{}' requires models.dev data",
                 pattern, spec.provider_id
             );
@@ -385,7 +385,7 @@ fn selected_meta_candidates(spec: &ProviderSpec<'_>, api: &ApiResponse) -> Vec<M
         }
 
         let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
-        eprintln!(
+        println!(
             "Info: creating default entry for '{}' (not found in official providers)",
             default_candidate.full_id
         );
@@ -642,7 +642,7 @@ fn select_candidates(
             // Patterns like "xiaomi/mimo-v2-flash" or "gpt-5*" are candidates for defaults
             // Pure "*" wildcards are not - they just mean "all models" which matched nothing
             if is_pure_wildcard(pattern) {
-                eprintln!(
+                println!(
                     "Warning: wildcard pattern '{pattern}' for provider '{provider_id}' matched no models"
                 );
             } else {
