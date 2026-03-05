@@ -38,13 +38,22 @@ pub struct OpenAIChatCompletionsConfig {
 /// OpenAI-compatible chat completions client.
 pub struct OpenAIChatCompletionsClient {
     config: OpenAIChatCompletionsConfig,
+    extra_body: HashMap<String, Value>,
     http: reqwest::Client,
 }
 
 impl OpenAIChatCompletionsClient {
     pub fn new(config: OpenAIChatCompletionsConfig) -> Self {
+        Self::with_extra_body(config, HashMap::new())
+    }
+
+    pub fn with_extra_body(
+        config: OpenAIChatCompletionsConfig,
+        extra_body: HashMap<String, Value>,
+    ) -> Self {
         Self {
             config,
+            extra_body,
             http: reqwest::Client::new(),
         }
     }
@@ -58,7 +67,8 @@ impl OpenAIChatCompletionsClient {
         tools: &[ToolDefinition],
         system: Option<&str>,
     ) -> Result<ProviderStream> {
-        let request = ChatCompletionRequest::new(&self.config, messages, tools, system);
+        let request =
+            ChatCompletionRequest::new(&self.config, &self.extra_body, messages, tools, system);
         let trace =
             DebugTrace::from_env(&self.config.model, self.config.prompt_cache_key.as_deref());
 
@@ -149,6 +159,8 @@ struct ChatCompletionRequest {
     thinking: Option<ThinkingConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     prompt_cache_key: Option<String>,
+    #[serde(flatten)]
+    extra_body: HashMap<String, Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -268,6 +280,7 @@ impl From<&ToolDefinition> for ChatToolDefinition {
 impl ChatCompletionRequest {
     fn new(
         config: &OpenAIChatCompletionsConfig,
+        extra_body: &HashMap<String, Value>,
         messages: &[ChatMessage],
         tools: &[ToolDefinition],
         system: Option<&str>,
@@ -295,6 +308,7 @@ impl ChatCompletionRequest {
                 .map(|effort| ReasoningConfig { effort }),
             thinking: config.thinking.clone(),
             prompt_cache_key: config.prompt_cache_key.clone(),
+            extra_body: extra_body.clone(),
         }
     }
 }
@@ -560,6 +574,7 @@ struct ChatCompletionsSseParser<S> {
     next_index: usize,
     text_index: Option<usize>,
     reasoning_index: Option<usize>,
+    reasoning_details_snapshot: String,
     saw_tool: bool,
     tool_calls: HashMap<u32, ToolCallState>,
     final_usage: Option<Usage>,
@@ -579,11 +594,46 @@ impl<S> ChatCompletionsSseParser<S> {
             next_index: 0,
             text_index: None,
             reasoning_index: None,
+            reasoning_details_snapshot: String::new(),
             saw_tool: false,
             tool_calls: HashMap::new(),
             final_usage: None,
             final_finish_reason: None,
             emitted_done: false,
+        }
+    }
+
+    fn ensure_reasoning_block(&mut self) -> usize {
+        if let Some(index) = self.reasoning_index {
+            return index;
+        }
+
+        let index = self.next_index;
+        self.next_index += 1;
+        self.reasoning_index = Some(index);
+        self.pending.push_back(StreamEvent::ContentBlockStart {
+            index,
+            block_type: ContentBlockType::Reasoning,
+            id: None,
+            name: None,
+        });
+        index
+    }
+
+    fn emit_reasoning_delta(&mut self, reasoning: &str) {
+        if reasoning.is_empty() {
+            return;
+        }
+        let index = self.ensure_reasoning_block();
+        self.pending.push_back(StreamEvent::ReasoningDelta {
+            index,
+            reasoning: reasoning.to_string(),
+        });
+    }
+
+    fn process_reasoning_details_from(&mut self, value: &Value) {
+        if let Some(details) = value.get("reasoning_details").and_then(|v| v.as_array()) {
+            self.process_reasoning_details(details);
         }
     }
 
@@ -698,6 +748,14 @@ impl<S> ChatCompletionsSseParser<S> {
             if let Some(delta) = choice.get("delta") {
                 self.process_delta(delta);
             }
+
+            // MiniMax may send reasoning_details directly on choice (not only delta).
+            self.process_reasoning_details_from(choice);
+
+            // Also check message level (some providers send final chunk with message instead of delta)
+            if let Some(message) = choice.get("message") {
+                self.process_reasoning_details_from(message);
+            }
         }
 
         // Parse usage (can arrive in any chunk, often in a separate final chunk)
@@ -743,30 +801,18 @@ impl<S> ChatCompletionsSseParser<S> {
         }
 
         // Handle reasoning content (Moonshot/Kimi, StepFun and other OpenAI-compatible providers)
+        // MiniMax can alternatively stream reasoning via reasoning_details.
         match delta
             .get("reasoning_content")
             .or_else(|| delta.get("reasoning"))
             .and_then(|v| v.as_str())
         {
-            Some(reasoning) if !reasoning.is_empty() => {
-                if self.reasoning_index.is_none() {
-                    let index = self.next_index;
-                    self.next_index += 1;
-                    self.reasoning_index = Some(index);
-                    self.pending.push_back(StreamEvent::ContentBlockStart {
-                        index,
-                        block_type: ContentBlockType::Reasoning,
-                        id: None,
-                        name: None,
-                    });
-                }
-                self.pending.push_back(StreamEvent::ReasoningDelta {
-                    index: self.reasoning_index.unwrap_or(0),
-                    reasoning: reasoning.to_string(),
-                });
-            }
+            Some(reasoning) if !reasoning.is_empty() => self.emit_reasoning_delta(reasoning),
             _ => (),
         }
+
+        // Handle MiniMax reasoning_details (array with type/text fields)
+        self.process_reasoning_details_from(delta);
 
         // Handle tool calls
         if let Some(tool_calls) = delta.get("tool_calls").and_then(|v| v.as_array()) {
@@ -816,6 +862,23 @@ impl<S> ChatCompletionsSseParser<S> {
                         index: entry.stream_index,
                         partial_json: args.to_string(),
                     });
+                }
+            }
+        }
+    }
+
+    /// Process `MiniMax` `reasoning_details` array (may be at delta or choice level).
+    fn process_reasoning_details(&mut self, details: &[Value]) {
+        for detail in details {
+            if let Some(text) = detail.get("text").and_then(|v| v.as_str())
+                && !text.is_empty()
+            {
+                if let Some(delta) = text.strip_prefix(&self.reasoning_details_snapshot) {
+                    self.reasoning_details_snapshot = text.to_string();
+                    self.emit_reasoning_delta(delta);
+                } else {
+                    self.reasoning_details_snapshot.push_str(text);
+                    self.emit_reasoning_delta(text);
                 }
             }
         }
@@ -916,9 +979,43 @@ fn parse_usage(usage: &Value) -> Usage {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
+    use reqwest::header::HeaderMap;
     use serde_json::json;
 
-    use super::{ContentBlockType, StreamEvent, parse_usage};
+    use super::{
+        ChatCompletionRequest, ContentBlockType, OpenAIChatCompletionsConfig, StreamEvent,
+        ThinkingConfig, parse_usage,
+    };
+
+    #[test]
+    fn test_request_flattens_extra_body_fields() {
+        let mut extra_body = HashMap::new();
+        extra_body.insert("reasoning_split".to_string(), json!(true));
+        extra_body.insert("custom_flag".to_string(), json!("enabled"));
+
+        let config = OpenAIChatCompletionsConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://api.example.com/v1".to_string(),
+            model: "MiniMax-M2.5".to_string(),
+            max_tokens: Some(4096),
+            max_completion_tokens: None,
+            reasoning_effort: None,
+            prompt_cache_key: None,
+            extra_headers: HeaderMap::new(),
+            include_usage: true,
+            include_reasoning_content: true,
+            thinking: Some(ThinkingConfig::from(true)),
+        };
+
+        let request = ChatCompletionRequest::new(&config, &extra_body, &[], &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+
+        assert_eq!(value.get("reasoning_split"), Some(&json!(true)));
+        assert_eq!(value.get("custom_flag"), Some(&json!("enabled")));
+        assert!(value.get("extra_body").is_none());
+    }
 
     #[test]
     fn test_parse_usage_subtracts_cached_tokens() {
@@ -972,6 +1069,45 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    fn extract_reasoning_deltas(events: &[StreamEvent]) -> Vec<String> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ReasoningDelta { reasoning, .. } => Some(reasoning.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn test_minimax_reasoning_details_normalized_to_incremental_deltas() {
+        let sse = r#"data: {"choices":[{"delta":{"reasoning_details":[{"text":"Think"}]}}]}
+
+data: {"choices":[{"delta":{"reasoning_details":[{"text":"Thinking"}]}}]}
+
+data: {"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":10,"completion_tokens":5}}
+
+data: [DONE]
+"#;
+
+        let events = parse_sse(sse, "MiniMax-M2.5").await;
+        assert_eq!(extract_reasoning_deltas(&events), vec!["Think", "ing"]);
+
+        let reasoning_starts = events
+            .iter()
+            .filter(|event| {
+                matches!(
+                    event,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::Reasoning,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(reasoning_starts, 1);
     }
 
     #[tokio::test]

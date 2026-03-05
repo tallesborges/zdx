@@ -74,7 +74,7 @@ enum InnerClient {
     Anthropic(AnthropicClient),
     OpenAIResponses(OpenAIClient),
     Gemini(GeminiClient),
-    ChatCompletions(OpenAIChatCompletionsClient),
+    ChatCompletions(Box<OpenAIChatCompletionsClient>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -149,7 +149,7 @@ impl ApiyiClient {
             }
             ApiyiRoute::OpenAICompletions => {
                 // Chat Completions fallback — append /v1 (client appends /chat/completions)
-                InnerClient::ChatCompletions(OpenAIChatCompletionsClient::new(
+                InnerClient::ChatCompletions(Box::new(OpenAIChatCompletionsClient::new(
                     OpenAIChatCompletionsConfig {
                         api_key: config.api_key,
                         base_url: format!("{}/v1", config.base_url),
@@ -163,7 +163,7 @@ impl ApiyiClient {
                         include_reasoning_content: false,
                         thinking: None,
                     },
-                ))
+                )))
             }
         };
 

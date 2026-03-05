@@ -73,7 +73,7 @@ enum InnerClient {
     Anthropic(AnthropicClient),
     OpenAIResponses(OpenAIClient),
     Gemini(GeminiClient),
-    ChatCompletions(OpenAIChatCompletionsClient),
+    ChatCompletions(Box<OpenAIChatCompletionsClient>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -151,7 +151,7 @@ impl ZenClient {
                 // Zen proxy rejects `reasoning` and `prompt_cache_key`, so omit those.
                 // Reasoning models (e.g. Kimi) need `thinking` + `include_reasoning_content`
                 // so `reasoning_content` round-trips in assistant messages.
-                InnerClient::ChatCompletions(OpenAIChatCompletionsClient::new(
+                InnerClient::ChatCompletions(Box::new(OpenAIChatCompletionsClient::new(
                     OpenAIChatCompletionsConfig {
                         api_key: config.api_key,
                         base_url: format!("{}/v1", config.base_url),
@@ -167,7 +167,7 @@ impl ZenClient {
                             .thinking_enabled
                             .then(|| config.thinking_enabled.into()),
                     },
-                ))
+                )))
             }
         };
 
