@@ -152,8 +152,6 @@ struct PromptTemplateVars {
     subagents_config: Option<PromptTemplateSubagents>,
     cwd: String,
     date: String,
-    memory_notes_path: String,
-    memory_daily_path: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -294,8 +292,6 @@ fn build_prompt_template_vars(
         subagents_config,
         cwd: root.display().to_string(),
         date: Utc::now().format("%Y-%m-%d").to_string(),
-        memory_notes_path: config.memory.effective_notes_path().display().to_string(),
-        memory_daily_path: config.memory.effective_daily_path().display().to_string(),
     }
 }
 

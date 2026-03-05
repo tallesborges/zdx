@@ -100,8 +100,8 @@ You have a lightweight memory system.
 All detailed memory lives in your memory notes and must be read on demand.
 
 ### Memory Paths
-- Notes: {{ memory_notes_path }}
-- Daily: {{ memory_daily_path }}
+- Notes: `$ZDX_MEMORY_NOTES_DIR`
+- Daily: `$ZDX_MEMORY_DAILY_DIR`
 
 ### Memory Boundaries
 - AGENTS/project guidance = how to work here (build/test commands, code conventions, workflow).
