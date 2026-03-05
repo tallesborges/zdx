@@ -84,6 +84,18 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
     );
 
     let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
+    if handle_model_command(
+        context,
+        &incoming,
+        &thread_id,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
+    )
+    .await?
+    {
+        return Ok(());
+    }
+
     if handle_thread_commands(
         context,
         &incoming,
@@ -180,6 +192,88 @@ async fn handle_rebuild_command(
         )
         .await?;
     context.request_rebuild();
+    Ok(true)
+}
+
+async fn handle_model_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    let Some(text) = incoming.text.as_deref() else {
+        return Ok(false);
+    };
+    let Some(subcmd) = crate::commands::parse_model_command(text) else {
+        return Ok(false);
+    };
+
+    use crate::commands::ModelSubcommand;
+
+    let msg = match subcmd {
+        ModelSubcommand::Show => {
+            let override_model =
+                zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?;
+            let current = override_model
+                .as_deref()
+                .unwrap_or(&context.config().model);
+            let is_override = override_model.is_some();
+            if is_override {
+                format!(
+                    "Current model: <code>{current}</code> (topic override)\nDefault: <code>{}</code>\n\nUse /model reset to revert.",
+                    context.config().model
+                )
+            } else {
+                format!("Current model: <code>{current}</code>\n\nUse /model set &lt;id&gt; to change.\nUse /model list to see options.")
+            }
+        }
+        ModelSubcommand::List => {
+            let models = context.config().subagent_available_models();
+            if models.is_empty() {
+                "No models available.".to_string()
+            } else {
+                let list: String = models
+                    .iter()
+                    .map(|m| format!("• <code>{m}</code>"))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                format!("Available models:\n\n{list}")
+            }
+        }
+        ModelSubcommand::Set(model_id) => {
+            let available = context.config().subagent_available_models();
+            if !available.iter().any(|m| m == &model_id) {
+                format!(
+                    "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
+                )
+            } else {
+                let mut thread =
+                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                        .context("open thread")?;
+                thread.set_model_override(Some(model_id.clone()))?;
+                format!("✅ Model set to <code>{model_id}</code> for this thread.")
+            }
+        }
+        ModelSubcommand::Reset => {
+            let mut thread =
+                zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                    .context("open thread")?;
+            thread.set_model_override(None)?;
+            format!(
+                "✅ Model reset to default: <code>{}</code>",
+                context.config().model
+            )
+        }
+    };
+
+    context
+        .client()
+        .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
+        .await?;
     Ok(true)
 }
 
@@ -280,6 +374,14 @@ async fn run_agent_turn(
 ) -> Result<()> {
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
+    let model_override = thread_persistence::read_thread_model_override(thread_id)?;
+    let config = if let Some(ref model_id) = model_override {
+        let mut cfg = context.config().clone();
+        cfg.model = model_id.clone();
+        cfg
+    } else {
+        context.config().clone()
+    };
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
@@ -321,6 +423,7 @@ async fn run_agent_turn(
         &thread,
         messages,
         &status,
+        &config,
     )
     .await?;
     let result = stream_turn_events(context, &incoming, &mut handle, &status).await;
@@ -395,10 +498,11 @@ async fn spawn_or_fail(
     thread: &zdx_core::core::thread_persistence::Thread,
     messages: Vec<zdx_core::providers::ChatMessage>,
     status: &TurnStatus,
+    config: &zdx_core::config::Config,
 ) -> Result<agent::AgentTurnHandle> {
     let handle = agent::spawn_agent_turn(
         messages,
-        context.config(),
+        config,
         worktree_root,
         context.bot_surface_rules(),
         thread_id,
