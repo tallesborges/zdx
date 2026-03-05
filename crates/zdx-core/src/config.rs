@@ -1013,6 +1013,7 @@ fn default_openai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.4".to_string(),
             "gpt-5.3-codex".to_string(),
             "gpt-5.3-codex-spark".to_string(),
             "gpt-5.2-codex".to_string(),
@@ -1026,6 +1027,7 @@ fn default_openai_codex_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "gpt-5.4".to_string(),
             "gpt-5.3-codex".to_string(),
             "gpt-5.3-codex-spark".to_string(),
             "gpt-5.2-codex".to_string(),
