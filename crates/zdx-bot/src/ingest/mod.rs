@@ -98,16 +98,16 @@ async fn validate_access(
 ) -> Result<Option<i64>> {
     if message.chat.is_group() {
         if !allowlist.chat_ids.contains(&target.chat) {
-            eprintln!("Ignoring non-allowlisted group chat {}", target.chat);
+            tracing::debug!(chat_id = target.chat, "Ignoring non-allowlisted group chat");
             return Ok(None);
         }
     } else if !message.chat.is_private() {
-        eprintln!("Ignoring unsupported chat type for chat {}", target.chat);
+        tracing::debug!(chat_id = target.chat, "Ignoring unsupported chat type");
         return Ok(None);
     }
 
     let Some(user) = message.from.as_ref() else {
-        eprintln!("Ignoring message without sender in chat {}", target.chat);
+        tracing::debug!(chat_id = target.chat, "Ignoring message without sender");
         return Ok(None);
     };
 
@@ -119,7 +119,7 @@ async fn validate_access(
         return Ok(Some(user.id));
     }
 
-    eprintln!("Denied user {} for chat {}", user.id, target.chat);
+    tracing::warn!(user_id = user.id, chat_id = target.chat, "Denied user");
     let _ = client
         .send_message(
             target.chat,
@@ -218,7 +218,7 @@ async fn push_attachment<T>(
     match load_future.await {
         Ok(Some(item)) => output.push(item),
         Ok(None) => {}
-        Err(err) => eprintln!("Failed to load {label}: {err}"),
+        Err(err) => tracing::error!(%err, label, "Failed to load attachment"),
     }
 }
 
@@ -228,7 +228,7 @@ async fn handle_empty_message(
     had_attachments: bool,
 ) -> Result<Option<IncomingMessage>> {
     if had_attachments {
-        eprintln!("Unsupported attachment in chat {}", target.chat);
+        tracing::warn!(chat_id = target.chat, "Unsupported attachment");
         let _ = client
             .send_message(
                 target.chat,
@@ -238,7 +238,7 @@ async fn handle_empty_message(
             )
             .await;
     } else {
-        eprintln!("Ignoring empty message in chat {}", target.chat);
+        tracing::debug!(chat_id = target.chat, "Ignoring empty message");
     }
     Ok(None)
 }
@@ -281,18 +281,18 @@ async fn load_photo_attachment(
     photo: &PhotoSize,
 ) -> Result<Option<IncomingImage>> {
     if photo.file_size.unwrap_or(0) > MAX_IMAGE_BYTES {
-        eprintln!("Skipping photo > max image size in chat {chat_id}");
+        tracing::debug!(chat_id, "Skipping photo exceeding max image size");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, &photo.file_id).await?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        eprintln!("Downloaded photo exceeds max image size in chat {chat_id}");
+        tracing::debug!(chat_id, "Downloaded photo exceeds max image size");
         return Ok(None);
     }
 
     let Some(mime_type) = detect_image_mime(&bytes) else {
-        eprintln!("Unsupported image type in chat {chat_id}");
+        tracing::debug!(chat_id, "Unsupported image type");
         return Ok(None);
     };
 
@@ -315,18 +315,18 @@ async fn load_document_image(
     document: &Document,
 ) -> Result<Option<IncomingImage>> {
     if document.file_size.unwrap_or(0) > MAX_IMAGE_BYTES {
-        eprintln!("Skipping document image > max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Skipping document image exceeding max size");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, &document.file_id).await?;
     if bytes.len() as u64 > MAX_IMAGE_BYTES {
-        eprintln!("Downloaded document image exceeds max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Downloaded document image exceeds max size");
         return Ok(None);
     }
 
     let Some(mime_type) = select_image_mime(document.mime_type.as_deref(), &bytes) else {
-        eprintln!("Unsupported document image type in chat {chat_id}");
+        tracing::debug!(chat_id, "Unsupported document image type");
         return Ok(None);
     };
 
@@ -353,13 +353,13 @@ async fn load_generic_document(
     document: &Document,
 ) -> Result<Option<IncomingDocument>> {
     if document.file_size.unwrap_or(0) > MAX_DOCUMENT_BYTES {
-        eprintln!("Skipping document > max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Skipping document exceeding max size");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, &document.file_id).await?;
     if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-        eprintln!("Downloaded document exceeds max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Downloaded document exceeds max size");
         return Ok(None);
     }
 
@@ -451,13 +451,13 @@ async fn load_audio_by_id(
     source: AudioSource<'_>,
 ) -> Result<Option<IncomingAudio>> {
     if source.file_size.unwrap_or(0) > MAX_AUDIO_BYTES {
-        eprintln!("Skipping audio > max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Skipping audio exceeding max size");
         return Ok(None);
     }
 
     let (file_path, bytes) = download_file_bytes(client, source.file_id).await?;
     if bytes.len() as u64 > MAX_AUDIO_BYTES {
-        eprintln!("Downloaded audio exceeds max size in chat {chat_id}");
+        tracing::debug!(chat_id, "Downloaded audio exceeds max size");
         return Ok(None);
     }
 
@@ -478,7 +478,7 @@ async fn load_audio_by_id(
     {
         Ok(transcript) => transcript,
         Err(err) => {
-            eprintln!("Audio transcription failed: {err}");
+            tracing::error!(%err, "Audio transcription failed");
             None
         }
     };

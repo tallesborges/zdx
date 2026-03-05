@@ -81,10 +81,7 @@ pub(crate) async fn dispatch_message(
                 .await
             {
                 Ok(topic_id) => {
-                    eprintln!(
-                        "Created topic '{}' (id: {}) for chat {}",
-                        topic_name, topic_id, message.chat.id
-                    );
+                    tracing::info!(topic_name = %topic_name, topic_id, chat_id = message.chat.id, "Created topic");
                     // Enqueue with the new topic ID so handler knows to use it
                     let mut message = message;
                     message.thread_id = Some(topic_id);
@@ -92,13 +89,10 @@ pub(crate) async fn dispatch_message(
                     enqueue_message(&queues, &context, message).await;
                 }
                 Err(err) => {
-                    eprintln!(
-                        "Failed to create topic for chat {}: {}",
-                        message.chat.id, err
-                    );
+                    tracing::error!(chat_id = message.chat.id, %err, "Failed to create topic");
                     // Fall back to processing in General (no queue, replies in General)
                     if let Err(err) = handle_message(context.as_ref(), message).await {
-                        eprintln!("Standalone message handling error: {err}");
+                        tracing::error!(%err, "Standalone message handling error");
                     }
                 }
             }
@@ -120,16 +114,16 @@ pub(crate) async fn dispatch_message(
 fn should_process_message(context: &BotContext, message: &Message) -> bool {
     // Check chat allowlist for groups
     if message.chat.is_group() && !context.allowlist_chat_ids().contains(&message.chat.id) {
-        eprintln!("Ignoring non-allowlisted group chat {}", message.chat.id);
+        tracing::debug!(
+            chat_id = message.chat.id,
+            "Ignoring non-allowlisted group chat"
+        );
         return false;
     }
 
     // Check sender exists and is not a bot
     let Some(user) = message.from.as_ref() else {
-        eprintln!(
-            "Ignoring message without sender in chat {}",
-            message.chat.id
-        );
+        tracing::debug!(chat_id = message.chat.id, "Ignoring message without sender");
         return false;
     };
 
@@ -139,7 +133,7 @@ fn should_process_message(context: &BotContext, message: &Message) -> bool {
 
     // Check user allowlist
     if !context.allowlist_user_ids().contains(&user.id) {
-        eprintln!("Denied user {} for chat {}", user.id, message.chat.id);
+        tracing::warn!(user_id = user.id, chat_id = message.chat.id, "Denied user");
         return false;
     }
 
@@ -177,7 +171,7 @@ fn generate_topic_name(text: Option<&str>) -> String {
 fn spawn_standalone(context: Arc<BotContext>, message: Message) {
     tokio::spawn(async move {
         if let Err(err) = handle_message(context.as_ref(), message).await {
-            eprintln!("Standalone message handling error: {err}");
+            tracing::error!(%err, "Standalone message handling error");
         }
     });
 }
@@ -249,7 +243,7 @@ async fn enqueue_message(queues: &ChatQueueMap, context: &Arc<BotContext>, messa
                 }
             }
             Err(err) => {
-                eprintln!("Failed to send queued status: {err}");
+                tracing::warn!(%err, "Failed to send queued status");
             }
         }
     }
@@ -307,17 +301,14 @@ fn spawn_queue_worker(
 
             if cancel_token.is_cancelled() {
                 // Item was cancelled while queued — update status and skip
-                eprintln!("Skipping cancelled queued message for {key:?}");
+                tracing::debug!(?key, "Skipping cancelled queued message");
                 if let Some(status) = queued_status {
                     if let Err(err) = context
                         .client()
                         .edit_message_text(status.chat, status.status, "Cancelled ✓", None)
                         .await
                     {
-                        eprintln!(
-                            "Failed to edit cancelled queue status {}: {}",
-                            status.status, err
-                        );
+                        tracing::warn!(status_id = status.status, %err, "Failed to edit cancelled queue status");
                     }
                     // Best-effort: delete user's original message
                     if let Err(err) = context
@@ -325,10 +316,7 @@ fn spawn_queue_worker(
                         .delete_message(status.chat, status.original)
                         .await
                     {
-                        eprintln!(
-                            "Failed to delete user message {} on queue cancel: {}",
-                            status.original, err
-                        );
+                        tracing::warn!(message_id = status.original, %err, "Failed to delete user message on queue cancel");
                     }
                 }
                 continue;
@@ -342,14 +330,11 @@ fn spawn_queue_worker(
                     .delete_message(status.chat, status.status)
                     .await
             {
-                eprintln!(
-                    "Failed to delete queued status message {}: {}",
-                    status.status, err
-                );
+                tracing::warn!(status_id = status.status, %err, "Failed to delete queued status message");
             }
 
             if let Err(err) = handle_message(context.as_ref(), message).await {
-                eprintln!("Message handling error for {key:?}: {err}");
+                tracing::error!(?key, %err, "Message handling error");
             }
 
             let mut queues = queues.lock().await;

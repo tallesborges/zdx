@@ -11,7 +11,9 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
 - `crates/zdx-cli/AGENTS.md`: CLI routing/modes/commands map + CLI testing guidance
 - `crates/zdx-bot/AGENTS.md`: Telegram bot flow map + bot-specific conventions
+- `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 - `crates/xtask/AGENTS.md`: maintainer task crate guidance
+- `crates/zdx-monitor/AGENTS.md`: monitor TUI dashboard map + conventions
 
 ### Scope and precedence
 

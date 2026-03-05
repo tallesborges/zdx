@@ -238,17 +238,16 @@ pub async fn run_definition(
         };
 
         if let Err(err) = append_run_record(&record) {
-            eprintln!("Warning: failed to append automation run log: {err:#}");
+            tracing::warn!(
+                err = format!("{err:#}"),
+                "Failed to append automation run log"
+            );
         }
 
         match result {
             Ok(()) => return Ok(()),
             Err(err) if attempt < attempts => {
-                eprintln!(
-                    "Automation '{}' failed (attempt {attempt}/{attempts}): {err:#}",
-                    automation.name
-                );
-                eprintln!("Retrying...");
+                tracing::warn!(name = %automation.name, attempt, attempts, err = format!("{err:#}"), "Automation failed, retrying");
             }
             Err(err) => {
                 return Err(err).with_context(|| {

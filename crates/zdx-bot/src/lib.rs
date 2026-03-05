@@ -47,16 +47,17 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
     config.model.clone_from(&config.telegram.model);
     config.thinking_level = config.telegram.thinking_level;
     let settings = TelegramSettings::from_config(&config)?;
+    let _pid_guard = zdx_core::pidfile::write("bot").context("write bot PID file")?;
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
-        eprintln!("Config file: {}", config_path.display());
+        tracing::info!(path = %config_path.display(), "Config file");
     }
-    eprintln!(
-        "Model: {} | Thinking: {} | Users: {:?} | Chats: {:?}",
-        config.model,
-        config.thinking_level.display_name(),
-        config.telegram.allowlist_user_ids,
-        config.telegram.allowlist_chat_ids,
+    tracing::info!(
+        model = %config.model,
+        thinking = %config.thinking_level.display_name(),
+        users = ?config.telegram.allowlist_user_ids,
+        chats = ?config.telegram.allowlist_chat_ids,
+        "Bot config",
     );
     run_bot(config, settings, root).await
 }
@@ -65,11 +66,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let client = TelegramClient::new(settings.bot_token);
     let command_specs = crate::commands::telegram_command_specs();
     match client.set_my_commands(&command_specs).await {
-        Ok(()) => eprintln!(
-            "Telegram command menu updated ({} command(s)).",
-            command_specs.len()
-        ),
-        Err(err) => eprintln!("Failed to update Telegram command menu: {err}"),
+        Ok(()) => tracing::info!(count = command_specs.len(), "Telegram command menu updated"),
+        Err(err) => tracing::error!(%err, "Failed to update Telegram command menu"),
     }
     let tool_config = ToolConfig::default();
 
@@ -100,33 +98,35 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let shutdown = tokio::signal::ctrl_c();
     tokio::pin!(shutdown);
 
-    eprintln!(
-        "zdx-bot started. Allowlist: {allowlist_user_len} user(s), {allowlist_chat_len} chat(s). Polling for updates..."
+    tracing::info!(
+        allowlist_users = allowlist_user_len,
+        allowlist_chats = allowlist_chat_len,
+        "zdx-bot started, polling for updates"
     );
 
     loop {
         let current_offset = offset;
         tokio::select! {
             _ = &mut shutdown => {
-                eprintln!("Shutting down Telegram bot.");
+                tracing::info!("Shutting down Telegram bot");
                 break;
             }
             () = context.rebuild_notified() => {
-                eprintln!("Rebuild requested via /rebuild command.");
+                tracing::info!("Rebuild requested via /rebuild command");
                 std::process::exit(EXIT_REBUILD);
             }
             updates = client.get_updates(current_offset, poll_timeout) => {
                 let updates = match updates {
                     Ok(updates) => updates,
                     Err(err) => {
-                        eprintln!("Telegram polling error: {err}");
+                        tracing::error!(%err, "Telegram polling error");
                         tokio::time::sleep(Duration::from_secs(1)).await;
                         continue;
                     }
                 };
 
                 if !updates.is_empty() {
-                    eprintln!("Received {} update(s)", updates.len());
+                    tracing::debug!(count = updates.len(), "Received updates");
                 }
                 for update in updates {
                     offset = Some(update.id + 1);
@@ -155,9 +155,9 @@ async fn handle_callback_query(
 ) {
     // Enforce allowlist: only authorized users can trigger cancel actions
     if !context.allowlist_user_ids().contains(&callback.from.id) {
-        eprintln!(
-            "Denied callback from non-allowlisted user {}",
-            callback.from.id
+        tracing::warn!(
+            user_id = callback.from.id,
+            "Denied callback from non-allowlisted user"
         );
         let _ = client
             .answer_callback_query(&callback.id, Some("Access denied"))
@@ -180,14 +180,14 @@ async fn handle_callback_query(
                 .answer_callback_query(&callback.id, Some("Cancelling..."))
                 .await
             {
-                eprintln!("Failed to answer cancel callback: {err}");
+                tracing::warn!(%err, "Failed to answer cancel callback");
             }
-            eprintln!("Cancelled agent turn for {key:?}");
+            tracing::info!(?key, "Cancelled agent turn");
         } else if let Err(err) = client
             .answer_callback_query(&callback.id, Some("Nothing to cancel"))
             .await
         {
-            eprintln!("Failed to answer callback: {err}");
+            tracing::warn!(%err, "Failed to answer callback");
         }
     } else if let Some(key) = parse_queue_cancel_callback(data) {
         // Cancel a queued (not-yet-processing) item
@@ -202,26 +202,23 @@ async fn handle_callback_query(
                 .answer_callback_query(&callback.id, Some("Removed from queue"))
                 .await
             {
-                eprintln!("Failed to answer queue cancel callback: {err}");
+                tracing::warn!(%err, "Failed to answer queue cancel callback");
             }
-            eprintln!("Cancelled queued item for {key:?}");
+            tracing::info!(?key, "Cancelled queued item");
         } else {
             // Token gone — item may have already started processing
             if let Err(err) = client
                 .answer_callback_query(&callback.id, Some("Already processing"))
                 .await
             {
-                eprintln!("Failed to answer callback: {err}");
+                tracing::warn!(%err, "Failed to answer callback");
             }
         }
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
-            eprintln!("Failed to answer unknown callback: {err}");
+            tracing::warn!(%err, "Failed to answer unknown callback");
         }
-        eprintln!(
-            "Unknown callback from user {}: {:?}",
-            callback.from.id, data
-        );
+        tracing::warn!(user_id = callback.from.id, ?data, "Unknown callback");
     }
 }
 

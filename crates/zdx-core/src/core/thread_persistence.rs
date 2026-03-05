@@ -748,7 +748,7 @@ pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> Jo
             if let Some(thread_event) = ThreadEvent::from_agent(&event) {
                 // Best-effort persistence - log errors but don't panic
                 if let Err(e) = thread.append(&thread_event) {
-                    eprintln!("Warning: Failed to persist thread event: {e}");
+                    tracing::warn!(%e, "Failed to persist thread event");
                 }
             }
         }

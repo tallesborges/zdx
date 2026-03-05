@@ -33,12 +33,9 @@ pub async fn run(
     let poll = Duration::from_secs(poll_interval_secs.max(1));
     let state_path = daemon_state_path();
     let mut state = load_state(&state_path)?;
+    let _pid_guard = zdx_core::pidfile::write("daemon").context("write daemon PID file")?;
 
-    eprintln!(
-        "Daemon started (root: {}, poll={}s)",
-        root.display(),
-        poll.as_secs()
-    );
+    tracing::info!(root = %root.display(), poll_secs = poll.as_secs(), "Daemon started");
 
     loop {
         let now = Local::now();
@@ -54,10 +51,7 @@ pub async fn run(
                     match automations::schedule_matches_local_time(schedule, now) {
                         Ok(false) => continue,
                         Err(err) => {
-                            eprintln!(
-                                "Invalid schedule for automation '{}': {err:#}",
-                                automation.name
-                            );
+                            tracing::warn!(name = %automation.name, err = format!("{err:#}"), "Invalid schedule for automation");
                             continue;
                         }
                         Ok(true) => {}
@@ -67,7 +61,7 @@ pub async fn run(
                         continue;
                     }
 
-                    eprintln!("Running automation '{}'", automation.name);
+                    tracing::info!(name = %automation.name, "Running automation");
                     match automation_commands::run_definition(
                         root,
                         thread_opts,
@@ -82,17 +76,20 @@ pub async fn run(
                                 .last_run_minute
                                 .insert(automation.name.clone(), current_bucket);
                             if let Err(err) = save_state(&state_path, &state) {
-                                eprintln!("Failed to persist daemon state: {err:#}");
+                                tracing::error!(
+                                    err = format!("{err:#}"),
+                                    "Failed to persist daemon state"
+                                );
                             }
                         }
                         Err(err) => {
-                            eprintln!("Automation '{}' failed: {err:#}", automation.name);
+                            tracing::error!(name = %automation.name, err = format!("{err:#}"), "Automation failed");
                         }
                     }
                 }
             }
             Err(err) => {
-                eprintln!("Failed to discover automations: {err:#}");
+                tracing::error!(err = format!("{err:#}"), "Failed to discover automations");
             }
         }
 
