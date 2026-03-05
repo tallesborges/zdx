@@ -127,6 +127,9 @@ pub enum ThreadEvent {
         /// The ID of the parent thread this was handed off from (if any).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         handoff_from: Option<String>,
+        /// Model override for this thread (overrides config.model).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        model_override: Option<String>,
         ts: String,
     },
 
@@ -192,6 +195,7 @@ impl ThreadEvent {
             title: None,
             root_path,
             handoff_from: None,
+            model_override: None,
             ts: chrono_timestamp(),
         }
     }
@@ -206,6 +210,7 @@ impl ThreadEvent {
             title: None,
             root_path,
             handoff_from,
+            model_override: None,
             ts: chrono_timestamp(),
         }
     }
@@ -548,6 +553,16 @@ impl Thread {
         rewrite_meta_with_root(&self.path, root_path)?;
         Ok(())
     }
+
+    /// Updates the model override stored in the meta event.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn set_model_override(&mut self, model_override: Option<String>) -> Result<()> {
+        self.ensure_meta()?;
+        rewrite_meta_with_model_override(&self.path, model_override)?;
+        Ok(())
+    }
 }
 
 /// Reads thread events from a file path, with backward compatibility.
@@ -657,12 +672,54 @@ fn rewrite_meta_with_root(path: &PathBuf, root_path: Option<String>) -> Result<(
     Ok(())
 }
 
+/// Rewrites the meta event with an updated model override, preserving the rest of the file.
+fn rewrite_meta_with_model_override(path: &PathBuf, model_override: Option<String>) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp thread file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Thread file is empty"))?;
+
+    let mut meta_event: ThreadEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        ThreadEvent::Meta {
+            model_override: ref mut meta_model,
+            ..
+        } => {
+            *meta_model = model_override;
+        }
+        _ => bail!("First thread event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
+    }
+
+    temp.sync_all().context("Failed to sync temp thread file")?;
+    fs::rename(&temp_path, path).context("Failed to replace thread file")?;
+    Ok(())
+}
+
 /// Reads only the meta line to extract title (backward compatible).
 /// Parsed meta fields from the first line of a thread file.
 struct ThreadMeta {
     title: Option<String>,
     root_path: Option<String>,
     handoff_from: Option<String>,
+    model_override: Option<String>,
 }
 
 /// Reads and parses the meta line from a thread file (single open + parse).
@@ -696,6 +753,7 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
         title,
         root_path,
         handoff_from,
+        model_override,
         ..
     } = parsed
     {
@@ -703,6 +761,7 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
             title,
             root_path,
             handoff_from,
+            model_override,
         }))
     } else {
         Ok(None)
@@ -715,6 +774,10 @@ fn read_meta_title(path: &PathBuf) -> Result<Option<String>> {
 
 fn read_meta_root_path(path: &PathBuf) -> Result<Option<String>> {
     Ok(read_meta(path)?.and_then(|m| m.root_path))
+}
+
+fn read_meta_model_override(path: &PathBuf) -> Result<Option<String>> {
+    Ok(read_meta(path)?.and_then(|m| m.model_override))
 }
 
 /// Generates a unique thread ID using UUID v4.
@@ -1130,6 +1193,15 @@ pub fn read_thread_title(id: &str) -> Result<Option<String>> {
 pub fn read_thread_root_path(id: &str) -> Result<Option<String>> {
     let path = threads_dir().join(format!("{id}.jsonl"));
     read_meta_root_path(&path)
+}
+
+/// Reads a thread's model override by ID (if present in meta).
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn read_thread_model_override(id: &str) -> Result<Option<String>> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    read_meta_model_override(&path)
 }
 
 /// Loads thread events and converts them to `ChatMessages` for API use.

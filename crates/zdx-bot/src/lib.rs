@@ -214,6 +214,8 @@ async fn handle_callback_query(
                 tracing::warn!(%err, "Failed to answer callback");
             }
         }
+    } else if data.starts_with("model_provider:") || data.starts_with("model_set:") || data.starts_with("model_back:") {
+        handle_model_callback(context, client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
             tracing::warn!(%err, "Failed to answer unknown callback");
@@ -242,4 +244,113 @@ fn parse_queue_cancel_callback(data: &str) -> Option<QueueCancelKey> {
     let chat_id: i64 = chat_str.parse().ok()?;
     let message_id: i64 = msg_str.parse().ok()?;
     Some((chat_id, message_id))
+}
+
+/// Handle model-selection inline keyboard callbacks.
+async fn handle_model_callback(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    data: &str,
+) {
+    let Some(msg) = callback.message.as_ref() else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("No message context"))
+            .await;
+        return;
+    };
+
+    let chat_id = msg.chat.id;
+    let message_id = msg.id;
+
+    if let Some(rest) = data.strip_prefix("model_provider:") {
+        // Format: model_provider:{provider}:{scope}
+        let Some((provider, scope)) = rest.split_once(':') else {
+            return;
+        };
+        let is_general = scope == "general";
+        let keyboard =
+            crate::handlers::message::build_models_keyboard(context, provider, is_general);
+        let header = format!("Select a <b>{provider}</b> model:");
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
+            .await
+        {
+            eprintln!("Failed to edit message for model provider: {err}");
+        }
+    } else if let Some(rest) = data.strip_prefix("model_set:") {
+        // Format: model_set:{model_id}:{scope}
+        // model_id itself contains ':', so split from the right for scope
+        let Some(last_colon) = rest.rfind(':') else {
+            return;
+        };
+        let model_id = &rest[..last_colon];
+        let scope = &rest[last_colon + 1..];
+        let is_general = scope == "general";
+
+        let reply = if is_general {
+            match Config::save_telegram_model(model_id) {
+                Ok(()) => format!(
+                    "✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect."
+                ),
+                Err(err) => format!("❌ Failed to save model: {err}"),
+            }
+        } else {
+            // Topic override — derive thread_id from chat_id + thread_id
+            let tid = match msg.thread_id {
+                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
+                None => format!("telegram-{chat_id}"),
+            };
+            match zdx_core::core::thread_persistence::Thread::with_id(tid) {
+                Ok(mut thread) => match thread.set_model_override(Some(model_id.to_string())) {
+                    Ok(()) => {
+                        format!("✅ Model set to <code>{model_id}</code> for this topic.")
+                    }
+                    Err(err) => format!("❌ Failed to set override: {err}"),
+                },
+                Err(err) => format!("❌ Failed to open thread: {err}"),
+            }
+        };
+
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &reply, None)
+            .await
+        {
+            eprintln!("Failed to edit message for model set: {err}");
+        }
+    } else if let Some(scope) = data.strip_prefix("model_back:") {
+        // Back to provider list
+        let is_general = scope == "general";
+        let keyboard = crate::handlers::message::build_provider_keyboard(context, is_general);
+
+        let override_info = if is_general {
+            String::new()
+        } else {
+            // Try to show current override
+            let tid = match msg.thread_id {
+                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
+                None => format!("telegram-{chat_id}"),
+            };
+            match zdx_core::core::thread_persistence::read_thread_model_override(&tid) {
+                Ok(Some(m)) => format!(
+                    "\nCurrent override: <code>{m}</code>"
+                ),
+                _ => String::new(),
+            }
+        };
+
+        let header = format!(
+            "Current model: <code>{}</code>{override_info}",
+            context.config().model
+        );
+
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
+            .await
+        {
+            eprintln!("Failed to edit message for model back: {err}");
+        }
+    }
+
+    let _ = client.answer_callback_query(&callback.id, None).await;
 }
