@@ -50,7 +50,13 @@ const COMMAND_DEFS: &[CommandDef] = &[
 ];
 
 pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
-    COMMAND_DEFS.iter().map(|def| def.telegram_spec).collect()
+    let mut specs: Vec<TelegramCommandSpec> =
+        COMMAND_DEFS.iter().map(|def| def.telegram_spec).collect();
+    specs.push(TelegramCommandSpec {
+        command: "model",
+        description: "View or change the AI model",
+    });
+    specs
 }
 
 pub(crate) fn parse_command(text: &str) -> Option<BotCommand> {
@@ -83,6 +89,37 @@ fn command_matches(trimmed_text: &str, command: &str) -> bool {
     trimmed_text
         .strip_prefix(command)
         .is_some_and(|stripped| stripped.starts_with('@'))
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum ModelSubcommand {
+    Show,
+    List,
+    Set(String),
+    Reset,
+}
+
+/// Parses a /model command. Returns None if the text is not a /model command.
+pub(crate) fn parse_model_command(text: &str) -> Option<ModelSubcommand> {
+    let trimmed = text.trim();
+    let without_mention = if trimmed.starts_with("/model@") {
+        let rest = trimmed.strip_prefix("/model").unwrap();
+        let after_mention = rest.find(' ').map(|i| &rest[i..]).unwrap_or("");
+        format!("/model{after_mention}")
+    } else if trimmed == "/model" || trimmed.starts_with("/model ") {
+        trimmed.to_string()
+    } else {
+        return None;
+    };
+
+    let parts: Vec<&str> = without_mention.split_whitespace().collect();
+    match parts.as_slice() {
+        ["/model"] => Some(ModelSubcommand::Show),
+        ["/model", "list"] => Some(ModelSubcommand::List),
+        ["/model", "set", id, ..] => Some(ModelSubcommand::Set(id.to_string())),
+        ["/model", "reset"] => Some(ModelSubcommand::Reset),
+        _ => Some(ModelSubcommand::Show),
+    }
 }
 
 #[cfg(test)]
