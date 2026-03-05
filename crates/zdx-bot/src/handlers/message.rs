@@ -214,67 +214,168 @@ async fn handle_model_command(
 
     use crate::commands::ModelSubcommand;
 
-    let msg = match subcmd {
-        ModelSubcommand::Show => {
-            let override_model =
-                zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?;
+    // General context = forum chat but NOT inside a topic thread
+    let is_general = incoming.is_forum && incoming.message_thread_id.is_none();
+
+    match subcmd {
+        ModelSubcommand::Show | ModelSubcommand::List => {
+            let override_model = if is_general {
+                None
+            } else {
+                zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?
+            };
             let current = override_model
                 .as_deref()
                 .unwrap_or(&context.config().model);
-            let is_override = override_model.is_some();
-            if is_override {
+
+            let header = if override_model.is_some() {
                 format!(
-                    "Current model: <code>{current}</code> (topic override)\nDefault: <code>{}</code>\n\nUse /model reset to revert.",
+                    "Current model: <code>{current}</code> (topic override)\nDefault: <code>{}</code>",
                     context.config().model
                 )
             } else {
-                format!("Current model: <code>{current}</code>\n\nUse /model set &lt;id&gt; to change.\nUse /model list to see options.")
-            }
-        }
-        ModelSubcommand::List => {
-            let models = context.config().subagent_available_models();
-            if models.is_empty() {
-                "No models available.".to_string()
-            } else {
-                let list: String = models
-                    .iter()
-                    .map(|m| format!("• <code>{m}</code>"))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                format!("Available models:\n\n{list}")
-            }
+                format!("Current model: <code>{current}</code>")
+            };
+
+            let keyboard = build_provider_keyboard(context, is_general);
+            context
+                .client()
+                .send_message_with_markup(
+                    incoming.chat_id,
+                    &header,
+                    reply_to_message_id,
+                    topic_id,
+                    &keyboard,
+                )
+                .await?;
         }
         ModelSubcommand::Set(model_id) => {
             let available = context.config().subagent_available_models();
-            if !available.iter().any(|m| m == &model_id) {
+            let msg = if !available.iter().any(|m| m == &model_id) {
                 format!(
                     "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
                 )
+            } else if is_general {
+                zdx_core::config::Config::save_telegram_model(&model_id)?;
+                format!("✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect.")
             } else {
                 let mut thread =
                     zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
                         .context("open thread")?;
                 thread.set_model_override(Some(model_id.clone()))?;
-                format!("✅ Model set to <code>{model_id}</code> for this thread.")
-            }
+                format!("✅ Model set to <code>{model_id}</code> for this topic.")
+            };
+            context
+                .client()
+                .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
+                .await?;
         }
         ModelSubcommand::Reset => {
-            let mut thread =
-                zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
-                    .context("open thread")?;
-            thread.set_model_override(None)?;
-            format!(
-                "✅ Model reset to default: <code>{}</code>",
-                context.config().model
-            )
+            let msg = if is_general {
+                format!(
+                    "Default model: <code>{}</code>\n\nUse /model set &lt;id&gt; to change.",
+                    context.config().model
+                )
+            } else {
+                let mut thread =
+                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                        .context("open thread")?;
+                thread.set_model_override(None)?;
+                format!(
+                    "✅ Model reset to default: <code>{}</code>",
+                    context.config().model
+                )
+            };
+            context
+                .client()
+                .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
+                .await?;
         }
     };
 
-    context
-        .client()
-        .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
-        .await?;
     Ok(true)
+}
+
+/// Build an inline keyboard showing provider names as buttons.
+/// Callback data format: `model_provider:{provider}:{scope}` where scope is `general` or `topic`.
+pub(crate) fn build_provider_keyboard(
+    context: &BotContext,
+    is_general: bool,
+) -> InlineKeyboardMarkup {
+    let models = context.config().subagent_available_models();
+    let scope = if is_general { "general" } else { "topic" };
+
+    // Extract unique providers (part before ':')
+    let mut providers: Vec<String> = Vec::new();
+    for m in &models {
+        let provider = m.split(':').next().unwrap_or(m).to_string();
+        if !providers.contains(&provider) {
+            providers.push(provider);
+        }
+    }
+
+    let rows: Vec<Vec<InlineKeyboardButton>> = providers
+        .chunks(3)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|p| InlineKeyboardButton {
+                    text: p.clone(),
+                    callback_data: Some(format!("model_provider:{p}:{scope}")),
+                    url: None,
+                })
+                .collect()
+        })
+        .collect();
+
+    InlineKeyboardMarkup {
+        inline_keyboard: rows,
+    }
+}
+
+/// Build an inline keyboard showing model names for a specific provider.
+/// Callback data format: `model_set:{model_id}:{scope}`.
+pub(crate) fn build_models_keyboard(
+    context: &BotContext,
+    provider: &str,
+    is_general: bool,
+) -> InlineKeyboardMarkup {
+    let models = context.config().subagent_available_models();
+    let scope = if is_general { "general" } else { "topic" };
+
+    let filtered: Vec<&String> = models
+        .iter()
+        .filter(|m| m.starts_with(&format!("{provider}:")))
+        .collect();
+
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = filtered
+        .chunks(2)
+        .map(|chunk| {
+            chunk
+                .iter()
+                .map(|m| {
+                    // Display just the model part (after provider:)
+                    let display = m.split(':').nth(1).unwrap_or(m);
+                    InlineKeyboardButton {
+                        text: display.to_string(),
+                        callback_data: Some(format!("model_set:{m}:{scope}")),
+                        url: None,
+                    }
+                })
+                .collect()
+        })
+        .collect();
+
+    // Add a "← Back" button
+    rows.push(vec![InlineKeyboardButton {
+        text: "← Back".to_string(),
+        callback_data: Some(format!("model_back:{scope}")),
+        url: None,
+    }]);
+
+    InlineKeyboardMarkup {
+        inline_keyboard: rows,
+    }
 }
 
 async fn handle_thread_commands(
