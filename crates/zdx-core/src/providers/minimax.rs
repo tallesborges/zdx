@@ -1,7 +1,10 @@
 //! `MiniMax` provider using OpenAI-compatible API.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use reqwest::header::HeaderMap;
+use serde_json::Value;
 
 use crate::providers::openai::chat_completions::{
     OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
@@ -63,20 +66,30 @@ pub struct MinimaxClient {
 
 impl MinimaxClient {
     pub fn new(config: MinimaxConfig) -> Self {
+        // MiniMax requires reasoning_split=true to return thinking in reasoning_details field.
+        let mut extra_body = HashMap::new();
+        if config.thinking_enabled {
+            extra_body.insert("reasoning_split".to_string(), Value::Bool(true));
+        }
+
         Self {
-            inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
-                api_key: config.api_key,
-                base_url: config.base_url,
-                model: config.model,
-                max_tokens: config.max_tokens,
-                max_completion_tokens: None,
-                reasoning_effort: None,
-                prompt_cache_key: config.prompt_cache_key,
-                extra_headers: HeaderMap::new(),
-                include_usage: true,
-                include_reasoning_content: config.thinking_enabled,
-                thinking: Some(config.thinking_enabled.into()),
-            }),
+            inner: OpenAIChatCompletionsClient::with_extra_body(
+                OpenAIChatCompletionsConfig {
+                    api_key: config.api_key,
+                    base_url: config.base_url,
+                    model: config.model,
+                    max_tokens: config.max_tokens,
+                    max_completion_tokens: None,
+                    reasoning_effort: None,
+                    prompt_cache_key: config.prompt_cache_key,
+                    extra_headers: HeaderMap::new(),
+                    include_usage: true,
+                    include_reasoning_content: config.thinking_enabled,
+                    // MiniMax uses reasoning_split in extra_body, not the thinking parameter.
+                    thinking: None,
+                },
+                extra_body,
+            ),
         }
     }
 
