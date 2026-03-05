@@ -3,6 +3,8 @@
 - Logs written to `~/.zdx/logs/` with daily file rotation via `tracing-appender`
 - `zdx monitor` TUI command shows a compact dashboard: services status, recent threads, automations, bot info, model config
 
+> ✅ MVP shipped (PR #34). Slices 1–4 complete.
+
 # Non-goals
 - Message content display in monitor
 - Fancy log viewer with search/filter
@@ -53,11 +55,11 @@
 ## Slice 1: Tracing foundation + daily log rotation
 - **Goal**: Set up `tracing` subscriber with daily rolling file appender; all crate entrypoints init the subscriber; logs go to `~/.zdx/logs/`
 - **Scope checklist**:
-  - [ ] Add `tracing`, `tracing-subscriber`, `tracing-appender` to workspace `Cargo.toml`
-  - [ ] Create `zdx-core` helper: `init_tracing()` that sets up a `tracing_subscriber` with `fmt` layer writing to `tracing_appender::rolling::daily("~/.zdx/logs", "zdx.log")`
-  - [ ] Also add a stderr layer (filtered to `warn+`) so critical errors still show in terminal
-  - [ ] Call `init_tracing()` from `zdx-cli/src/main.rs`, `zdx-bot/src/lib.rs` entrypoints
-  - [ ] Replace 5–10 `eprintln!` calls in `zdx-bot/src/lib.rs` and `zdx-cli/src/cli/commands/daemon.rs` with `tracing::info!`/`tracing::warn!`/`tracing::error!` as proof of concept
+  - [x] Add `tracing`, `tracing-subscriber`, `tracing-appender` to workspace `Cargo.toml`
+  - [x] Create `zdx-core` helper: `init_tracing()` that sets up a `tracing_subscriber` with `fmt` layer writing to `tracing_appender::rolling::daily("~/.zdx/logs", "zdx.log")`
+  - [x] Also add a stderr layer (filtered to `warn+`) so critical errors still show in terminal
+  - [x] Call `init_tracing()` from `zdx-cli/src/main.rs`, `zdx-bot/src/lib.rs` entrypoints
+  - [x] Replace 5–10 `eprintln!` calls in `zdx-bot/src/lib.rs` and `zdx-cli/src/cli/commands/daemon.rs` with `tracing::info!`/`tracing::warn!`/`tracing::error!` as proof of concept
 - **✅ Demo**: Run `zdx bot` (or `zdx daemon`), see log file created at `~/.zdx/logs/zdx.YYYY-MM-DD.log` with structured output; stderr still shows warnings
 - **Risks / failure modes**:
   - Guard init must be held alive or logs drop silently — store `WorkerGuard` in a `let _guard` at main scope
@@ -66,12 +68,12 @@
 ## Slice 2: Replace all remaining `eprintln!` with tracing macros
 - **Goal**: Mechanically replace all ~40+ `eprintln!` calls across the workspace with appropriate `tracing` macros
 - **Scope checklist**:
-  - [ ] `zdx-bot/src/ingest/mod.rs` (~20 calls): `warn!`/`info!`/`debug!` with structured fields (`chat_id`, `user_id`)
-  - [ ] `zdx-bot/src/handlers/message.rs` (~11 calls): `info!`/`error!`/`debug!` with structured fields
-  - [ ] `zdx-cli/src/cli/commands/automations.rs` (~3 calls): `warn!`/`info!`
-  - [ ] `zdx-core/src/` (~4 calls in agent.rs, thread_persistence.rs, debug_metrics.rs, models.rs): `warn!`/`error!`
-  - [ ] Distinguish user-facing CLI output (`println!`) from log messages — keep `println!` for CLI output
-  - [ ] Test files and xtask: leave `eprintln!` as-is
+  - [x] `zdx-bot/src/ingest/mod.rs` (~20 calls): `warn!`/`info!`/`debug!` with structured fields (`chat_id`, `user_id`)
+  - [x] `zdx-bot/src/handlers/message.rs` (~11 calls): `info!`/`error!`/`debug!` with structured fields
+  - [x] `zdx-cli/src/cli/commands/automations.rs` (~3 calls): `warn!`/`info!`
+  - [x] `zdx-core/src/` (~4 calls in agent.rs, thread_persistence.rs, debug_metrics.rs, models.rs): `warn!`/`error!`
+  - [x] Distinguish user-facing CLI output (`println!`) from log messages — keep `println!` for CLI output
+  - [x] Test files and xtask: leave `eprintln!` as-is
 - **✅ Demo**: `grep -rn "eprintln!" --include="*.rs" crates/` shows only test files and xtask; all runtime logging goes through tracing
 - **Risks / failure modes**:
   - `models.rs` prints are user-facing CLI output — these should be `println!` not tracing
@@ -80,13 +82,13 @@
 ## Slice 3: Monitor TUI — scaffold + static dashboard
 - **Goal**: `zdx monitor` opens a ratatui TUI showing static/file-based info: model config, recent threads, automation definitions
 - **Scope checklist**:
-  - [ ] Add `monitor` subcommand to `zdx-cli` CLI router
-  - [ ] Create `crates/zdx-monitor/` crate with basic ratatui app (single screen, sectioned layout)
-  - [ ] Section: **Config** — show current model, thinking level, provider (read from `Config::load()`)
-  - [ ] Section: **Recent Threads** — list last N threads from `~/.zdx/threads/` with ID, timestamp, surface (single-line each)
-  - [ ] Section: **Automations** — list discovered automations with name, schedule, last-run time
-  - [ ] Keybinding: `q` to quit, `y` to copy selected thread ID to clipboard
-  - [ ] Keybinding: arrow keys / `j`/`k` to navigate lists
+  - [x] Add `monitor` subcommand to `zdx-cli` CLI router
+  - [x] Create `crates/zdx-monitor/` crate with basic ratatui app (single screen, sectioned layout)
+  - [x] Section: **Config** — show current model, thinking level, provider (read from `Config::load()`)
+  - [x] Section: **Recent Threads** — list last N threads from `~/.zdx/threads/` with ID, timestamp, surface (single-line each)
+  - [x] Section: **Automations** — list discovered automations with name, schedule, last-run time
+  - [x] Keybinding: `q` to quit, `y` to copy selected thread ID to clipboard
+  - [x] Keybinding: arrow keys / `j`/`k` to navigate lists
 - **✅ Demo**: Run `zdx monitor` — see compact dashboard with config, recent threads, automations. Copy a thread ID. Press `q` to exit.
 - **Risks / failure modes**:
   - Thread listing may be slow with many threads — limit to last 50, sorted by mtime
@@ -95,10 +97,10 @@
 ## Slice 4: Monitor TUI — live service status
 - **Goal**: Monitor shows live status of running services (bot, daemon) by reading PID files
 - **Scope checklist**:
-  - [ ] Bot and daemon write a PID + status file to `~/.zdx/run/{service}.pid` on startup, remove on clean shutdown
-  - [ ] Section: **Services** — show bot (running/stopped), daemon (running/stopped) based on PID file + process alive check
-  - [ ] Auto-refresh every 2–5 seconds
-  - [ ] Show uptime if running (from PID file mtime)
+  - [x] Bot and daemon write a PID + status file to `~/.zdx/run/{service}.pid` on startup, remove on clean shutdown
+  - [x] Section: **Services** — show bot (running/stopped), daemon (running/stopped) based on PID file + process alive check
+  - [x] Auto-refresh every 2–5 seconds
+  - [x] Show uptime if running (from PID file mtime)
 - **✅ Demo**: Start `zdx bot` in one terminal, run `zdx monitor` in another — see bot as "running". Stop bot — monitor updates to "stopped".
 - **Risks / failure modes**:
   - Stale PID files after crash — validate PID is alive via `kill(pid, 0)` check
@@ -113,7 +115,7 @@
 
 # Key decisions (decide early)
 - **Log format**: `tracing-subscriber` `fmt` layer with `compact()` format — KISS
-- **Log level default**: `info` for file, `warn` for stderr; configurable via `RUST_LOG` env var
+- **Log level default**: `info` for file, `warn` for stderr; configurable via `ZDX_LOG` env var
 - **Where `init_tracing()` lives**: `zdx-core` as a shared helper
 - **Monitor crate**: New `zdx-monitor` crate (`crates/zdx-monitor/`), invoked via `zdx monitor` subcommand in `zdx-cli`. If shared UI code emerges later, extract to a `zdx-ui-common` crate (YAGNI until then).
 - **Service status mechanism**: Simple PID files in `~/.zdx/run/` — no IPC, no sockets
