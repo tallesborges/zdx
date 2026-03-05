@@ -516,10 +516,10 @@ impl<S> MetricsStream<S> {
     /// Write both human-readable and JSONL metrics.
     fn write_metrics(&self) {
         if let Err(e) = self.metrics.write_to_file(&self.output_path) {
-            eprintln!("Failed to write stream metrics: {e}");
+            tracing::error!(%e, "Failed to write stream metrics");
         }
         if let Err(e) = self.metrics.write_jsonl(&self.output_path) {
-            eprintln!("Failed to write stream metrics JSONL: {e}");
+            tracing::error!(%e, "Failed to write stream metrics JSONL");
         }
     }
 }

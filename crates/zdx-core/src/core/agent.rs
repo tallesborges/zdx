@@ -1588,7 +1588,7 @@ async fn execute_tools_async(
                         // This is rare and typically only happens if a task panics.
                         // Log it but continue - the slot will remain None and be
                         // caught by the expect below (which is a bug if it happens).
-                        eprintln!("Task join error: {e:?}");
+                        tracing::error!(err = ?e, "Task join error");
                     }
                     None => break, // All tasks completed
                 }
