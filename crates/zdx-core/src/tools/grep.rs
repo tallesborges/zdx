@@ -3,6 +3,7 @@
 //! Uses ripgrep internals (`grep-regex`, `grep-searcher`) and `ignore::WalkBuilder`
 //! for fast, `.gitignore`-respecting searches that return structured JSON results.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use globset::{Glob, GlobMatcher};
@@ -10,6 +11,7 @@ use grep_regex::RegexMatcherBuilder;
 use grep_searcher::SearcherBuilder;
 use grep_searcher::sinks::UTF8;
 use ignore::WalkBuilder;
+use regex::RegexBuilder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -77,6 +79,10 @@ pub fn definition() -> ToolDefinition {
                     "description": "Number of matches to skip before collecting results (default: 0). Use with max_count for pagination.",
                     "default": 0,
                     "minimum": 0
+                },
+                "extract_unique": {
+                    "type": "boolean",
+                    "description": "When true, extract only the matching text (capture group 1 if present, otherwise full match), deduplicate, and return sorted unique values. Useful for discovery queries like listing all unique tags."
                 }
             },
             "required": ["pattern"],
@@ -98,6 +104,8 @@ struct GrepInput {
     max_count: Option<usize>,
     #[serde(default, deserialize_with = "deserialize_optional_usize")]
     offset: Option<usize>,
+    #[serde(default, deserialize_with = "super::bool_or_string::deserialize")]
+    extract_unique: bool,
 }
 
 /// Deserialize `context_lines` from integer, string, or null, clamped to `0..=MAX_CONTEXT_LINES`.
@@ -290,6 +298,19 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         .max_count
         .unwrap_or(DEFAULT_MAX_COUNT)
         .clamp(1, MAX_MATCHES);
+
+    // Extract-unique mode: return sorted deduplicated capture values.
+    if input.extract_unique {
+        return execute_extract_unique(
+            &sanitized,
+            input.case_insensitive,
+            &search_path,
+            &ctx.root,
+            glob_matcher.as_ref(),
+            max_count,
+        );
+    }
+
     let offset = input.offset.unwrap_or(0);
 
     let per_file = collect_matches(
@@ -316,32 +337,79 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 }
 
 /// Collect matches grouped by file for round-robin selection.
-fn collect_matches(
+/// Extract unique matching values (capture group 1 or full match) from files.
+///
+/// Walks the file tree, applies the regex to each file's content, and collects
+/// unique extracted values into a sorted set.
+fn execute_extract_unique(
+    pattern: &str,
+    case_insensitive: bool,
     search_path: &Path,
-    matcher: &grep_regex::RegexMatcher,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
-    context_lines: usize,
-) -> Vec<Vec<Match>> {
-    let mut per_file: Vec<Vec<Match>> = Vec::new();
-    let mut total_collected: usize = 0;
-
-    if search_path.is_file() {
-        let mut file_matches = Vec::new();
-        search_file(
-            search_path,
-            matcher,
-            root,
-            context_lines,
-            &mut file_matches,
-            &mut total_collected,
-        );
-        if !file_matches.is_empty() {
-            per_file.push(file_matches);
+    max_count: usize,
+) -> ToolOutput {
+    let re = match RegexBuilder::new(pattern)
+        .case_insensitive(case_insensitive)
+        .build()
+    {
+        Ok(r) => r,
+        Err(e) => {
+            return ToolOutput::failure(
+                "invalid_pattern",
+                format!("Invalid regex pattern: {e}"),
+                None,
+            );
         }
-        return per_file;
+    };
+
+    let has_captures = re.captures_len() > 1;
+    let mut unique_values = BTreeSet::new();
+
+    let files = walk_files(search_path, root, glob_matcher);
+
+    for path in &files {
+        let Ok(content) = std::fs::read_to_string(path) else {
+            continue;
+        };
+
+        if has_captures {
+            for caps in re.captures_iter(&content) {
+                if let Some(m) = caps.get(1) {
+                    let val = m.as_str().trim().to_string();
+                    if !val.is_empty() {
+                        unique_values.insert(val);
+                    }
+                }
+            }
+        } else {
+            for m in re.find_iter(&content) {
+                let val = m.as_str().trim().to_string();
+                if !val.is_empty() {
+                    unique_values.insert(val);
+                }
+            }
+        }
     }
 
+    let total_unique = unique_values.len();
+    let truncated = total_unique > max_count;
+    let values: Vec<String> = unique_values.into_iter().take(max_count).collect();
+
+    ToolOutput::success(json!({
+        "values": values,
+        "total_unique": values.len(),
+        "truncated": truncated,
+    }))
+}
+
+/// Walk the file tree and return paths to search, respecting glob filters and size limits.
+fn walk_files(search_path: &Path, root: &Path, glob_matcher: Option<&GlobMatcher>) -> Vec<PathBuf> {
+    if search_path.is_file() {
+        return vec![search_path.to_path_buf()];
+    }
+
+    let mut files = Vec::new();
     let walker = WalkBuilder::new(search_path).build();
 
     for entry in walker {
@@ -364,9 +432,27 @@ fn collect_matches(
             continue;
         }
 
+        files.push(entry.into_path());
+    }
+
+    files
+}
+
+/// Collect matches grouped by file for round-robin selection.
+fn collect_matches(
+    search_path: &Path,
+    matcher: &grep_regex::RegexMatcher,
+    root: &Path,
+    glob_matcher: Option<&GlobMatcher>,
+    context_lines: usize,
+) -> Vec<Vec<Match>> {
+    let mut per_file: Vec<Vec<Match>> = Vec::new();
+    let mut total_collected: usize = 0;
+
+    for path in walk_files(search_path, root, glob_matcher) {
         let mut file_matches = Vec::new();
         search_file(
-            entry.path(),
+            &path,
             matcher,
             root,
             context_lines,
@@ -1130,5 +1216,174 @@ mod tests {
         let data = result.data().unwrap();
         assert_eq!(data["total_matches"], 5);
         assert_eq!(data["truncated"], true);
+    }
+
+    // --- extract_unique tests ---
+
+    #[test]
+    fn test_extract_unique_with_capture_group() {
+        let temp = TempDir::new().unwrap();
+        let content = "Hello #rust and #python\nMore #rust and #go\nAlso #python\n";
+        fs::write(temp.path().join("notes.md"), content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#([a-zA-Z][a-zA-Z0-9_-]*)",
+            "extract_unique": true
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let values: Vec<&str> = data["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // Capture group 1 extracts tag name without #
+        assert_eq!(values, vec!["go", "python", "rust"]);
+        assert_eq!(data["total_unique"], 3);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_extract_unique_full_match_no_capture() {
+        let temp = TempDir::new().unwrap();
+        let content = "Hello #rust and #python\nMore #rust and #go\n";
+        fs::write(temp.path().join("notes.md"), content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#[a-zA-Z][a-zA-Z0-9_-]*",
+            "extract_unique": true
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let values: Vec<&str> = data["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // No capture group -> full match including #
+        assert_eq!(values, vec!["#go", "#python", "#rust"]);
+        assert_eq!(data["total_unique"], 3);
+    }
+
+    #[test]
+    fn test_extract_unique_across_files() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("a.md"), "tags: #alpha #beta\n").unwrap();
+        fs::write(temp.path().join("b.md"), "tags: #beta #gamma\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#([a-zA-Z]+)",
+            "extract_unique": true,
+            "glob": "*.md"
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let values: Vec<&str> = data["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        // Deduplicated across both files
+        assert_eq!(values, vec!["alpha", "beta", "gamma"]);
+    }
+
+    #[test]
+    fn test_extract_unique_case_insensitive() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.md"), "#Rust #rust #RUST\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#([a-zA-Z]+)",
+            "extract_unique": true,
+            "case_insensitive": true
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let values = data["values"].as_array().unwrap();
+        // Case-insensitive matching but BTreeSet dedup is case-sensitive on extracted text
+        assert_eq!(values.len(), 3); // "RUST", "Rust", "rust" are distinct strings
+    }
+
+    #[test]
+    fn test_extract_unique_max_count() {
+        let temp = TempDir::new().unwrap();
+        let mut content = String::new();
+        for i in 0..20 {
+            let _ = writeln!(content, "tag_{i:02}");
+        }
+        fs::write(temp.path().join("test.txt"), &content).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"tag_\d+",
+            "extract_unique": true,
+            "max_count": 5
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_unique"], 5);
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["values"].as_array().unwrap().len(), 5);
+    }
+
+    #[test]
+    fn test_extract_unique_no_matches() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("test.txt"), "nothing here\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#[a-z]+",
+            "extract_unique": true
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_unique"], 0);
+        assert_eq!(data["values"].as_array().unwrap().len(), 0);
+        assert_eq!(data["truncated"], false);
+    }
+
+    #[test]
+    fn test_extract_unique_with_glob_filter() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("notes.md"), "#keep\n").unwrap();
+        fs::write(temp.path().join("code.rs"), "#skip\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"#([a-z]+)",
+            "extract_unique": true,
+            "glob": "*.md"
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let values: Vec<&str> = data["values"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(values, vec!["keep"]);
     }
 }
