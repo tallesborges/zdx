@@ -239,7 +239,6 @@ fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, 
 fn build_prompt_template_vars(
     root: &Path,
     model: &str,
-    config: &Config,
     sections: PromptTemplateSections<'_>,
 ) -> PromptTemplateVars {
     let base_prompt = sections.base_prompt.unwrap_or_default().trim().to_string();
@@ -670,7 +669,6 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
     let vars = build_prompt_template_vars(
         root,
         &config.model,
-        config,
         PromptTemplateSections {
             base_prompt: base_prompt.as_deref(),
             project_context: project_context_block.as_deref(),
@@ -1024,7 +1022,6 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1046,7 +1043,6 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1076,7 +1072,6 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1113,7 +1108,6 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "codex:gpt-5.3-codex",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1144,7 +1138,6 @@ mod tests {
         let anthropic = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1164,7 +1157,6 @@ mod tests {
         let codex = build_prompt_template_vars(
             Path::new("/tmp"),
             "codex:gpt-5.3-codex",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: Some("hello"),
                 project_context: None,
@@ -1249,7 +1241,6 @@ mod tests {
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
-            &Config::default(),
             PromptTemplateSections {
                 base_prompt: None,
                 project_context: None,

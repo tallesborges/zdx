@@ -3926,6 +3926,7 @@ dependencies = [
  "libc",
  "minijinja",
  "nucleo-matcher",
+ "regex",
  "reqwest",
  "serde",
  "serde_json",
