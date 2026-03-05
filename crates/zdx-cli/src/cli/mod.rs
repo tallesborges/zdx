@@ -191,6 +191,9 @@ enum Commands {
         command: TelegramCommands,
     },
 
+    /// Service dashboard (inspect config, threads, automations)
+    Monitor,
+
     /// Manage git worktrees
     Worktree {
         #[command(subcommand)]
@@ -417,6 +420,10 @@ pub fn run() -> Result<()> {
 
     interrupt::init();
 
+    // Initialize tracing (file + stderr logging)
+    let _tracing_guards =
+        zdx_core::tracing_init::init(&zdx_core::tracing_init::TracingOptions::default());
+
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
 
@@ -629,6 +636,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             gemini_cli,
         } => dispatch_logout((anthropic, claude_cli, openai_codex, gemini_cli)),
         Commands::Models { command } => dispatch_models(command, context).await,
+        Commands::Monitor => dispatch_monitor(context),
         Commands::Telegram { command } => dispatch_telegram(command, context).await,
         Commands::Worktree { command } => dispatch_worktree(command, context),
     }
@@ -792,6 +800,11 @@ async fn dispatch_telegram(command: TelegramCommands, context: &DispatchContext<
             .await
         }
     }
+}
+
+fn dispatch_monitor(context: &DispatchContext<'_>) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    zdx_monitor::run(&root_path)
 }
 
 fn dispatch_worktree(command: WorktreeCommands, context: &DispatchContext<'_>) -> Result<()> {

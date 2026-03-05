@@ -5,6 +5,7 @@ members = [
     "crates/zdx-core",
     "crates/zdx-tui",
     "crates/zdx-bot",
+    "crates/zdx-monitor",
 ]
 resolver = "2"
 
@@ -73,6 +74,9 @@ toml_edit = "0.22"
 unicode-segmentation = "1.12"
 unicode-width = "0.2"
 url = "2.5"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-appender = "0.2"
 uuid = { version = "1.19.0", features = ["v4"] }
 
 # The profile that 'dist' will build with
