@@ -628,6 +628,38 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
+    /// Saves only the `telegram.model` field to the config file.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_telegram_model(model: &str) -> Result<()> {
+        Self::save_telegram_model_to(&paths::config_path(), model)
+    }
+
+    /// Saves only the `telegram.model` field to a specific config file path.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_telegram_model_to(path: &Path, model: &str) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        doc["telegram"]["model"] = value(model);
+
+        Self::write_config(path, &doc.to_string())
+    }
+
     /// Saves only the `thinking_level` field to the config file.
     ///
     /// Creates the file if it doesn't exist.
