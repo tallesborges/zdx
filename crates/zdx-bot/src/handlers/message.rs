@@ -129,6 +129,26 @@ struct TurnResult {
     final_text: String,
     got_result: bool,
     had_error: bool,
+    error_message: Option<String>,
+}
+
+fn escape_html(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
+fn format_user_error_message(message: &str) -> String {
+    let trimmed = message.trim();
+    let compact = if trimmed.len() > 700 {
+        format!("{}…", trimmed.chars().take(700).collect::<String>())
+    } else {
+        trimmed.to_string()
+    };
+    format!(
+        "❌ Request failed.\n\n<blockquote><code>{}</code></blockquote>",
+        escape_html(&compact)
+    )
 }
 
 async fn handle_general_forum_commands(
@@ -621,7 +641,7 @@ async fn spawn_or_fail(
                     .edit_message_text(
                         incoming.chat_id,
                         msg_id,
-                        "Sorry, something went wrong.",
+                        &format_user_error_message(&err.to_string()),
                         None,
                     )
                     .await;
@@ -645,6 +665,7 @@ async fn stream_turn_events(
     let mut final_text = String::new();
     let mut got_result = false;
     let mut had_error = false;
+    let mut error_message = None;
 
     loop {
         tokio::select! {
@@ -663,6 +684,7 @@ async fn stream_turn_events(
                     AgentEvent::Error { message, .. } => {
                         tracing::error!(message, "Agent error event");
                         had_error = true;
+                        error_message = Some(message.clone());
                     }
                     AgentEvent::Interrupted { partial_content } => {
                         if let Some(partial) = partial_content {
@@ -680,6 +702,7 @@ async fn stream_turn_events(
         final_text,
         got_result,
         had_error,
+        error_message,
     }
 }
 
@@ -743,12 +766,17 @@ async fn finalize_turn(
 
     if result.had_error && !result.got_result {
         if let Some(msg_id) = status.message_id {
+            let error_text = result
+                .error_message
+                .as_deref()
+                .map(format_user_error_message)
+                .unwrap_or_else(|| "Sorry, something went wrong.".to_string());
             let _ = context
                 .client()
                 .edit_message_text(
                     incoming.chat_id,
                     msg_id,
-                    "Sorry, something went wrong.",
+                    &error_text,
                     None,
                 )
                 .await;
