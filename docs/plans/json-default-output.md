@@ -1,10 +1,10 @@
 # JSON Default Output for ZDX CLI
 
 # Goals
-- All ZDX CLI commands output JSON to stdout by default
+- All finite ZDX CLI commands output JSON to stdout by default
 - Structured errors in JSON to stderr
 - Dates in ISO-8601 (RFC3339) format everywhere
-- Agents (AI consumers) can reliably parse all CLI output without flags
+- Agents (AI consumers) can reliably parse all finite CLI command output without flags
 - List responses include `has_more` field so agents know if results were capped
 - Rename `truncated` → `has_more` in tool outputs where semantics are "more results exist" (glob, grep), keep `truncated` where content is cut mid-stream (bash, read)
 
@@ -12,13 +12,15 @@
 - Human-readable format flag (`--human`, `--text`, etc.)
 - Changing TUI output (remains interactive/human-facing)
 - Changing `zdx exec` streaming output mid-stream (assistant text stays as-is for piping)
+- Defining a stable stdout API for long-running service commands (`bot`, `automations daemon`, future service runners)
 - JSON schema versioning/OpenAPI spec generation
 
 # Design principles
 - User journey drives order
-- Agent-first: every stdout line must be valid JSON or part of a JSON document
+- Agent-first for finite commands: command results should be structured and deterministic
 - Convention over configuration: no `--json` flag needed, it's always JSON
 - Remove existing `--json` flags (they become redundant)
+- Long-running services may emit logs/tracing, but logs are not the stable machine contract
 
 # User journey
 1. User runs `zdx threads list` → gets JSON array of threads on stdout
@@ -74,15 +76,16 @@
   - `threads show` has a large transcript — ensure streaming/buffered write for big threads
 
 ## Slice 3: Convert `automations` subcommands to JSON output
-- **Goal**: `automations list`, `automations validate`, `automations runs` all emit JSON by default
+- **Goal**: finite `automations` subcommands emit JSON by default
 - **Scope checklist**:
   - [ ] `automations list` → JSON array of `{ name, source, schedule }` objects
   - [ ] `automations validate` → JSON array of `{ name, source, schedule, model, timeout_secs, max_retries, valid }` objects
   - [ ] `automations runs` → JSON array (reuse existing `AutomationRunRecord`, remove `--json` flag)
   - [ ] Remove `--json` flag from `automations runs` (always JSON now)
+  - [ ] Explicitly leave `automations daemon` out of the JSON stdout contract (long-running service; observability via tracing/logs/state)
 - **✅ Demo**: `zdx automations list | jq '.[].name'` lists automation names
 - **Risks / failure modes**:
-  - Daemon log output stays human-readable on stderr (daemon is long-running, not piped)
+  - `automations run <name>` currently routes through exec-like behavior; decide explicitly whether it becomes a finite JSON summary later or stays outside this contract for now
 
 ## Slice 4: Convert remaining commands to JSON output
 - **Goal**: All other non-interactive commands emit JSON
@@ -97,6 +100,7 @@
   - [ ] `telegram send-message` / `send-document` → `{ "sent": true }`
   - [ ] `worktree ensure` → `{ "path": "..." }`
   - [ ] `worktree remove` → `{ "removed": "...", "branch_deleted": "..." }`
+  - [ ] Explicitly leave `bot`, `monitor`, and other long-running/service entrypoints out of scope for this plan
 - **✅ Demo**: `zdx config path | jq -r '.path'` prints the raw config path
 - **Risks / failure modes**:
   - `login` has interactive prompts (stdin reads) — prompts go to stderr, only final result to stdout as JSON
@@ -128,20 +132,22 @@
   - LLM tool descriptions mention `truncated` — update tool descriptions in SPEC.md
 
 # Contracts (guardrails)
-- All stdout from non-interactive commands is valid JSON (parseable by `jq`)
+- All stdout from finite, non-interactive commands is valid JSON (parseable by `jq`)
 - Error output on stderr is valid JSON with `{ "ok": false, "error": { "code": "...", "message": "..." } }`
 - Exit codes unchanged: 0/1/2/130
 - TUI mode (`zdx` with no subcommand) is unchanged
-- `zdx exec` stdout contract unchanged (assistant text only, per SPEC.md §7)
+- `zdx exec` stdout contract unchanged for now (assistant text only, per SPEC.md §7)
 - Dates are RFC3339 UTC strings
-- `zdx automations daemon` operational logs remain on stderr (long-running process)
+- Long-running service commands are outside this stdout JSON contract; they may emit logs via tracing/stderr for observability
+- `threads resume`, `zdx exec`, `bot`, `monitor`, and `automations daemon` are out of scope for this plan
 
 # Key decisions (decide early)
 - **Envelope shape**: Use `{ "ok": true, "data": ... }` / `{ "ok": false, "error": { "code", "message" } }` matching existing tool envelope (SPEC.md §9) — consistent across the project
 - **`zdx exec` output**: Keep as streaming text on stdout (agent-facing contract). Do NOT wrap in JSON — it would break piping semantics. Errors already go to stderr via `ExecRenderer`
 - **Pretty vs compact**: Use compact JSON by default (single line). Agents don't need pretty-printing. Removes the `serde_json::to_string_pretty` calls
-- **Warnings**: Warnings during command execution go to stderr as JSON `{ "ok": false, "error": { "code": "warning", "message": "..." } }` — or drop warnings entirely since agents don't need them
+- **Warnings**: Warnings during finite command execution go to stderr as JSON `{ "ok": false, "error": { "code": "warning", "message": "..." } }` — or drop warnings entirely since agents don't need them
 - **`has_more` vs `truncated`**: Use `has_more` when the output is a capped list of results (glob, grep, CLI list commands). Keep `truncated` only when content is literally cut mid-stream (bash stdout/stderr, read file content). This makes semantics clearer for agent consumers
+- **Long-running observability**: Long-running services may log useful debug/runtime information, but those logs are not a stable machine contract. Service inspection/control should come from tracing + structured state + future TUI surfaces
 
 # Testing
 - Manual smoke demos per slice: pipe each command through `jq .` to verify valid JSON
@@ -161,3 +167,4 @@
 - **`--format text` flag**: Add back human-readable output if users complain about raw JSON. Revisit if dogfooding reveals frequent pain.
 - **`zdx exec` JSON wrapping**: Wrap exec output in JSON envelope. Revisit when streaming JSON (JSONL per event) is needed for automation tooling.
 - **JSON streaming (JSONL)**: For commands with large output, emit one JSON object per line instead of a single array. Revisit when performance is an issue.
+- **Service control plane TUI**: Separate plan for a non-chat TUI focused on bot/automation service status, config inspection, logs, and start/stop/restart controls. Revisit as the next major TUI surface.
