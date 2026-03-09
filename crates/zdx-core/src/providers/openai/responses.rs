@@ -138,6 +138,7 @@ fn build_input(messages: &[ChatMessage], system: Option<&str>) -> Vec<InputItem>
     if let Some(prompt) = system {
         input.push(message_item(
             "developer",
+            None,
             vec![InputContent::InputText {
                 text: prompt.to_string(),
             }],
@@ -158,29 +159,37 @@ fn append_input_for_message(msg: &ChatMessage, input: &mut Vec<InputItem>) {
         ("user", MessageContent::Text(text)) => {
             input.push(message_item(
                 "user",
+                None,
                 vec![InputContent::InputText { text: text.clone() }],
             ));
         }
         ("assistant", MessageContent::Text(text)) => {
             input.push(message_item(
                 "assistant",
+                msg.phase.as_deref().or(Some("final_answer")),
                 vec![InputContent::OutputText { text: text.clone() }],
             ));
         }
         ("assistant", MessageContent::Blocks(blocks)) => {
-            append_assistant_blocks(blocks, input);
+            append_assistant_blocks(blocks, msg.phase.as_deref(), input);
         }
         ("user", MessageContent::Blocks(blocks)) => append_user_blocks(blocks, input),
         _ => {}
     }
 }
 
-fn append_assistant_blocks(blocks: &[ChatContentBlock], input: &mut Vec<InputItem>) {
+fn append_assistant_blocks(
+    blocks: &[ChatContentBlock],
+    explicit_phase: Option<&str>,
+    input: &mut Vec<InputItem>,
+) {
+    let phase = explicit_phase.unwrap_or_else(|| assistant_phase_for_blocks(blocks));
     for block in blocks {
         match block {
             ChatContentBlock::Text(text) => {
                 input.push(message_item(
                     "assistant",
+                    Some(phase),
                     vec![InputContent::OutputText { text: text.clone() }],
                 ));
             }
@@ -224,7 +233,7 @@ fn flush_user_content_parts(input: &mut Vec<InputItem>, content_parts: &mut Vec<
     if content_parts.is_empty() {
         return;
     }
-    input.push(message_item("user", std::mem::take(content_parts)));
+    input.push(message_item("user", None, std::mem::take(content_parts)));
 }
 
 fn append_tool_result(result: &crate::tools::ToolResult, input: &mut Vec<InputItem>) {
@@ -243,6 +252,7 @@ fn append_tool_result(result: &crate::tools::ToolResult, input: &mut Vec<InputIt
     if let Some((mime_type, data)) = has_image {
         input.push(message_item(
             "user",
+            None,
             vec![input_image_content(&mime_type, &data)],
         ));
     }
@@ -264,6 +274,7 @@ fn reasoning_replay_item(text: Option<&str>, replay: Option<&ReplayToken>) -> Op
         id: Some(id.clone()),
         item_type: "reasoning".to_string(),
         role: None,
+        phase: None,
         content: None,
         call_id: None,
         name: None,
@@ -287,6 +298,7 @@ fn function_call_item(id: &str, name: &str, arguments: &serde_json::Value) -> In
         id: tool_id,
         item_type: "function_call".to_string(),
         role: None,
+        phase: None,
         content: None,
         call_id,
         name: Some(name.to_string()),
@@ -302,6 +314,7 @@ fn function_call_output_item(call_id: String, output: String) -> InputItem {
         id: None,
         item_type: "function_call_output".to_string(),
         role: None,
+        phase: None,
         content: None,
         call_id: Some(call_id),
         name: None,
@@ -312,11 +325,12 @@ fn function_call_output_item(call_id: String, output: String) -> InputItem {
     }
 }
 
-fn message_item(role: &str, content: Vec<InputContent>) -> InputItem {
+fn message_item(role: &str, phase: Option<&str>, content: Vec<InputContent>) -> InputItem {
     InputItem {
         id: None,
         item_type: "message".to_string(),
         role: Some(role.to_string()),
+        phase: phase.map(std::string::ToString::to_string),
         content: Some(content),
         call_id: None,
         name: None,
@@ -324,6 +338,17 @@ fn message_item(role: &str, content: Vec<InputContent>) -> InputItem {
         output: None,
         encrypted_content: None,
         summary: None,
+    }
+}
+
+fn assistant_phase_for_blocks(blocks: &[ChatContentBlock]) -> &'static str {
+    if blocks
+        .iter()
+        .any(|block| matches!(block, ChatContentBlock::ToolUse { .. }))
+    {
+        "commentary"
+    } else {
+        "final_answer"
     }
 }
 
@@ -363,5 +388,55 @@ fn extract_tool_result_with_image(
 
             (text, image)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
+
+    #[test]
+    fn assistant_text_messages_are_marked_as_final_answer() {
+        let messages = vec![ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Text("Done.".to_string()),
+        }];
+
+        let input = build_input(&messages, None);
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0].role.as_deref(), Some("assistant"));
+        assert_eq!(input[0].phase.as_deref(), Some("final_answer"));
+    }
+
+    #[test]
+    fn assistant_tool_preambles_are_marked_as_commentary() {
+        let messages = vec![ChatMessage::assistant_blocks(vec![
+            ChatContentBlock::Text("I’ll inspect the file first.".to_string()),
+            ChatContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "read".to_string(),
+                input: serde_json::json!({"path": "src/main.rs"}),
+            },
+        ])];
+
+        let input = build_input(&messages, None);
+        let assistant_message = input
+            .iter()
+            .find(|item| item.role.as_deref() == Some("assistant"))
+            .expect("assistant message");
+        assert_eq!(assistant_message.phase.as_deref(), Some("commentary"));
+    }
+
+    #[test]
+    fn explicit_assistant_phase_is_preserved_on_replay() {
+        let messages = vec![ChatMessage::assistant_text(
+            "Working on it.",
+            Some("commentary".to_string()),
+        )];
+
+        let input = build_input(&messages, None);
+        assert_eq!(input[0].phase.as_deref(), Some("commentary"));
     }
 }
