@@ -214,7 +214,10 @@ async fn handle_callback_query(
                 tracing::warn!(%err, "Failed to answer callback");
             }
         }
-    } else if data.starts_with("model_provider:") || data.starts_with("model_set:") || data.starts_with("model_back:") {
+    } else if data.starts_with("model_provider:")
+        || data.starts_with("model_set:")
+        || data.starts_with("model_back:")
+    {
         handle_model_callback(context, client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
@@ -332,9 +335,7 @@ async fn handle_model_callback(
                 None => format!("telegram-{chat_id}"),
             };
             match zdx_core::core::thread_persistence::read_thread_model_override(&tid) {
-                Ok(Some(m)) => format!(
-                    "\nCurrent override: <code>{m}</code>"
-                ),
+                Ok(Some(m)) => format!("\nCurrent override: <code>{m}</code>"),
                 _ => String::new(),
             }
         };

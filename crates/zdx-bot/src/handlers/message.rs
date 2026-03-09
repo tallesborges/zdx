@@ -224,9 +224,7 @@ async fn handle_model_command(
             } else {
                 zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?
             };
-            let current = override_model
-                .as_deref()
-                .unwrap_or(&context.config().model);
+            let current = override_model.as_deref().unwrap_or(&context.config().model);
 
             let header = if override_model.is_some() {
                 format!(
@@ -257,7 +255,9 @@ async fn handle_model_command(
                 )
             } else if is_general {
                 zdx_core::config::Config::save_telegram_model(&model_id)?;
-                format!("✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect.")
+                format!(
+                    "✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect."
+                )
             } else {
                 let mut thread =
                     zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
