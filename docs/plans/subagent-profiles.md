@@ -1,5 +1,5 @@
 # Goals
-- `invoke_subagent(profile: "explore", prompt: "...")` replaces inline model/system_prompt params
+- `invoke_subagent(profile: "assistant", prompt: "...")` and `invoke_subagent(profile: "automation", prompt: "...")` cover the immediate normal-use and headless-use flows
 - Named profiles configure: system_prompt + model + tools + thinking — stored as markdown files with YAML frontmatter
 - Unified profile consumers: subagent tool, automations (`profile:` in frontmatter), telegram bot
 - Available profiles dynamically listed in tool description
@@ -17,14 +17,14 @@
 - Profiles are just files — no database, no migration
 - Convention over configuration: built-in defaults work out of the box
 - Project profiles override global profiles override built-in defaults (by name)
+- Start with the minimum useful set of built-ins; add specialized profiles only after real usage proves the need
 
 # User journey
-1. User invokes subagent without changes → works with built-in `worker` profile (default)
-2. Agent sees available profiles in tool description → picks `explore` for fast search
-3. `invoke_subagent(profile: "explore", prompt: "find all usages of X")` → child runs with explore's model/tools/system_prompt
+1. User invokes subagent without changes → works with built-in `assistant` profile (default behavior mapping of today's normal mode)
+2. User sets `profile: automation` in an automation frontmatter → automation runs in a headless, non-interactive mode tuned to finish the task without depending on follow-up questions
+3. Telegram bot uses `assistant` profile → no AGENTS.md/coding context pollution, but still keeps general assistant behavior
 4. User creates `~/.zdx/profiles/my-analyst.md` → it appears in available profiles
-5. User sets `profile: researcher` in an automation frontmatter → automation runs with researcher config
-6. Telegram bot uses `assistant` profile → no AGENTS.md/coding context pollution
+5. Later, user adds specialized profiles like `search`, `review`, `plan`, or `orchestrator` only when needed
 
 # Foundations / Already shipped (✅)
 
@@ -52,15 +52,15 @@
   - [ ] Profile parser: read `.md` file → split YAML frontmatter + markdown body → deserialize into `Profile`
   - [ ] `load_profile(name, project_root)` → searches `.zdx/profiles/` then `~/.zdx/profiles/` then built-in defaults
   - [ ] `list_profiles(project_root)` → returns all available profile names+descriptions (deduplicated by name, project wins)
-  - [ ] Built-in profiles embedded via `include_str!`: `worker`, `explore`, `oracle`, `researcher`, `assistant`, `look_at`
+  - [ ] Built-in profiles embedded via `include_str!`: `assistant`, `automation`
   - [ ] Built-in profile markdown files in `crates/zdx-core/src/profiles/` (or similar)
   - [ ] Unit tests for parsing and precedence
-- **✅ Demo**: Unit test loads built-in `explore` profile, verifies model/tools/system_prompt fields
+- **✅ Demo**: Unit test loads built-in `assistant` and `automation` profiles, verifies model/tools/system_prompt fields
 - **Risks / failure modes**:
   - YAML frontmatter parsing edge cases → mitigate: reuse same parsing as skills/automations if they already parse frontmatter
 
 ## Slice 2: Wire profiles into subagent execution
-- **Goal**: `invoke_subagent(profile: "explore", prompt: "...")` resolves profile and passes config to child `zdx exec`
+- **Goal**: `invoke_subagent(profile: "assistant", prompt: "...")` or `invoke_subagent(profile: "automation", prompt: "...")` resolves profile and passes config to child `zdx exec`
 - **Scope checklist**:
   - [ ] Add `profile` param to `invoke_subagent` tool schema (optional string, replaces `model`)
   - [ ] Remove `model` param from tool schema (profile owns model selection)
@@ -68,11 +68,11 @@
   - [ ] Pass custom system prompt to child: add `--system-prompt <TEXT>` support to `ExecSubagentOptions` / `build_exec_args` (reuse existing root `--system-prompt` CLI flag)
   - [ ] Pass `--tools` list from profile to child exec args
   - [ ] Pass `--no-system-prompt` if profile sets it
-  - [ ] Default to `worker` profile when no profile specified
+  - [ ] Default to `assistant` profile when no profile specified
   - [ ] Dynamic tool description: inject available profile names+descriptions into `Invoke_Subagent` tool description
   - [ ] Update system prompt `<subagents>` block to reference profiles instead of `<available_models>`
   - [ ] Update tests
-- **✅ Demo**: In TUI, agent uses `invoke_subagent(profile: "explore", prompt: "find all TODO comments")` → child runs with cheap model, read-only tools, explore system prompt
+- **✅ Demo**: In TUI, agent uses `invoke_subagent(profile: "automation", prompt: "summarize yesterday's thread activity into a structured report")` → child runs with automation prompt/constraints and completes without asking follow-up questions
 - **Risks / failure modes**:
   - System prompt text might be very long when passed as CLI arg → mitigate: use `--system-prompt-file` or temp file if needed; for MVP, CLI arg is fine (OS arg limit is 256KB+)
   - Removing `model` param is breaking for existing usage → mitigate: keep `model` as deprecated fallback in Slice 2, remove in polish
@@ -85,17 +85,18 @@
   - [ ] Telegram bot: configure default profile (e.g., `assistant`) in `[telegram]` config section
   - [ ] Bot uses profile's system_prompt/tools/model instead of default coding context
   - [ ] Update automation validation to check profile exists
-- **✅ Demo**: Create automation with `profile: researcher` in frontmatter → `just automations run <name>` uses researcher model and web tools
+- **✅ Demo**: Create automation with `profile: automation` in frontmatter → `just automations run <name>` uses automation prompt/constraints and finishes in headless mode
 - **Risks / failure modes**:
   - Automation already has `model:` in frontmatter — need to decide precedence (profile wins, explicit model overrides profile) → decide in key decisions
 
 # Contracts (guardrails)
-- `invoke_subagent` without `profile` must still work (defaults to `worker`)
+- `invoke_subagent` without `profile` must still work (defaults to `assistant`)
 - Built-in profiles must always be available even with no user files
 - Profile `tools` list is an allowlist — child exec gets exactly those tools
 - Profile system_prompt replaces (not appends to) the default system prompt composition
 - Project-level profiles override global profiles override built-in (by name match)
 - Existing `zdx exec` CLI flags continue to work independently of profiles
+- `automation` profile must be written for non-interactive execution: complete the task with reasonable assumptions instead of depending on user clarification
 
 # Key decisions (decide early)
 - **Profile `model` format**: use the existing `provider:model` format (e.g., `gemini:gemini-2.5-flash-lite`)
@@ -120,13 +121,15 @@
 - ✅ Check-in demo: `zdx profiles list` shows built-in + user profiles with descriptions
 
 ## Phase 2: Profile refinements
+- Add specialized built-ins only after they prove useful in practice: `search`, `review`, `plan`, `orchestrator`, `bot`
 - Profile `extends:` field for inheriting from another profile
 - `tools_add` / `tools_remove` fields (modify base tool set instead of full override)
 - Profile-specific timeout configuration
-- ✅ Check-in demo: custom profile with `extends: worker` inherits worker defaults and overrides model
+- ✅ Check-in demo: custom profile with `extends: assistant` inherits assistant defaults and overrides model
 
 # Later / Deferred
 - **Profile templates/generators** — create profile from interactive wizard. Trigger: users frequently create profiles with similar patterns.
 - **Profile marketplace/sharing** — import profiles from URLs/repos. Trigger: community demand.
 - **Per-profile environment variables** — inject env vars into child process. Trigger: profiles need API keys or runtime config.
 - **TUI profile picker** — select profile from overlay menu. Trigger: TUI becomes primary profile consumer.
+- **Specialized built-ins (`search`, `review`, `plan`, `orchestrator`, `bot`)** — add once the two-profile MVP (`assistant` + `automation`) is dogfooded enough to show clear repeated patterns.
