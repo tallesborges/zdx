@@ -61,6 +61,7 @@ pub(crate) fn record_user_message(
 
     messages.push(ChatMessage {
         role: "user".to_string(),
+        phase: None,
         content: MessageContent::Blocks(blocks),
     });
     Ok(())
