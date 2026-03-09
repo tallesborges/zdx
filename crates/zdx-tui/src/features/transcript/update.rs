@@ -114,7 +114,10 @@ pub fn handle_agent_event(
             // Save assistant message to thread if enabled
             if !final_text.is_empty() && has_thread {
                 vec![UiEffect::SaveThread {
-                    event: ThreadEvent::assistant_message(final_text),
+                    event: ThreadEvent::assistant_message_with_phase(
+                        final_text,
+                        Some("final_answer".to_string()),
+                    ),
                 }]
             } else {
                 vec![]

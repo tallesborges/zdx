@@ -17,6 +17,7 @@ pub struct OpenAIConfig {
     pub base_url: String,
     pub model: String,
     pub max_output_tokens: Option<u32>,
+    pub reasoning_effort: Option<String>,
     pub prompt_cache_key: Option<String>,
 }
 
@@ -38,6 +39,7 @@ impl OpenAIConfig {
         max_output_tokens: Option<u32>,
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
+        reasoning_effort: Option<String>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
         let api_key = ProviderKind::OpenAI.resolve_api_key(config_api_key)?;
@@ -48,6 +50,7 @@ impl OpenAIConfig {
             base_url,
             model,
             max_output_tokens,
+            reasoning_effort,
             prompt_cache_key,
         })
     }
@@ -82,12 +85,12 @@ impl OpenAIClient {
             path: RESPONSES_PATH.to_string(),
             model: self.config.model.clone(),
             max_output_tokens: self.config.max_output_tokens,
-            reasoning_effort: None,
+            reasoning_effort: self.config.reasoning_effort.clone(),
             reasoning_summary: None,
             instructions: None,
             text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
             store: Some(false),
-            include: None,
+            include: Some(vec!["reasoning.encrypted_content".to_string()]),
             stream_options: Some(StreamOptions {
                 include_obfuscation: Some(false),
             }),
