@@ -137,6 +137,8 @@ pub enum ThreadEvent {
     Message {
         role: String,
         text: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        phase: Option<String>,
         ts: String,
     },
 
@@ -220,15 +222,25 @@ impl ThreadEvent {
         Self::Message {
             role: "user".to_string(),
             text: text.into(),
+            phase: None,
             ts: chrono_timestamp(),
         }
     }
 
     /// Creates a new assistant message event.
     pub fn assistant_message(text: impl Into<String>) -> Self {
+        Self::assistant_message_with_phase(text, None)
+    }
+
+    /// Creates a new assistant message event with optional phase.
+    pub fn assistant_message_with_phase(
+        text: impl Into<String>,
+        phase: Option<String>,
+    ) -> Self {
         Self::Message {
             role: "assistant".to_string(),
             text: text.into(),
+            phase,
             ts: chrono_timestamp(),
         }
     }
@@ -1260,7 +1272,9 @@ impl MessageReplay {
     fn handle_event(&mut self, event: ThreadEvent) {
         match event {
             ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {}
-            ThreadEvent::Message { role, text, .. } => self.handle_message(role, text),
+            ThreadEvent::Message {
+                role, text, phase, ..
+            } => self.handle_message(role, text, phase),
             ThreadEvent::Reasoning { text, replay, .. } => {
                 self.flush_tool_results();
                 self.pending_reasoning
@@ -1285,7 +1299,7 @@ impl MessageReplay {
         }
     }
 
-    fn handle_message(&mut self, role: String, text: String) {
+    fn handle_message(&mut self, role: String, text: String, phase: Option<String>) {
         use crate::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
         if role == "assistant"
@@ -1297,7 +1311,11 @@ impl MessageReplay {
             if !text.is_empty() {
                 blocks.push(ChatContentBlock::Text(text));
             }
-            self.messages.push(ChatMessage::assistant_blocks(blocks));
+            self.messages.push(ChatMessage {
+                role: "assistant".to_string(),
+                phase,
+                content: MessageContent::Blocks(blocks),
+            });
             return;
         }
 
@@ -1305,6 +1323,7 @@ impl MessageReplay {
         self.cancel_open_tool_uses();
         self.messages.push(ChatMessage {
             role,
+            phase,
             content: MessageContent::Text(text),
         });
     }
@@ -1334,6 +1353,7 @@ impl MessageReplay {
         if !blocks.is_empty() {
             self.messages.push(ChatMessage {
                 role: "assistant".to_string(),
+                phase: Some("commentary".to_string()),
                 content: MessageContent::Blocks(blocks),
             });
         }
@@ -1707,6 +1727,13 @@ mod tests {
         assert!(json.contains("\"encrypted_content\":\"encrypted\""));
         assert!(json.contains("\"text\":\"summary\""));
 
+        let assistant =
+            ThreadEvent::assistant_message_with_phase("Done.", Some("final_answer".to_string()));
+        let json = serde_json::to_string(&assistant).unwrap();
+        assert!(json.contains("\"type\":\"message\""));
+        assert!(json.contains("\"role\":\"assistant\""));
+        assert!(json.contains("\"phase\":\"final_answer\""));
+
         // Test Gemini replay token serialization
         let reasoning_gemini = ThreadEvent::reasoning(
             Some("thought summary".to_string()),
@@ -1780,6 +1807,19 @@ mod tests {
             }
             MessageContent::Text(_) => panic!("Expected assistant message with blocks"),
         }
+    }
+
+    #[test]
+    fn test_events_to_messages_preserves_assistant_phase() {
+        let events = vec![ThreadEvent::assistant_message_with_phase(
+            "Working on it.",
+            Some("commentary".to_string()),
+        )];
+
+        let messages = thread_events_to_messages(events);
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0].role, "assistant");
+        assert_eq!(messages[0].phase.as_deref(), Some("commentary"));
     }
 
     #[test]

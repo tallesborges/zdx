@@ -758,7 +758,10 @@ async fn finalize_turn(
 
     if result.got_result {
         thread
-            .append(&ThreadEvent::assistant_message(&result.final_text))
+            .append(&ThreadEvent::assistant_message_with_phase(
+                &result.final_text,
+                Some("final_answer".to_string()),
+            ))
             .context("append assistant message")?;
     }
 

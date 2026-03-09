@@ -691,6 +691,7 @@ mod tests {
             ChatMessage::user("What files are here?"),
             ChatMessage {
                 role: "assistant".to_string(),
+                phase: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
                         text: Some("I'll check the files".to_string()),
@@ -728,6 +729,7 @@ mod tests {
             ChatMessage::user("Hi"),
             ChatMessage {
                 role: "assistant".to_string(),
+                phase: None,
                 content: MessageContent::Blocks(vec![
                     ChatContentBlock::Reasoning(ReasoningBlock {
                         text: Some("Thinking...".to_string()),
@@ -760,6 +762,7 @@ mod tests {
             ChatMessage::user("What files are here?"),
             ChatMessage {
                 role: "assistant".to_string(),
+                phase: None,
                 content: MessageContent::Blocks(vec![ChatContentBlock::ToolUse {
                     id: "tool-1".to_string(),
                     name: "bash".to_string(),
@@ -789,6 +792,7 @@ mod tests {
         // Message 1: Assistant with signature (simulating history)
         let msg1 = ChatMessage {
             role: "assistant".to_string(),
+            phase: None,
             content: MessageContent::Blocks(vec![
                 ChatContentBlock::Reasoning(ReasoningBlock {
                     text: Some("Thinking...".to_string()),

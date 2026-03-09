@@ -198,6 +198,8 @@ pub enum MessageContent {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ChatMessage {
     pub role: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     pub content: MessageContent,
 }
 
@@ -205,6 +207,7 @@ impl ChatMessage {
     pub fn user(content: impl Into<String>) -> Self {
         Self {
             role: "user".to_string(),
+            phase: None,
             content: MessageContent::Text(content.into()),
         }
     }
@@ -245,6 +248,7 @@ impl ChatMessage {
 
         Self {
             role: "user".to_string(),
+            phase: None,
             content: MessageContent::Blocks(blocks),
         }
     }
@@ -253,7 +257,17 @@ impl ChatMessage {
     pub fn assistant_blocks(blocks: Vec<ChatContentBlock>) -> Self {
         Self {
             role: "assistant".to_string(),
+            phase: None,
             content: MessageContent::Blocks(blocks),
+        }
+    }
+
+    /// Creates an assistant text message with an optional Responses API phase.
+    pub fn assistant_text(content: impl Into<String>, phase: Option<String>) -> Self {
+        Self {
+            role: "assistant".to_string(),
+            phase,
+            content: MessageContent::Text(content.into()),
         }
     }
 
@@ -268,6 +282,7 @@ impl ChatMessage {
             .collect();
         Self {
             role: "user".to_string(),
+            phase: None,
             content: MessageContent::Blocks(blocks),
         }
     }

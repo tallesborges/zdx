@@ -63,6 +63,8 @@ pub struct InputItem {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub content: Option<Vec<InputContent>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub call_id: Option<String>,

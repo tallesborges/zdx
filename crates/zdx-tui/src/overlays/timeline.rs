@@ -285,7 +285,10 @@ fn cells_to_events(cells: &[HistoryCell]) -> Vec<ThreadEvent> {
                 events.push(ThreadEvent::user_message(content));
             }
             HistoryCell::Assistant { content, .. } => {
-                events.push(ThreadEvent::assistant_message(content));
+                events.push(ThreadEvent::assistant_message_with_phase(
+                    content,
+                    Some("final_answer".to_string()),
+                ));
             }
             HistoryCell::Thinking {
                 content, replay, ..

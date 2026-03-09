@@ -672,7 +672,9 @@ fn build_provider_client(
         ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
             OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
         ))),
-        ProviderKind::OpenAI => build_openai_client(config, model, config.max_tokens, cache_key),
+        ProviderKind::OpenAI => {
+            build_openai_client(config, model, config.max_tokens, reasoning_effort, cache_key)
+        }
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, model, reasoning_effort, cache_key)
         }
@@ -741,6 +743,7 @@ fn build_openai_client(
     config: &Config,
     model: &str,
     max_tokens: Option<u32>,
+    reasoning_effort: Option<String>,
     cache_key: Option<String>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::OpenAI(OpenAIClient::new(
@@ -749,6 +752,7 @@ fn build_openai_client(
             max_tokens,
             config.providers.openai.effective_base_url(),
             config.providers.openai.effective_api_key(),
+            reasoning_effort,
             cache_key,
         )?,
     )))

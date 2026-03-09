@@ -170,7 +170,10 @@ pub async fn run_exec(
 
     // Log assistant response to thread
     if let Some(ref mut s) = thread {
-        s.append(&ThreadEvent::assistant_message(&final_text))?;
+        s.append(&ThreadEvent::assistant_message_with_phase(
+            &final_text,
+            Some("final_answer".to_string()),
+        ))?;
     }
 
     Ok(final_text)

@@ -13,7 +13,10 @@ use crate::modes;
 pub fn append(thread_id: &str, role: &str, text: &str) -> Result<()> {
     let event = match role {
         "user" => thread_persistence::ThreadEvent::user_message(text),
-        "assistant" => thread_persistence::ThreadEvent::assistant_message(text),
+        "assistant" => thread_persistence::ThreadEvent::assistant_message_with_phase(
+            text,
+            Some("final_answer".to_string()),
+        ),
         _ => anyhow::bail!("unsupported role '{role}' (use 'user' or 'assistant')"),
     };
 

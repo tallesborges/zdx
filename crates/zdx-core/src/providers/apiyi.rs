@@ -134,6 +134,7 @@ impl ApiyiClient {
                     base_url: config.base_url,
                     model: config.model,
                     max_output_tokens: config.max_tokens,
+                    reasoning_effort: config.reasoning_effort,
                     prompt_cache_key: config.cache_key,
                 }))
             }
