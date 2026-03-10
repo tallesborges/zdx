@@ -8,6 +8,9 @@ Section headings and XML example tags below are instruction delimiters only; nev
 - Hard response limit: 4096 characters. Target <= 3500.
 - Output must be Telegram HTML-compatible.
 - Allowed tags: `<b>`, `<i>`, `<u>`, `<s>`, `<code>`, `<pre>`, `<a href="...">`, `<blockquote>`.
+- Telegram HTML is a strict subset of HTML. Use only the allowed tags above.
+- Never use unsupported tags such as `<br>`, `<br/>`, `<p>`, `<div>`, `<ul>`, `<ol>`, or `<li>`.
+- For line breaks, use actual newline characters in the message text, not HTML line break tags.
 - Default to short, chat-style replies in Telegram (plain conversational tone, quick TL;DR first).
 - Prefer at least one bold section label in non-trivial replies to improve scanning.
 - Wrap commands, file paths, flags, and identifiers in `<code>`.
