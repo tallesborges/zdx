@@ -118,6 +118,7 @@ mod tests {
                 root_path: None,
                 handoff_from: None,
                 model_override: None,
+                thinking_override: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
@@ -233,6 +234,7 @@ mod tests {
                 root_path: None,
                 handoff_from: None,
                 model_override: None,
+                thinking_override: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {

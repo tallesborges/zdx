@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
@@ -33,7 +33,7 @@ pub(crate) fn new_queue_cancel_map() -> QueueCancelMap {
 
 pub(crate) struct BotContext {
     client: TelegramClient,
-    config: Config,
+    config: RwLock<Config>,
     allowlist_user_ids: HashSet<i64>,
     allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
@@ -67,7 +67,7 @@ impl BotContext {
         } = deps;
         Self {
             client,
-            config,
+            config: RwLock::new(config),
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
@@ -83,8 +83,16 @@ impl BotContext {
         &self.client
     }
 
-    pub(crate) fn config(&self) -> &Config {
-        &self.config
+    pub(crate) fn config(&self) -> Config {
+        self.config
+            .read()
+            .expect("bot config lock poisoned")
+            .clone()
+    }
+
+    pub(crate) fn update_config(&self, f: impl FnOnce(&mut Config)) {
+        let mut config = self.config.write().expect("bot config lock poisoned");
+        f(&mut config);
     }
 
     pub(crate) fn allowlist_user_ids(&self) -> &HashSet<i64> {
