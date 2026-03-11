@@ -254,7 +254,12 @@ async fn test_tool_shows_activity_indicator() {
         .args(["--no-thread", "exec", "-p", "Show indicator"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("⚙ Running read... Done."));
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_started\",\"id\":\"toolu_indicator\",\"name\":\"read\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_completed\",\"id\":\"toolu_indicator\"",
+        ));
 }
 
 #[tokio::test]
@@ -454,10 +459,11 @@ async fn test_bash_tool_shows_debug_lines() {
         .args(["--no-thread", "exec", "-p", "Run bash"])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "Tool requested: bash command=\"echo hello\"",
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_input_completed\",\"id\":\"toolu_bash\",\"name\":\"bash\",\"input\":{\"command\":\"echo hello\"}}",
         ))
-        // Check for duration format: Done. (X.XXs)
-        .stderr(predicate::str::is_match(r"Done\. \(\d+\.\d{2}s\)").unwrap())
-        .stderr(predicate::str::contains("Tool finished: bash exit=0"));
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_completed\",\"id\":\"toolu_bash\"",
+        ))
+        .stdout(predicate::str::contains("\"stdout\":\"hello\\n\""));
 }
