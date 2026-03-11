@@ -250,6 +250,58 @@ fn parse_queue_cancel_callback(data: &str) -> Option<QueueCancelKey> {
     Some((chat_id, message_id))
 }
 
+fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
+    match thread_id {
+        Some(thread_id) => format!("telegram-{chat_id}-topic-{thread_id}"),
+        None => format!("telegram-{chat_id}"),
+    }
+}
+
+fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
+    zdx_core::core::thread_persistence::read_thread_model_override(&telegram_thread_id(
+        chat_id, thread_id,
+    ))
+    .ok()
+    .flatten()
+    .unwrap_or_else(|| context.config().model.clone())
+}
+
+fn set_topic_model(chat_id: i64, thread_id: Option<i64>, model_id: &str) -> String {
+    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+        chat_id, thread_id,
+    )) {
+        Ok(mut thread) => match thread.set_model_override(Some(model_id.to_string())) {
+            Ok(()) => format!("✅ Model set to <code>{model_id}</code> for this topic."),
+            Err(err) => format!("❌ Failed to set override: {err}"),
+        },
+        Err(err) => format!("❌ Failed to open thread: {err}"),
+    }
+}
+
+fn model_picker_header(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: Option<i64>,
+    is_general: bool,
+) -> String {
+    if is_general {
+        format!("Current model: <code>{}</code>", context.config().model)
+    } else {
+        let override_info = zdx_core::core::thread_persistence::read_thread_model_override(
+            &telegram_thread_id(chat_id, thread_id),
+        )
+        .ok()
+        .flatten()
+        .map_or_else(String::new, |m| {
+            format!("\nCurrent override: <code>{m}</code>")
+        });
+        format!(
+            "Current model: <code>{}</code>{override_info}",
+            context.config().model
+        )
+    }
+}
+
 /// Handle model-selection inline keyboard callbacks.
 async fn handle_model_callback(
     context: &BotContext,
@@ -268,7 +320,6 @@ async fn handle_model_callback(
     let message_id = msg.id;
 
     if let Some(rest) = data.strip_prefix("model_provider:") {
-        // Format: model_provider:{provider}:{scope}
         let Some((provider, scope)) = rest.split_once(':') else {
             return;
         };
@@ -283,8 +334,6 @@ async fn handle_model_callback(
             eprintln!("Failed to edit message for model provider: {err}");
         }
     } else if let Some(rest) = data.strip_prefix("model_set:") {
-        // Format: model_set:{model_id}:{scope}
-        // model_id itself contains ':', so split from the right for scope
         let Some(last_colon) = rest.rfind(':') else {
             return;
         };
@@ -300,20 +349,7 @@ async fn handle_model_callback(
                 Err(err) => format!("❌ Failed to save model: {err}"),
             }
         } else {
-            // Topic override — derive thread_id from chat_id + thread_id
-            let tid = match msg.thread_id {
-                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
-                None => format!("telegram-{chat_id}"),
-            };
-            match zdx_core::core::thread_persistence::Thread::with_id(tid) {
-                Ok(mut thread) => match thread.set_model_override(Some(model_id.to_string())) {
-                    Ok(()) => {
-                        format!("✅ Model set to <code>{model_id}</code> for this topic.")
-                    }
-                    Err(err) => format!("❌ Failed to set override: {err}"),
-                },
-                Err(err) => format!("❌ Failed to open thread: {err}"),
-            }
+            set_topic_model(chat_id, msg.thread_id, model_id)
         };
 
         if let Err(err) = client
@@ -323,28 +359,9 @@ async fn handle_model_callback(
             eprintln!("Failed to edit message for model set: {err}");
         }
     } else if let Some(scope) = data.strip_prefix("model_back:") {
-        // Back to provider list
         let is_general = scope == "general";
         let keyboard = crate::handlers::message::build_provider_keyboard(context, is_general);
-
-        let override_info = if is_general {
-            String::new()
-        } else {
-            // Try to show current override
-            let tid = match msg.thread_id {
-                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
-                None => format!("telegram-{chat_id}"),
-            };
-            match zdx_core::core::thread_persistence::read_thread_model_override(&tid) {
-                Ok(Some(m)) => format!("\nCurrent override: <code>{m}</code>"),
-                _ => String::new(),
-            }
-        };
-
-        let header = format!(
-            "Current model: <code>{}</code>{override_info}",
-            context.config().model
-        );
+        let header = model_picker_header(context, chat_id, msg.thread_id, is_general);
 
         if let Err(err) = client
             .edit_message_text(chat_id, message_id, &header, Some(&keyboard))
@@ -357,17 +374,13 @@ async fn handle_model_callback(
         let current = if is_general {
             context.config().model.clone()
         } else {
-            let tid = match msg.thread_id {
-                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
-                None => format!("telegram-{chat_id}"),
-            };
-            zdx_core::core::thread_persistence::read_thread_model_override(&tid)
-                .ok()
-                .flatten()
-                .unwrap_or_else(|| context.config().model.clone())
+            current_topic_model(context, chat_id, msg.thread_id)
         };
         let reply = format!("Model change cancelled. Current model: <code>{current}</code>");
-        if let Err(err) = client.edit_message_text(chat_id, message_id, &reply, None).await {
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &reply, None)
+            .await
+        {
             eprintln!("Failed to edit message for model cancel: {err}");
         }
     }

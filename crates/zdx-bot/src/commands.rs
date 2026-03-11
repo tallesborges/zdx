@@ -78,8 +78,7 @@ pub(crate) fn blocks_topic_autocreate(command: BotCommand) -> bool {
 }
 
 pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
-    parse_command(text).is_some_and(blocks_topic_autocreate)
-        || parse_model_command(text).is_some()
+    parse_command(text).is_some_and(blocks_topic_autocreate) || parse_model_command(text).is_some()
 }
 
 fn command_matches(trimmed_text: &str, command: &str) -> bool {
@@ -127,8 +126,8 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        BotCommand, command_matches, is_topic_blocking_command, parse_command,
-        parse_model_command, telegram_command_specs,
+        BotCommand, command_matches, is_topic_blocking_command, parse_command, parse_model_command,
+        telegram_command_specs,
     };
 
     #[test]
@@ -187,7 +186,10 @@ mod tests {
 
     #[test]
     fn parse_model_commands() {
-        assert!(matches!(parse_model_command("/model"), Some(super::ModelSubcommand::Show)));
+        assert!(matches!(
+            parse_model_command("/model"),
+            Some(super::ModelSubcommand::Show)
+        ));
         assert!(matches!(
             parse_model_command("/model@zdx_bot list"),
             Some(super::ModelSubcommand::List)
