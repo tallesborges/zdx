@@ -1218,6 +1218,8 @@ fn default_xai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "grok-4.20-experimental-beta-0304-reasoning".to_string(),
+            "grok-4.20-experimental-beta-0304-non-reasoning".to_string(),
             "grok-4-1-fast-non-reasoning".to_string(),
             "grok-4-1-fast".to_string(),
             "grok-code-fast-1".to_string(),
