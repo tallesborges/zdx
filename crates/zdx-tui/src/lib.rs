@@ -26,6 +26,16 @@ use zdx_core::skills::Skill;
 
 use crate::transcript::HistoryCell;
 
+pub(crate) const TUI_SURFACE_RULES: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/chat_surface_rules.md"
+));
+
+pub(crate) fn tui_surface_rules() -> Option<&'static str> {
+    let trimmed = TUI_SURFACE_RULES.trim();
+    (!trimmed.is_empty()).then_some(trimmed)
+}
+
 /// Runs the interactive chat loop.
 ///
 /// # Errors
@@ -63,7 +73,12 @@ pub async fn run_interactive_chat_with_history(
     zdx_core::core::context::set_runtime_env(config, thread_id_ref);
 
     let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths(config, &root, true)?;
+        zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+            config,
+            &root,
+            tui_surface_rules(),
+            true,
+        )?;
 
     // Print pre-TUI info to stderr (will be replaced by alternate screen)
     let mut err = stderr();

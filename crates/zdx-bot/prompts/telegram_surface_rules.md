@@ -15,6 +15,8 @@ Section headings and XML example tags below are instruction delimiters only; nev
 - Prefer at least one bold section label in non-trivial replies to improve scanning.
 - Wrap commands, file paths, flags, and identifiers in `<code>`.
 - Prefer `<code>` for key technical terms too (API names, config keys, function/struct names) when it improves emphasis and scanability.
+- Do not include code references like `filepath:startLine-endLine` or `filepath:startLine` unless the user explicitly asks for code locations.
+- Do not include absolute local file paths in normal replies unless the user explicitly asks for them.
 - Never use Markdown headers (`#`), Markdown tables, or nested lists.
 - Escape dynamic/user-provided text for `&`, `<`, and `>`.
 - Do not escape the allowed Telegram HTML tags themselves.

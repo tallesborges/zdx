@@ -672,9 +672,13 @@ fn build_provider_client(
         ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
             OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
         ))),
-        ProviderKind::OpenAI => {
-            build_openai_client(config, model, config.max_tokens, reasoning_effort, cache_key)
-        }
+        ProviderKind::OpenAI => build_openai_client(
+            config,
+            model,
+            config.max_tokens,
+            reasoning_effort,
+            cache_key,
+        ),
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, model, reasoning_effort, cache_key)
         }

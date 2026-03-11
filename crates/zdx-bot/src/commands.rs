@@ -79,6 +79,7 @@ pub(crate) fn blocks_topic_autocreate(command: BotCommand) -> bool {
 
 pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
     parse_command(text).is_some_and(blocks_topic_autocreate)
+        || parse_model_command(text).is_some()
 }
 
 fn command_matches(trimmed_text: &str, command: &str) -> bool {
@@ -104,7 +105,7 @@ pub(crate) fn parse_model_command(text: &str) -> Option<ModelSubcommand> {
     let trimmed = text.trim();
     let without_mention = if trimmed.starts_with("/model@") {
         let rest = trimmed.strip_prefix("/model").unwrap();
-        let after_mention = rest.find(' ').map(|i| &rest[i..]).unwrap_or("");
+        let after_mention = rest.find(' ').map_or("", |i| &rest[i..]);
         format!("/model{after_mention}")
     } else if trimmed == "/model" || trimmed.starts_with("/model ") {
         trimmed.to_string()
@@ -114,9 +115,8 @@ pub(crate) fn parse_model_command(text: &str) -> Option<ModelSubcommand> {
 
     let parts: Vec<&str> = without_mention.split_whitespace().collect();
     match parts.as_slice() {
-        ["/model"] => Some(ModelSubcommand::Show),
         ["/model", "list"] => Some(ModelSubcommand::List),
-        ["/model", "set", id, ..] => Some(ModelSubcommand::Set(id.to_string())),
+        ["/model", "set", id, ..] => Some(ModelSubcommand::Set((*id).to_string())),
         ["/model", "reset"] => Some(ModelSubcommand::Reset),
         _ => Some(ModelSubcommand::Show),
     }
@@ -128,7 +128,7 @@ mod tests {
 
     use super::{
         BotCommand, command_matches, is_topic_blocking_command, parse_command,
-        telegram_command_specs,
+        parse_model_command, telegram_command_specs,
     };
 
     #[test]
@@ -180,7 +180,26 @@ mod tests {
         assert!(is_topic_blocking_command("/new"));
         assert!(is_topic_blocking_command("/rebuild@zdx_bot"));
         assert!(is_topic_blocking_command("/worktree"));
+        assert!(is_topic_blocking_command("/model"));
+        assert!(is_topic_blocking_command("/model list"));
         assert!(!is_topic_blocking_command("let's chat"));
+    }
+
+    #[test]
+    fn parse_model_commands() {
+        assert!(matches!(parse_model_command("/model"), Some(super::ModelSubcommand::Show)));
+        assert!(matches!(
+            parse_model_command("/model@zdx_bot list"),
+            Some(super::ModelSubcommand::List)
+        ));
+        assert!(matches!(
+            parse_model_command("/model set anthropic:claude-sonnet-4-5"),
+            Some(super::ModelSubcommand::Set(_))
+        ));
+        assert!(matches!(
+            parse_model_command("/model reset"),
+            Some(super::ModelSubcommand::Reset)
+        ));
     }
 
     #[test]

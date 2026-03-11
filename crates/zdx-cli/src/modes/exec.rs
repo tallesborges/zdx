@@ -17,6 +17,11 @@ use zdx_core::core::events::{AgentEvent, ToolOutput};
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::ChatMessage;
 
+const EXEC_SURFACE_RULES: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/prompts/exec_surface_rules.md"
+));
+
 /// Options for exec execution.
 #[derive(Debug, Clone)]
 pub struct ExecOptions {
@@ -61,10 +66,13 @@ pub async fn run_exec(
     let effective = if options.no_system_prompt {
         None
     } else {
+        let trimmed_surface_rules = EXEC_SURFACE_RULES.trim();
+        let surface_rules = (!trimmed_surface_rules.is_empty()).then_some(trimmed_surface_rules);
         Some(
-            zdx_core::core::context::build_effective_system_prompt_with_paths(
+            zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
                 config,
                 &options.root,
+                surface_rules,
                 false,
             )?,
         )
