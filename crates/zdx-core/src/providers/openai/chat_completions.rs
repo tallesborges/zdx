@@ -13,7 +13,8 @@ use serde_json::Value;
 use crate::providers::debug_metrics::maybe_wrap_with_metrics;
 use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, DebugTrace, MessageContent, ProviderError,
-    ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage, wrap_stream,
+    ProviderErrorKind, ProviderResult, ProviderStream, StreamEvent, Usage,
+    error_message_from_payload, wrap_stream,
 };
 use crate::tools::{ToolDefinition, ToolResult, ToolResultContent};
 
@@ -718,11 +719,7 @@ impl<S> ChatCompletionsSseParser<S> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("error")
                 .to_string();
-            let message = error
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
+            let message = error_message_from_payload(error, &["message"]);
             self.pending.push_back(StreamEvent::Error {
                 error_type,
                 message,
