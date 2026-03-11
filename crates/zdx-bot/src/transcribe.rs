@@ -143,12 +143,17 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
 
     let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
     let response = client
-        .post(url)
+        .post(&url)
         .bearer_auth(api_key)
         .multipart(form)
         .send()
         .await
-        .context(format!("{provider_name} transcription request"))?;
+        .with_context(|| {
+            format!(
+                "{provider_name} transcription request failed (url={url}, model={model}, filename={filename}, mime_type={})",
+                mime_type.unwrap_or("unknown")
+            )
+        })?;
 
     if !response.status().is_success() {
         let status = response.status();
@@ -158,9 +163,10 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
         ));
     }
 
-    let payload: TranscriptionResponse = response
-        .json()
-        .await
-        .context("decode transcription response")?;
+    let payload: TranscriptionResponse = response.json().await.with_context(|| {
+        format!(
+            "decode {provider_name} transcription response (model={model}, filename={filename})"
+        )
+    })?;
     Ok(payload.text)
 }
