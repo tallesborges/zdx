@@ -8,7 +8,7 @@ use zdx_core::core::thread_persistence::{self, ThreadEvent};
 use zdx_core::core::worktree;
 
 use crate::bot::context::BotContext;
-use crate::commands::{BotCommand, parse_command};
+use crate::commands::{BotCommand, ModelSubcommand, parse_command};
 use crate::ingest::AllowlistConfig;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message, ReplyParameters};
 use crate::{agent, ingest};
@@ -132,6 +132,14 @@ struct TurnResult {
     error_message: Option<String>,
 }
 
+struct SpawnRequest<'a> {
+    worktree_root: &'a std::path::Path,
+    thread_id: &'a str,
+    thread: &'a zdx_core::core::thread_persistence::Thread,
+    messages: Vec<zdx_core::providers::ChatMessage>,
+    config: &'a zdx_core::config::Config,
+}
+
 fn escape_html(text: &str) -> String {
     text.replace('&', "&amp;")
         .replace('<', "&lt;")
@@ -232,8 +240,6 @@ async fn handle_model_command(
         return Ok(false);
     };
 
-    use crate::commands::ModelSubcommand;
-
     // General context = forum chat but NOT inside a topic thread
     let is_general = incoming.is_forum && incoming.message_thread_id.is_none();
 
@@ -244,9 +250,7 @@ async fn handle_model_command(
             } else {
                 zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?
             };
-            let current = override_model
-                .as_deref()
-                .unwrap_or(&context.config().model);
+            let current = override_model.as_deref().unwrap_or(&context.config().model);
 
             let header = if override_model.is_some() {
                 format!(
@@ -277,7 +281,9 @@ async fn handle_model_command(
                 )
             } else if is_general {
                 zdx_core::config::Config::save_telegram_model(&model_id)?;
-                format!("✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect.")
+                format!(
+                    "✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect."
+                )
             } else {
                 let mut thread =
                     zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
@@ -311,7 +317,7 @@ async fn handle_model_command(
                 .send_message(incoming.chat_id, &msg, reply_to_message_id, topic_id)
                 .await?;
         }
-    };
+    }
 
     Ok(true)
 }
@@ -334,7 +340,7 @@ pub(crate) fn build_provider_keyboard(
         }
     }
 
-    let rows: Vec<Vec<InlineKeyboardButton>> = providers
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = providers
         .chunks(3)
         .map(|chunk| {
             chunk
@@ -347,6 +353,12 @@ pub(crate) fn build_provider_keyboard(
                 .collect()
         })
         .collect();
+
+    rows.push(vec![InlineKeyboardButton {
+        text: "✖ Cancel".to_string(),
+        callback_data: Some(format!("model_cancel:{scope}")),
+        url: None,
+    }]);
 
     InlineKeyboardMarkup {
         inline_keyboard: rows,
@@ -390,6 +402,12 @@ pub(crate) fn build_models_keyboard(
     rows.push(vec![InlineKeyboardButton {
         text: "← Back".to_string(),
         callback_data: Some(format!("model_back:{scope}")),
+        url: None,
+    }]);
+
+    rows.push(vec![InlineKeyboardButton {
+        text: "✖ Cancel".to_string(),
+        callback_data: Some(format!("model_cancel:{scope}")),
         url: None,
     }]);
 
@@ -498,7 +516,7 @@ async fn run_agent_turn(
     let model_override = thread_persistence::read_thread_model_override(thread_id)?;
     let config = if let Some(ref model_id) = model_override {
         let mut cfg = context.config().clone();
-        cfg.model = model_id.clone();
+        cfg.model.clone_from(model_id);
         cfg
     } else {
         context.config().clone()
@@ -536,17 +554,14 @@ async fn run_agent_turn(
         reply_ctx.topic_id,
     )
     .await;
-    let mut handle = spawn_or_fail(
-        context,
-        &incoming,
-        &worktree_root,
+    let spawn = SpawnRequest {
+        worktree_root: &worktree_root,
         thread_id,
-        &thread,
+        thread: &thread,
         messages,
-        &status,
-        &config,
-    )
-    .await?;
+        config: &config,
+    };
+    let mut handle = spawn_or_fail(context, &incoming, &status, spawn).await?;
     let result = stream_turn_events(context, &incoming, &mut handle, &status).await;
     drop(typing);
     cleanup_turn_status(context, &status).await;
@@ -614,20 +629,16 @@ async fn setup_turn_status(
 async fn spawn_or_fail(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
-    worktree_root: &std::path::Path,
-    thread_id: &str,
-    thread: &zdx_core::core::thread_persistence::Thread,
-    messages: Vec<zdx_core::providers::ChatMessage>,
     status: &TurnStatus,
-    config: &zdx_core::config::Config,
+    spawn: SpawnRequest<'_>,
 ) -> Result<agent::AgentTurnHandle> {
     let handle = agent::spawn_agent_turn(
-        messages,
-        config,
-        worktree_root,
+        spawn.messages,
+        spawn.config,
+        spawn.worktree_root,
         context.bot_surface_rules(),
-        thread_id,
-        thread,
+        spawn.thread_id,
+        spawn.thread,
         context.tool_config(),
     );
 
@@ -766,19 +777,13 @@ async fn finalize_turn(
 
     if result.had_error && !result.got_result {
         if let Some(msg_id) = status.message_id {
-            let error_text = result
-                .error_message
-                .as_deref()
-                .map(format_user_error_message)
-                .unwrap_or_else(|| "Sorry, something went wrong.".to_string());
+            let error_text = result.error_message.as_deref().map_or_else(
+                || "Sorry, something went wrong.".to_string(),
+                format_user_error_message,
+            );
             let _ = context
                 .client()
-                .edit_message_text(
-                    incoming.chat_id,
-                    msg_id,
-                    &error_text,
-                    None,
-                )
+                .edit_message_text(incoming.chat_id, msg_id, &error_text, None)
                 .await;
         }
         return Ok(());

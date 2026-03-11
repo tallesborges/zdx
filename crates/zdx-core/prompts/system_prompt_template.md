@@ -54,7 +54,6 @@ When a task spans 3+ files or involves a sequence of dependent changes:
 - When asked about code or project behavior, ALWAYS inspect with tools first. Never answer from general knowledge or assumptions alone.
 - ALWAYS prefer editing an existing file over creating a new one. NEVER create files unless absolutely necessary.
 - NEVER create documentation files (*.md, *.txt, README, CHANGELOG, etc.) unless the user explicitly asks for one by name or purpose. Explain in your reply or use code comments instead.
-- Reference code using `filepath:startLine-endLine` for ranges or `filepath:startLine` for single lines. Do not use other formats.
 
 ## Tool Errors
 When a {{ invocation_term }} call fails, reflect before retrying:

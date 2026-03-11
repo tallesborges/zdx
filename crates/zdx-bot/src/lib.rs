@@ -214,7 +214,11 @@ async fn handle_callback_query(
                 tracing::warn!(%err, "Failed to answer callback");
             }
         }
-    } else if data.starts_with("model_provider:") || data.starts_with("model_set:") || data.starts_with("model_back:") {
+    } else if data.starts_with("model_provider:")
+        || data.starts_with("model_set:")
+        || data.starts_with("model_back:")
+        || data.starts_with("model_cancel:")
+    {
         handle_model_callback(context, client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
@@ -332,9 +336,7 @@ async fn handle_model_callback(
                 None => format!("telegram-{chat_id}"),
             };
             match zdx_core::core::thread_persistence::read_thread_model_override(&tid) {
-                Ok(Some(m)) => format!(
-                    "\nCurrent override: <code>{m}</code>"
-                ),
+                Ok(Some(m)) => format!("\nCurrent override: <code>{m}</code>"),
                 _ => String::new(),
             }
         };
@@ -349,6 +351,24 @@ async fn handle_model_callback(
             .await
         {
             eprintln!("Failed to edit message for model back: {err}");
+        }
+    } else if let Some(scope) = data.strip_prefix("model_cancel:") {
+        let is_general = scope == "general";
+        let current = if is_general {
+            context.config().model.clone()
+        } else {
+            let tid = match msg.thread_id {
+                Some(tid) => format!("telegram-{chat_id}-topic-{tid}"),
+                None => format!("telegram-{chat_id}"),
+            };
+            zdx_core::core::thread_persistence::read_thread_model_override(&tid)
+                .ok()
+                .flatten()
+                .unwrap_or_else(|| context.config().model.clone())
+        };
+        let reply = format!("Model change cancelled. Current model: <code>{current}</code>");
+        if let Err(err) = client.edit_message_text(chat_id, message_id, &reply, None).await {
+            eprintln!("Failed to edit message for model cancel: {err}");
         }
     }
 

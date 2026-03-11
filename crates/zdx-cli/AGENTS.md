@@ -11,6 +11,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler
+- `prompts/exec_surface_rules.md`: exec/terminal-specific output rules
 - `src/modes/exec.rs`: non-interactive streaming mode
 - `src/modes/mod.rs`: mode exports (exec + feature-gated TUI)
 - `tests/`: CLI integration tests (`assert_cmd`, fixtures)

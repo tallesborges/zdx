@@ -233,10 +233,7 @@ impl ThreadEvent {
     }
 
     /// Creates a new assistant message event with optional phase.
-    pub fn assistant_message_with_phase(
-        text: impl Into<String>,
-        phase: Option<String>,
-    ) -> Self {
+    pub fn assistant_message_with_phase(text: impl Into<String>, phase: Option<String>) -> Self {
         Self::Message {
             role: "assistant".to_string(),
             text: text.into(),

@@ -117,16 +117,19 @@ mod tests {
                 title: None,
                 root_path: None,
                 handoff_from: None,
+                model_override: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
                 role: "user".to_string(),
                 text: "Hello".to_string(),
+                phase: None,
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::Message {
                 role: "assistant".to_string(),
                 text: "Hi there!".to_string(),
+                phase: None,
                 ts: "2024-01-01T00:00:02Z".to_string(),
             },
         ];
@@ -229,11 +232,13 @@ mod tests {
                 title: None,
                 root_path: None,
                 handoff_from: None,
+                model_override: None,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
                 role: "user".to_string(),
                 text: "Read the file".to_string(),
+                phase: None,
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::Reasoning {
@@ -259,6 +264,7 @@ mod tests {
             ThreadEvent::Message {
                 role: "assistant".to_string(),
                 text: "Done!".to_string(),
+                phase: None,
                 ts: "2024-01-01T00:00:05Z".to_string(),
             },
             ThreadEvent::Interrupted {

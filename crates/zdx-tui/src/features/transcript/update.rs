@@ -26,6 +26,7 @@ const MOUSE_SCROLL_LINES: usize = 1;
 ///
 /// This is the main entry point for agent events. It updates transcript cells
 /// based on streaming text, tool use, thinking, and turn completion.
+#[allow(clippy::too_many_lines)]
 pub fn handle_agent_event(
     transcript: &mut TranscriptState,
     agent_state: &mut AgentState,
