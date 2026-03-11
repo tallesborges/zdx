@@ -1,19 +1,18 @@
-//! Streamed stdout/stderr rendering and exec wrapper.
+//! Structured streaming rendering and exec wrapper.
 //!
 //! This module provides:
-//! - `ExecRenderer` + `spawn_exec_renderer_task` for agent events
+//! - `ExecRenderer` + `spawn_exec_renderer_task` for JSONL agent events
 //! - `run_exec` for single-shot exec mode
 
-use std::collections::HashMap;
-use std::io::{Stderr, Stdout, Write, stderr, stdout};
+use std::io::{Stdout, Write, stdout};
 use std::path::PathBuf;
-use std::time::Instant;
 
 use anyhow::Result;
 use tokio::task::JoinHandle;
+use tracing::{info, warn};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
-use zdx_core::core::events::{AgentEvent, ToolOutput};
+use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::ChatMessage;
 
@@ -42,7 +41,7 @@ impl From<&ExecOptions> for AgentOptions {
     }
 }
 
-/// Sends a prompt to the LLM and streams text response to stdout.
+/// Sends a prompt to the LLM and streams JSONL events to stdout.
 ///
 /// If a thread is provided, logs the user prompt and final assistant response,
 /// plus `tool_use` and `tool_result` events for full history.
@@ -56,8 +55,6 @@ pub async fn run_exec(
     mut thread: Option<Thread>,
     options: &ExecOptions,
 ) -> Result<String> {
-    use std::io::Write;
-
     let thread_id_ref = thread.as_ref().map(|t| t.id.as_str());
 
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
@@ -79,16 +76,15 @@ pub async fn run_exec(
     };
 
     if let Some(effective) = &effective {
-        // Emit warnings from context loading to stderr
         for warning in &effective.warnings {
-            let _ = writeln!(std::io::stderr(), "Warning: {}", warning.message);
+            warn!(message = %warning.message, "exec context warning");
         }
     }
 
     // Emit config path info (only if config exists on disk).
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
-        let _ = writeln!(std::io::stderr(), "Config file: {}", config_path.display());
+        info!(path = %config_path.display(), "exec config file");
     }
 
     // Emit loaded AGENTS.md paths info (per SPEC §10)
@@ -100,11 +96,7 @@ pub async fn run_exec(
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        let _ = writeln!(
-            std::io::stderr(),
-            "Loaded AGENTS.md from: {}",
-            paths_str.join(", ")
-        );
+        info!(paths = %paths_str.join(", "), "exec loaded AGENTS.md files");
     }
 
     // Emit loaded skills info
@@ -116,7 +108,7 @@ pub async fn run_exec(
             .iter()
             .map(|skill| skill.name.clone())
             .collect();
-        let _ = writeln!(std::io::stderr(), "Loaded skills: {}", names.join(", "));
+        info!(skills = %names.join(", "), "exec loaded skills");
     }
 
     // Load thread history if continuing an existing thread
@@ -187,20 +179,9 @@ pub async fn run_exec(
     Ok(final_text)
 }
 
-/// CLI renderer that writes agent events to stdout/stderr.
-///
-/// # Output contract
-/// - `AssistantDelta` and `AssistantCompleted` → stdout
-/// - `ToolStarted`, `ToolCompleted`, `Error`, etc. → stderr
+/// CLI renderer that writes agent events as compact JSONL to stdout.
 pub struct ExecRenderer {
     stdout: Stdout,
-    stderr: Stderr,
-    /// Whether the final newline has been printed after assistant output.
-    needs_final_newline: bool,
-    /// Tracks `tool_use` id -> name for `ToolCompleted` rendering.
-    tool_names: HashMap<String, String>,
-    /// Tracks tool start times for duration calculation.
-    tool_start_times: HashMap<String, Instant>,
 }
 
 impl Default for ExecRenderer {
@@ -212,151 +193,18 @@ impl Default for ExecRenderer {
 impl ExecRenderer {
     /// Creates a new CLI renderer.
     pub fn new() -> Self {
-        Self {
-            stdout: stdout(),
-            stderr: stderr(),
-            needs_final_newline: false,
-            tool_names: HashMap::new(),
-            tool_start_times: HashMap::new(),
-        }
+        Self { stdout: stdout() }
     }
 
-    /// Handles a single agent event by writing to the appropriate stream.
+    /// Handles a single agent event by writing a compact JSON object per line.
     pub fn handle_event(&mut self, event: AgentEvent) {
-        match event {
-            AgentEvent::AssistantDelta { text } => {
-                if !text.is_empty() {
-                    let _ = write!(self.stdout, "{text}");
-                    let _ = self.stdout.flush();
-                    self.needs_final_newline = true;
-                }
-            }
-            AgentEvent::AssistantCompleted { text } => {
-                // Final text is already streamed via deltas; track newline state
-                if !text.is_empty() {
-                    self.needs_final_newline = true;
-                }
-            }
-            AgentEvent::ToolRequested { id, name, .. } => {
-                // Ensure newline after assistant text before tool status
-                if self.needs_final_newline {
-                    let _ = writeln!(self.stdout);
-                    let _ = self.stdout.flush();
-                    self.needs_final_newline = false;
-                }
-
-                // Track tool name for ToolCompleted rendering
-                self.tool_names.insert(id.clone(), name.clone());
-            }
-            AgentEvent::ToolInputCompleted { id, name, input } => {
-                // Emit debug line for bash tool (per SPEC §10)
-                // This is emitted here (not ToolRequested) because we now have the full input
-                if name == "bash"
-                    && let Some(command) = input.get("command").and_then(|v| v.as_str())
-                {
-                    let _ = writeln!(self.stderr, "Tool requested: bash command=\"{command}\"");
-                }
-
-                // Track tool name for ToolCompleted rendering (if not already tracked)
-                self.tool_names.entry(id.clone()).or_insert(name.clone());
-            }
-            AgentEvent::ToolStarted { id, name } => {
-                self.tool_start_times.insert(id, Instant::now());
-                let _ = write!(self.stderr, "⚙ Running {name}...");
-                let _ = self.stderr.flush();
-            }
-            AgentEvent::ToolCompleted { id, result } => {
-                // Calculate duration if we have a start time
-                let duration_str = self
-                    .tool_start_times
-                    .remove(&id)
-                    .map(|start| format!(" ({:.2}s)", start.elapsed().as_secs_f64()))
-                    .unwrap_or_default();
-
-                let _ = writeln!(self.stderr, " Done.{duration_str}");
-
-                // Emit debug line for bash tool (per SPEC §10)
-                if let Some(name) = self.tool_names.get(&id)
-                    && name == "bash"
-                {
-                    self.emit_bash_finish_details(&result);
-                }
-            }
-            AgentEvent::Error {
-                kind,
-                message,
-                details,
-            } => {
-                // Print one-liner to stderr
-                let _ = writeln!(self.stderr, "Error [{kind}]: {message}");
-                // Print details if present (indented)
-                if let Some(ref detail_text) = details {
-                    let _ = writeln!(self.stderr, "  Details: {detail_text}");
-                }
-            }
-            AgentEvent::Interrupted { .. } => {
-                // Print interruption message to stderr (per SPEC §10)
-                let _ = writeln!(self.stderr, "\n^C Interrupted.");
-            }
-            AgentEvent::TurnCompleted { .. }
-            | AgentEvent::UsageUpdate { .. }
-            | AgentEvent::TurnStarted
-            | AgentEvent::ToolOutputDelta { .. }
-            | AgentEvent::ToolInputDelta { .. } => {
-                // No-op in exec mode.
-            }
-            AgentEvent::ReasoningDelta { text } => {
-                // In exec mode, stream thinking text to stderr (no styling)
-                if !text.is_empty() {
-                    let _ = write!(self.stderr, "{text}");
-                    let _ = self.stderr.flush();
-                }
-            }
-            AgentEvent::ReasoningCompleted { .. } => {
-                // Reasoning complete - ensure newline after reasoning output
-                let _ = writeln!(self.stderr);
-                let _ = self.stderr.flush();
-            }
+        if let Ok(line) = serde_json::to_string(&event) {
+            let _ = writeln!(self.stdout, "{line}");
+            let _ = self.stdout.flush();
         }
     }
 
-    /// Emits bash tool finish details to stderr.
-    fn emit_bash_finish_details(&mut self, result: &ToolOutput) {
-        match result {
-            ToolOutput::Success { data, .. } => {
-                // Check for timed_out first
-                if let Some(true) = data
-                    .get("timed_out")
-                    .and_then(serde_json::value::Value::as_bool)
-                {
-                    let _ = writeln!(self.stderr, "Tool finished: bash timed_out=true");
-                } else if let Some(exit_code) = data
-                    .get("exit_code")
-                    .and_then(serde_json::value::Value::as_i64)
-                {
-                    let _ = writeln!(self.stderr, "Tool finished: bash exit={exit_code}");
-                }
-            }
-            ToolOutput::Failure { error, .. } => {
-                let _ = writeln!(
-                    self.stderr,
-                    "Tool finished: bash error=\"{}\"",
-                    error.message
-                );
-            }
-            ToolOutput::Canceled { message } => {
-                let _ = writeln!(self.stderr, "Tool finished: bash canceled ({message})");
-            }
-        }
-    }
-
-    /// Prints a final newline to stdout if needed (after assistant output completes).
-    pub fn finish(&mut self) {
-        if self.needs_final_newline {
-            let _ = writeln!(self.stdout);
-            self.needs_final_newline = false;
-        }
-    }
+    pub fn finish(&mut self) {}
 }
 
 /// Spawns a renderer task that consumes events from a channel.
