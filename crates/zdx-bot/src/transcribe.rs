@@ -1,11 +1,27 @@
 //! Audio transcription support for Telegram voice messages.
 
 use anyhow::{Context, Result, anyhow};
+use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
 use zdx_core::providers::{ProviderKind, resolve_provider};
 
 const DEFAULT_OPENAI_MODEL: &str = "whisper-1";
 const DEFAULT_MISTRAL_MODEL: &str = "voxtral-mini-latest";
+
+#[derive(Debug)]
+pub struct OperationCancelled;
+
+impl std::fmt::Display for OperationCancelled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "operation cancelled")
+    }
+}
+
+impl std::error::Error for OperationCancelled {}
+
+pub fn is_operation_cancelled(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<OperationCancelled>().is_some()
+}
 
 #[derive(serde::Deserialize)]
 struct TranscriptionResponse {
@@ -26,6 +42,7 @@ pub async fn transcribe_audio_if_configured(
     bytes: Vec<u8>,
     filename: &str,
     mime_type: Option<&str>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<String>> {
     let Some((provider, model)) = resolve_model(config)? else {
         return Ok(None);
@@ -52,6 +69,7 @@ pub async fn transcribe_audio_if_configured(
         filename,
         mime_type,
         language,
+        cancel_token,
     })
     .await?;
 
@@ -111,6 +129,7 @@ struct TranscriptionRequest<'a> {
     filename: &'a str,
     mime_type: Option<&'a str>,
     language: Option<&'a str>,
+    cancel_token: Option<&'a CancellationToken>,
 }
 
 async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
@@ -123,7 +142,12 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
         filename,
         mime_type,
         language,
+        cancel_token,
     } = request;
+
+    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
+        return Err(OperationCancelled.into());
+    }
 
     let client = reqwest::Client::new();
     let mut part = reqwest::multipart::Part::bytes(bytes).file_name(filename.to_string());
@@ -142,18 +166,25 @@ async fn transcribe_audio(request: TranscriptionRequest<'_>) -> Result<String> {
     }
 
     let url = format!("{}/audio/transcriptions", base_url.trim_end_matches('/'));
-    let response = client
+    let request = client
         .post(&url)
         .bearer_auth(api_key)
         .multipart(form)
-        .send()
-        .await
-        .with_context(|| {
-            format!(
-                "{provider_name} transcription request failed (url={url}, model={model}, filename={filename}, mime_type={})",
-                mime_type.unwrap_or("unknown")
-            )
-        })?;
+        .send();
+    let response = if let Some(token) = cancel_token {
+        tokio::select! {
+            () = token.cancelled() => return Err(OperationCancelled.into()),
+            response = request => response,
+        }
+    } else {
+        request.await
+    }
+    .with_context(|| {
+        format!(
+            "{provider_name} transcription request failed (url={url}, model={model}, filename={filename}, mime_type={})",
+            mime_type.unwrap_or("unknown")
+        )
+    })?;
 
     if !response.status().is_success() {
         let status = response.status();

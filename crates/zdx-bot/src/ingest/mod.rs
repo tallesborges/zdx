@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
+use tokio_util::sync::CancellationToken;
 use zdx_core::config::{Config, paths};
 
 use crate::telegram::{Audio, Document, Message, PhotoSize, TelegramClient, Voice};
@@ -49,6 +50,7 @@ pub(crate) async fn parse_incoming_message(
     allowlist: AllowlistConfig<'_>,
     config: &Config,
     message: Message,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<IncomingMessage>> {
     let target = MessageTarget {
         chat: message.chat.id,
@@ -61,7 +63,7 @@ pub(crate) async fn parse_incoming_message(
     };
 
     let mut text = extract_text(&message);
-    let attachments = collect_attachments(client, config, &message, &target).await;
+    let attachments = collect_attachments(client, config, &message, &target, cancel_token).await?;
     let AttachmentCollection {
         images,
         audios,
@@ -136,7 +138,8 @@ async fn collect_attachments(
     config: &Config,
     message: &Message,
     target: &MessageTarget,
-) -> AttachmentCollection {
+    cancel_token: Option<&CancellationToken>,
+) -> Result<AttachmentCollection> {
     let mut images = Vec::new();
     let mut audios = Vec::new();
     let mut documents = Vec::new();
@@ -150,7 +153,7 @@ async fn collect_attachments(
                 load_photo_attachment(client, target.chat, target.message, photo),
                 "photo attachment",
             )
-            .await;
+            .await?;
         }
     }
 
@@ -164,21 +167,28 @@ async fn collect_attachments(
                 load_document_image(client, target.chat, target.message, document),
                 "document image",
             )
-            .await;
+            .await?;
         } else if mime.starts_with("audio/") {
             push_attachment(
                 &mut audios,
-                load_audio_attachment(client, config, target.chat, target.message, document),
+                load_audio_attachment(
+                    client,
+                    config,
+                    target.chat,
+                    target.message,
+                    document,
+                    cancel_token,
+                ),
                 "document audio",
             )
-            .await;
+            .await?;
         } else {
             push_attachment(
                 &mut documents,
                 load_generic_document(client, target.chat, target.message, document),
                 "generic document",
             )
-            .await;
+            .await?;
         }
     }
 
@@ -186,40 +196,56 @@ async fn collect_attachments(
         had_attachments = true;
         push_attachment(
             &mut audios,
-            load_voice_attachment(client, config, target.chat, target.message, voice),
+            load_voice_attachment(
+                client,
+                config,
+                target.chat,
+                target.message,
+                voice,
+                cancel_token,
+            ),
             "voice attachment",
         )
-        .await;
+        .await?;
     }
 
     if let Some(audio) = message.audio.as_ref() {
         had_attachments = true;
         push_attachment(
             &mut audios,
-            load_audio_message(client, config, target.chat, target.message, audio),
+            load_audio_message(
+                client,
+                config,
+                target.chat,
+                target.message,
+                audio,
+                cancel_token,
+            ),
             "audio message",
         )
-        .await;
+        .await?;
     }
 
-    AttachmentCollection {
+    Ok(AttachmentCollection {
         images,
         audios,
         documents,
         had_attachments,
-    }
+    })
 }
 
 async fn push_attachment<T>(
     output: &mut Vec<T>,
     load_future: impl std::future::Future<Output = Result<Option<T>>>,
     label: &str,
-) {
+) -> Result<()> {
     match load_future.await {
         Ok(Some(item)) => output.push(item),
         Ok(None) => {}
+        Err(err) if transcribe::is_operation_cancelled(&err) => return Err(err),
         Err(err) => tracing::error!(%err, label, "Failed to load attachment"),
     }
+    Ok(())
 }
 
 async fn handle_empty_message(
@@ -383,6 +409,7 @@ async fn load_voice_attachment(
     chat_id: i64,
     message_id: i64,
     voice: &Voice,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<IncomingAudio>> {
     load_audio_by_id(
         client,
@@ -395,6 +422,7 @@ async fn load_voice_attachment(
             mime_type: voice.mime_type.as_deref(),
             file_name_hint: None,
         },
+        cancel_token,
     )
     .await
 }
@@ -405,6 +433,7 @@ async fn load_audio_message(
     chat_id: i64,
     message_id: i64,
     audio: &Audio,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<IncomingAudio>> {
     load_audio_by_id(
         client,
@@ -417,6 +446,7 @@ async fn load_audio_message(
             mime_type: audio.mime_type.as_deref(),
             file_name_hint: audio.file_name.as_deref(),
         },
+        cancel_token,
     )
     .await
 }
@@ -427,6 +457,7 @@ async fn load_audio_attachment(
     chat_id: i64,
     message_id: i64,
     document: &Document,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<IncomingAudio>> {
     load_audio_by_id(
         client,
@@ -439,6 +470,7 @@ async fn load_audio_attachment(
             mime_type: document.mime_type.as_deref(),
             file_name_hint: document.file_name.as_deref(),
         },
+        cancel_token,
     )
     .await
 }
@@ -449,7 +481,12 @@ async fn load_audio_by_id(
     chat_id: i64,
     message_id: i64,
     source: AudioSource<'_>,
+    cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<IncomingAudio>> {
+    if cancel_token.is_some_and(CancellationToken::is_cancelled) {
+        return Err(transcribe::OperationCancelled.into());
+    }
+
     if source.file_size.unwrap_or(0) > MAX_AUDIO_BYTES {
         tracing::debug!(chat_id, "Skipping audio exceeding max size");
         return Ok(None);
@@ -473,10 +510,12 @@ async fn load_audio_by_id(
         bytes,
         &filename,
         source.mime_type,
+        cancel_token,
     )
     .await
     {
         Ok(transcript) => transcript,
+        Err(err) if transcribe::is_operation_cancelled(&err) => return Err(err),
         Err(err) => {
             tracing::error!(error = %err, error_chain = %format!("{err:#}"), "Audio transcription failed");
             None

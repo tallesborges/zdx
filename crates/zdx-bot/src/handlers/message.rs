@@ -34,18 +34,93 @@ const MEDIA_TAG_CLOSE: &str = "</media>";
 pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Result<()> {
     let bot_config = context.config();
     let synthetic_topic_routed_from_general = message.synthetic_topic_routed_from_general;
+    let provisional_status = if message_has_audio(&message) {
+        Some(
+            setup_preprocessing_status(context, &message, synthetic_topic_routed_from_general)
+                .await,
+        )
+    } else {
+        None
+    };
     let allowlist = AllowlistConfig {
         user_ids: context.allowlist_user_ids(),
         chat_ids: context.allowlist_chat_ids(),
     };
-    let Some(incoming) =
-        ingest::parse_incoming_message(context.client(), allowlist, &bot_config, message).await?
+    let Some(incoming) = parse_message_with_status(
+        context,
+        allowlist,
+        &bot_config,
+        message,
+        provisional_status.as_ref(),
+    )
+    .await?
     else {
+        cleanup_provisional_status(context, None, provisional_status).await;
         return Ok(());
     };
 
-    // Skip reply_to when message_id == message_thread_id (topic-creating message).
-    // Telegram rejects REPLY_MESSAGE_ID_INVALID for these.
+    let reply_ctx = build_reply_context(&incoming, synthetic_topic_routed_from_general);
+
+    if handle_pre_agent_commands(context, &incoming, &reply_ctx).await? {
+        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+        return Ok(());
+    }
+
+    tracing::info!(
+        user_id = incoming.user_id,
+        chat_id = incoming.chat_id,
+        topic_id = ?reply_ctx.topic_id,
+        "Accepted message",
+    );
+
+    let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
+    if handle_thread_setup_commands(context, &incoming, &reply_ctx, &thread_id).await? {
+        cleanup_provisional_status(context, Some(incoming.chat_id), provisional_status).await;
+        return Ok(());
+    }
+
+    run_agent_turn(
+        context,
+        incoming,
+        reply_ctx,
+        &thread_id,
+        synthetic_topic_routed_from_general,
+        provisional_status,
+    )
+    .await
+}
+
+async fn parse_message_with_status(
+    context: &BotContext,
+    allowlist: AllowlistConfig<'_>,
+    bot_config: &zdx_core::config::Config,
+    message: Message,
+    provisional_status: Option<&TurnStatus>,
+) -> Result<Option<crate::types::IncomingMessage>> {
+    match ingest::parse_incoming_message(
+        context.client(),
+        allowlist,
+        bot_config,
+        message,
+        provisional_status.map(|status| &status.token),
+    )
+    .await
+    {
+        Ok(incoming) => Ok(incoming),
+        Err(err) if crate::transcribe::is_operation_cancelled(&err) => {
+            if let Some(status) = provisional_status {
+                finalize_preprocessing_cancelled(context, status.key.0, status).await;
+            }
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
+fn build_reply_context(
+    incoming: &crate::types::IncomingMessage,
+    synthetic_topic_routed_from_general: bool,
+) -> ReplyContext {
     let reply_to_message_id = if synthetic_topic_routed_from_general
         || incoming.message_thread_id == Some(incoming.message_id)
     {
@@ -65,70 +140,64 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
         None
     };
 
-    let reply_ctx = ReplyContext {
+    ReplyContext {
         reply_to_message_id,
         topic_id,
         cross_topic_reply_parameters,
-    };
-
-    if handle_general_forum_commands(context, &incoming, reply_ctx.reply_to_message_id).await?
-        || handle_rebuild_command(context, &incoming, reply_ctx.reply_to_message_id).await?
-    {
-        return Ok(());
     }
+}
 
-    tracing::info!(
-        user_id = incoming.user_id,
-        chat_id = incoming.chat_id,
-        topic_id = ?reply_ctx.topic_id,
-        "Accepted message",
-    );
-
-    let thread_id = thread_id_for_chat(incoming.chat_id, reply_ctx.topic_id);
-    if handle_model_command(
-        context,
-        &incoming,
-        &thread_id,
-        reply_ctx.reply_to_message_id,
-        reply_ctx.topic_id,
+async fn handle_pre_agent_commands(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+) -> Result<bool> {
+    Ok(
+        handle_general_forum_commands(context, incoming, reply_ctx.reply_to_message_id).await?
+            || handle_rebuild_command(context, incoming, reply_ctx.reply_to_message_id).await?,
     )
-    .await?
-    {
-        return Ok(());
-    }
+}
 
-    if handle_thinking_command(
-        context,
-        &incoming,
-        &thread_id,
-        reply_ctx.reply_to_message_id,
-        reply_ctx.topic_id,
-    )
-    .await?
-    {
-        return Ok(());
-    }
-
-    if handle_thread_commands(
-        context,
-        &incoming,
-        &thread_id,
-        reply_ctx.reply_to_message_id,
-        reply_ctx.topic_id,
-    )
-    .await?
-    {
-        return Ok(());
-    }
-
-    run_agent_turn(
+async fn handle_thread_setup_commands(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    reply_ctx: &ReplyContext,
+    thread_id: &str,
+) -> Result<bool> {
+    Ok(handle_model_command(
         context,
         incoming,
-        reply_ctx,
-        &thread_id,
-        synthetic_topic_routed_from_general,
+        thread_id,
+        reply_ctx.reply_to_message_id,
+        reply_ctx.topic_id,
     )
-    .await
+    .await?
+        || handle_thinking_command(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
+        || handle_thread_commands(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?)
+}
+
+async fn cleanup_provisional_status(
+    context: &BotContext,
+    chat_id: Option<i64>,
+    provisional_status: Option<TurnStatus>,
+) {
+    if let Some(status) = provisional_status {
+        discard_turn_status(context, chat_id, &status).await;
+    }
 }
 
 struct TurnStatus {
@@ -136,6 +205,16 @@ struct TurnStatus {
     token: CancellationToken,
     markup: InlineKeyboardMarkup,
     message_id: Option<i64>,
+}
+
+fn message_has_audio(message: &Message) -> bool {
+    message.voice.is_some()
+        || message.audio.is_some()
+        || message
+            .document
+            .as_ref()
+            .and_then(|doc| doc.mime_type.as_deref())
+            .is_some_and(|mime| mime.starts_with("audio/"))
 }
 
 struct TurnResult {
@@ -684,6 +763,7 @@ async fn run_agent_turn(
     reply_ctx: ReplyContext,
     thread_id: &str,
     synthetic_topic_routed_from_general: bool,
+    provisional_status: Option<TurnStatus>,
 ) -> Result<()> {
     let worktree_root = thread_persistence::read_thread_root_path(thread_id)?
         .map_or_else(|| context.root().to_path_buf(), std::path::PathBuf::from);
@@ -732,6 +812,7 @@ async fn run_agent_turn(
         &incoming,
         reply_ctx.reply_to_message_id,
         reply_ctx.topic_id,
+        provisional_status,
     )
     .await;
     let spawn = SpawnRequest {
@@ -753,7 +834,13 @@ async fn setup_turn_status(
     incoming: &crate::types::IncomingMessage,
     reply_to_message_id: Option<i64>,
     topic_id: Option<i64>,
+    existing: Option<TurnStatus>,
 ) -> TurnStatus {
+    if let Some(status) = existing {
+        update_turn_status_text(context, incoming.chat_id, &status, agent::STATUS_WAITING).await;
+        return status;
+    }
+
     let key = (incoming.chat_id, incoming.message_id);
     let cancel_markup = InlineKeyboardMarkup {
         inline_keyboard: vec![vec![InlineKeyboardButton {
@@ -773,7 +860,7 @@ async fn setup_turn_status(
         .client()
         .send_message_with_markup(
             incoming.chat_id,
-            "🧠 Thinking...",
+            agent::STATUS_WAITING,
             reply_to_message_id,
             topic_id,
             &cancel_markup,
@@ -788,7 +875,7 @@ async fn setup_turn_status(
             .client()
             .send_message_with_markup(
                 incoming.chat_id,
-                "🧠 Thinking...",
+                agent::STATUS_WAITING,
                 None,
                 topic_id,
                 &cancel_markup,
@@ -804,6 +891,96 @@ async fn setup_turn_status(
         markup: cancel_markup,
         message_id,
     }
+}
+
+async fn setup_preprocessing_status(
+    context: &BotContext,
+    message: &Message,
+    synthetic_topic_routed_from_general: bool,
+) -> TurnStatus {
+    let key = (message.chat.id, message.id);
+    let cancel_markup = InlineKeyboardMarkup {
+        inline_keyboard: vec![vec![InlineKeyboardButton {
+            text: "⏹ Cancel".to_string(),
+            callback_data: Some(format!("cancel:{}:{}", key.0, key.1)),
+            url: None,
+        }]],
+    };
+    let token = CancellationToken::new();
+    {
+        let mut map = context.cancel_map().lock().await;
+        map.insert(key, token.clone());
+    }
+
+    let reply_to_message_id = if synthetic_topic_routed_from_general
+        || message.effective_thread_id() == Some(message.id)
+    {
+        None
+    } else {
+        Some(message.id)
+    };
+
+    let mut message_id = context
+        .client()
+        .send_message_with_markup(
+            message.chat.id,
+            agent::STATUS_TRANSCRIBING,
+            reply_to_message_id,
+            message.effective_thread_id(),
+            &cancel_markup,
+        )
+        .await
+        .ok()
+        .map(|m| m.id);
+
+    if message_id.is_none() && reply_to_message_id.is_some() {
+        message_id = context
+            .client()
+            .send_message_with_markup(
+                message.chat.id,
+                agent::STATUS_TRANSCRIBING,
+                None,
+                message.effective_thread_id(),
+                &cancel_markup,
+            )
+            .await
+            .ok()
+            .map(|m| m.id);
+    }
+
+    TurnStatus {
+        key,
+        token,
+        markup: cancel_markup,
+        message_id,
+    }
+}
+
+async fn update_turn_status_text(
+    context: &BotContext,
+    chat_id: i64,
+    status: &TurnStatus,
+    text: &str,
+) {
+    let Some(msg_id) = status.message_id else {
+        return;
+    };
+    let _ = context
+        .client()
+        .edit_message_text(chat_id, msg_id, text, Some(&status.markup))
+        .await;
+}
+
+async fn discard_turn_status(context: &BotContext, chat_id: Option<i64>, status: &TurnStatus) {
+    if let (Some(chat_id), Some(msg_id)) = (chat_id, status.message_id) {
+        let _ = context.client().delete_message(chat_id, msg_id).await;
+    }
+    cleanup_turn_status(context, status).await;
+}
+
+async fn finalize_preprocessing_cancelled(context: &BotContext, chat_id: i64, status: &TurnStatus) {
+    update_turn_status_text(context, chat_id, status, "Cancelled ✓").await;
+    cleanup_turn_status(context, status).await;
 }
 
 async fn spawn_or_fail(
@@ -849,7 +1026,7 @@ async fn stream_turn_events(
     handle: &mut agent::AgentTurnHandle,
     status: &TurnStatus,
 ) -> TurnResult {
-    let mut current_status = "🧠 Thinking...".to_string();
+    let mut current_status = agent::STATUS_WAITING.to_string();
     let mut last_edit = std::time::Instant::now()
         .checked_sub(STATUS_DEBOUNCE)
         .expect("debounce subtraction should always succeed");
@@ -913,18 +1090,15 @@ async fn update_status(
     }
 
     *current_status = new_status;
-    let Some(msg_id) = status.message_id else {
+    if status.message_id.is_none() {
         return;
-    };
+    }
     let now = std::time::Instant::now();
     if now.duration_since(*last_edit) < STATUS_DEBOUNCE {
         return;
     }
     *last_edit = now;
-    let _ = context
-        .client()
-        .edit_message_text(chat_id, msg_id, current_status, Some(&status.markup))
-        .await;
+    update_turn_status_text(context, chat_id, status, current_status).await;
 }
 
 async fn cleanup_turn_status(context: &BotContext, status: &TurnStatus) {
