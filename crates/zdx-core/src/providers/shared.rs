@@ -102,6 +102,30 @@ pub fn merge_system_prompt(system: Option<&str>) -> Option<String> {
         .map(ToOwned::to_owned)
 }
 
+/// Extracts a user-visible provider error message from a JSON error payload.
+///
+/// Falls back to a compact serialized payload when the provider omits a
+/// top-level string message.
+#[must_use]
+pub fn error_message_from_payload(error: &Value, message_keys: &[&str]) -> String {
+    for key in message_keys {
+        if let Some(message) = error.get(key).and_then(Value::as_str) {
+            let trimmed = message.trim();
+            if !trimmed.is_empty() {
+                return trimmed.to_string();
+            }
+        }
+    }
+
+    let raw = serde_json::to_string(error).unwrap_or_else(|_| format!("{error:?}"));
+    let compact = if raw.len() > 1200 {
+        format!("{}…", &raw[..1200])
+    } else {
+        raw
+    };
+    format!("Upstream error payload: {compact}")
+}
+
 /// Provider-specific replay token for reasoning/thinking blocks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "provider")]
