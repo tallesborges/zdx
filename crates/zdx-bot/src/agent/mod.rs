@@ -10,6 +10,11 @@ use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
 use crate::types::IncomingMessage;
 
+pub(crate) const STATUS_WAITING: &str = "⏳ Waiting for model...";
+pub(crate) const STATUS_THINKING: &str = "🧠 Thinking...";
+pub(crate) const STATUS_WRITING: &str = "✍️ Writing reply...";
+pub(crate) const STATUS_TRANSCRIBING: &str = "🎤 Transcribing audio...";
+
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -142,7 +147,14 @@ pub(crate) fn spawn_agent_turn(
 /// Maps an `AgentEvent` to a short status emoji + label for Telegram display.
 pub(crate) fn event_to_status(event: &AgentEvent) -> Option<String> {
     match event {
-        AgentEvent::ReasoningDelta { .. } => Some("🧠 Thinking...".to_string()),
+        AgentEvent::TurnStarted
+        | AgentEvent::ReasoningCompleted { .. }
+        | AgentEvent::ToolCompleted { .. } => Some(STATUS_WAITING.to_string()),
+        AgentEvent::ReasoningDelta { .. } => Some(STATUS_THINKING.to_string()),
+        AgentEvent::AssistantDelta { .. } | AgentEvent::AssistantCompleted { .. } => {
+            Some(STATUS_WRITING.to_string())
+        }
+        AgentEvent::ToolRequested { name, .. } => Some(format!("⚙️ Preparing `{name}`...")),
         AgentEvent::ToolStarted { name, .. } => {
             let emoji = match name.as_str() {
                 "bash" => "🔧",
@@ -197,5 +209,59 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
         "User sent an attachment.".to_string()
     } else {
         parts.join("\n\n")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+    use zdx_core::core::events::{AgentEvent, ToolOutput};
+
+    use super::{STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status};
+
+    #[test]
+    fn maps_waiting_thinking_and_writing_states() {
+        assert_eq!(
+            event_to_status(&AgentEvent::TurnStarted),
+            Some(STATUS_WAITING.to_string())
+        );
+        assert_eq!(
+            event_to_status(&AgentEvent::ReasoningDelta {
+                text: "hmm".to_string()
+            }),
+            Some(STATUS_THINKING.to_string())
+        );
+        assert_eq!(
+            event_to_status(&AgentEvent::AssistantDelta {
+                text: "hello".to_string()
+            }),
+            Some(STATUS_WRITING.to_string())
+        );
+    }
+
+    #[test]
+    fn maps_tool_lifecycle_states() {
+        assert_eq!(
+            event_to_status(&AgentEvent::ToolRequested {
+                id: "1".to_string(),
+                name: "read".to_string(),
+                input: json!({}),
+            }),
+            Some("⚙️ Preparing `read`...".to_string())
+        );
+        assert_eq!(
+            event_to_status(&AgentEvent::ToolStarted {
+                id: "1".to_string(),
+                name: "read".to_string(),
+            }),
+            Some("📖 Running `read`...".to_string())
+        );
+        assert_eq!(
+            event_to_status(&AgentEvent::ToolCompleted {
+                id: "1".to_string(),
+                result: ToolOutput::success(json!({ "ok": true })),
+            }),
+            Some(STATUS_WAITING.to_string())
+        );
     }
 }
