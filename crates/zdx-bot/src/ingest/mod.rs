@@ -478,7 +478,7 @@ async fn load_audio_by_id(
     {
         Ok(transcript) => transcript,
         Err(err) => {
-            tracing::error!(%err, "Audio transcription failed");
+            tracing::error!(error = %err, error_chain = %format!("{err:#}"), "Audio transcription failed");
             None
         }
     };
