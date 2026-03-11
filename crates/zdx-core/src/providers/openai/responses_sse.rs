@@ -9,6 +9,7 @@ use serde_json::Value;
 
 use crate::providers::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, StreamEvent, Usage,
+    error_message_from_payload,
 };
 
 /// Extension trait for extracting strings from JSON values.
@@ -439,11 +440,7 @@ impl<S> ResponsesSseParser<S> {
                     .and_then(|v| v.as_str())
                     .unwrap_or("error")
                     .to_string();
-                let message = value
-                    .get("message")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Unknown error")
-                    .to_string();
+                let message = error_message_from_payload(&value, &["message"]);
                 Ok(StreamEvent::Error {
                     error_type,
                     message,

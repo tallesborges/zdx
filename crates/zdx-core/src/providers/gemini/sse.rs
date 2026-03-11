@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::providers::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
-    StreamEvent, Usage,
+    StreamEvent, Usage, error_message_from_payload,
 };
 
 /// Gemini SSE stream parser.
@@ -103,11 +103,7 @@ impl<S> GeminiSseParser<S> {
                 .and_then(|v| v.as_str())
                 .unwrap_or("error")
                 .to_string();
-            let message = error
-                .get("message")
-                .and_then(|v| v.as_str())
-                .unwrap_or("Unknown error")
-                .to_string();
+            let message = error_message_from_payload(error, &["message"]);
             self.pending.push_back(StreamEvent::Error {
                 error_type,
                 message,
