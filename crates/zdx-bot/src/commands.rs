@@ -56,6 +56,10 @@ pub(crate) fn telegram_command_specs() -> Vec<TelegramCommandSpec> {
         command: "model",
         description: "View or change the AI model",
     });
+    specs.push(TelegramCommandSpec {
+        command: "thinking",
+        description: "View or change the thinking level",
+    });
     specs
 }
 
@@ -78,7 +82,9 @@ pub(crate) fn blocks_topic_autocreate(command: BotCommand) -> bool {
 }
 
 pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
-    parse_command(text).is_some_and(blocks_topic_autocreate) || parse_model_command(text).is_some()
+    parse_command(text).is_some_and(blocks_topic_autocreate)
+        || parse_model_command(text).is_some()
+        || parse_thinking_command(text).is_some()
 }
 
 fn command_matches(trimmed_text: &str, command: &str) -> bool {
@@ -96,6 +102,14 @@ pub(crate) enum ModelSubcommand {
     Show,
     List,
     Set(String),
+    Reset,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ThinkingSubcommand {
+    Show,
+    List,
+    Set(zdx_core::config::ThinkingLevel),
     Reset,
 }
 
@@ -121,13 +135,47 @@ pub(crate) fn parse_model_command(text: &str) -> Option<ModelSubcommand> {
     }
 }
 
+/// Parses a /thinking command. Returns None if the text is not a /thinking command.
+pub(crate) fn parse_thinking_command(text: &str) -> Option<ThinkingSubcommand> {
+    let trimmed = text.trim();
+    let without_mention = if trimmed.starts_with("/thinking@") {
+        let rest = trimmed.strip_prefix("/thinking").unwrap();
+        let after_mention = rest.find(' ').map_or("", |i| &rest[i..]);
+        format!("/thinking{after_mention}")
+    } else if trimmed == "/thinking" || trimmed.starts_with("/thinking ") {
+        trimmed.to_string()
+    } else {
+        return None;
+    };
+
+    let parts: Vec<&str> = without_mention.split_whitespace().collect();
+    match parts.as_slice() {
+        ["/thinking", "list"] => Some(ThinkingSubcommand::List),
+        ["/thinking", "reset"] => Some(ThinkingSubcommand::Reset),
+        ["/thinking", "set", level, ..] => parse_thinking_level(level).map(ThinkingSubcommand::Set),
+        _ => Some(ThinkingSubcommand::Show),
+    }
+}
+
+fn parse_thinking_level(level: &str) -> Option<zdx_core::config::ThinkingLevel> {
+    match level.to_ascii_lowercase().as_str() {
+        "off" => Some(zdx_core::config::ThinkingLevel::Off),
+        "minimal" => Some(zdx_core::config::ThinkingLevel::Minimal),
+        "low" => Some(zdx_core::config::ThinkingLevel::Low),
+        "medium" => Some(zdx_core::config::ThinkingLevel::Medium),
+        "high" => Some(zdx_core::config::ThinkingLevel::High),
+        "xhigh" => Some(zdx_core::config::ThinkingLevel::XHigh),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashSet;
 
     use super::{
         BotCommand, command_matches, is_topic_blocking_command, parse_command, parse_model_command,
-        telegram_command_specs,
+        parse_thinking_command, telegram_command_specs,
     };
 
     #[test]
@@ -181,6 +229,8 @@ mod tests {
         assert!(is_topic_blocking_command("/worktree"));
         assert!(is_topic_blocking_command("/model"));
         assert!(is_topic_blocking_command("/model list"));
+        assert!(is_topic_blocking_command("/thinking"));
+        assert!(is_topic_blocking_command("/thinking set high"));
         assert!(!is_topic_blocking_command("let's chat"));
     }
 
@@ -202,6 +252,29 @@ mod tests {
             parse_model_command("/model reset"),
             Some(super::ModelSubcommand::Reset)
         ));
+    }
+
+    #[test]
+    fn parse_thinking_commands() {
+        assert!(matches!(
+            parse_thinking_command("/thinking"),
+            Some(super::ThinkingSubcommand::Show)
+        ));
+        assert!(matches!(
+            parse_thinking_command("/thinking@zdx_bot list"),
+            Some(super::ThinkingSubcommand::List)
+        ));
+        assert!(matches!(
+            parse_thinking_command("/thinking set medium"),
+            Some(super::ThinkingSubcommand::Set(
+                zdx_core::config::ThinkingLevel::Medium
+            ))
+        ));
+        assert!(matches!(
+            parse_thinking_command("/thinking reset"),
+            Some(super::ThinkingSubcommand::Reset)
+        ));
+        assert!(parse_thinking_command("/thinking set invalid").is_none());
     }
 
     #[test]

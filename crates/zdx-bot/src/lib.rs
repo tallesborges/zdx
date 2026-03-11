@@ -220,6 +220,11 @@ async fn handle_callback_query(
         || data.starts_with("model_cancel:")
     {
         handle_model_callback(context, client, &callback, data).await;
+    } else if data.starts_with("thinking_set:")
+        || data.starts_with("thinking_reset:")
+        || data.starts_with("thinking_cancel:")
+    {
+        handle_thinking_callback(context, client, &callback, data).await;
     } else {
         if let Err(err) = client.answer_callback_query(&callback.id, None).await {
             tracing::warn!(%err, "Failed to answer unknown callback");
@@ -258,12 +263,27 @@ fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
 }
 
 fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
+    let config = context.config();
     zdx_core::core::thread_persistence::read_thread_model_override(&telegram_thread_id(
         chat_id, thread_id,
     ))
     .ok()
     .flatten()
-    .unwrap_or_else(|| context.config().model.clone())
+    .unwrap_or(config.model)
+}
+
+fn current_topic_thinking(
+    context: &BotContext,
+    chat_id: i64,
+    thread_id: Option<i64>,
+) -> zdx_core::config::ThinkingLevel {
+    let config = context.config();
+    zdx_core::core::thread_persistence::read_thread_thinking_override(&telegram_thread_id(
+        chat_id, thread_id,
+    ))
+    .ok()
+    .flatten()
+    .unwrap_or(config.thinking_level)
 }
 
 fn set_topic_model(chat_id: i64, thread_id: Option<i64>, model_id: &str) -> String {
@@ -278,14 +298,50 @@ fn set_topic_model(chat_id: i64, thread_id: Option<i64>, model_id: &str) -> Stri
     }
 }
 
+fn set_topic_thinking(
+    chat_id: i64,
+    thread_id: Option<i64>,
+    level: zdx_core::config::ThinkingLevel,
+) -> String {
+    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+        chat_id, thread_id,
+    )) {
+        Ok(mut thread) => match thread.set_thinking_override(Some(level)) {
+            Ok(()) => format!(
+                "✅ Thinking set to <code>{}</code> for this topic.",
+                level.display_name()
+            ),
+            Err(err) => format!("❌ Failed to set override: {err}"),
+        },
+        Err(err) => format!("❌ Failed to open thread: {err}"),
+    }
+}
+
+fn reset_topic_thinking(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
+    let config = context.config();
+    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+        chat_id, thread_id,
+    )) {
+        Ok(mut thread) => match thread.set_thinking_override(None) {
+            Ok(()) => format!(
+                "✅ Thinking reset to default: <code>{}</code>",
+                config.thinking_level.display_name()
+            ),
+            Err(err) => format!("❌ Failed to reset override: {err}"),
+        },
+        Err(err) => format!("❌ Failed to open thread: {err}"),
+    }
+}
+
 fn model_picker_header(
     context: &BotContext,
     chat_id: i64,
     thread_id: Option<i64>,
     is_general: bool,
 ) -> String {
+    let config = context.config();
     if is_general {
-        format!("Current model: <code>{}</code>", context.config().model)
+        format!("Current model: <code>{}</code>", config.model)
     } else {
         let override_info = zdx_core::core::thread_persistence::read_thread_model_override(
             &telegram_thread_id(chat_id, thread_id),
@@ -297,7 +353,7 @@ fn model_picker_header(
         });
         format!(
             "Current model: <code>{}</code>{override_info}",
-            context.config().model
+            config.model
         )
     }
 }
@@ -343,9 +399,13 @@ async fn handle_model_callback(
 
         let reply = if is_general {
             match Config::save_telegram_model(model_id) {
-                Ok(()) => format!(
-                    "✅ Default model set to <code>{model_id}</code>.\n\nRestart the bot for changes to take effect."
-                ),
+                Ok(()) => {
+                    context.update_config(|cfg| {
+                        cfg.telegram.model = model_id.to_string();
+                        cfg.model = model_id.to_string();
+                    });
+                    format!("✅ Default model set to <code>{model_id}</code>.")
+                }
                 Err(err) => format!("❌ Failed to save model: {err}"),
             }
         } else {
@@ -372,7 +432,7 @@ async fn handle_model_callback(
     } else if let Some(scope) = data.strip_prefix("model_cancel:") {
         let is_general = scope == "general";
         let current = if is_general {
-            context.config().model.clone()
+            context.config().model
         } else {
             current_topic_model(context, chat_id, msg.thread_id)
         };
@@ -382,6 +442,108 @@ async fn handle_model_callback(
             .await
         {
             eprintln!("Failed to edit message for model cancel: {err}");
+        }
+    }
+
+    let _ = client.answer_callback_query(&callback.id, None).await;
+}
+
+/// Handle thinking-selection inline keyboard callbacks.
+async fn handle_thinking_callback(
+    context: &BotContext,
+    client: &TelegramClient,
+    callback: &CallbackQuery,
+    data: &str,
+) {
+    let Some(msg) = callback.message.as_ref() else {
+        let _ = client
+            .answer_callback_query(&callback.id, Some("No message context"))
+            .await;
+        return;
+    };
+
+    let chat_id = msg.chat.id;
+    let message_id = msg.id;
+
+    if let Some(rest) = data.strip_prefix("thinking_set:") {
+        let Some((level_str, scope)) = rest.split_once(':') else {
+            return;
+        };
+        let is_general = scope == "general";
+        let level = match level_str {
+            "off" => zdx_core::config::ThinkingLevel::Off,
+            "minimal" => zdx_core::config::ThinkingLevel::Minimal,
+            "low" => zdx_core::config::ThinkingLevel::Low,
+            "medium" => zdx_core::config::ThinkingLevel::Medium,
+            "high" => zdx_core::config::ThinkingLevel::High,
+            "xhigh" => zdx_core::config::ThinkingLevel::XHigh,
+            _ => {
+                let _ = client
+                    .answer_callback_query(&callback.id, Some("Unknown thinking level"))
+                    .await;
+                return;
+            }
+        };
+
+        let reply = if is_general {
+            match Config::save_telegram_thinking_level(level) {
+                Ok(()) => {
+                    context.update_config(|cfg| {
+                        cfg.telegram.thinking_level = level;
+                        cfg.thinking_level = level;
+                    });
+                    format!(
+                        "✅ Default thinking set to <code>{}</code>.",
+                        level.display_name()
+                    )
+                }
+                Err(err) => format!("❌ Failed to save thinking level: {err}"),
+            }
+        } else {
+            set_topic_thinking(chat_id, msg.thread_id, level)
+        };
+
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &reply, None)
+            .await
+        {
+            eprintln!("Failed to edit message for thinking set: {err}");
+        }
+    } else if let Some(scope) = data.strip_prefix("thinking_reset:") {
+        let is_general = scope == "general";
+        let reply = if is_general {
+            let config = context.config();
+            format!(
+                "Default thinking: <code>{}</code>",
+                config.thinking_level.display_name()
+            )
+        } else {
+            reset_topic_thinking(context, chat_id, msg.thread_id)
+        };
+
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &reply, None)
+            .await
+        {
+            eprintln!("Failed to edit message for thinking reset: {err}");
+        }
+    } else if let Some(scope) = data.strip_prefix("thinking_cancel:") {
+        let is_general = scope == "general";
+        let current = if is_general {
+            context.config().thinking_level
+        } else {
+            current_topic_thinking(context, chat_id, msg.thread_id)
+        };
+        let reply = format!(
+            "Thinking change cancelled. Current thinking: <code>{}</code>",
+            current.display_name()
+        );
+
+        if let Err(err) = client
+            .edit_message_text(chat_id, message_id, &reply, None)
+            .await
+        {
+            eprintln!("Failed to edit message for thinking cancel: {err}");
         }
     }
 
