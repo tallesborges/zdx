@@ -198,7 +198,7 @@ models = ["glm-5", "glm-4.7", "glm-4.7-flash"]
 enabled = true
 # api_key = "..."  # Overrides XAI_API_KEY env var
 # base_url = "https://api.x.ai/v1"
-models = ["grok-4-1-fast-non-reasoning", "grok-4-1-fast", "grok-code-fast-1"]
+models = ["grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning"]
 
 [providers.mistral]
 enabled = true
