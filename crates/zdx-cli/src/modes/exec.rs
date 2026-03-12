@@ -8,6 +8,7 @@ use std::io::{Stdout, Write, stdout};
 use std::path::PathBuf;
 
 use anyhow::Result;
+use serde_json::json;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use zdx_core::config::Config;
@@ -28,6 +29,8 @@ pub struct ExecOptions {
     pub root: PathBuf,
     /// Tool configuration.
     pub tool_config: ToolConfig,
+    /// Optional event type filters to emit.
+    pub event_filter: Vec<String>,
     /// Disable all system prompt/context composition.
     pub no_system_prompt: bool,
 }
@@ -131,7 +134,8 @@ pub async fn run_exec(
     let (render_tx, render_rx) = zdx_core::core::agent::create_event_channel();
 
     // Spawn renderer task
-    let renderer_handle = spawn_exec_renderer_task(render_rx);
+    let renderer_handle =
+        spawn_exec_renderer_task_with_filter(render_rx, options.event_filter.clone());
 
     // Spawn persist task if thread exists
     let thread_id = thread.as_ref().map(|t| t.id.clone());
@@ -168,6 +172,8 @@ pub async fn run_exec(
     // Propagate error after tasks complete
     let (final_text, _messages) = result?;
 
+    emit_final_turn_completed(&final_text, &options.event_filter);
+
     // Log assistant response to thread
     if let Some(ref mut s) = thread {
         s.append(&ThreadEvent::assistant_message_with_phase(
@@ -182,18 +188,22 @@ pub async fn run_exec(
 /// CLI renderer that writes agent events as compact JSONL to stdout.
 pub struct ExecRenderer {
     stdout: Stdout,
+    event_filter: Vec<String>,
 }
 
 impl Default for ExecRenderer {
     fn default() -> Self {
-        Self::new()
+        Self::new(Vec::new())
     }
 }
 
 impl ExecRenderer {
     /// Creates a new CLI renderer.
-    pub fn new() -> Self {
-        Self { stdout: stdout() }
+    pub fn new(event_filter: Vec<String>) -> Self {
+        Self {
+            stdout: stdout(),
+            event_filter,
+        }
     }
 
     /// Handles a single agent event by writing a compact JSON object per line.
@@ -201,6 +211,15 @@ impl ExecRenderer {
         let Some(event) = sanitize_exec_event(event) else {
             return;
         };
+
+        if !self.event_filter.is_empty()
+            && !self
+                .event_filter
+                .iter()
+                .any(|wanted| wanted.eq_ignore_ascii_case(event_type_name(&event)))
+        {
+            return;
+        }
 
         if let Ok(line) = serde_json::to_string(&event) {
             let _ = writeln!(self.stdout, "{line}");
@@ -215,9 +234,12 @@ impl ExecRenderer {
 ///
 /// The task owns the `ExecRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
-pub fn spawn_exec_renderer_task(mut rx: zdx_core::core::agent::AgentEventRx) -> JoinHandle<()> {
+pub fn spawn_exec_renderer_task_with_filter(
+    mut rx: zdx_core::core::agent::AgentEventRx,
+    event_filter: Vec<String>,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut renderer = ExecRenderer::new();
+        let mut renderer = ExecRenderer::new(event_filter);
 
         while let Some(event) = rx.recv().await {
             renderer.handle_event(&event);
@@ -227,12 +249,33 @@ pub fn spawn_exec_renderer_task(mut rx: zdx_core::core::agent::AgentEventRx) -> 
     })
 }
 
+fn event_type_name(event: &AgentEvent) -> &'static str {
+    match event {
+        AgentEvent::TurnStarted => "turn_started",
+        AgentEvent::ReasoningDelta { .. } => "reasoning_delta",
+        AgentEvent::ReasoningCompleted { .. } => "reasoning_completed",
+        AgentEvent::AssistantDelta { .. } => "assistant_delta",
+        AgentEvent::AssistantCompleted { .. } => "assistant_completed",
+        AgentEvent::ToolRequested { .. } => "tool_requested",
+        AgentEvent::ToolInputCompleted { .. } => "tool_input_completed",
+        AgentEvent::ToolInputDelta { .. } => "tool_input_delta",
+        AgentEvent::ToolStarted { .. } => "tool_started",
+        AgentEvent::ToolOutputDelta { .. } => "tool_output_delta",
+        AgentEvent::ToolCompleted { .. } => "tool_completed",
+        AgentEvent::Error { .. } => "error",
+        AgentEvent::Interrupted { .. } => "interrupted",
+        AgentEvent::TurnCompleted { .. } => "turn_completed",
+        AgentEvent::UsageUpdate { .. } => "usage_update",
+    }
+}
+
 fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
     match event {
         AgentEvent::AssistantDelta { .. }
         | AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
-        | AgentEvent::ToolInputDelta { .. } => None,
+        | AgentEvent::ToolInputDelta { .. }
+        | AgentEvent::TurnCompleted { .. } => None,
         AgentEvent::ReasoningCompleted { block } => {
             let sanitized = zdx_core::providers::ReasoningBlock {
                 text: block.text.clone(),
@@ -245,6 +288,27 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
             }
         }
         _ => Some(event.clone()),
+    }
+}
+
+fn emit_final_turn_completed(final_text: &str, event_filter: &[String]) {
+    if !event_filter.is_empty()
+        && !event_filter
+            .iter()
+            .any(|wanted| wanted.eq_ignore_ascii_case("turn_completed"))
+    {
+        return;
+    }
+
+    let event = json!({
+        "type": "turn_completed",
+        "final_text": final_text,
+        "messages": [],
+    });
+    if let Ok(line) = serde_json::to_string(&event) {
+        let mut out = stdout();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
 }
 
