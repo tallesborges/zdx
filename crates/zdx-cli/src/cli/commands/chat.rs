@@ -33,6 +33,7 @@ pub async fn run(
             model_override,
             tool_timeout_override: None,
             thinking_override,
+            event_filter_override: None,
             tools_override: None,
             no_tools: false,
             no_system_prompt: false,
