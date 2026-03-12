@@ -320,6 +320,33 @@ async fn test_exec_omits_empty_reasoning_completed_from_stdout() {
 }
 
 #[tokio::test]
+async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"replay\":").not());
+}
+
+#[tokio::test]
 async fn test_tool_use_loop_writes_file() {
     if !can_bind_localhost() {
         eprintln!("Skipping: cannot bind localhost TCP port in this environment.");

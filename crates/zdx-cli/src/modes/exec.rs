@@ -198,11 +198,11 @@ impl ExecRenderer {
 
     /// Handles a single agent event by writing a compact JSON object per line.
     pub fn handle_event(&mut self, event: &AgentEvent) {
-        if !should_emit_event(event) {
+        let Some(event) = sanitize_exec_event(event) else {
             return;
-        }
+        };
 
-        if let Ok(line) = serde_json::to_string(event) {
+        if let Ok(line) = serde_json::to_string(&event) {
             let _ = writeln!(self.stdout, "{line}");
             let _ = self.stdout.flush();
         }
@@ -227,15 +227,64 @@ pub fn spawn_exec_renderer_task(mut rx: zdx_core::core::agent::AgentEventRx) -> 
     })
 }
 
-fn should_emit_event(event: &AgentEvent) -> bool {
+fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
     match event {
         AgentEvent::AssistantDelta { .. }
         | AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
-        | AgentEvent::ToolInputDelta { .. } => false,
+        | AgentEvent::ToolInputDelta { .. } => None,
         AgentEvent::ReasoningCompleted { block } => {
-            block.text.is_some() || block.replay.is_some()
+            let sanitized = zdx_core::providers::ReasoningBlock {
+                text: block.text.clone(),
+                replay: None,
+            };
+            if sanitized.text.is_some() {
+                Some(AgentEvent::ReasoningCompleted { block: sanitized })
+            } else {
+                None
+            }
         }
-        _ => true,
+        _ => Some(event.clone()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::sanitize_exec_event;
+    use zdx_core::core::events::AgentEvent;
+    use zdx_core::providers::{ReasoningBlock, ReplayToken};
+
+    #[test]
+    fn sanitize_exec_event_drops_empty_reasoning() {
+        let event = AgentEvent::ReasoningCompleted {
+            block: ReasoningBlock {
+                text: None,
+                replay: None,
+            },
+        };
+
+        assert!(sanitize_exec_event(&event).is_none());
+    }
+
+    #[test]
+    fn sanitize_exec_event_strips_reasoning_replay() {
+        let event = AgentEvent::ReasoningCompleted {
+            block: ReasoningBlock {
+                text: Some("thinking".to_string()),
+                replay: Some(ReplayToken::OpenAI {
+                    id: "r1".to_string(),
+                    encrypted_content: "secret".to_string(),
+                }),
+            },
+        };
+
+        let sanitized = sanitize_exec_event(&event).expect("event should remain");
+        match sanitized {
+            AgentEvent::ReasoningCompleted { block } => {
+                assert_eq!(block.text.as_deref(), Some("thinking"));
+                assert!(block.replay.is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 }
