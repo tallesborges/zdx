@@ -1,14 +1,14 @@
-//! xAI provider (Grok) using OpenAI-compatible API.
+//! xAI provider (Grok) using the Responses API.
 
 use anyhow::Result;
-use reqwest::header::HeaderMap;
+use reqwest::header::{HeaderMap, HeaderValue};
 
-use crate::providers::openai::chat_completions::{
-    OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig,
-};
+use crate::providers::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::providers::shared::merge_system_prompt;
 use crate::providers::{ChatMessage, ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
+
+const RESPONSES_PATH: &str = "/responses";
 
 /// `xAI` API configuration.
 #[derive(Debug, Clone)]
@@ -56,27 +56,51 @@ impl XaiConfig {
     }
 }
 
-/// `xAI` client using OpenAI-compatible API.
+fn build_headers(api_key: &str) -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        "Authorization",
+        HeaderValue::from_str(&format!("Bearer {api_key}"))
+            .unwrap_or_else(|_| HeaderValue::from_static("")),
+    );
+    headers.insert("accept", HeaderValue::from_static("text/event-stream"));
+    headers.insert("content-type", HeaderValue::from_static("application/json"));
+    headers.insert(
+        "user-agent",
+        HeaderValue::from_static(crate::providers::shared::USER_AGENT),
+    );
+    headers
+}
+
+/// `xAI` client using the Responses API.
 pub struct XaiClient {
-    inner: OpenAIChatCompletionsClient,
+    api_key: String,
+    config: ResponsesConfig,
+    http: reqwest::Client,
 }
 
 impl XaiClient {
     pub fn new(config: XaiConfig) -> Self {
         Self {
-            inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
-                api_key: config.api_key,
+            api_key: config.api_key,
+            config: ResponsesConfig {
                 base_url: config.base_url,
+                path: RESPONSES_PATH.to_string(),
                 model: config.model,
-                max_tokens: config.max_tokens,
-                max_completion_tokens: None,
+                max_output_tokens: config.max_tokens,
                 reasoning_effort: None,
+                reasoning_summary: None,
+                instructions: None,
+                text_verbosity: None,
+                store: Some(false),
+                include: Some(vec!["reasoning.encrypted_content".to_string()]),
+                stream_options: None,
                 prompt_cache_key: config.prompt_cache_key,
-                extra_headers: HeaderMap::new(),
-                include_usage: true,
-                include_reasoning_content: config.thinking_enabled,
-                thinking: Some(config.thinking_enabled.into()),
-            }),
+                parallel_tool_calls: Some(true),
+                tool_choice: Some("auto".to_string()),
+                truncation: None,
+            },
+            http: reqwest::Client::new(),
         }
     }
 
@@ -90,8 +114,47 @@ impl XaiClient {
         system: Option<&str>,
     ) -> Result<ProviderStream> {
         let system = merge_system_prompt(system);
-        self.inner
-            .send_messages_stream(messages, tools, system.as_deref())
-            .await
+        send_responses_stream(
+            &self.http,
+            &self.config,
+            build_headers(&self.api_key),
+            messages,
+            tools,
+            system.as_deref(),
+        )
+        .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RESPONSES_PATH, XaiClient, XaiConfig};
+
+    fn test_config(model: &str) -> XaiConfig {
+        XaiConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://api.x.ai/v1".to_string(),
+            model: model.to_string(),
+            max_tokens: Some(1024),
+            prompt_cache_key: Some("thread-123".to_string()),
+            thinking_enabled: true,
+        }
+    }
+
+    #[test]
+    fn xai_provider_uses_responses_api_for_current_models() {
+        for model in [
+            "grok-4.20-experimental-beta-0304-reasoning",
+            "grok-4-1-fast-reasoning",
+            "grok-4-1-fast-non-reasoning",
+        ] {
+            let client = XaiClient::new(test_config(model));
+            assert_eq!(client.config.path, RESPONSES_PATH);
+            assert_eq!(client.config.model, model);
+            assert_eq!(
+                client.config.include.as_ref(),
+                Some(&vec!["reasoning.encrypted_content".to_string()])
+            );
+        }
     }
 }
