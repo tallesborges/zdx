@@ -197,14 +197,18 @@ impl ExecRenderer {
     }
 
     /// Handles a single agent event by writing a compact JSON object per line.
-    pub fn handle_event(&mut self, event: AgentEvent) {
-        if let Ok(line) = serde_json::to_string(&event) {
+    pub fn handle_event(&mut self, event: &AgentEvent) {
+        if !should_emit_event(event) {
+            return;
+        }
+
+        if let Ok(line) = serde_json::to_string(event) {
             let _ = writeln!(self.stdout, "{line}");
             let _ = self.stdout.flush();
         }
     }
 
-    pub fn finish(&mut self) {}
+    pub fn finish() {}
 }
 
 /// Spawns a renderer task that consumes events from a channel.
@@ -216,9 +220,22 @@ pub fn spawn_exec_renderer_task(mut rx: zdx_core::core::agent::AgentEventRx) -> 
         let mut renderer = ExecRenderer::new();
 
         while let Some(event) = rx.recv().await {
-            renderer.handle_event((*event).clone());
+            renderer.handle_event(&event);
         }
 
-        renderer.finish();
+        ExecRenderer::finish();
     })
+}
+
+fn should_emit_event(event: &AgentEvent) -> bool {
+    match event {
+        AgentEvent::AssistantDelta { .. }
+        | AgentEvent::ReasoningDelta { .. }
+        | AgentEvent::ToolOutputDelta { .. }
+        | AgentEvent::ToolInputDelta { .. } => false,
+        AgentEvent::ReasoningCompleted { block } => {
+            block.text.is_some() || block.replay.is_some()
+        }
+        _ => true,
+    }
 }
