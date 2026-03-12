@@ -5,19 +5,15 @@
 //! Uses `CancellationToken` for unified cancellation model.
 
 use std::path::{Path, PathBuf};
-use std::process::Stdio;
 use std::time::Duration;
 
-use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
+use zdx_core::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
 use zdx_core::core::thread_persistence::{self, Thread};
 use zdx_core::prompts::HANDOFF_PROMPT_TEMPLATE;
 
 use crate::events::UiEvent;
-
-/// Thinking level for handoff generation (minimal reasoning).
-const HANDOFF_THINKING: &str = "minimal";
 
 /// Timeout for handoff generation subagent (2 minutes).
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
@@ -48,21 +44,6 @@ fn load_thread_content(thread_id: &str) -> Result<String, String> {
     Ok(thread_persistence::format_transcript(&events))
 }
 
-/// Processes subagent output into a Result.
-fn process_subagent_output(output: &std::process::Output) -> Result<String, String> {
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Handoff generation failed: {}", stderr.trim()));
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if stdout.is_empty() {
-        return Err("Handoff generation returned empty output".to_string());
-    }
-
-    Ok(stdout)
-}
-
 /// Runs the subagent process with timeout and cancellation support.
 ///
 /// Pure async function - returns the generated prompt or error.
@@ -73,48 +54,19 @@ async fn run_subagent(
     generation_prompt: String,
     root: PathBuf,
 ) -> Result<String, String> {
-    let exe = match std::env::current_exe() {
-        Ok(e) => e,
-        Err(e) => return Err(format!("Failed to get executable: {e}")),
+    let options = ExecSubagentOptions {
+        model: Some(handoff_model),
+        thinking_level: Some(zdx_core::config::ThinkingLevel::Minimal),
+        no_tools: false,
+        no_system_prompt: true,
+        tools_override: Some(vec!["read".to_string()]),
+        event_filter: Some(vec!["turn_completed".to_string()]),
+        timeout: Some(Duration::from_secs(HANDOFF_TIMEOUT_SECS)),
     };
 
-    let child = match Command::new(exe)
-        .args([
-            "--no-thread",
-            "exec",
-            "--no-system-prompt",
-            "-m",
-            &handoff_model,
-            "-t",
-            HANDOFF_THINKING,
-            "--tools",
-            "read",
-            "-p",
-            &generation_prompt,
-        ])
-        .current_dir(&root)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => return Err(format!("Failed to spawn subagent: {e}")),
-    };
-
-    // Use select! to race cancellation against the subagent completion
-    tokio::select! {
-        () = cancel.cancelled() => Err("Handoff cancelled".to_string()),
-        output = tokio::time::timeout(
-            Duration::from_secs(HANDOFF_TIMEOUT_SECS),
-            child.wait_with_output()
-        ) => {
-            output
-                .map_err(|_elapsed| format!("Handoff generation timed out after {HANDOFF_TIMEOUT_SECS} seconds"))
-                .and_then(|r| r.map_err(|e| format!("Failed to get subagent output: {e}")))
-                .and_then(|output| process_subagent_output(&output))
-        }
-    }
+    run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel))
+        .await
+        .map_err(|err| format!("Handoff generation failed: {err}"))
 }
 
 /// Executes a handoff submit: creates a new thread with handoff source.

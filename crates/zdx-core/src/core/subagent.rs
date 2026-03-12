@@ -10,6 +10,9 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Command;
+use tokio_util::sync::CancellationToken;
+
+use crate::core::events::AgentEvent;
 
 /// Options for a child `zdx exec` subagent run.
 #[derive(Debug, Clone, Default)]
@@ -22,6 +25,10 @@ pub struct ExecSubagentOptions {
     pub no_tools: bool,
     /// Disable system prompt/context composition for the child run (`--no-system-prompt`).
     pub no_system_prompt: bool,
+    /// Optional explicit tool allowlist for the child run (`--tools`).
+    pub tools_override: Option<Vec<String>>,
+    /// Optional event type filters for exec output (`--filter`).
+    pub event_filter: Option<Vec<String>>,
     /// Optional timeout for the child process.
     pub timeout: Option<Duration>,
 }
@@ -37,6 +44,20 @@ pub async fn run_exec_subagent(
     prompt: &str,
     options: &ExecSubagentOptions,
 ) -> Result<String> {
+    run_exec_subagent_with_cancel(root, prompt, options, None).await
+}
+
+/// Runs an isolated child `zdx exec` process with optional cancellation support.
+///
+/// # Errors
+/// Returns an error if the child process fails, times out, is canceled, or
+/// produces invalid/empty output.
+pub async fn run_exec_subagent_with_cancel(
+    root: &Path,
+    prompt: &str,
+    options: &ExecSubagentOptions,
+    cancel: Option<CancellationToken>,
+) -> Result<String> {
     let prompt = prompt.trim();
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
 
@@ -46,22 +67,36 @@ pub async fn run_exec_subagent(
     let mut command = Command::new(exe);
     command
         .args(args)
+        .current_dir(root)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
     let child = command.spawn().context("Failed to spawn subagent")?;
 
-    let output = if let Some(timeout) = options.timeout {
-        tokio::time::timeout(timeout, child.wait_with_output())
+    let wait_future = child.wait_with_output();
+    let output = match (cancel, options.timeout) {
+        (Some(cancel), Some(timeout)) => {
+            tokio::select! {
+                () = cancel.cancelled() => bail!("Subagent cancelled"),
+                result = tokio::time::timeout(timeout, wait_future) => {
+                    result
+                        .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))?
+                        .context("Failed to get subagent output")?
+                }
+            }
+        }
+        (Some(cancel), None) => {
+            tokio::select! {
+                () = cancel.cancelled() => bail!("Subagent cancelled"),
+                result = wait_future => result.context("Failed to get subagent output")?,
+            }
+        }
+        (None, Some(timeout)) => tokio::time::timeout(timeout, wait_future)
             .await
             .with_context(|| format!("Subagent timed out after {} seconds", timeout.as_secs()))?
-            .context("Failed to get subagent output")?
-    } else {
-        child
-            .wait_with_output()
-            .await
-            .context("Failed to get subagent output")?
+            .context("Failed to get subagent output")?,
+        (None, None) => wait_future.await.context("Failed to get subagent output")?,
     };
 
     process_subagent_output(&output)
@@ -83,6 +118,24 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
 
     if options.no_system_prompt {
         args.push(OsString::from("--no-system-prompt"));
+    }
+
+    if let Some(tools) = options
+        .tools_override
+        .as_ref()
+        .filter(|tools| !tools.is_empty())
+    {
+        args.push(OsString::from("--tools"));
+        args.push(OsString::from(tools.join(",")));
+    }
+
+    if let Some(filters) = options
+        .event_filter
+        .as_ref()
+        .filter(|filters| !filters.is_empty())
+    {
+        args.push(OsString::from("--filter"));
+        args.push(OsString::from(filters.join(",")));
     }
 
     if let Some(model) = normalize_optional(options.model.as_deref()) {
@@ -115,11 +168,57 @@ fn process_subagent_output(output: &std::process::Output) -> Result<String> {
 
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     ensure!(!stdout.is_empty(), "Subagent returned empty output");
+
+    if let Some(final_text) = extract_turn_completed_text(&stdout)? {
+        return Ok(final_text);
+    }
+
     Ok(stdout)
+}
+
+fn extract_turn_completed_text(stdout: &str) -> Result<Option<String>> {
+    let mut saw_json_event = false;
+    let mut final_text = None;
+
+    for line in stdout
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+    {
+        match serde_json::from_str::<AgentEvent>(line) {
+            Ok(AgentEvent::TurnCompleted {
+                final_text: text, ..
+            }) => {
+                saw_json_event = true;
+                final_text = Some(text);
+            }
+            Ok(_) => {
+                saw_json_event = true;
+            }
+            Err(_) => {
+                if saw_json_event {
+                    bail!("Subagent produced malformed JSONL output");
+                }
+                return Ok(None);
+            }
+        }
+    }
+
+    if saw_json_event {
+        return final_text
+            .filter(|text| !text.trim().is_empty())
+            .map(Some)
+            .ok_or_else(|| {
+                anyhow::anyhow!("Subagent JSONL output missing turn_completed.final_text")
+            });
+    }
+
+    Ok(None)
 }
 
 #[cfg(test)]
 mod tests {
+    use std::os::unix::process::ExitStatusExt;
     use std::path::Path;
 
     use super::*;
@@ -157,8 +256,10 @@ mod tests {
             &ExecSubagentOptions {
                 model: Some("openai:gpt-5.2".to_string()),
                 thinking_level: Some(crate::config::ThinkingLevel::Low),
-                no_tools: true,
+                no_tools: false,
                 no_system_prompt: true,
+                tools_override: Some(vec!["read".to_string(), "glob".to_string()]),
+                event_filter: Some(vec!["turn_completed".to_string()]),
                 timeout: None,
             },
         );
@@ -176,13 +277,44 @@ mod tests {
                 "exec",
                 "-p",
                 "task",
-                "--no-tools",
                 "--no-system-prompt",
+                "--tools",
+                "read,glob",
+                "--filter",
+                "turn_completed",
                 "-m",
                 "openai:gpt-5.2",
                 "-t",
                 "low"
             ]
         );
+    }
+
+    #[test]
+    fn process_subagent_output_extracts_turn_completed_text() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: br#"{"type":"usage_update","input_tokens":1,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}
+{"type":"assistant_completed","text":"partial"}
+{"type":"turn_completed","final_text":"final answer","messages":[]}
+"#
+            .to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let text = process_subagent_output(&output).expect("should parse");
+        assert_eq!(text, "final answer");
+    }
+
+    #[test]
+    fn process_subagent_output_falls_back_to_plain_text() {
+        let output = std::process::Output {
+            status: std::process::ExitStatus::from_raw(0),
+            stdout: b"plain text output\n".to_vec(),
+            stderr: Vec::new(),
+        };
+
+        let text = process_subagent_output(&output).expect("should keep plain text");
+        assert_eq!(text, "plain text output");
     }
 }
