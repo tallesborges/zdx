@@ -250,9 +250,10 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
 
 #[cfg(test)]
 mod tests {
-    use super::sanitize_exec_event;
     use zdx_core::core::events::AgentEvent;
     use zdx_core::providers::{ReasoningBlock, ReplayToken};
+
+    use super::sanitize_exec_event;
 
     #[test]
     fn sanitize_exec_event_drops_empty_reasoning() {
