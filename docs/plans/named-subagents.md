@@ -4,6 +4,7 @@
 - Unified subagent consumers: subagent tool, automations (`subagent:` in frontmatter), telegram bot
 - Available subagents dynamically listed in tool description
 - Users can create custom subagents at `~/.zdx/subagents/` (global) and `.zdx/subagents/` (project-level)
+- Subagent prompt bodies support the same template engine/features as the current system prompt pipeline
 
 # Non-goals
 - Subagent inheritance / composability (subagents are flat)
@@ -18,6 +19,7 @@
 - Convention over configuration: built-in defaults work out of the box
 - Project subagents override global subagents override built-in defaults (by name)
 - Start with the minimum useful set of built-ins; add specialized subagents only after real usage proves the need
+- Reuse the existing prompt-template pipeline instead of inventing a second templating model for subagents
 
 # User journey
 1. User invokes subagent without changes → works with built-in `general_assistant` subagent (default behavior mapping of today's normal mode)
@@ -54,6 +56,7 @@
   - [ ] `list_subagents(project_root)` → returns all available subagent names+descriptions (deduplicated by name, project wins)
   - [ ] Built-in subagents embedded via `include_str!`: `general_assistant`, `automation_assistant`
   - [ ] Built-in subagent markdown files in `crates/zdx-core/src/subagents/` (or similar)
+  - [ ] Subagent markdown body is treated as a MiniJinja template, not just a literal string
   - [ ] Unit tests for parsing and precedence
 - **✅ Demo**: Unit test loads built-in `general_assistant` and `automation_assistant` subagents, verifies model/tools/system_prompt fields
 - **Risks / failure modes**:
@@ -65,6 +68,8 @@
   - [ ] Add `subagent` param to `invoke_subagent` tool schema (optional string, replaces `model`)
   - [ ] Remove `model` param from tool schema (named subagent owns model selection)
   - [ ] In `execute()`: resolve subagent → build `ExecSubagentOptions` from subagent fields
+  - [ ] Render subagent prompt body through the same MiniJinja/template pipeline used by the current system prompt
+  - [ ] Reuse the same supported template features and variables the current system prompt supports (for example conditionals/loops and the existing prompt-template vars)
   - [ ] Pass custom system prompt to child: add `--system-prompt <TEXT>` support to `ExecSubagentOptions` / `build_exec_args` (reuse existing root `--system-prompt` CLI flag)
   - [ ] Pass `--tools` list from subagent to child exec args
   - [ ] Keep `--no-system-prompt` as an advanced CLI escape hatch, not part of the subagent schema
@@ -97,6 +102,7 @@
 - Project-level subagents override global subagents override built-in (by name match)
 - Existing `zdx exec` CLI flags continue to work independently of named subagents
 - `automation_assistant` subagent must be written for non-interactive execution: complete the task with reasonable assumptions instead of depending on user clarification
+- Subagent prompt rendering must support the same template capabilities as the current system prompt rendering path
 
 # Key decisions (decide early)
 - **Subagent `model` format**: use the existing `provider:model` format (e.g., `gemini:gemini-2.5-flash-lite`)
@@ -105,11 +111,13 @@
 - **System prompt passthrough mechanism**: reuse existing root-level `--system-prompt` CLI flag (already wired to override config system prompt)
 - **Frontmatter parser**: reuse whatever skills/automations already use for YAML frontmatter parsing (avoid new dependency if possible)
 - **Subagent context model**: subagent prompt replaces default composition; `--no-system-prompt` remains only as an advanced CLI escape hatch outside the subagent schema
+- **Subagent templating model**: reuse the same MiniJinja renderer and supported variables/features as the current system prompt template path, not a reduced or custom subset
 
 # Testing
 - Manual smoke demos per slice
 - Unit tests for subagent parsing + precedence in Slice 1
 - Unit tests for `build_exec_args` with subagent-derived options in Slice 2
+- Unit tests proving subagent prompt templates support the same basic behavior as the current system prompt templates (for example `if`, `for`, and existing prompt-template vars)
 - Integration test: `zdx exec` with `--system-prompt` + `--tools` produces expected behavior
 
 # Polish phases (after MVP)
