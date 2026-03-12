@@ -18,6 +18,7 @@ pub struct ExecRunOptions<'a> {
     pub model_override: Option<&'a str>,
     pub tool_timeout_override: Option<u32>,
     pub thinking_override: Option<&'a str>,
+    pub event_filter_override: Option<&'a str>,
     pub tools_override: Option<&'a str>,
     pub no_tools: bool,
     pub no_system_prompt: bool,
@@ -54,6 +55,11 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         } else {
             ToolSelection::default()
         }),
+        event_filter: options
+            .event_filter_override
+            .map(parse_event_filter)
+            .transpose()?
+            .unwrap_or_default(),
         no_system_prompt: options.no_system_prompt,
     };
 
@@ -112,4 +118,19 @@ fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
     }
 
     Ok(tools)
+}
+
+fn parse_event_filter(raw: &str) -> Result<Vec<String>> {
+    let filters: Vec<String> = raw
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(std::string::ToString::to_string)
+        .collect();
+
+    if filters.is_empty() {
+        anyhow::bail!("--filter requires a comma-separated list of event names");
+    }
+
+    Ok(filters)
 }

@@ -347,6 +347,44 @@ async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
 }
 
 #[tokio::test]
+async fn test_exec_filter_turn_completed_only_emits_turn_completed() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--no-thread",
+            "exec",
+            "--filter",
+            "turn_completed",
+            "-p",
+            "Say hello",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"type\":\"turn_completed\"")
+                .and(predicate::str::contains("\"final_text\":\"Hello world\"")),
+        )
+        .stdout(predicate::str::contains("\"type\":\"assistant_completed\"").not());
+}
+
+#[tokio::test]
 async fn test_tool_use_loop_writes_file() {
     if !can_bind_localhost() {
         eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
