@@ -848,10 +848,13 @@ impl TelegramClient {
             .json(body)
             .send()
             .await
-            .context("Telegram request")?;
+            .with_context(|| format!("Telegram request failed for {method}"))?;
 
-        let bytes = response.bytes().await.context("read Telegram response")?;
-        Self::parse_telegram_response(&bytes)
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| format!("read Telegram response for {method}"))?;
+        Self::parse_telegram_response(method, &bytes)
     }
 
     async fn post_multipart<T: DeserializeOwned>(
@@ -866,27 +869,46 @@ impl TelegramClient {
             .multipart(form)
             .send()
             .await
-            .context("Telegram multipart request")?;
+            .with_context(|| format!("Telegram multipart request failed for {method}"))?;
 
-        let bytes = response.bytes().await.context("read Telegram response")?;
-        Self::parse_telegram_response(&bytes)
+        let bytes = response
+            .bytes()
+            .await
+            .with_context(|| format!("read Telegram response for {method}"))?;
+        Self::parse_telegram_response(method, &bytes)
     }
 
-    fn parse_telegram_response<T: DeserializeOwned>(bytes: &[u8]) -> Result<T> {
-        let envelope: TelegramEnvelope =
-            serde_json::from_slice(bytes).context("parse Telegram response envelope")?;
+    fn parse_telegram_response<T: DeserializeOwned>(method: &str, bytes: &[u8]) -> Result<T> {
+        let body_preview = String::from_utf8_lossy(bytes);
+        let envelope: TelegramEnvelope = serde_json::from_slice(bytes).with_context(|| {
+            format!(
+                "parse Telegram response envelope for {method}: {}",
+                body_preview.trim()
+            )
+        })?;
 
         if !envelope.ok {
-            let error: TelegramError =
-                serde_json::from_slice(bytes).context("decode Telegram error")?;
+            let error: TelegramError = serde_json::from_slice(bytes).with_context(|| {
+                format!(
+                    "decode Telegram error for {method}: {}",
+                    body_preview.trim()
+                )
+            })?;
             let description = error
                 .description
                 .unwrap_or_else(|| "Telegram API error".to_string());
-            bail!("{description}");
+            let code = error
+                .error_code
+                .map_or_else(|| "unknown".to_string(), |code| code.to_string());
+            bail!("Telegram API error for {method} ({code}): {description}");
         }
 
-        let success: TelegramSuccess<T> =
-            serde_json::from_slice(bytes).context("decode Telegram result")?;
+        let success: TelegramSuccess<T> = serde_json::from_slice(bytes).with_context(|| {
+            format!(
+                "decode Telegram result for {method}: {}",
+                body_preview.trim()
+            )
+        })?;
 
         Ok(success.result)
     }
@@ -901,6 +923,8 @@ struct TelegramSuccess<T> {
 /// Telegram API error response (ok: false, no result)
 #[derive(Debug, Deserialize)]
 struct TelegramError {
+    #[serde(default)]
+    error_code: Option<u16>,
     #[serde(default)]
     description: Option<String>,
 }

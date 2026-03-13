@@ -90,9 +90,17 @@ pub(crate) async fn dispatch_message(
                 }
                 Err(err) => {
                     tracing::error!(chat_id = message.chat.id, %err, "Failed to create topic");
-                    // Fall back to processing in General (no queue, replies in General)
-                    if let Err(err) = handle_message(context.as_ref(), message).await {
-                        tracing::error!(%err, "Standalone message handling error");
+                    if let Err(send_err) = context
+                        .client()
+                        .send_message(
+                            message.chat.id,
+                            "⚠️ I couldn't create a new topic for this message, so I didn't answer in General. Please try again.",
+                            Some(message.id),
+                            None,
+                        )
+                        .await
+                    {
+                        tracing::error!(chat_id = message.chat.id, err = %send_err, "Failed to notify topic creation failure");
                     }
                 }
             }
@@ -167,7 +175,7 @@ fn generate_topic_name(text: Option<&str>) -> String {
 }
 
 /// Spawn a standalone task for a message (no queuing, fully concurrent).
-/// Used only as fallback when topic creation fails.
+/// Used only for commands that intentionally bypass topic auto-creation.
 fn spawn_standalone(context: Arc<BotContext>, message: Message) {
     tokio::spawn(async move {
         if let Err(err) = handle_message(context.as_ref(), message).await {
