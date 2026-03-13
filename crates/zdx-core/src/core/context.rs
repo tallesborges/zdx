@@ -1231,7 +1231,9 @@ mod tests {
         assert!(prompt.contains("Current directory:"));
         assert!(prompt.contains("Current date:"));
         assert!(prompt.contains("`ZDX_HOME`: ZDX runtime home/config directory."));
-        assert!(prompt.contains("`ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread."));
+        assert!(prompt.contains(
+            "`ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread."
+        ));
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("# Project"));

@@ -145,85 +145,89 @@ async fn collect_attachments(
     let mut documents = Vec::new();
     let mut had_attachments = false;
 
-    if let Some(photos) = message.photo.as_deref() {
-        had_attachments = true;
-        if let Some(photo) = select_best_photo(photos) {
-            push_attachment(
-                &mut images,
-                load_photo_attachment(client, target.chat, target.message, photo),
-                "photo attachment",
-            )
-            .await?;
-        }
-    }
+    for current in std::iter::once(message).chain(message.grouped_messages.iter()) {
+        let current_message_id = current.id;
 
-    if let Some(document) = message.document.as_ref()
-        && let Some(mime) = document.mime_type.as_deref()
-    {
-        had_attachments = true;
-        if mime.starts_with("image/") {
-            push_attachment(
-                &mut images,
-                load_document_image(client, target.chat, target.message, document),
-                "document image",
-            )
-            .await?;
-        } else if mime.starts_with("audio/") {
+        if let Some(photos) = current.photo.as_deref() {
+            had_attachments = true;
+            if let Some(photo) = select_best_photo(photos) {
+                push_attachment(
+                    &mut images,
+                    load_photo_attachment(client, target.chat, current_message_id, photo),
+                    "photo attachment",
+                )
+                .await?;
+            }
+        }
+
+        if let Some(document) = current.document.as_ref()
+            && let Some(mime) = document.mime_type.as_deref()
+        {
+            had_attachments = true;
+            if mime.starts_with("image/") {
+                push_attachment(
+                    &mut images,
+                    load_document_image(client, target.chat, current_message_id, document),
+                    "document image",
+                )
+                .await?;
+            } else if mime.starts_with("audio/") {
+                push_attachment(
+                    &mut audios,
+                    load_audio_attachment(
+                        client,
+                        config,
+                        target.chat,
+                        current_message_id,
+                        document,
+                        cancel_token,
+                    ),
+                    "document audio",
+                )
+                .await?;
+            } else {
+                push_attachment(
+                    &mut documents,
+                    load_generic_document(client, target.chat, current_message_id, document),
+                    "generic document",
+                )
+                .await?;
+            }
+        }
+
+        if let Some(voice) = current.voice.as_ref() {
+            had_attachments = true;
             push_attachment(
                 &mut audios,
-                load_audio_attachment(
+                load_voice_attachment(
                     client,
                     config,
                     target.chat,
-                    target.message,
-                    document,
+                    current_message_id,
+                    voice,
                     cancel_token,
                 ),
-                "document audio",
-            )
-            .await?;
-        } else {
-            push_attachment(
-                &mut documents,
-                load_generic_document(client, target.chat, target.message, document),
-                "generic document",
+                "voice attachment",
             )
             .await?;
         }
-    }
 
-    if let Some(voice) = message.voice.as_ref() {
-        had_attachments = true;
-        push_attachment(
-            &mut audios,
-            load_voice_attachment(
-                client,
-                config,
-                target.chat,
-                target.message,
-                voice,
-                cancel_token,
-            ),
-            "voice attachment",
-        )
-        .await?;
-    }
-
-    if let Some(audio) = message.audio.as_ref() {
-        had_attachments = true;
-        push_attachment(
-            &mut audios,
-            load_audio_message(
-                client,
-                config,
-                target.chat,
-                target.message,
-                audio,
-                cancel_token,
-            ),
-            "audio message",
-        )
-        .await?;
+        if let Some(audio) = current.audio.as_ref() {
+            had_attachments = true;
+            push_attachment(
+                &mut audios,
+                load_audio_message(
+                    client,
+                    config,
+                    target.chat,
+                    current_message_id,
+                    audio,
+                    cancel_token,
+                ),
+                "audio message",
+            )
+            .await?;
+        }
     }
 
     Ok(AttachmentCollection {
@@ -271,16 +275,18 @@ async fn handle_empty_message(
 
 fn extract_text(message: &Message) -> Option<String> {
     let mut parts = Vec::new();
-    if let Some(text) = message.text.as_deref() {
-        let trimmed = text.trim();
-        if !trimmed.is_empty() {
-            parts.push(trimmed.to_string());
+    for current in std::iter::once(message).chain(message.grouped_messages.iter()) {
+        if let Some(text) = current.text.as_deref() {
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
         }
-    }
-    if let Some(caption) = message.caption.as_deref() {
-        let trimmed = caption.trim();
-        if !trimmed.is_empty() {
-            parts.push(trimmed.to_string());
+        if let Some(caption) = current.caption.as_deref() {
+            let trimmed = caption.trim();
+            if !trimmed.is_empty() {
+                parts.push(trimmed.to_string());
+            }
         }
     }
     if parts.is_empty() {
