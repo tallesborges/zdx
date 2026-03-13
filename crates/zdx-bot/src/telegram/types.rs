@@ -43,6 +43,8 @@ pub struct Message {
     pub id: i64,
     pub chat: Chat,
     pub from: Option<User>,
+    #[serde(default)]
+    pub media_group_id: Option<String>,
     pub text: Option<String>,
     #[serde(default)]
     pub caption: Option<String>,
@@ -64,6 +66,9 @@ pub struct Message {
     /// created topic before handling it.
     #[serde(skip)]
     pub synthetic_topic_routed_from_general: bool,
+    /// Additional Telegram messages that belong to the same media album.
+    #[serde(skip)]
+    pub grouped_messages: Vec<Message>,
 }
 
 impl Message {

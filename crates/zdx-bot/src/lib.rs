@@ -128,7 +128,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 if !updates.is_empty() {
                     tracing::debug!(count = updates.len(), "Received updates");
                 }
-                for update in updates {
+                for update in coalesce_media_group_updates(updates) {
                     offset = Some(update.id + 1);
                     if let Some(message) = update.message {
                         dispatch_message(&chat_queues, &context, message).await;
@@ -142,6 +142,44 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     }
 
     Ok(())
+}
+
+fn coalesce_media_group_updates(
+    updates: Vec<crate::telegram::Update>,
+) -> Vec<crate::telegram::Update> {
+    let mut coalesced = Vec::with_capacity(updates.len());
+
+    for update in updates {
+        let media_key = update.message.as_ref().and_then(media_group_key);
+        if let Some(key) = media_key
+            && let Some(existing_index) =
+                coalesced
+                    .iter()
+                    .position(|existing: &crate::telegram::Update| {
+                        existing.message.as_ref().and_then(media_group_key) == Some(key.clone())
+                    })
+        {
+            if let (Some(existing), Some(message)) =
+                (coalesced[existing_index].message.as_mut(), update.message)
+            {
+                existing.grouped_messages.push(message);
+            }
+            continue;
+        }
+
+        coalesced.push(update);
+    }
+
+    coalesced
+}
+
+fn media_group_key(message: &crate::telegram::Message) -> Option<(i64, Option<i64>, i64, String)> {
+    Some((
+        message.chat.id,
+        message.effective_thread_id(),
+        message.from.as_ref()?.id,
+        message.media_group_id.clone()?,
+    ))
 }
 
 /// Handle a callback query from an inline keyboard button.
@@ -548,4 +586,59 @@ async fn handle_thinking_callback(
     }
 
     let _ = client.answer_callback_query(&callback.id, None).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::{coalesce_media_group_updates, parse_cancel_callback, parse_queue_cancel_callback};
+    use crate::telegram::{Message, Update};
+
+    fn test_message(id: i64, media_group_id: Option<&str>, text: Option<&str>) -> Message {
+        serde_json::from_value(json!({
+            "message_id": id,
+            "chat": { "id": 42, "type": "private", "is_forum": false },
+            "from": { "id": 7, "is_bot": false },
+            "media_group_id": media_group_id,
+            "text": text,
+        }))
+        .expect("valid test message")
+    }
+
+    #[test]
+    fn coalesces_media_group_updates_into_first_message() {
+        let updates = vec![
+            Update {
+                id: 1,
+                message: Some(test_message(100, Some("album-1"), Some("first"))),
+                callback_query: None,
+            },
+            Update {
+                id: 2,
+                message: Some(test_message(101, Some("album-1"), None)),
+                callback_query: None,
+            },
+            Update {
+                id: 3,
+                message: Some(test_message(102, None, Some("solo"))),
+                callback_query: None,
+            },
+        ];
+
+        let coalesced = coalesce_media_group_updates(updates);
+        assert_eq!(coalesced.len(), 2);
+        let first = coalesced[0].message.as_ref().expect("message");
+        assert_eq!(first.id, 100);
+        assert_eq!(first.grouped_messages.len(), 1);
+        assert_eq!(first.grouped_messages[0].id, 101);
+        assert_eq!(coalesced[1].message.as_ref().expect("message").id, 102);
+    }
+
+    #[test]
+    fn parses_cancel_callbacks() {
+        assert_eq!(parse_cancel_callback("cancel:1:2"), Some((1, 2)));
+        assert_eq!(parse_cancel_callback("cancel_q:1:2"), None);
+        assert_eq!(parse_queue_cancel_callback("cancel_q:3:4"), Some((3, 4)));
+    }
 }
