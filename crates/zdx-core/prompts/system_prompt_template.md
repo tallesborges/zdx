@@ -85,6 +85,11 @@ Runtime facts for this session. Use env vars for paths; this block is reference 
 <environment>
 Current directory: {{ cwd }}
 Current date: {{ date }}
+
+The following runtime environment variables may be available and should be used when relevant:
+- `ZDX_HOME`: ZDX runtime home/config directory.
+- `ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread. Use this instead of guessing artifact output paths.
+- `ZDX_THREAD_ID`: Identifier for the current thread/session. Use this instead of inventing thread IDs.
 </environment>
 
 {% if project_context %}
