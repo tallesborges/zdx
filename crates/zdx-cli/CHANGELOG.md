@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.4.0](https://github.com/tallesborges/zdx/compare/v0.3.0...v0.4.0) (2026-03-14)
+
+
+### Features
+
+* **artifacts:** update skills, automations, and imagine command to use artifact_dir ([b7d543d](https://github.com/tallesborges/zdx/commit/b7d543dec4c4ee32ab74fa53a20e3154d01ba75f))
+* **cli:** add 512px image size option for imagine command ([8da943d](https://github.com/tallesborges/zdx/commit/8da943d3a0e8d93090215ec2a7d94a982cea8296))
+* **cli:** add zdx imagine command for Gemini image generation ([#32](https://github.com/tallesborges/zdx/issues/32)) ([a4f4dbd](https://github.com/tallesborges/zdx/commit/a4f4dbddfc0bbc12d7e91ac8046de7cd0a77018e))
+* **core:** add thread-scoped artifact directory resolution ([99789e3](https://github.com/tallesborges/zdx/commit/99789e30665b4a4423d814123a3674ad826bbce9))
+* **core:** expose runtime context as ZDX_* environment variables ([f432317](https://github.com/tallesborges/zdx/commit/f43231784d2d2e7220912d597600be15cdef754e))
+* **exec:** add --no-system-prompt support ([c908a2d](https://github.com/tallesborges/zdx/commit/c908a2d8724a3fb4bf081528bff851b373487618))
+* **imagine:** add image editing support with --source flag ([c7f3071](https://github.com/tallesborges/zdx/commit/c7f3071abea77ee878798b74d5a5e60f44839451))
+* **imagine:** default output to $ZDX_HOME/artifacts/ ([3fdbc90](https://github.com/tallesborges/zdx/commit/3fdbc90454ac4faea9c958a7a1074251e9d78ab1))
+* structured tracing + zdx-monitor TUI dashboard ([#34](https://github.com/tallesborges/zdx/issues/34)) ([f0061f1](https://github.com/tallesborges/zdx/commit/f0061f1350e40776ef10ffc22faaa945bb666d0d))
+* **tui:** add /pwd, /open, /worktree-remove commands ([816d4b7](https://github.com/tallesborges/zdx/commit/816d4b754be1dc4df47b4bdd93309e4ac310a1e1))
+
+
+### Bug Fixes
+
+* **models:** remove deprecated gemini-3-pro-preview defaults ([2d51b8b](https://github.com/tallesborges/zdx/commit/2d51b8bcb7106332461e77f06e300325d37d23cd))
+* **openai:** preserve responses phases and reasoning replay ([#38](https://github.com/tallesborges/zdx/issues/38)) ([5ab0b25](https://github.com/tallesborges/zdx/commit/5ab0b2584b82516acde9b714242616e1582416e3))
+* **providers:** rename mimo provider to xiomi ([c6e7ef1](https://github.com/tallesborges/zdx/commit/c6e7ef17d63fce8b8d0e6324d27e9ed3d2daa645))
+* **surfaces:** split output rules by interface ([158126b](https://github.com/tallesborges/zdx/commit/158126b4013dffe8382354823f06a79c49ad81f7))
+
 ## [0.3.0](https://github.com/tallesborges/zdx/compare/v0.2.0...v0.3.0) (2026-02-22)
 
 
