@@ -571,32 +571,38 @@ pub(crate) fn build_provider_keyboard(
     }
 }
 
+pub(crate) fn models_for_provider(context: &BotContext, provider: &str) -> Vec<String> {
+    context
+        .config()
+        .subagent_available_models()
+        .into_iter()
+        .filter(|m| m.starts_with(&format!("{provider}:")))
+        .collect()
+}
+
 /// Build an inline keyboard showing model names for a specific provider.
-/// Callback data format: `model_set:{model_id}:{scope}`.
+/// Callback data format: `model_pick:{provider}:{index}:{scope}`.
 pub(crate) fn build_models_keyboard(
     context: &BotContext,
     provider: &str,
     is_general: bool,
 ) -> InlineKeyboardMarkup {
-    let models = context.config().subagent_available_models();
     let scope = if is_general { "general" } else { "topic" };
+    let filtered = models_for_provider(context, provider);
 
-    let filtered: Vec<&String> = models
-        .iter()
-        .filter(|m| m.starts_with(&format!("{provider}:")))
-        .collect();
+    let indexed: Vec<(usize, &String)> = filtered.iter().enumerate().collect();
 
-    let mut rows: Vec<Vec<InlineKeyboardButton>> = filtered
+    let mut rows: Vec<Vec<InlineKeyboardButton>> = indexed
         .chunks(2)
         .map(|chunk| {
             chunk
                 .iter()
-                .map(|m| {
+                .map(|(index, m)| {
                     // Display just the model part (after provider:)
                     let display = m.split(':').nth(1).unwrap_or(m);
                     InlineKeyboardButton {
                         text: display.to_string(),
-                        callback_data: Some(format!("model_set:{m}:{scope}")),
+                        callback_data: Some(format!("model_pick:{provider}:{index}:{scope}")),
                         url: None,
                     }
                 })

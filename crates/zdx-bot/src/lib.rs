@@ -253,7 +253,7 @@ async fn handle_callback_query(
             }
         }
     } else if data.starts_with("model_provider:")
-        || data.starts_with("model_set:")
+        || data.starts_with("model_pick:")
         || data.starts_with("model_back:")
         || data.starts_with("model_cancel:")
     {
@@ -427,13 +427,31 @@ async fn handle_model_callback(
         {
             eprintln!("Failed to edit message for model provider: {err}");
         }
-    } else if let Some(rest) = data.strip_prefix("model_set:") {
-        let Some(last_colon) = rest.rfind(':') else {
+    } else if let Some(rest) = data.strip_prefix("model_pick:") {
+        let mut parts = rest.rsplitn(2, ':');
+        let Some(scope) = parts.next() else {
             return;
         };
-        let model_id = &rest[..last_colon];
-        let scope = &rest[last_colon + 1..];
+        let Some(provider_and_index) = parts.next() else {
+            return;
+        };
+        let Some((provider, index_str)) = provider_and_index.rsplit_once(':') else {
+            return;
+        };
         let is_general = scope == "general";
+        let Some(index) = index_str.parse::<usize>().ok() else {
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Invalid model selection"))
+                .await;
+            return;
+        };
+        let models = crate::handlers::message::models_for_provider(context, provider);
+        let Some(model_id) = models.get(index) else {
+            let _ = client
+                .answer_callback_query(&callback.id, Some("Model no longer available"))
+                .await;
+            return;
+        };
 
         let reply = if is_general {
             match Config::save_telegram_model(model_id) {
