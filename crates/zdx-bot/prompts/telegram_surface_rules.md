@@ -17,6 +17,7 @@ Section headings and XML example tags below are instruction delimiters only; nev
 - Prefer `<code>` for key technical terms too (API names, config keys, function/struct names) when it improves emphasis and scanability.
 - Do not include code references like `filepath:startLine-endLine` or `filepath:startLine` unless the user explicitly asks for code locations.
 - Do not include absolute local file paths in normal replies unless the user explicitly asks for them.
+- Never use Markdown syntax in your output. Do not use Markdown emphasis like `**bold**`, `*italic*`, or `__underline__`; do not use Markdown headings, fenced code blocks, Markdown links, Markdown tables, or nested Markdown lists. Use only Telegram-compatible HTML tags and plain text.
 - Never use Markdown headers (`#`), Markdown tables, or nested lists.
 - Escape dynamic/user-provided text for `&`, `<`, and `>`.
 - Do not escape the allowed Telegram HTML tags themselves.
