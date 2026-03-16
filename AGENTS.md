@@ -54,6 +54,13 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - `just build-release` (build release binary)
 - Release automation: `.github/workflows/release-please.yml` (config in `release-please-config.json`)
 
+## Verification
+
+- After code changes, prefer `just ci` from the repo root as the default final verification.
+- Use narrower checks (for example `cargo test -p zdx-cli`) for intermediate iteration, when `just ci` would be unnecessarily expensive, or when the user explicitly asks for a targeted check.
+- Use `just lint` or `just test` only when intentionally running one half of CI.
+- If `just ci` is not run after a code change, briefly state why.
+
 ## Conventions
 
 - Rust edition: 2024 (see `Cargo.toml`)

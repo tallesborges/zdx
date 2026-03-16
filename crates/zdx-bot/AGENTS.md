@@ -26,8 +26,9 @@ Scope: Telegram bot runtime, ingest/handler flow, queueing, and Telegram API int
 
 ## Checks
 
-- Targeted: `cargo test -p zdx-bot`
-- Workspace lint/test: use `just lint` / `just test` from repo root
+- Default final verification after code changes: `just ci` from repo root
+- Intermediate iteration for this crate: `cargo test -p zdx-bot`
+- Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Maintenance
 

@@ -13,7 +13,8 @@ Scope: maintainer-only workspace utilities (defaults/config/codebase generation)
 
 ## Checks
 
-- Targeted: `cargo test -p xtask`
+- Default final verification after code changes: `just ci` from repo root
+- Intermediate iteration for this crate: `cargo test -p xtask`
 - Run commands from repo root via `cargo xtask ...` or `just update-*` recipes
 
 ## Maintenance
