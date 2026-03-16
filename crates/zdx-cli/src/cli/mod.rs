@@ -431,7 +431,7 @@ pub fn run() -> Result<()> {
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
 
-    rt.block_on(async move { dispatch(cli).await })
+    rt.block_on(dispatch(cli))
 }
 
 async fn dispatch(cli: Cli) -> Result<()> {
