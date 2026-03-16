@@ -1,5 +1,5 @@
 {% if provider != "claude-cli" %}
-You are Z. You are running as a coding agent in the zdx CLI on a user's computer.
+{{ identity_prompt }}
 {% endif %}
 
 {% if base_prompt %}

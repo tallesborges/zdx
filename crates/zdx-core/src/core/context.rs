@@ -18,6 +18,7 @@ use minijinja::{Environment, UndefinedBehavior};
 use serde::Serialize;
 
 use crate::config::{Config, paths};
+use crate::prompts;
 use crate::prompts::SYSTEM_PROMPT_TEMPLATE;
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
@@ -139,6 +140,7 @@ struct PromptTemplateSubagents {
 
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateVars {
+    identity_prompt: String,
     provider: String,
     invocation_term: String,
     invocation_term_plural: String,
@@ -270,6 +272,7 @@ fn build_prompt_template_vars(
     let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
 
     PromptTemplateVars {
+        identity_prompt: prompts::identity_prompt().to_string(),
         provider,
         invocation_term: if is_openai_codex {
             "function".to_string()
@@ -1197,9 +1200,33 @@ mod tests {
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
-        assert!(!prompt.contains(
-            "You are Z. You are running as a coding agent in the zdx CLI on a user's computer."
-        ));
+        assert!(!prompt.contains(crate::prompts::identity_prompt()));
+    }
+
+    #[test]
+    fn test_template_mode_includes_linked_identity_for_non_claude() {
+        let dir = tempdir().unwrap();
+
+        let mut config = crate::config::Config {
+            model: "openai-codex:gpt-5.4".to_string(),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains(crate::prompts::identity_prompt()));
     }
 
     #[test]
