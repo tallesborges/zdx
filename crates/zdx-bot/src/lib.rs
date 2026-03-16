@@ -3,9 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
+use tokio::sync::Mutex;
 use zdx_core::config::Config;
 use zdx_core::core::agent::ToolConfig;
 
+use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
     BotContext, BotContextDeps, CancelKey, QueueCancelKey, dispatch_message, new_cancel_map,
     new_chat_queues, new_queue_cancel_map,
@@ -26,6 +28,11 @@ const TELEGRAM_SURFACE_RULES: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/prompts/telegram_surface_rules.md"
 ));
+const MEDIA_GROUP_DEBOUNCE: Duration = Duration::from_millis(1500);
+
+type MediaGroupKey = (i64, Option<i64>, i64, String);
+type PendingMediaGroups =
+    Arc<Mutex<std::collections::HashMap<MediaGroupKey, crate::telegram::Message>>>;
 
 /// Exit code used to signal the wrapper script to rebuild.
 pub const EXIT_REBUILD: i32 = 42;
@@ -92,6 +99,8 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
         },
     ));
     let chat_queues = new_chat_queues();
+    let pending_media_groups: PendingMediaGroups =
+        Arc::new(Mutex::new(std::collections::HashMap::new()));
 
     let mut offset: Option<i64> = None;
     let poll_timeout = Duration::from_secs(30);
@@ -128,10 +137,16 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
                 if !updates.is_empty() {
                     tracing::debug!(count = updates.len(), "Received updates");
                 }
-                for update in coalesce_media_group_updates(updates) {
+                for update in updates {
                     offset = Some(update.id + 1);
                     if let Some(message) = update.message {
-                        dispatch_message(&chat_queues, &context, message).await;
+                        route_message_update(
+                            &chat_queues,
+                            &context,
+                            &pending_media_groups,
+                            message,
+                        )
+                        .await;
                     }
                     if let Some(callback) = update.callback_query {
                         handle_callback_query(&context, &client, callback).await;
@@ -144,36 +159,42 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     Ok(())
 }
 
-fn coalesce_media_group_updates(
-    updates: Vec<crate::telegram::Update>,
-) -> Vec<crate::telegram::Update> {
-    let mut coalesced = Vec::with_capacity(updates.len());
+async fn route_message_update(
+    chat_queues: &ChatQueueMap,
+    context: &Arc<BotContext>,
+    pending_media_groups: &PendingMediaGroups,
+    message: crate::telegram::Message,
+) {
+    let Some(key) = media_group_key(&message) else {
+        dispatch_message(chat_queues, context, message).await;
+        return;
+    };
 
-    for update in updates {
-        let media_key = update.message.as_ref().and_then(media_group_key);
-        if let Some(key) = media_key
-            && let Some(existing_index) =
-                coalesced
-                    .iter()
-                    .position(|existing: &crate::telegram::Update| {
-                        existing.message.as_ref().and_then(media_group_key) == Some(key.clone())
-                    })
-        {
-            if let (Some(existing), Some(message)) =
-                (coalesced[existing_index].message.as_mut(), update.message)
-            {
-                existing.grouped_messages.push(message);
-            }
-            continue;
-        }
-
-        coalesced.push(update);
+    let mut pending = pending_media_groups.lock().await;
+    if let Some(existing) = pending.get_mut(&key) {
+        existing.grouped_messages.push(message);
+        return;
     }
 
-    coalesced
+    pending.insert(key.clone(), message);
+    drop(pending);
+
+    let queues = Arc::clone(chat_queues);
+    let context = Arc::clone(context);
+    let pending_media_groups = Arc::clone(pending_media_groups);
+    tokio::spawn(async move {
+        tokio::time::sleep(MEDIA_GROUP_DEBOUNCE).await;
+        let message = {
+            let mut pending = pending_media_groups.lock().await;
+            pending.remove(&key)
+        };
+        if let Some(message) = message {
+            dispatch_message(&queues, &context, message).await;
+        }
+    });
 }
 
-fn media_group_key(message: &crate::telegram::Message) -> Option<(i64, Option<i64>, i64, String)> {
+fn media_group_key(message: &crate::telegram::Message) -> Option<MediaGroupKey> {
     Some((
         message.chat.id,
         message.effective_thread_id(),
@@ -610,8 +631,8 @@ async fn handle_thinking_callback(
 mod tests {
     use serde_json::json;
 
-    use super::{coalesce_media_group_updates, parse_cancel_callback, parse_queue_cancel_callback};
-    use crate::telegram::{Message, Update};
+    use super::{media_group_key, parse_cancel_callback, parse_queue_cancel_callback};
+    use crate::telegram::Message;
 
     fn test_message(id: i64, media_group_id: Option<&str>, text: Option<&str>) -> Message {
         serde_json::from_value(json!({
@@ -625,32 +646,14 @@ mod tests {
     }
 
     #[test]
-    fn coalesces_media_group_updates_into_first_message() {
-        let updates = vec![
-            Update {
-                id: 1,
-                message: Some(test_message(100, Some("album-1"), Some("first"))),
-                callback_query: None,
-            },
-            Update {
-                id: 2,
-                message: Some(test_message(101, Some("album-1"), None)),
-                callback_query: None,
-            },
-            Update {
-                id: 3,
-                message: Some(test_message(102, None, Some("solo"))),
-                callback_query: None,
-            },
-        ];
-
-        let coalesced = coalesce_media_group_updates(updates);
-        assert_eq!(coalesced.len(), 2);
-        let first = coalesced[0].message.as_ref().expect("message");
-        assert_eq!(first.id, 100);
-        assert_eq!(first.grouped_messages.len(), 1);
-        assert_eq!(first.grouped_messages[0].id, 101);
-        assert_eq!(coalesced[1].message.as_ref().expect("message").id, 102);
+    fn derives_media_group_key_from_message() {
+        let message = test_message(100, Some("album-1"), Some("first"));
+        assert_eq!(
+            media_group_key(&message),
+            Some((42, None, 7, "album-1".to_string()))
+        );
+        let non_album = test_message(101, None, Some("solo"));
+        assert_eq!(media_group_key(&non_album), None);
     }
 
     #[test]
