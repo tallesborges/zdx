@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use crate::prompts;
 use crate::providers::oauth::openai_codex as oauth_codex;
 use crate::providers::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::providers::{ProviderKind, ProviderStream};
@@ -125,10 +126,7 @@ impl OpenAICodexClient {
     ) -> Result<ProviderStream> {
         let creds = resolve_credentials().await?;
 
-        let instructions = system
-            .map(str::trim)
-            .filter(|prompt| !prompt.is_empty())
-            .map(ToOwned::to_owned);
+        let instructions = effective_codex_instructions(system);
 
         let headers = build_headers(
             &creds.account_id,
@@ -158,6 +156,14 @@ impl OpenAICodexClient {
         // Keep `system` input empty here to avoid duplication in `input`.
         send_responses_stream(&self.http, &config, headers, messages, tools, None).await
     }
+}
+
+fn effective_codex_instructions(system: Option<&str>) -> Option<String> {
+    system
+        .map(str::trim)
+        .filter(|prompt| !prompt.is_empty())
+        .map(ToOwned::to_owned)
+        .or_else(|| Some(prompts::identity_prompt().to_string()))
 }
 
 fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>) -> HeaderMap {
@@ -191,7 +197,8 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
 
 #[cfg(test)]
 mod tests {
-    use super::supports_reasoning_summary;
+    use super::{effective_codex_instructions, supports_reasoning_summary};
+    use crate::prompts;
 
     #[test]
     fn spark_model_disables_reasoning_summary() {
@@ -201,5 +208,25 @@ mod tests {
     #[test]
     fn non_spark_models_keep_reasoning_summary() {
         assert!(supports_reasoning_summary("gpt-5.3-codex"));
+    }
+
+    #[test]
+    fn codex_instructions_fall_back_to_identity_prompt() {
+        assert_eq!(
+            effective_codex_instructions(None).as_deref(),
+            Some(prompts::identity_prompt())
+        );
+        assert_eq!(
+            effective_codex_instructions(Some("   ")).as_deref(),
+            Some(prompts::identity_prompt())
+        );
+    }
+
+    #[test]
+    fn codex_instructions_prefer_explicit_system_prompt() {
+        assert_eq!(
+            effective_codex_instructions(Some(" custom system ")).as_deref(),
+            Some("custom system")
+        );
     }
 }

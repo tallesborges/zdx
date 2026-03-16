@@ -9,6 +9,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for model picker
 - `src/prompts.rs`: prompt template helpers
+- `prompts/identity_prompt.md`: shared minimal identity prompt for backend-safe/system prompt reuse
 - `src/skills.rs`: skills discovery + parsing
 - `src/images/mod.rs`: shared image utilities module exports
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers

@@ -254,7 +254,134 @@ async fn test_tool_shows_activity_indicator() {
         .args(["--no-thread", "exec", "-p", "Show indicator"])
         .assert()
         .success()
-        .stderr(predicate::str::contains("⚙ Running read... Done."));
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_started\",\"id\":\"toolu_indicator\",\"name\":\"read\"",
+        ))
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_completed\",\"id\":\"toolu_indicator\"",
+        ));
+}
+
+#[tokio::test]
+async fn test_exec_omits_assistant_deltas_from_stdout() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "\"type\":\"assistant_completed\",\"text\":\"Hello world\"",
+        ))
+        .stdout(predicate::str::contains("\"type\":\"assistant_delta\"").not());
+}
+
+#[tokio::test]
+async fn test_exec_omits_empty_reasoning_completed_from_stdout() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"type\":\"reasoning_completed\"").not());
+}
+
+#[tokio::test]
+async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args(["--no-thread", "exec", "-p", "Say hello"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("\"replay\":").not());
+}
+
+#[tokio::test]
+async fn test_exec_filter_turn_completed_only_emits_turn_completed() {
+    if !can_bind_localhost() {
+        eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
+        return;
+    }
+    let zdx_home = temp_zdx_home();
+    let mock_server = MockServer::start().await;
+    let response = text_sse("Hello world");
+
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(sse_response(&response))
+        .expect(1)
+        .mount(&mock_server)
+        .await;
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .env("ANTHROPIC_API_KEY", "test-api-key")
+        .env("ANTHROPIC_BASE_URL", mock_server.uri())
+        .args([
+            "--no-thread",
+            "exec",
+            "--filter",
+            "turn_completed",
+            "-p",
+            "Say hello",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("\"type\":\"turn_completed\"")
+                .and(predicate::str::contains("\"final_text\":\"Hello world\"")),
+        )
+        .stdout(predicate::str::contains("\"type\":\"assistant_completed\"").not());
 }
 
 #[tokio::test]
@@ -454,10 +581,11 @@ async fn test_bash_tool_shows_debug_lines() {
         .args(["--no-thread", "exec", "-p", "Run bash"])
         .assert()
         .success()
-        .stderr(predicate::str::contains(
-            "Tool requested: bash command=\"echo hello\"",
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_input_completed\",\"id\":\"toolu_bash\",\"name\":\"bash\",\"input\":{\"command\":\"echo hello\"}}",
         ))
-        // Check for duration format: Done. (X.XXs)
-        .stderr(predicate::str::is_match(r"Done\. \(\d+\.\d{2}s\)").unwrap())
-        .stderr(predicate::str::contains("Tool finished: bash exit=0"));
+        .stdout(predicate::str::contains(
+            "\"type\":\"tool_completed\",\"id\":\"toolu_bash\"",
+        ))
+        .stdout(predicate::str::contains("\"stdout\":\"hello\\n\""));
 }
