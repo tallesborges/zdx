@@ -23,8 +23,9 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 
 ## Checks
 
-- Targeted: `cargo test -p zdx-cli`
-- Workspace lint/test: use `just lint` / `just test` from repo root
+- Default final verification after code changes: `just ci` from repo root
+- Intermediate iteration for this crate: `cargo test -p zdx-cli`
+- Use `just lint` or `just test` only when intentionally running one half of CI
 
 ## Maintenance
 
