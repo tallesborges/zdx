@@ -275,7 +275,52 @@ async fn handle_general_forum_commands(
     }
 
     let message = match command {
-        BotCommand::New => "/new is not allowed in General.",
+        BotCommand::New => {
+            let topic_name = format!("Chat {}", chrono::Utc::now().format("%Y-%m-%d %H:%M"));
+            match context
+                .client()
+                .create_forum_topic(incoming.chat_id, &topic_name)
+                .await
+            {
+                Ok(topic_id) => {
+                    let thread_id = thread_id_for_chat(incoming.chat_id, Some(topic_id));
+                    if let Err(err) = thread_persistence::Thread::with_id(thread_id.clone())
+                        .and_then(|mut thread| thread.set_pending_topic_title(true))
+                    {
+                        tracing::warn!(
+                            chat_id = incoming.chat_id,
+                            topic_id,
+                            thread_id = %thread_id,
+                            %err,
+                            "Created empty topic but failed to mark pending auto-title"
+                        );
+                    }
+                    tracing::info!(
+                        chat_id = incoming.chat_id,
+                        topic_id,
+                        topic_name = %topic_name,
+                        "Created empty topic from /new in General"
+                    );
+                }
+                Err(err) => {
+                    tracing::error!(
+                        chat_id = incoming.chat_id,
+                        %err,
+                        "Failed to create empty topic from /new in General"
+                    );
+                    context
+                        .client()
+                        .send_message(
+                            incoming.chat_id,
+                            "⚠️ I couldn't create a new topic. Please try again.",
+                            reply_to_message_id,
+                            None,
+                        )
+                        .await?;
+                }
+            }
+            return Ok(true);
+        }
         BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
         BotCommand::Rebuild => unreachable!("rebuild is handled by handle_rebuild_command"),
     };
@@ -788,11 +833,14 @@ async fn run_agent_turn(
         context.config()
     };
     let (mut thread, mut messages) = agent::load_thread_state(thread_id)?;
+    let pending_topic_title = thread_persistence::read_thread_pending_topic_title(thread_id)?;
     agent::record_user_message(&mut thread, &mut messages, &incoming)?;
 
     // Async topic title: spawn LLM-based title generation + rename for new topics.
     // This runs only after the user message is persisted, so the thread file exists.
-    if synthetic_topic_routed_from_general && let Some(topic_id) = reply_ctx.topic_id {
+    if (synthetic_topic_routed_from_general || pending_topic_title)
+        && let Some(topic_id) = reply_ctx.topic_id
+    {
         let effective_text = incoming
             .text
             .as_deref()
@@ -800,6 +848,9 @@ async fn run_agent_turn(
             .filter(|t| !t.trim().is_empty());
 
         if let Some(text) = effective_text {
+            if pending_topic_title {
+                thread.set_pending_topic_title(false)?;
+            }
             crate::topic_title::spawn_topic_title_update(
                 context,
                 incoming.chat_id,

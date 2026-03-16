@@ -316,3 +316,18 @@ Contracts:
 - Preflight upload size checks:
   - photos > 10 MB are rejected before upload
   - documents > 50 MB are rejected before upload
+
+---
+
+## 16) Telegram forum topic flow (`zdx-bot`)
+
+When the Telegram bot is used in a forum-enabled supergroup:
+
+- A normal user message sent in `General` creates a new topic and routes that message into the topic before the agent replies.
+- `/new` sent in `General` creates an empty topic only:
+  - no prompt is routed into the new topic
+  - no agent turn starts
+  - no bot message is posted into the topic as part of creation
+- Topic title generation rules:
+  - if the topic was created from a normal message in `General`, the bot may auto-generate the topic title from that first routed message
+  - if the topic was created by `/new` in `General`, the bot waits and auto-generates the topic title from the first later in-topic message that contains usable text (plain text or audio transcript)

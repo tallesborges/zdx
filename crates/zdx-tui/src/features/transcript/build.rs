@@ -119,6 +119,7 @@ mod tests {
                 handoff_from: None,
                 model_override: None,
                 thinking_override: None,
+                pending_topic_title: false,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
@@ -235,6 +236,7 @@ mod tests {
                 handoff_from: None,
                 model_override: None,
                 thinking_override: None,
+                pending_topic_title: false,
                 ts: "2024-01-01T00:00:00Z".to_string(),
             },
             ThreadEvent::Message {
