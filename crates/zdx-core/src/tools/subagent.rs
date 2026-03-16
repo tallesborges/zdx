@@ -88,6 +88,8 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         thinking_level: ctx.thinking_level,
         no_tools: false,
         no_system_prompt: false,
+        tools_override: None,
+        event_filter: Some(vec!["turn_completed".to_string()]),
         timeout: ctx.timeout,
     };
 

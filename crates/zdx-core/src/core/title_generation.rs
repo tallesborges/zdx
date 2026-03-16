@@ -25,6 +25,8 @@ pub async fn generate_title(message: &str, title_model: &str, root: &Path) -> Re
         thinking_level: Some(ThinkingLevel::Minimal),
         no_tools: true,
         no_system_prompt: true,
+        tools_override: None,
+        event_filter: Some(vec!["turn_completed".to_string()]),
         timeout: Some(Duration::from_secs(60)),
     };
 

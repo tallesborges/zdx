@@ -211,6 +211,7 @@ pub async fn run_definition(
             model_override: automation.model.as_deref(),
             tool_timeout_override: automation.timeout_secs,
             thinking_override: None,
+            event_filter_override: None,
             tools_override: None,
             no_tools: false,
             no_system_prompt: false,
