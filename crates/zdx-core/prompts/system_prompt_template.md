@@ -111,6 +111,11 @@ All detailed memory lives in your memory notes and must be read on demand.
 - AGENTS/project guidance = how to work here (build/test commands, code conventions, workflow).
 - Memory = durable interaction context (preferences, learnings, recurring decisions, useful history).
 
+### When to Consult Memory First
+- For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — consult memory before answering from general knowledge or asking for more context.
+- If the answer is more likely to live in a connected live system, use the corresponding skill instead of memory (for example Google Calendar/Gmail/Contacts via `gog`, Apple Reminders, or WhatsApp).
+- Skip the memory lookup only when the question is clearly generic, opinion-based, creative, or unlikely to be in notes.
+
 ### How It Works
 1. Use the index to locate relevant memory notes.
 2. Load only the specific note(s) needed for the task.
