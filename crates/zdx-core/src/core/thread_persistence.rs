@@ -29,6 +29,11 @@ use tokio::task::JoinHandle;
 use super::agent::AgentEventRx;
 use crate::config::paths::threads_dir;
 
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
 /// Token usage data for a single API request.
 ///
 /// Used for both persistence (in thread files) and runtime tracking.
@@ -133,6 +138,9 @@ pub enum ThreadEvent {
         /// Thinking override for this thread (overrides `config.thinking_level`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thinking_override: Option<crate::config::ThinkingLevel>,
+        /// Whether the next qualifying user message should generate the topic title.
+        #[serde(default, skip_serializing_if = "is_false")]
+        pending_topic_title: bool,
         ts: String,
     },
 
@@ -202,6 +210,7 @@ impl ThreadEvent {
             handoff_from: None,
             model_override: None,
             thinking_override: None,
+            pending_topic_title: false,
             ts: chrono_timestamp(),
         }
     }
@@ -218,6 +227,7 @@ impl ThreadEvent {
             handoff_from,
             model_override: None,
             thinking_override: None,
+            pending_topic_title: false,
             ts: chrono_timestamp(),
         }
     }
@@ -590,6 +600,16 @@ impl Thread {
         rewrite_meta_with_thinking_override(&self.path, thinking_override)?;
         Ok(())
     }
+
+    /// Updates the pending topic-title flag stored in the meta event.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn set_pending_topic_title(&mut self, pending_topic_title: bool) -> Result<()> {
+        self.ensure_meta()?;
+        rewrite_meta_with_pending_topic_title(&self.path, pending_topic_title)?;
+        Ok(())
+    }
 }
 
 /// Reads thread events from a file path, with backward compatibility.
@@ -784,6 +804,47 @@ fn rewrite_meta_with_thinking_override(
     Ok(())
 }
 
+/// Rewrites the meta event with an updated pending topic-title flag, preserving the rest of the file.
+fn rewrite_meta_with_pending_topic_title(path: &PathBuf, pending_topic_title: bool) -> Result<()> {
+    let file = fs::File::open(path).context("Failed to open thread file")?;
+    let reader = BufReader::new(file);
+
+    let temp_path = path.with_extension("jsonl.tmp");
+    let mut temp = fs::File::create(&temp_path).context("Failed to create temp thread file")?;
+
+    let mut lines = reader.lines();
+    let first_line = lines
+        .next()
+        .transpose()
+        .context("Failed to read meta line")?
+        .ok_or_else(|| anyhow!("Thread file is empty"))?;
+
+    let mut meta_event: ThreadEvent =
+        serde_json::from_str(&first_line).context("Failed to parse meta event")?;
+    match meta_event {
+        ThreadEvent::Meta {
+            pending_topic_title: ref mut meta_pending,
+            ..
+        } => {
+            *meta_pending = pending_topic_title;
+        }
+        _ => bail!("First thread event is not a meta event"),
+    }
+
+    let new_meta =
+        serde_json::to_string(&meta_event).context("Failed to serialize updated meta event")?;
+    writeln!(temp, "{new_meta}").context("Failed to write updated meta")?;
+
+    for line in lines {
+        let line = line.context("Failed to read thread line")?;
+        writeln!(temp, "{line}").context("Failed to write thread line")?;
+    }
+
+    temp.sync_all().context("Failed to sync temp thread file")?;
+    fs::rename(&temp_path, path).context("Failed to replace thread file")?;
+    Ok(())
+}
+
 /// Reads only the meta line to extract title (backward compatible).
 /// Parsed meta fields from the first line of a thread file.
 struct ThreadMeta {
@@ -792,6 +853,7 @@ struct ThreadMeta {
     handoff_from: Option<String>,
     model_override: Option<String>,
     thinking_override: Option<crate::config::ThinkingLevel>,
+    pending_topic_title: bool,
 }
 
 /// Reads and parses the meta line from a thread file (single open + parse).
@@ -827,6 +889,7 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
         handoff_from,
         model_override,
         thinking_override,
+        pending_topic_title,
         ..
     } = parsed
     {
@@ -836,6 +899,7 @@ fn read_meta(path: &PathBuf) -> Result<Option<ThreadMeta>> {
             handoff_from,
             model_override,
             thinking_override,
+            pending_topic_title,
         }))
     } else {
         Ok(None)
@@ -856,6 +920,10 @@ fn read_meta_model_override(path: &PathBuf) -> Result<Option<String>> {
 
 fn read_meta_thinking_override(path: &PathBuf) -> Result<Option<crate::config::ThinkingLevel>> {
     Ok(read_meta(path)?.and_then(|m| m.thinking_override))
+}
+
+fn read_meta_pending_topic_title(path: &PathBuf) -> Result<bool> {
+    Ok(read_meta(path)?.is_some_and(|m| m.pending_topic_title))
 }
 
 /// Generates a unique thread ID using UUID v4.
@@ -1289,6 +1357,15 @@ pub fn read_thread_model_override(id: &str) -> Result<Option<String>> {
 pub fn read_thread_thinking_override(id: &str) -> Result<Option<crate::config::ThinkingLevel>> {
     let path = threads_dir().join(format!("{id}.jsonl"));
     read_meta_thinking_override(&path)
+}
+
+/// Reads a thread's pending topic-title flag by ID.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn read_thread_pending_topic_title(id: &str) -> Result<bool> {
+    let path = threads_dir().join(format!("{id}.jsonl"));
+    read_meta_pending_topic_title(&path)
 }
 
 /// Loads thread events and converts them to `ChatMessages` for API use.
@@ -2444,6 +2521,31 @@ mod tests {
         // Single event: cumulative = latest
         assert_eq!(cumulative, Usage::new(1000, 500, 2000, 100));
         assert_eq!(latest, Usage::new(1000, 500, 2000, 100));
+    }
+
+    #[test]
+    fn test_pending_topic_title_roundtrip() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread_id = unique_thread_id("pending-topic-title");
+        let mut thread = Thread::with_id(thread_id.clone()).unwrap();
+
+        assert!(!read_thread_pending_topic_title(&thread_id).unwrap());
+
+        thread.set_pending_topic_title(true).unwrap();
+        assert!(read_thread_pending_topic_title(&thread_id).unwrap());
+
+        let events = thread.read_events().unwrap();
+        assert!(matches!(
+            events[0],
+            ThreadEvent::Meta {
+                pending_topic_title: true,
+                ..
+            }
+        ));
+
+        thread.set_pending_topic_title(false).unwrap();
+        assert!(!read_thread_pending_topic_title(&thread_id).unwrap());
     }
 
     #[test]
