@@ -30,6 +30,8 @@ pub struct ExecOptions {
     pub tool_config: ToolConfig,
     /// Optional event type filters to emit.
     pub event_filter: Vec<String>,
+    /// Optional fully-rendered system prompt override.
+    pub effective_system_prompt: Option<String>,
     /// Disable all system prompt/context composition.
     pub no_system_prompt: bool,
 }
@@ -93,6 +95,13 @@ pub async fn run_exec(
 
     let effective = if options.no_system_prompt {
         None
+    } else if let Some(prompt) = options.effective_system_prompt.as_ref() {
+        Some(zdx_core::core::context::EffectivePrompt {
+            prompt: Some(prompt.clone()),
+            loaded_agents_paths: Vec::new(),
+            warnings: Vec::new(),
+            loaded_skills: Vec::new(),
+        })
     } else {
         let trimmed_surface_rules = EXEC_SURFACE_RULES.trim();
         let surface_rules = (!trimmed_surface_rules.is_empty()).then_some(trimmed_surface_rules);

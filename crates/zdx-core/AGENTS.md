@@ -12,12 +12,15 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/prompts.rs`: prompt template helpers
 - `prompts/identity_prompt.md`: shared minimal identity prompt for backend-safe/system prompt reuse
 - `src/skills.rs`: skills discovery + parsing
+- `src/subagents.rs`: named subagent discovery + parsing
 - `src/images/mod.rs`: shared image utilities module exports
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
 - `prompts/system_prompt_template.md`: unified MiniJinja system prompt template
+- `subagents/general_assistant.md`: built-in general-purpose named subagent template
+- `subagents/automation_assistant.md`: built-in headless automation named subagent template
 
 ### Core runtime (`src/core/`)
 

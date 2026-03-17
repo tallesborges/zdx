@@ -339,6 +339,9 @@ pub struct ToolContext {
     /// Optional thinking level for tool subagents.
     pub thinking_level: Option<crate::config::ThinkingLevel>,
 
+    /// Full config snapshot for advanced tool behaviors.
+    pub config: Option<crate::config::Config>,
+
     /// Whether subagent delegation is enabled.
     pub subagents_enabled: bool,
 
@@ -354,6 +357,7 @@ impl ToolContext {
             model: None,
             read_thread_model: None,
             thinking_level: None,
+            config: None,
             subagents_enabled: true,
             subagent_available_models: Vec::new(),
         }
@@ -361,6 +365,7 @@ impl ToolContext {
 
     #[must_use]
     pub fn with_config(mut self, config: &crate::config::Config) -> Self {
+        self.config = Some(config.clone());
         self.model = Some(config.model.clone());
         self.read_thread_model = Some(config.read_thread_model.clone());
         self.thinking_level = Some(config.thinking_level);

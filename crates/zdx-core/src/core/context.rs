@@ -22,6 +22,7 @@ use crate::prompts;
 use crate::prompts::SYSTEM_PROMPT_TEMPLATE;
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
+use crate::subagents;
 
 /// Sets `ZDX_ARTIFACT_DIR` and `ZDX_THREAD_ID` as process environment variables.
 ///
@@ -146,6 +147,13 @@ struct PromptTemplateSkill {
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateSubagents {
     available_models: Vec<String>,
+    available_subagents: Vec<PromptTemplateNamedSubagent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateNamedSubagent {
+    name: String,
+    description: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -276,8 +284,21 @@ fn build_prompt_template_vars(
             path: skill.file_path.display().to_string(),
         })
         .collect();
+    let available_subagents = if sections.subagents_enabled {
+        subagents::list_summaries(root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|subagent| PromptTemplateNamedSubagent {
+                name: subagent.name,
+                description: subagent.description,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let subagents_config = sections.subagents_enabled.then(|| PromptTemplateSubagents {
         available_models: sections.subagent_models.to_vec(),
+        available_subagents,
     });
     let scoped_context = sections
         .scoped_context
@@ -590,6 +611,24 @@ pub struct EffectivePrompt {
     pub loaded_skills: Vec<Skill>,
 }
 
+/// Selects which ambient context blocks are exposed to a rendered prompt template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptContextInclusion {
+    pub project_context: bool,
+    pub memory_index: bool,
+    pub skills: bool,
+}
+
+impl Default for PromptContextInclusion {
+    fn default() -> Self {
+        Self {
+            project_context: true,
+            memory_index: true,
+            skills: true,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct PromptContextSectionsResult {
     loaded_agents_paths: Vec<PathBuf>,
@@ -635,6 +674,91 @@ fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
         .include_skills
         .clone_from(&config.skills.include_skills);
     load_skills(&skill_options)
+}
+
+/// Renders an arbitrary MiniJinja prompt template with the same variables and
+/// context pipeline used by the built-in system prompt.
+///
+/// # Errors
+/// Returns an error if the operation fails or the template cannot be rendered.
+pub fn render_prompt_template_with_context(
+    config: &Config,
+    root: &Path,
+    template: &str,
+    model: &str,
+    surface_rules: Option<&str>,
+    memory_suggestions: bool,
+    inclusion: PromptContextInclusion,
+) -> Result<EffectivePrompt> {
+    let base_prompt = config.effective_system_prompt()?;
+
+    let mut loaded_agents_paths = Vec::new();
+    let mut warnings = Vec::new();
+    let mut project_context_block = None;
+    let mut memory_index = None;
+
+    if inclusion.project_context
+        && let Some(loaded) = load_all_agents_files(root)
+    {
+        loaded_agents_paths = loaded.loaded_paths;
+        warnings.extend(loaded.warnings);
+        project_context_block = format_project_context_block(&loaded.content);
+    }
+
+    if inclusion.memory_index
+        && let Some(loaded_memory_index) = load_memory_index(config)
+    {
+        warnings.extend(loaded_memory_index.warnings);
+        if !loaded_memory_index.content.trim().is_empty() {
+            memory_index = Some(loaded_memory_index.content);
+        }
+    }
+
+    let skills_result = if inclusion.skills {
+        load_skills_with_config(config, root)
+    } else {
+        LoadSkillsResult::default()
+    };
+    let LoadSkillsResult {
+        skills,
+        warnings: skill_warnings,
+    } = skills_result;
+
+    let subagent_models = if config.subagents.enabled {
+        config.subagent_available_models()
+    } else {
+        Vec::new()
+    };
+
+    let vars = build_prompt_template_vars(
+        root,
+        model,
+        PromptTemplateSections {
+            base_prompt: base_prompt.as_deref(),
+            project_context: project_context_block.as_deref(),
+            memory_index: memory_index.as_deref(),
+            memory_suggestions,
+            surface_rules,
+            skills_list: &skills,
+            subagents_enabled: config.subagents.enabled,
+            subagent_models: &subagent_models,
+        },
+    );
+
+    let prompt = render_prompt_template(template, &vars)
+        .map_err(|error| anyhow::anyhow!("Failed to render prompt template: {error}"))?;
+
+    warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
+        path: Some(warning.skill_path),
+        message: warning.message,
+    }));
+
+    Ok(EffectivePrompt {
+        prompt,
+        loaded_agents_paths,
+        warnings,
+        loaded_skills: skills,
+    })
 }
 
 fn render_system_prompt_with_fallback(
@@ -1210,7 +1334,7 @@ mod tests {
         );
 
         let rendered = render_prompt_template(
-            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
+            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available named subagents: {% for subagent in subagents_config.available_subagents %}{{ subagent.name }}{% endfor %}\nAvailable model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
             &vars,
         )
         .unwrap()
@@ -1219,6 +1343,7 @@ mod tests {
         assert!(rendered.contains("<name>demo-skill</name>"));
         assert!(rendered.contains("Use <special> syntax"));
         assert!(rendered.contains("demo&skill"));
+        assert!(rendered.contains("general_assistant"));
         assert!(rendered.contains("codex:gpt-5.3-codex"));
     }
 

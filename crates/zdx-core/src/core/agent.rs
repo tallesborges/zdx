@@ -40,6 +40,7 @@ use crate::providers::{
     ChatContentBlock, ChatMessage, ContentBlockType, ProviderError, ProviderKind, ProviderStream,
     ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
 };
+use crate::subagents;
 use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
 
 /// Options for agent execution.
@@ -1148,6 +1149,12 @@ fn resolve_tools(
 
     if !config.subagents.enabled {
         tools.retain(|tool| !tool.name.eq_ignore_ascii_case("Invoke_Subagent"));
+    } else if let Ok(available_subagents) = subagents::list_summaries(&options.root) {
+        for tool in &mut tools {
+            if tool.name.eq_ignore_ascii_case("Invoke_Subagent") {
+                *tool = crate::tools::subagent::definition_with_subagents(&available_subagents);
+            }
+        }
     }
 
     tools

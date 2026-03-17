@@ -2,11 +2,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
-use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
-use zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules;
+use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
+use zdx_core::core::context::PromptContextInclusion;
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
+use zdx_core::subagents;
 
 use crate::types::IncomingMessage;
 
@@ -103,19 +104,44 @@ pub(crate) fn spawn_agent_turn(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, Some(thread_id));
 
-    // Build effective system prompt from config + AGENTS.md + memory + skills + optional surface rules.
-    let effective = build_effective_system_prompt_with_paths_and_surface_rules(
-        config,
-        root,
-        bot_surface_rules,
-        true,
-    )
-    .context("build system prompt")?;
-    let system_prompt = effective.prompt;
+    let subagent_name = config.telegram.subagent.trim();
+    let definition = subagents::load_by_name(root, subagent_name)
+        .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
+
+    let mut bot_config = config.clone();
+    if let Some(model) = definition.model.clone() {
+        bot_config.model = model;
+    }
+    if let Some(level) = definition.thinking_level {
+        bot_config.thinking_level = level;
+    }
+
+    let system_prompt = Some(
+        subagents::render_prompt(
+            &bot_config,
+            root,
+            &definition,
+            &bot_config.model,
+            bot_surface_rules,
+            true,
+            PromptContextInclusion {
+                project_context: false,
+                memory_index: true,
+                skills: true,
+            },
+        )
+        .with_context(|| format!("render bot subagent '{subagent_name}'"))?,
+    );
+
+    let tool_config = if let Some(tools) = definition.tools.clone() {
+        tool_config.clone().with_selection(ToolSelection::Explicit(tools))
+    } else {
+        tool_config.clone()
+    };
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
-        tool_config: tool_config.clone(),
+        tool_config,
         surface: Some("telegram".to_string()),
     };
 
@@ -128,7 +154,7 @@ pub(crate) fn spawn_agent_turn(
     thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
 
     // Spawn agent in background — owned values moved in
-    let config = config.clone();
+    let config = bot_config;
     let thread_id = thread_id.to_string();
     let task = tokio::spawn(async move {
         agent::run_turn(

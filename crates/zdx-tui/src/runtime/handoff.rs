@@ -56,6 +56,7 @@ async fn run_subagent(
 ) -> Result<String, String> {
     let options = ExecSubagentOptions {
         model: Some(handoff_model),
+        system_prompt: None,
         thinking_level: Some(zdx_core::config::ThinkingLevel::Minimal),
         no_tools: false,
         no_system_prompt: true,

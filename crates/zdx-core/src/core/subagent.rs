@@ -19,6 +19,8 @@ use crate::core::events::AgentEvent;
 pub struct ExecSubagentOptions {
     /// Optional model override (`-m`).
     pub model: Option<String>,
+    /// Optional final system prompt override (`--effective-system-prompt`).
+    pub system_prompt: Option<String>,
     /// Optional thinking override (`-t`).
     pub thinking_level: Option<crate::config::ThinkingLevel>,
     /// Disable tools for the child run (`--no-tools`).
@@ -143,6 +145,11 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
         args.push(OsString::from(model));
     }
 
+    if let Some(system_prompt) = normalize_optional(options.system_prompt.as_deref()) {
+        args.push(OsString::from("--effective-system-prompt"));
+        args.push(OsString::from(system_prompt));
+    }
+
     if let Some(level) = options.thinking_level {
         args.push(OsString::from("-t"));
         args.push(OsString::from(level.display_name()));
@@ -265,6 +272,7 @@ mod tests {
             "task",
             &ExecSubagentOptions {
                 model: Some("openai:gpt-5.2".to_string()),
+                system_prompt: Some("You are a focused assistant".to_string()),
                 thinking_level: Some(crate::config::ThinkingLevel::Low),
                 no_tools: false,
                 no_system_prompt: true,
@@ -294,6 +302,8 @@ mod tests {
                 "turn_finished",
                 "-m",
                 "openai:gpt-5.2",
+                "--effective-system-prompt",
+                "You are a focused assistant",
                 "-t",
                 "low"
             ]

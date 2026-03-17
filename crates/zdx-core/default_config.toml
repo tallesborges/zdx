@@ -90,6 +90,8 @@ agents_project = true
 model = "claude-cli:claude-opus-4-6"
 # Thinking level used by the Telegram bot
 thinking_level = "minimal"
+# Named subagent used for Telegram bot turns
+subagent = "general_assistant"
 
 # Telegram audio transcription configuration
 # provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
