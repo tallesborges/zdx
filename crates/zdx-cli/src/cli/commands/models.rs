@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use zdx_core::config;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
+const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
 
 /// Default context limit for unknown models (136k tokens).
 const DEFAULT_CONTEXT_LIMIT: u64 = 136_000;
@@ -121,13 +122,62 @@ struct ModelCapabilitiesRecord {
     api: Option<String>,
 }
 
+#[derive(Debug, Deserialize)]
+struct OpenRouterResponse {
+    data: Vec<OpenRouterModel>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterModel {
+    id: String,
+    name: String,
+    context_length: Option<u64>,
+    architecture: Option<OpenRouterArchitecture>,
+    pricing: Option<OpenRouterPricing>,
+    top_provider: Option<OpenRouterTopProvider>,
+    #[serde(default)]
+    supported_parameters: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterArchitecture {
+    #[serde(default)]
+    input_modalities: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterPricing {
+    prompt: Option<String>,
+    completion: Option<String>,
+    input_cache_read: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OpenRouterTopProvider {
+    max_completion_tokens: Option<u64>,
+}
+
 pub async fn update(config: &config::Config) -> Result<()> {
     let url = std::env::var("MODELS_DEV_URL").unwrap_or_else(|_| MODELS_DEV_URL.to_string());
     let api = fetch_api(&url).await?;
 
+    let openrouter_models = match fetch_openrouter_models().await {
+        Ok(models) => {
+            println!(
+                "Info: loaded {} models from OpenRouter as fallback",
+                models.len()
+            );
+            models
+        }
+        Err(e) => {
+            println!("Warning: failed to fetch OpenRouter models: {e}");
+            Vec::new()
+        }
+    };
+
     let mut state = UpdateState::default();
     for spec in provider_specs(config) {
-        collect_provider_records(&spec, &api, &mut state)?;
+        collect_provider_records(&spec, &api, &openrouter_models, &mut state)?;
     }
 
     if state.records.is_empty() {
@@ -269,6 +319,7 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 15] {
 fn collect_provider_records(
     spec: &ProviderSpec<'_>,
     api: &ApiResponse,
+    openrouter_models: &[OpenRouterModel],
     state: &mut UpdateState,
 ) -> Result<()> {
     // Include all providers in the registry regardless of enabled status.
@@ -289,15 +340,15 @@ fn collect_provider_records(
                 spec.api_id
             );
         };
-        selected_candidates(spec, models_map)
+        selected_candidates(spec, models_map, openrouter_models)
     } else if is_meta_provider(spec.provider_id) {
-        selected_meta_candidates(spec, api)
+        selected_meta_candidates(spec, api, openrouter_models)
     } else {
         println!(
             "Warning: provider '{}' not found in models.dev response; falling back to defaults",
             spec.api_id
         );
-        fallback_candidates(spec)
+        fallback_candidates(spec, openrouter_models)
     };
 
     if all_selected.is_empty() {
@@ -314,7 +365,10 @@ fn collect_provider_records(
     Ok(())
 }
 
-fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
+fn fallback_candidates(
+    spec: &ProviderSpec<'_>,
+    openrouter_models: &[OpenRouterModel],
+) -> Vec<ModelCandidate> {
     let mut fallback = Vec::new();
     for pattern in &spec.provider_cfg.models {
         let pattern = pattern.trim();
@@ -332,6 +386,7 @@ fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
             spec.provider_id,
             spec.prefix,
             pattern,
+            openrouter_models,
         ));
     }
     fallback
@@ -340,20 +395,23 @@ fn fallback_candidates(spec: &ProviderSpec<'_>) -> Vec<ModelCandidate> {
 fn selected_candidates(
     spec: &ProviderSpec<'_>,
     models_map: &std::collections::BTreeMap<String, ModelEntry>,
+    openrouter_models: &[OpenRouterModel],
 ) -> Vec<ModelCandidate> {
     let candidates = build_candidates(spec.provider_id, spec.prefix, spec.api_id, models_map);
-    selected_candidates_from_candidates(spec, &candidates)
+    selected_candidates_from_candidates(spec, &candidates, openrouter_models)
 }
 
 fn selected_candidates_from_candidates(
     spec: &ProviderSpec<'_>,
     candidates: &[ModelCandidate],
+    openrouter_models: &[OpenRouterModel],
 ) -> Vec<ModelCandidate> {
     let select_result = select_candidates(spec.provider_id, &spec.provider_cfg.models, candidates);
 
     let mut all_selected = select_result.matched;
     for pattern in &select_result.unmatched_patterns {
-        let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
+        let default_candidate =
+            create_default_candidate(spec.provider_id, spec.prefix, pattern, openrouter_models);
         println!(
             "Info: creating default entry for '{}' (not found in models.dev)",
             default_candidate.full_id
@@ -363,7 +421,11 @@ fn selected_candidates_from_candidates(
     all_selected
 }
 
-fn selected_meta_candidates(spec: &ProviderSpec<'_>, api: &ApiResponse) -> Vec<ModelCandidate> {
+fn selected_meta_candidates(
+    spec: &ProviderSpec<'_>,
+    api: &ApiResponse,
+    openrouter_models: &[OpenRouterModel],
+) -> Vec<ModelCandidate> {
     let mut selected = Vec::new();
 
     for pattern in &spec.provider_cfg.models {
@@ -384,7 +446,8 @@ fn selected_meta_candidates(spec: &ProviderSpec<'_>, api: &ApiResponse) -> Vec<M
             continue;
         }
 
-        let default_candidate = create_default_candidate(spec.provider_id, spec.prefix, pattern);
+        let default_candidate =
+            create_default_candidate(spec.provider_id, spec.prefix, pattern, openrouter_models);
         println!(
             "Info: creating default entry for '{}' (not found in official providers)",
             default_candidate.full_id
@@ -520,6 +583,23 @@ async fn fetch_api(url: &str) -> Result<ApiResponse> {
         .json::<ApiResponse>()
         .await
         .context("Failed to parse models.dev response as JSON")
+}
+
+async fn fetch_openrouter_models() -> Result<Vec<OpenRouterModel>> {
+    let response = reqwest::get(OPENROUTER_MODELS_URL)
+        .await
+        .context("Failed to fetch OpenRouter models API")?;
+
+    if !response.status().is_success() {
+        bail!("OpenRouter API returned status {}", response.status());
+    }
+
+    let data: OpenRouterResponse = response
+        .json()
+        .await
+        .context("Failed to parse OpenRouter response")?;
+
+    Ok(data.data)
 }
 
 fn build_candidates(
@@ -717,12 +797,106 @@ fn normalize_model_lookup_id(model_id: &str) -> String {
     lower.to_string()
 }
 
+/// Looks up a model in the `OpenRouter` API data and converts it to a `ModelCandidate`.
+fn lookup_openrouter_model(
+    provider_id: &str,
+    model_id: &str,
+    openrouter_models: &[OpenRouterModel],
+) -> Option<ModelCandidate> {
+    // Map our provider IDs to OpenRouter vendor prefixes
+    let vendor = match provider_id {
+        "xiaomi" | "xiomi" => "xiaomi",
+        "minimax" => "minimax",
+        "xai" => "x-ai",
+        "anthropic" | "claude-cli" => "anthropic",
+        "openai" | "openai-codex" => "openai",
+        "google" | "gemini" | "gemini-cli" => "google",
+        "deepseek" => "deepseek",
+        "stepfun" => "stepfun",
+        "moonshot" | "kimi" => "moonshotai",
+        "mistral" => "mistralai",
+        "zai" => "z-ai",
+        other => other,
+    };
+
+    let openrouter_id = format!("{vendor}/{model_id}");
+
+    let or_model = openrouter_models
+        .iter()
+        .find(|m| m.id.eq_ignore_ascii_case(&openrouter_id))?;
+
+    let per_m = 1_000_000.0;
+    let pricing = or_model
+        .pricing
+        .as_ref()
+        .map(|p| ModelPricingRecord {
+            input: p
+                .prompt
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                * per_m,
+            output: p
+                .completion
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                * per_m,
+            cache_read: p
+                .input_cache_read
+                .as_deref()
+                .and_then(|s| s.parse::<f64>().ok())
+                .unwrap_or(0.0)
+                * per_m,
+            cache_write: 0.0,
+        })
+        .unwrap_or_default();
+
+    let input_images = or_model
+        .architecture
+        .as_ref()
+        .is_some_and(|a| a.input_modalities.iter().any(|m| m == "image"));
+
+    let output_limit = or_model
+        .top_provider
+        .as_ref()
+        .and_then(|tp| tp.max_completion_tokens)
+        .unwrap_or(0);
+
+    let display_name = or_model.name.clone();
+
+    let reasoning = or_model
+        .supported_parameters
+        .iter()
+        .any(|p| p == "reasoning");
+
+    let capabilities = ModelCapabilitiesRecord {
+        reasoning,
+        input_images,
+        output_limit,
+        api: None,
+    };
+
+    let full_id = format!("{provider_id}:{model_id}");
+    let match_targets = build_match_targets(provider_id, model_id, &full_id);
+
+    Some(ModelCandidate {
+        full_id,
+        display_name,
+        pricing,
+        context_limit: or_model.context_length.unwrap_or(DEFAULT_CONTEXT_LIMIT),
+        capabilities,
+        match_targets,
+    })
+}
+
 /// Creates a default `ModelCandidate` for a model ID not found in the API.
 /// Looks up pricing and capabilities from embedded `default_models.toml` if available.
 fn create_default_candidate(
     provider_id: &str,
     prefix: Option<&str>,
     model_id: &str,
+    openrouter_models: &[OpenRouterModel],
 ) -> ModelCandidate {
     // Use the pattern as-is for the model ID - don't try to parse it
     // OpenRouter models have IDs like "xiaomi/mimo-v2-flash:free" which should stay intact
@@ -739,6 +913,12 @@ fn create_default_candidate(
             capabilities: default_model.capabilities,
             match_targets,
         };
+    }
+
+    // Try OpenRouter as secondary fallback
+    if let Some(or_candidate) = lookup_openrouter_model(provider_id, model_id, openrouter_models) {
+        println!("Info: using OpenRouter data for '{}'", or_candidate.full_id);
+        return or_candidate;
     }
 
     // Fall back to generic defaults
@@ -896,6 +1076,7 @@ mod tests {
             "openrouter",
             Some("openrouter"),
             "xiaomi/mimo-v2-flash:free",
+            &[],
         );
 
         assert_eq!(candidate.full_id, "openrouter:xiaomi/mimo-v2-flash:free");
