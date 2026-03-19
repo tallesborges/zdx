@@ -37,7 +37,11 @@ pub fn definition() -> ToolDefinition {
                     "maximum": 20
                 }
             },
-            "required": ["objective"],
+            "required": [],
+            "anyOf": [
+                { "required": ["objective"] },
+                { "required": ["search_queries"] }
+            ],
             "additionalProperties": false
         }),
     }
@@ -45,7 +49,8 @@ pub fn definition() -> ToolDefinition {
 
 #[derive(Debug, Deserialize)]
 struct WebSearchInput {
-    objective: String,
+    #[serde(default)]
+    objective: Option<String>,
     #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
     #[serde(default = "default_max_results")]
@@ -56,9 +61,125 @@ fn default_max_results() -> u32 {
     10
 }
 
+fn normalize_objective(objective: Option<&str>) -> Option<&str> {
+    objective.map(str::trim).filter(|value| !value.is_empty())
+}
+
+fn has_search_queries(search_queries: Option<&[String]>) -> bool {
+    search_queries.is_some_and(|queries| !queries.is_empty())
+}
+
+fn parse_input(input: &Value) -> Result<WebSearchInput, ToolOutput> {
+    serde_json::from_value(input.clone()).map_err(|e| {
+        ToolOutput::failure(
+            "invalid_input",
+            "Invalid input for web_search tool",
+            Some(format!("Parse error: {e}")),
+        )
+    })
+}
+
+fn validate_input(
+    objective: Option<&str>,
+    search_queries: Option<&[String]>,
+    max_results: u32,
+) -> Result<(), ToolOutput> {
+    if objective.is_none() && !has_search_queries(search_queries) {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "at least one of objective or search_queries must be provided",
+            None,
+        ));
+    }
+
+    if objective.is_some_and(|value| value.len() > 5000) {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "Objective exceeds maximum length of 5000 characters",
+            None,
+        ));
+    }
+
+    if !(1..=20).contains(&max_results) {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "max_results must be between 1 and 20",
+            None,
+        ));
+    }
+
+    if let Some(queries) = search_queries {
+        for query in queries {
+            if query.len() > 200 {
+                return Err(ToolOutput::failure(
+                    "invalid_input",
+                    format!("Search query exceeds 200 characters: \"{query}\""),
+                    None,
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn parallel_api_key() -> Result<String, ToolOutput> {
+    match std::env::var("PARALLEL_API_KEY") {
+        Ok(key) if !key.is_empty() => Ok(key),
+        _ => Err(ToolOutput::failure(
+            "missing_api_key",
+            "PARALLEL_API_KEY environment variable not set",
+            Some("Set PARALLEL_API_KEY to use web search functionality".to_string()),
+        )),
+    }
+}
+
+async fn send_search_request(
+    request: &SearchRequest,
+    api_key: &str,
+) -> Result<reqwest::Response, ToolOutput> {
+    let client = reqwest::Client::new();
+    client
+        .post(PARALLEL_SEARCH_URL)
+        .header("Content-Type", "application/json")
+        .header("x-api-key", api_key)
+        .header("parallel-beta", PARALLEL_BETA_HEADER)
+        .json(request)
+        .send()
+        .await
+        .map_err(|e| {
+            ToolOutput::failure(
+                "request_error",
+                "Failed to send search request",
+                Some(format!("HTTP error: {e}")),
+            )
+        })
+}
+
+async fn parse_search_response(response: reqwest::Response) -> Result<SearchResponse, ToolOutput> {
+    if !response.status().is_success() {
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        return Err(ToolOutput::failure(
+            "http_error",
+            format!("Search API returned HTTP {status}"),
+            Some(body),
+        ));
+    }
+
+    response.json().await.map_err(|e| {
+        ToolOutput::failure(
+            "parse_error",
+            "Failed to parse search response",
+            Some(format!("JSON error: {e}")),
+        )
+    })
+}
+
 #[derive(Debug, Serialize)]
 struct SearchRequest {
-    objective: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    objective: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     search_queries: Option<Vec<String>>,
     max_results: u32,
@@ -70,7 +191,16 @@ struct SearchResponse {
     search_id: String,
     results: Vec<SearchResult>,
     #[serde(default)]
-    warnings: Option<String>,
+    warnings: Option<Vec<ParallelWarning>>,
+}
+
+#[derive(Debug, Deserialize, Serialize, PartialEq)]
+struct ParallelWarning {
+    #[serde(rename = "type")]
+    kind: String,
+    message: String,
+    #[serde(default)]
+    detail: Option<Value>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -84,115 +214,41 @@ struct SearchResult {
 
 /// Executes the `web_search` tool asynchronously.
 pub async fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
-    let input: WebSearchInput = match serde_json::from_value(input.clone()) {
-        Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for web_search tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+    let input = match parse_input(input) {
+        Ok(input) => input,
+        Err(output) => return output,
     };
 
-    let objective = input.objective.trim();
-    if objective.is_empty() {
-        return ToolOutput::failure("invalid_input", "objective cannot be empty", None);
-    }
+    let WebSearchInput {
+        objective,
+        search_queries,
+        max_results,
+    } = input;
 
-    // Validate objective length
-    if objective.len() > 5000 {
-        return ToolOutput::failure(
-            "invalid_input",
-            "Objective exceeds maximum length of 5000 characters",
-            None,
-        );
+    let objective = normalize_objective(objective.as_deref());
+    if let Err(output) = validate_input(objective, search_queries.as_deref(), max_results) {
+        return output;
     }
-
-    // Validate max_results
-    if input.max_results < 1 || input.max_results > 20 {
-        return ToolOutput::failure(
-            "invalid_input",
-            "max_results must be between 1 and 20",
-            None,
-        );
-    }
-
-    // Validate search queries if provided
-    if let Some(ref queries) = input.search_queries {
-        for query in queries {
-            if query.len() > 200 {
-                return ToolOutput::failure(
-                    "invalid_input",
-                    format!("Search query exceeds 200 characters: \"{query}\""),
-                    None,
-                );
-            }
-        }
-    }
-
-    // Get API key from environment
-    let api_key = match std::env::var("PARALLEL_API_KEY") {
-        Ok(key) if !key.is_empty() => key,
-        _ => {
-            return ToolOutput::failure(
-                "missing_api_key",
-                "PARALLEL_API_KEY environment variable not set",
-                Some("Set PARALLEL_API_KEY to use web search functionality".to_string()),
-            );
-        }
+    let api_key = match parallel_api_key() {
+        Ok(api_key) => api_key,
+        Err(output) => return output,
     };
 
     // Build request
     let request = SearchRequest {
-        objective: objective.to_string(),
-        search_queries: input.search_queries,
-        max_results: input.max_results,
+        objective: objective.map(str::to_string),
+        search_queries,
+        max_results,
         mode: "agentic",
     };
 
-    // Make HTTP request
-    let client = reqwest::Client::new();
-    let response = match client
-        .post(PARALLEL_SEARCH_URL)
-        .header("Content-Type", "application/json")
-        .header("x-api-key", &api_key)
-        .header("parallel-beta", PARALLEL_BETA_HEADER)
-        .json(&request)
-        .send()
-        .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            return ToolOutput::failure(
-                "request_error",
-                "Failed to send search request",
-                Some(format!("HTTP error: {e}")),
-            );
-        }
+    let response = match send_search_request(&request, &api_key).await {
+        Ok(response) => response,
+        Err(output) => return output,
     };
-
-    // Check HTTP status
-    if !response.status().is_success() {
-        let status = response.status();
-        let body = response.text().await.unwrap_or_default();
-        return ToolOutput::failure(
-            "http_error",
-            format!("Search API returned HTTP {status}"),
-            Some(body),
-        );
-    }
-
-    // Parse response
-    let search_response: SearchResponse = match response.json().await {
-        Ok(r) => r,
-        Err(e) => {
-            return ToolOutput::failure(
-                "parse_error",
-                "Failed to parse search response",
-                Some(format!("JSON error: {e}")),
-            );
-        }
+    let search_response = match parse_search_response(response).await {
+        Ok(search_response) => search_response,
+        Err(output) => return output,
     };
 
     // Build successful response
@@ -217,14 +273,17 @@ mod tests {
 
         let schema = &def.input_schema;
         let required = schema.get("required").unwrap().as_array().unwrap();
-        assert!(required.iter().any(|v| v == "objective"));
+        assert!(required.is_empty());
+        let any_of = schema.get("anyOf").unwrap().as_array().unwrap();
+        assert_eq!(any_of.len(), 2);
     }
 
     #[test]
-    fn test_input_validation_missing_objective() {
+    fn test_input_validation_allows_missing_objective() {
         let input = json!({});
-        let result: Result<WebSearchInput, _> = serde_json::from_value(input);
-        assert!(result.is_err());
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.objective.is_none());
+        assert!(parsed.search_queries.is_none());
     }
 
     #[test]
@@ -233,6 +292,23 @@ mod tests {
         let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
         assert_eq!(parsed.max_results, 10);
         assert!(parsed.search_queries.is_none());
+        assert_eq!(parsed.objective.as_deref(), Some("test query"));
+    }
+
+    #[test]
+    fn test_input_allows_search_queries_without_objective() {
+        let input = json!({
+            "search_queries": ["gpt-5.3-codex", "february 2026"]
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert!(parsed.objective.is_none());
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec![
+                "gpt-5.3-codex".to_string(),
+                "february 2026".to_string()
+            ])
+        );
     }
 
     #[test]
@@ -298,14 +374,53 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_normalize_objective_treats_blank_as_missing() {
+        assert_eq!(normalize_objective(Some("   ")), None);
+        assert_eq!(normalize_objective(Some(" test ")), Some("test"));
+    }
+
+    #[test]
+    fn test_has_search_queries_detects_non_empty_queries() {
+        assert!(has_search_queries(Some(&["rust tui styling".to_string()])));
+        assert!(!has_search_queries(Some(&[])));
+        assert!(!has_search_queries(None));
+    }
+
+    #[test]
+    fn test_search_response_parses_warning_objects() {
+        let response: SearchResponse = serde_json::from_value(json!({
+            "search_id": "search_123",
+            "results": [],
+            "warnings": [{
+                "type": "warning",
+                "message": "No objective provided; using search queries only.",
+                "detail": null
+            }]
+        }))
+        .unwrap();
+
+        assert_eq!(
+            response.warnings,
+            Some(vec![ParallelWarning {
+                kind: "warning".to_string(),
+                message: "No objective provided; using search queries only.".to_string(),
+                detail: None,
+            }])
+        );
+    }
+
     #[tokio::test]
-    async fn test_execute_rejects_empty_objective() {
+    async fn test_execute_rejects_missing_objective_and_search_queries() {
         let ctx = ToolContext::new(PathBuf::from("."), None);
         let output = execute(&json!({"objective": "   "}), &ctx).await;
 
         assert!(!output.is_ok());
         let payload = serde_json::to_value(output).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
-        assert_eq!(payload["error"]["message"], "objective cannot be empty");
+        assert_eq!(
+            payload["error"]["message"],
+            "at least one of objective or search_queries must be provided"
+        );
     }
 }
