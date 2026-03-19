@@ -16,18 +16,19 @@ const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Web_Search".to_string(),
-        description: "Search the web for information. Use this tool when you need current information, facts, or details that may not be in your training data. Returns ranked URLs with LLM-optimized excerpts.".to_string(),
+        description: "Search the web for current information and return ranked URLs with LLM-optimized excerpts. Use `objective` for the research goal and `search_queries` for concrete keyword searches. Do not send a `query` field. Prefer providing both `objective` and `search_queries`. Example: {\"objective\":\"When was the United Nations established? Prefer UN's websites.\",\"search_queries\":[\"Founding year UN\",\"Year of founding United Nations\"],\"max_results\":5}.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "objective": {
                     "type": "string",
-                    "description": "Natural-language research goal. Be specific about what you need, include context from your task, preferred sources (e.g., 'prefer official docs'), and freshness requirements (e.g., 'past 6 months')."
+                    "description": "Main natural-language research goal. Be specific about what you need, include context from your task, preferred sources (e.g., 'prefer official docs'), and freshness requirements (e.g., 'past 6 months'). Use this instead of a `query` field when describing the task in natural language."
                 },
                 "search_queries": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Keyword queries to supplement the objective. Use specific terms and search operators. Providing both objective and search_queries yields best results."
+                    "minItems": 1,
+                    "description": "Keyword queries to supplement the objective. Use specific terms and search operators. Providing both objective and search_queries yields best results. If you only have keywords, send them here instead of using a `query` field."
                 },
                 "max_results": {
                     "type": "integer",
@@ -44,6 +45,7 @@ pub fn definition() -> ToolDefinition {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WebSearchInput {
     #[serde(default)]
     objective: Option<String>,
@@ -66,6 +68,16 @@ fn has_search_queries(search_queries: Option<&[String]>) -> bool {
 }
 
 fn parse_input(input: &Value) -> Result<WebSearchInput, ToolOutput> {
+    if input.get("query").is_some() {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "`query` is not supported for web_search; use `objective` and/or `search_queries`",
+            Some(
+                "Example: {\"objective\":\"When was the United Nations established? Prefer UN's websites.\",\"search_queries\":[\"Founding year UN\"],\"max_results\":5}".to_string(),
+            ),
+        ));
+    }
+
     serde_json::from_value(input.clone()).map_err(|e| {
         ToolOutput::failure(
             "invalid_input",
@@ -266,10 +278,26 @@ mod tests {
         let def = definition();
         assert_eq!(def.name, "Web_Search");
         assert!(def.description.contains("Search the web"));
+        assert!(def.description.contains("Do not send a `query` field"));
 
         let schema = &def.input_schema;
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.is_empty());
+
+        let props = schema.get("properties").unwrap();
+        assert!(props["objective"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("instead of a `query` field"));
+        assert!(props["search_queries"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("instead of using a `query` field"));
+        assert_eq!(props["search_queries"]["minItems"], json!(1));
+        assert!(props["max_results"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("default: 10"));
     }
 
     #[test]
@@ -415,6 +443,27 @@ mod tests {
         assert_eq!(
             payload["error"]["message"],
             "at least one of objective or search_queries must be provided"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_rejects_legacy_query_field() {
+        let ctx = ToolContext::new(PathBuf::from("."), None);
+        let output = execute(
+            &json!({
+                "query": "codex-rs /fast option implementation GitHub",
+                "max_results": 10
+            }),
+            &ctx,
+        )
+        .await;
+
+        assert!(!output.is_ok());
+        let payload = serde_json::to_value(output).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(
+            payload["error"]["message"],
+            "`query` is not supported for web_search; use `objective` and/or `search_queries`"
         );
     }
 }
