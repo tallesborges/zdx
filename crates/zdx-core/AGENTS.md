@@ -73,39 +73,42 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 
 ## Adding or updating models
 
-Three files must be updated (in this order):
+Two files must be updated:
 
 1. **`src/config.rs`** — hardcoded provider defaults (e.g. `default_xiaomi_provider()`).
    Add the model ID to the provider's `models` vec. This is the source of truth for
    `default_config.toml` generation.
 2. **`default_models.toml`** — model entries with pricing, capabilities, context limits.
-   Add a full `[[model]]` block. Use the OpenRouter API for accurate pricing/limits:
-   ```
-   curl -s https://openrouter.ai/api/v1/models | jq '.data[] | select(.id | test("model-name")) | {id, pricing, context_length, top_provider}'
-   ```
-   Pricing is per-token; multiply by 1,000,000 for per-M values.
+   For models available on OpenRouter, you can skip manual editing — the update command
+   fetches pricing/capabilities automatically via the OpenRouter API fallback.
+   For models NOT on OpenRouter, add a full `[[model]]` block manually.
 3. **`default_config.toml`** — **do not edit directly**. It is generated from `config.rs`.
 
 ### Workflow
 
 ```bash
-# 1. Edit config.rs + default_models.toml
+# 1. Edit config.rs (add model to provider's models vec)
 # 2. Build so the binary embeds your changes
 cargo build
-# 3. Regenerate both default files (config from config.rs, models from upstream + defaults)
+# 3. Regenerate both default files
 just update-defaults
-# 4. Re-apply any model entries that got overwritten with "(custom)" placeholders
-#    (models not found in models.dev upstream get zeroed out by update-defaults)
+# 4. Verify entries in default_models.toml (OpenRouter fallback fills pricing/capabilities)
 # 5. Update local user config (~/.zdx/config.toml) manually
 # 6. Update local models registry
 cargo run -- models update
 ```
 
+### Fallback chain for model data (in `zdx models update`)
+
+1. **models.dev** — primary upstream source
+2. **embedded `default_models.toml`** — for models manually added to the file
+3. **OpenRouter API** — automatic fallback with pricing, context, reasoning, images
+4. **"(custom)" placeholder** — last resort with zero pricing (needs manual fix)
+
 ### Gotchas
 
-- `just update-defaults` regenerates `default_models.toml` from an external source.
-  Models not in models.dev will be created as placeholder "(custom)" entries with zero
-  pricing. You must re-apply correct values after the update.
+- `just update-defaults` regenerates `default_models.toml` from external sources.
+  Models not in models.dev fall back to OpenRouter, then to "(custom)" placeholders.
 - Always `cargo build` before running update commands — the binary must embed the
   latest `config.rs` and `default_config.toml` changes.
 - `default_config.toml` is generated output. To change provider model lists,
