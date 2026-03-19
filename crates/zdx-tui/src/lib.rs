@@ -20,6 +20,7 @@ pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
 use zdx_core::config::Config;
+use zdx_core::core::context::EffectivePrompt;
 use zdx_core::core::thread_persistence::Thread;
 use zdx_core::providers::ChatMessage;
 use zdx_core::skills::Skill;
@@ -34,6 +35,12 @@ pub(crate) const TUI_SURFACE_RULES: &str = include_str!(concat!(
 pub(crate) fn tui_surface_rules() -> Option<&'static str> {
     let trimmed = TUI_SURFACE_RULES.trim();
     (!trimmed.is_empty()).then_some(trimmed)
+}
+
+pub(crate) fn context_paths(effective: &EffectivePrompt) -> Vec<PathBuf> {
+    let mut paths = effective.loaded_agents_paths.clone();
+    paths.extend(effective.scoped_context_paths.iter().cloned());
+    paths
 }
 
 /// Runs the interactive chat loop.
@@ -166,7 +173,10 @@ pub(crate) fn thread_startup_messages(
             .iter()
             .map(|p| format!("  - {}", p.display()))
             .collect();
-        messages.push(format!("Loaded AGENTS.md from:\n{}", paths_list.join("\n")));
+        messages.push(format!(
+            "AGENTS.md context available from:\n{}",
+            paths_list.join("\n")
+        ));
     }
 
     if !skills.is_empty() {

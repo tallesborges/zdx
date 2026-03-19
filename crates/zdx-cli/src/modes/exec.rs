@@ -51,6 +51,34 @@ impl From<&ExecOptions> for AgentOptions {
 /// Implements tool loop - if the model requests tools, executes them and continues.
 /// Returns the complete response text.
 ///
+/// Logs effective context info (AGENTS.md paths, skills) at startup.
+fn log_effective_context(effective: &zdx_core::core::context::EffectivePrompt) {
+    if !effective.loaded_agents_paths.is_empty() {
+        let paths_str: Vec<String> = effective
+            .loaded_agents_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        info!(paths = %paths_str.join(", "), "exec inlined AGENTS.md files");
+    }
+    if !effective.scoped_context_paths.is_empty() {
+        let paths_str: Vec<String> = effective
+            .scoped_context_paths
+            .iter()
+            .map(|p| p.display().to_string())
+            .collect();
+        info!(paths = %paths_str.join(", "), "exec scoped AGENTS.md files");
+    }
+    if !effective.loaded_skills.is_empty() {
+        let names: Vec<String> = effective
+            .loaded_skills
+            .iter()
+            .map(|skill| skill.name.clone())
+            .collect();
+        info!(skills = %names.join(", "), "exec loaded skills");
+    }
+}
+
 /// This is a backward-compatible wrapper that uses the agent internally.
 pub async fn run_exec(
     prompt: &str,
@@ -90,28 +118,9 @@ pub async fn run_exec(
         info!(path = %config_path.display(), "exec config file");
     }
 
-    // Emit loaded AGENTS.md paths info (per SPEC §10)
-    if let Some(effective) = &effective
-        && !effective.loaded_agents_paths.is_empty()
-    {
-        let paths_str: Vec<String> = effective
-            .loaded_agents_paths
-            .iter()
-            .map(|p| p.display().to_string())
-            .collect();
-        info!(paths = %paths_str.join(", "), "exec loaded AGENTS.md files");
-    }
-
-    // Emit loaded skills info
-    if let Some(effective) = &effective
-        && !effective.loaded_skills.is_empty()
-    {
-        let names: Vec<String> = effective
-            .loaded_skills
-            .iter()
-            .map(|skill| skill.name.clone())
-            .collect();
-        info!(skills = %names.join(", "), "exec loaded skills");
+    // Emit context info (AGENTS.md paths, skills)
+    if let Some(effective) = &effective {
+        log_effective_context(effective);
     }
 
     // Load thread history if continuing an existing thread
