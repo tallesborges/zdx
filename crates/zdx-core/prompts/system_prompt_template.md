@@ -92,10 +92,20 @@ The following runtime environment variables may be available and should be used 
 - `ZDX_THREAD_ID`: Identifier for the current thread/session. Use this instead of inventing thread IDs.
 </environment>
 
+{% if project_context or scoped_context %}
+<project-context>
+AGENTS.md files define project-local rules. Deeper files override higher ones.
+**MUST** follow these rules when making changes in their scope.
 {% if project_context %}
-## Project Context
-- AGENTS.md defines local law; nearest wins, deeper overrides higher
 {{ project_context }}
+{% endif %}
+{% if scoped_context %}
+The following directories have their own AGENTS.md rules.
+**MUST** read the relevant file before modifying code in that scope:
+{% for ctx in scoped_context %}- `{{ ctx.scope }}/AGENTS.md`
+{% endfor %}
+{% endif %}
+</project-context>
 {% endif %}
 
 {% if memory_index %}

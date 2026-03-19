@@ -109,6 +109,16 @@ pub struct LoadedContext {
     pub warnings: Vec<ContextWarning>,
 }
 
+/// A scoped AGENTS.md file discovered in a project subdirectory.
+/// These are listed by path in the prompt (not inlined) — the agent reads on demand.
+#[derive(Debug, Clone)]
+pub struct ScopedContextFile {
+    /// Absolute path to the AGENTS.md file.
+    pub path: PathBuf,
+    /// Relative scope directory from project root (e.g., "crates/zdx-core").
+    pub scope: String,
+}
+
 /// Result of loading the memory index file.
 #[derive(Debug, Clone)]
 pub struct LoadedMemoryIndex {
@@ -139,6 +149,11 @@ struct PromptTemplateSubagents {
 }
 
 #[derive(Debug, Clone, Serialize)]
+struct PromptTemplateScopedContext {
+    scope: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct PromptTemplateVars {
     identity_prompt: String,
     provider: String,
@@ -151,6 +166,7 @@ struct PromptTemplateVars {
     memory_suggestions: bool,
     surface_rules: String,
     skills_list: Vec<PromptTemplateSkill>,
+    scoped_context: Vec<PromptTemplateScopedContext>,
     subagents_config: Option<PromptTemplateSubagents>,
     cwd: String,
     date: String,
@@ -164,25 +180,21 @@ struct PromptTemplateSections<'a> {
     memory_suggestions: bool,
     surface_rules: Option<&'a str>,
     skills_list: &'a [Skill],
+    scoped_context: &'a [ScopedContextFile],
     subagents_enabled: bool,
     subagent_models: &'a [String],
 }
 
-fn format_project_context_block(content: &str) -> Option<String> {
-    let trimmed = content.trim();
-    (!trimmed.is_empty()).then(|| format!("### Project Context\n\n{trimmed}"))
-}
-
 fn combine_prompt_sections(
     base_prompt: Option<&str>,
-    project_context_block: Option<&str>,
+    inline_project_context: Option<&str>,
     memory_index_block: Option<&str>,
     surface_rules_block: Option<&str>,
 ) -> Option<String> {
     let mut sections: Vec<&str> = Vec::new();
     for value in [
         base_prompt,
-        project_context_block,
+        inline_project_context,
         memory_index_block,
         surface_rules_block,
     ]
@@ -267,6 +279,13 @@ fn build_prompt_template_vars(
     let subagents_config = sections.subagents_enabled.then(|| PromptTemplateSubagents {
         available_models: sections.subagent_models.to_vec(),
     });
+    let scoped_context = sections
+        .scoped_context
+        .iter()
+        .map(|sa| PromptTemplateScopedContext {
+            scope: sa.scope.clone(),
+        })
+        .collect();
     let provider_selection = resolve_provider(model);
     let provider = provider_selection.kind.id().to_string();
     let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
@@ -291,6 +310,7 @@ fn build_prompt_template_vars(
         memory_suggestions: sections.memory_suggestions,
         surface_rules,
         skills_list,
+        scoped_context,
         subagents_config,
         cwd: root.display().to_string(),
         date: Utc::now().format("%Y-%m-%d").to_string(),
@@ -390,6 +410,62 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
             seen.insert(key)
         })
         .collect()
+}
+
+/// Maximum depth to walk when discovering scoped AGENTS.md files.
+/// Keeps traversal fast in large repos.
+const SCOPED_CONTEXT_MAX_DEPTH: usize = 4;
+
+/// Maximum number of scoped AGENTS.md files to discover.
+const SCOPED_CONTEXT_LIMIT: usize = 200;
+
+/// Discovers AGENTS.md files in subdirectories of the project root.
+///
+/// Uses gitignore-aware walking to skip ignored directories (target/, .git/, etc.).
+/// Limited to [`SCOPED_CONTEXT_MAX_DEPTH`] levels deep and [`SCOPED_CONTEXT_LIMIT`] files.
+/// Returns files sorted by path for deterministic ordering.
+/// The root AGENTS.md itself is excluded (it's handled as inline context).
+pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
+    use ignore::WalkBuilder;
+
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let root_agents = canonical_root.join("AGENTS.md");
+
+    let mut scoped: Vec<ScopedContextFile> = Vec::new();
+
+    let walker = WalkBuilder::new(&canonical_root)
+        .hidden(true)
+        .git_ignore(true)
+        .git_global(false)
+        .git_exclude(false)
+        .max_depth(Some(SCOPED_CONTEXT_MAX_DEPTH))
+        .build();
+
+    for entry in walker.flatten() {
+        if scoped.len() >= SCOPED_CONTEXT_LIMIT {
+            break;
+        }
+        let path = entry.path();
+        if path.file_name().is_none_or(|f| f != "AGENTS.md") || !path.is_file() {
+            continue;
+        }
+        let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        if canonical == root_agents {
+            continue;
+        }
+        if let Ok(relative) = canonical.strip_prefix(&canonical_root)
+            && let Some(scope_dir) = relative.parent()
+        {
+            let scope = scope_dir.display().to_string();
+            scoped.push(ScopedContextFile {
+                path: canonical,
+                scope,
+            });
+        }
+    }
+
+    scoped.sort_by(|a, b| a.path.cmp(&b.path));
+    scoped
 }
 
 /// Loads all AGENTS.md files from the collected paths.
@@ -504,8 +580,10 @@ fn load_memory_index_from_path(path: &Path) -> Option<LoadedMemoryIndex> {
 pub struct EffectivePrompt {
     /// The combined system prompt (config + AGENTS.md + optional memory index + template sections).
     pub prompt: Option<String>,
-    /// Paths of AGENTS.md files that were loaded (in order).
+    /// Paths of AGENTS.md files that were inlined (in order).
     pub loaded_agents_paths: Vec<PathBuf>,
+    /// Scoped AGENTS.md files discovered in subdirectories (listed as paths, not inlined).
+    pub scoped_context_paths: Vec<PathBuf>,
     /// Warnings generated during context loading.
     pub warnings: Vec<ContextWarning>,
     /// Skills loaded from configured sources.
@@ -515,26 +593,26 @@ pub struct EffectivePrompt {
 #[derive(Debug, Default)]
 struct PromptContextSectionsResult {
     loaded_agents_paths: Vec<PathBuf>,
+    scoped_context: Vec<ScopedContextFile>,
     warnings: Vec<ContextWarning>,
-    project_context_block: Option<String>,
+    inline_project_context: Option<String>,
     memory_index: Option<String>,
 }
 
 fn load_prompt_context_sections(root: &Path, config: &Config) -> PromptContextSectionsResult {
     let mut result = PromptContextSectionsResult::default();
-    let mut agents_content: Option<String> = None;
 
     if let Some(loaded) = load_all_agents_files(root) {
         result.loaded_agents_paths = loaded.loaded_paths;
         result.warnings = loaded.warnings;
 
-        if !loaded.content.trim().is_empty() {
-            agents_content = Some(loaded.content);
+        let trimmed = loaded.content.trim();
+        if !trimmed.is_empty() {
+            result.inline_project_context = Some(loaded.content);
         }
     }
 
-    result.project_context_block =
-        format_project_context_block(agents_content.as_deref().unwrap_or_default());
+    result.scoped_context = discover_scoped_context(root);
 
     if let Some(loaded_memory_index) = load_memory_index(config) {
         result.warnings.extend(loaded_memory_index.warnings);
@@ -564,7 +642,7 @@ fn render_system_prompt_with_fallback(
     vars: &PromptTemplateVars,
     warnings: &mut Vec<ContextWarning>,
     base_prompt: Option<&str>,
-    project_context_block: Option<&str>,
+    inline_project_context: Option<&str>,
     memory_index: Option<&str>,
     surface_rules: Option<&str>,
 ) -> Option<String> {
@@ -600,7 +678,7 @@ fn render_system_prompt_with_fallback(
                     });
                     combine_prompt_sections(
                         base_prompt,
-                        project_context_block,
+                        inline_project_context,
                         memory_index,
                         surface_rules,
                     )
@@ -652,8 +730,9 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
     let base_prompt = config.effective_system_prompt()?;
     let PromptContextSectionsResult {
         loaded_agents_paths,
+        scoped_context,
         mut warnings,
-        project_context_block,
+        inline_project_context,
         memory_index,
     } = load_prompt_context_sections(root, config);
 
@@ -674,11 +753,12 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
         &config.model,
         PromptTemplateSections {
             base_prompt: base_prompt.as_deref(),
-            project_context: project_context_block.as_deref(),
+            project_context: inline_project_context.as_deref(),
             memory_index: memory_index.as_deref(),
             memory_suggestions,
             surface_rules,
             skills_list: &skills,
+            scoped_context: &scoped_context,
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
         },
@@ -689,7 +769,7 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
         &vars,
         &mut warnings,
         base_prompt.as_deref(),
-        project_context_block.as_deref(),
+        inline_project_context.as_deref(),
         memory_index.as_deref(),
         surface_rules,
     );
@@ -706,11 +786,13 @@ pub fn build_effective_system_prompt_with_paths_and_surface_rules(
         message: warning.message,
     }));
 
+    let scoped_context_paths = scoped_context.iter().map(|sa| sa.path.clone()).collect();
     let loaded_skills = skills;
 
     Ok(EffectivePrompt {
         prompt: system_prompt,
         loaded_agents_paths,
+        scoped_context_paths,
         warnings,
         loaded_skills,
     })
@@ -1032,6 +1114,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1053,6 +1136,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1082,6 +1166,7 @@ mod tests {
                 memory_suggestions: true,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1118,6 +1203,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &skills,
+                scoped_context: &[],
                 subagents_enabled: true,
                 subagent_models: &models,
             },
@@ -1148,6 +1234,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1167,6 +1254,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1263,8 +1351,8 @@ mod tests {
         ));
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
         assert!(prompt.contains("Base prompt"));
-        assert!(prompt.contains("# Project"));
-        assert!(prompt.contains("# Project Context"));
+        assert!(prompt.contains("<project-context>"));
+        assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Available model overrides"));
     }
 
@@ -1280,6 +1368,7 @@ mod tests {
                 memory_suggestions: false,
                 surface_rules: None,
                 skills_list: &[],
+                scoped_context: &[],
                 subagents_enabled: false,
                 subagent_models: &[],
             },
@@ -1361,7 +1450,7 @@ mod tests {
         assert!(prompt.contains("Prompt=Base prompt"));
         assert!(prompt.contains(&format!("Root={}", dir.path().display())));
         assert!(prompt.contains("Date="));
-        assert!(prompt.contains("Context=### Project Context"));
+        assert!(prompt.contains("Context=## "));
     }
 
     #[test]
