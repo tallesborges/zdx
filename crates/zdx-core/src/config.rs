@@ -1128,7 +1128,7 @@ fn default_stepfun_provider() -> ProviderConfig {
 fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["mimo-v2-flash".to_string()],
+        models: vec!["mimo-v2-flash".to_string(), "mimo-v2-pro".to_string(), "mimo-v2-omni".to_string()],
         ..Default::default()
     }
 }
@@ -1199,7 +1199,7 @@ fn default_apiyi_provider() -> ProviderConfig {
 fn default_minimax_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
+        models: vec!["MiniMax-M2.7".to_string(), "MiniMax-M2.5".to_string(), "MiniMax-M2.1".to_string()],
         ..Default::default()
     }
 }
@@ -1223,7 +1223,7 @@ fn default_xai_provider() -> ProviderConfig {
         models: vec![
             "grok-4.20-experimental-beta-0304-reasoning".to_string(),
             "grok-4.20-experimental-beta-0304-non-reasoning".to_string(),
-            "grok-4-1-fast-reasoning".to_string(),
+            "grok-4-1-fast".to_string(),
             "grok-4-1-fast-non-reasoning".to_string(),
         ],
         ..Default::default()

@@ -169,7 +169,7 @@ models = []
 enabled = true
 # api_key = "sk-..."  # Overrides XIAOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
-models = ["mimo-v2-flash"]
+models = ["mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"]
 
 [providers.gemini]
 enabled = true
@@ -186,7 +186,7 @@ models = ["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemin
 enabled = true
 # api_key = "..."  # Overrides MINIMAX_API_KEY env var
 # base_url = "https://api.minimax.io/v1"
-models = ["MiniMax-M2.5", "MiniMax-M2.1"]
+models = ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1"]
 
 [providers.zai]
 enabled = true
@@ -198,7 +198,7 @@ models = ["glm-5-turbo", "glm-5", "glm-4.7", "glm-4.7-flash"]
 enabled = true
 # api_key = "..."  # Overrides XAI_API_KEY env var
 # base_url = "https://api.x.ai/v1"
-models = ["grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4-1-fast-reasoning", "grok-4-1-fast-non-reasoning"]
+models = ["grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4-1-fast", "grok-4-1-fast-non-reasoning"]
 
 [providers.mistral]
 enabled = true
