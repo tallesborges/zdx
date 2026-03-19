@@ -137,6 +137,57 @@ pub(crate) mod bool_or_string {
 
 /// Resolves a path for reading/editing an existing file.
 ///
+/// Expand environment variables in a path string.
+///
+/// Supports `$VAR` and `${VAR}` syntax. Unknown variables are left as-is.
+pub fn expand_env_vars(input: &str) -> String {
+    let mut result = String::with_capacity(input.len());
+    let mut chars = input.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '$' {
+            let braced = chars.peek() == Some(&'{');
+            if braced {
+                chars.next(); // consume '{'
+            }
+            let mut var_name = String::new();
+            while let Some(&c) = chars.peek() {
+                if braced {
+                    if c == '}' {
+                        chars.next();
+                        break;
+                    }
+                } else if !c.is_ascii_alphanumeric() && c != '_' {
+                    break;
+                }
+                var_name.push(c);
+                chars.next();
+            }
+            if var_name.is_empty() {
+                result.push('$');
+                if braced {
+                    result.push('{');
+                }
+            } else if let Ok(val) = std::env::var(&var_name) {
+                result.push_str(&val);
+            } else {
+                // Leave unknown vars as-is
+                result.push('$');
+                if braced {
+                    result.push('{');
+                }
+                result.push_str(&var_name);
+                if braced {
+                    result.push('}');
+                }
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+    result
+}
+
 /// - Joins relative paths with root
 /// - Canonicalizes the path (resolves symlinks, `..`, etc.)
 /// - Returns error if the file doesn't exist
@@ -146,7 +197,8 @@ pub(crate) mod bool_or_string {
 /// # Errors
 /// Returns an error if the operation fails.
 pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
-    let requested = Path::new(path);
+    let expanded = expand_env_vars(path);
+    let requested = Path::new(&expanded);
 
     // Join with root (handles both absolute and relative paths)
     let full_path = if requested.is_absolute() {
