@@ -20,7 +20,6 @@ pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
 use zdx_core::config::Config;
-use zdx_core::core::context::EffectivePrompt;
 use zdx_core::core::thread_persistence::Thread;
 use zdx_core::providers::ChatMessage;
 use zdx_core::skills::Skill;
@@ -35,12 +34,6 @@ pub(crate) const TUI_SURFACE_RULES: &str = include_str!(concat!(
 pub(crate) fn tui_surface_rules() -> Option<&'static str> {
     let trimmed = TUI_SURFACE_RULES.trim();
     (!trimmed.is_empty()).then_some(trimmed)
-}
-
-pub(crate) fn context_paths(effective: &EffectivePrompt) -> Vec<PathBuf> {
-    let mut paths = effective.loaded_agents_paths.clone();
-    paths.extend(effective.scoped_context_paths.iter().cloned());
-    paths
 }
 
 /// Runs the interactive chat loop.
@@ -106,6 +99,10 @@ pub async fn run_interactive_chat_with_history(
     // Small delay so user can see the info before TUI takes over
     err.flush()?;
 
+    // Extract context info before prompt is moved into runtime
+    let loaded_agents_paths = effective.loaded_agents_paths.clone();
+    let loaded_skills = effective.loaded_skills.clone();
+
     // Create and run the TUI
     let mut runtime = if history.is_empty() {
         TuiRuntime::new(config.clone(), root, effective.prompt, thread_handle)?
@@ -139,8 +136,8 @@ pub async fn run_interactive_chat_with_history(
         .map(|log| log.path().as_path());
     for message in thread_startup_messages(
         thread_path,
-        &effective.loaded_agents_paths,
-        &effective.loaded_skills,
+        &loaded_agents_paths,
+        &loaded_skills,
     ) {
         runtime
             .state

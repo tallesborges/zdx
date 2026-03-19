@@ -90,7 +90,7 @@ pub fn execute_handoff_submit(
             crate::tui_surface_rules(),
             true,
         ) {
-            Ok(effective) => crate::context_paths(&effective),
+            Ok(effective) => effective.loaded_agents_paths,
             Err(_) => Vec::new(),
         };
 

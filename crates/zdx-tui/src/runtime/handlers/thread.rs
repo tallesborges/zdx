@@ -297,7 +297,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
 
         UiEvent::Thread(ThreadUiEvent::Created {
             thread_handle,
-            context_paths: crate::context_paths(&context),
+            context_paths: context.loaded_agents_paths.clone(),
             skills: context.loaded_skills,
         })
     })
