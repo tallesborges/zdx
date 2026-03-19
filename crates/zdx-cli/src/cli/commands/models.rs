@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
@@ -471,7 +472,8 @@ fn select_meta_candidate_from_official_sources(
     for source_provider in source_providers {
         if let Some(model) = lookup_model_in_provider(api, source_provider, &target_model) {
             return Some(candidate_from_model_entry(
-                spec,
+                spec.provider_id,
+                spec.prefix,
                 pattern,
                 source_provider,
                 model,
@@ -484,7 +486,8 @@ fn select_meta_candidate_from_official_sources(
         for source_provider in source_providers {
             if let Some(model) = lookup_model_in_provider(api, source_provider, &normalized) {
                 return Some(candidate_from_model_entry(
-                    spec,
+                    spec.provider_id,
+                    spec.prefix,
                     pattern,
                     source_provider,
                     model,
@@ -534,12 +537,13 @@ fn lookup_model_in_provider<'a>(
 }
 
 fn candidate_from_model_entry(
-    spec: &ProviderSpec<'_>,
-    pattern: &str,
+    provider_id: &str,
+    prefix: Option<&str>,
+    raw_id: &str,
     source_provider_id: &str,
     model: &ModelEntry,
 ) -> ModelCandidate {
-    let full_id = format_model_id(spec.prefix, pattern);
+    let full_id = format_model_id(prefix, raw_id);
     let input_images = model
         .modalities
         .input
@@ -548,7 +552,7 @@ fn candidate_from_model_entry(
 
     ModelCandidate {
         full_id: full_id.clone(),
-        display_name: format_display_name(spec.provider_id, &model.name),
+        display_name: format_display_name(provider_id, &model.name),
         pricing: ModelPricingRecord {
             input: model.cost.input,
             output: model.cost.output,
@@ -560,9 +564,9 @@ fn candidate_from_model_entry(
             reasoning: model.reasoning,
             input_images,
             output_limit: model.limit.output,
-            api: model_api_hint(spec.provider_id, Some(source_provider_id), model),
+            api: model_api_hint(provider_id, Some(source_provider_id), model),
         },
-        match_targets: build_match_targets(spec.provider_id, pattern, &full_id),
+        match_targets: build_match_targets(provider_id, raw_id, &full_id),
     }
 }
 
@@ -612,36 +616,7 @@ fn build_candidates(
         .values()
         .filter(|model| model.tool_call)
         .map(|model| {
-            let display_name = format_display_name(provider_id, &model.name);
-            let full_id = format_model_id(prefix, &model.id);
-            let pricing = ModelPricingRecord {
-                input: model.cost.input,
-                output: model.cost.output,
-                cache_read: model.cost.cache_read,
-                cache_write: model.cost.cache_write,
-            };
-            let input_images = model
-                .modalities
-                .input
-                .iter()
-                .any(|modality| modality == "image");
-            let capabilities = ModelCapabilitiesRecord {
-                reasoning: model.reasoning,
-                input_images,
-                output_limit: model.limit.output,
-                api: model_api_hint(provider_id, Some(source_provider_id), model),
-            };
-
-            let match_targets = build_match_targets(provider_id, &model.id, &full_id);
-
-            ModelCandidate {
-                full_id,
-                display_name,
-                pricing,
-                context_limit: model.limit.context,
-                capabilities,
-                match_targets,
-            }
+            candidate_from_model_entry(provider_id, prefix, &model.id, source_provider_id, model)
         })
         .collect()
 }
@@ -754,38 +729,53 @@ fn is_meta_provider(provider_id: &str) -> bool {
 fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
     use zdx_core::providers::{ProviderKind, provider_kind_from_id, resolve_provider};
 
-    let defaults: ModelsFile = toml::from_str(zdx_core::models::default_models_toml()).ok()?;
+    static DEFAULTS: OnceLock<Option<ModelsFile>> = OnceLock::new();
+    let defaults = DEFAULTS.get_or_init(|| {
+        match toml::from_str::<ModelsFile>(zdx_core::models::default_models_toml()) {
+            Ok(file) => Some(file),
+            Err(e) => {
+                eprintln!("Warning: failed to parse default_models.toml: {e}");
+                None
+            }
+        }
+    });
+    let defaults = defaults.as_ref()?;
+
     let target = resolve_provider(full_id);
     let target_model_normalized = normalize_model_lookup_id(&target.model);
     let is_meta_target = matches!(target.kind, ProviderKind::Zen | ProviderKind::Apiyi);
 
-    defaults.models.into_iter().find(|record| {
-        // Try exact match first
-        if record.id == full_id {
-            return true;
-        }
-        // Fall back to provider-based match using record.provider field
-        // This handles cases where record.id has no prefix (e.g., "step-3.5-flash")
-        // but record.provider specifies the correct provider (e.g., "stepfun")
-        if let Some(candidate_kind) = provider_kind_from_id(&record.provider)
-            && candidate_kind == target.kind
-            && record.id == target.model
-        {
-            return true;
-        }
+    defaults
+        .models
+        .iter()
+        .find(|record| {
+            // Try exact match first
+            if record.id == full_id {
+                return true;
+            }
+            // Fall back to provider-based match using record.provider field
+            // This handles cases where record.id has no prefix (e.g., "step-3.5-flash")
+            // but record.provider specifies the correct provider (e.g., "stepfun")
+            if let Some(candidate_kind) = provider_kind_from_id(&record.provider)
+                && candidate_kind == target.kind
+                && record.id == target.model
+            {
+                return true;
+            }
 
-        // Meta-providers (zen/apiyi) can reuse defaults from underlying providers
-        // when model IDs match (e.g., apiyi:gemini-2.5-flash -> gemini:gemini-2.5-flash).
-        if is_meta_target {
-            let resolved_record = resolve_provider(&record.id);
-            let resolved_match =
-                normalize_model_lookup_id(&resolved_record.model) == target_model_normalized;
-            let raw_match = normalize_model_lookup_id(&record.id) == target_model_normalized;
-            return resolved_match || raw_match;
-        }
+            // Meta-providers (zen/apiyi) can reuse defaults from underlying providers
+            // when model IDs match (e.g., apiyi:gemini-2.5-flash -> gemini:gemini-2.5-flash).
+            if is_meta_target {
+                let resolved_record = resolve_provider(&record.id);
+                let resolved_match =
+                    normalize_model_lookup_id(&resolved_record.model) == target_model_normalized;
+                let raw_match = normalize_model_lookup_id(&record.id) == target_model_normalized;
+                return resolved_match || raw_match;
+            }
 
-        false
-    })
+            false
+        })
+        .cloned()
 }
 
 fn normalize_model_lookup_id(model_id: &str) -> String {
@@ -805,16 +795,14 @@ fn lookup_openrouter_model(
 ) -> Option<ModelCandidate> {
     // Map our provider IDs to OpenRouter vendor prefixes
     let vendor = match provider_id {
-        "xiaomi" | "xiomi" => "xiaomi",
+        "xiaomi" => "xiaomi",
         "minimax" => "minimax",
         "xai" => "x-ai",
         "anthropic" | "claude-cli" => "anthropic",
         "openai" | "openai-codex" => "openai",
-        "google" | "gemini" | "gemini-cli" => "google",
-        "deepseek" => "deepseek",
+        "gemini" | "gemini-cli" => "google",
         "stepfun" => "stepfun",
-        "moonshot" | "kimi" => "moonshotai",
-        "mistral" => "mistralai",
+        "moonshot" => "moonshotai",
         "zai" => "z-ai",
         other => other,
     };
