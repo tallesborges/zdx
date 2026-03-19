@@ -1139,6 +1139,7 @@ fn default_gemini_provider() -> ProviderConfig {
         models: vec![
             "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
+            "gemini-3.1-flash-lite-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
@@ -1153,6 +1154,7 @@ fn default_gemini_cli_provider() -> ProviderConfig {
         models: vec![
             "gemini-3.1-pro-preview-customtools".to_string(),
             "gemini-3.1-pro-preview".to_string(),
+            "gemini-3.1-flash-lite-preview".to_string(),
             "gemini-3-flash-preview".to_string(),
             "gemini-2.5-flash".to_string(),
             "gemini-2.5-flash-lite".to_string(),
