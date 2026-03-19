@@ -54,14 +54,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let path = input.path.trim();
+    let path = super::expand_env_vars(input.path.trim());
     if path.is_empty() {
         return ToolOutput::failure("invalid_input", "path cannot be empty", None);
     }
 
     // Resolve path (relative to root, or absolute as-is)
-    let file_path = if std::path::Path::new(path).is_absolute() {
-        std::path::PathBuf::from(path)
+    let file_path = if std::path::Path::new(path.as_str()).is_absolute() {
+        std::path::PathBuf::from(path.as_str())
     } else {
         ctx.root.join(path)
     };
