@@ -16,18 +16,18 @@ const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Web_Search".to_string(),
-        description: "Search the web for information using natural language. Returns LLM-optimized excerpts ranked by relevance.".to_string(),
+        description: "Search the web for information. Use this tool when you need current information, facts, or details that may not be in your training data. Returns ranked URLs with LLM-optimized excerpts.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "objective": {
                     "type": "string",
-                    "description": "Natural language research goal (max 5000 chars). Include task context, preferred sources, and freshness needs."
+                    "description": "Natural-language research goal. Be specific about what you need, include context from your task, preferred sources (e.g., 'prefer official docs'), and freshness requirements (e.g., 'past 6 months')."
                 },
                 "search_queries": {
                     "type": "array",
                     "items": { "type": "string" },
-                    "description": "Optional keyword queries (max 200 chars each). Use with objective for best results."
+                    "description": "Keyword queries to supplement the objective. Use specific terms and search operators. Providing both objective and search_queries yields best results."
                 },
                 "max_results": {
                     "type": "integer",
@@ -38,10 +38,6 @@ pub fn definition() -> ToolDefinition {
                 }
             },
             "required": [],
-            "anyOf": [
-                { "required": ["objective"] },
-                { "required": ["search_queries"] }
-            ],
             "additionalProperties": false
         }),
     }
@@ -274,8 +270,6 @@ mod tests {
         let schema = &def.input_schema;
         let required = schema.get("required").unwrap().as_array().unwrap();
         assert!(required.is_empty());
-        let any_of = schema.get("anyOf").unwrap().as_array().unwrap();
-        assert_eq!(any_of.len(), 2);
     }
 
     #[test]
