@@ -37,6 +37,7 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 All common tasks are available via `just` (see `justfile`). Run `just` to list all recipes.
 
 - `just run` (interactive TUI; pass extra args: `just run --help`)
+- `just monitor` (service dashboard for config, threads, automations)
 - `just bot` (Telegram bot; requires config telegram.\* keys)
 - `just bot-loop` (Telegram bot with auto-restart on exit code 42)
 - `just automations` (automation subcommands; e.g. `just automations list`)

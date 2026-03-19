@@ -10,6 +10,10 @@ default:
 run *ARGS:
     cargo run -p zdx -- {{ARGS}}
 
+# Run the service dashboard
+monitor:
+    cargo run -p zdx -- monitor
+
 # Run the Telegram bot
 bot:
     cargo run -p zdx -- bot
