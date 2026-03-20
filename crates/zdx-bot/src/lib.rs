@@ -62,7 +62,6 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
     tracing::info!(
         model = %config.model,
         thinking = %config.thinking_level.display_name(),
-        subagent = ?config.telegram.subagent,
         users = ?config.telegram.allowlist_user_ids,
         chats = ?config.telegram.allowlist_chat_ids,
         "Bot config",

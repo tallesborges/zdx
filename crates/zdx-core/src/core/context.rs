@@ -819,11 +819,19 @@ fn render_system_prompt_with_fallback(
     match render_prompt_template(&template_source.content, vars) {
         Ok(rendered) => rendered,
         Err(error) => {
+            let legacy_surface_rules_hint = error.contains("surface_rules")
+                || template_source.content.contains("surface_rules");
             warnings.push(ContextWarning {
                 path: template_source.path.clone(),
-                message: format!(
-                    "Failed to render system prompt template: {error}; falling back to default template"
-                ),
+                message: if legacy_surface_rules_hint {
+                    format!(
+                        "Failed to render system prompt template: {error}; `surface_rules` is no longer available in template vars, use `instruction_layers` instead; falling back to default template"
+                    )
+                } else {
+                    format!(
+                        "Failed to render system prompt template: {error}; falling back to default template"
+                    )
+                },
             });
 
             match render_prompt_template(prompts::default_system_prompt_template(), vars) {

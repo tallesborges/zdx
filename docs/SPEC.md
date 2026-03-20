@@ -233,7 +233,6 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
 - Built-in subagents currently include `general_assistant` as an alias of the base/default prompt with no extra specialization.
 - Subagent prompt bodies use the same template engine/features as the main system prompt pipeline.
-- `[telegram].subagent` optionally selects a named subagent used by the Telegram bot runtime.
 
 ### Models registry
 

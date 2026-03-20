@@ -55,7 +55,7 @@ fn automation_instruction_layers() -> [&'static str; 1] {
 
 fn automation_prompt_context() -> PromptContextInclusion {
     PromptContextInclusion {
-        project_context: false,
+        project_context: true,
         memory_index: true,
         skills: true,
     }
@@ -296,6 +296,10 @@ fn prepare_automation_run(
 ) -> Result<PreparedAutomationRun> {
     let mut run_config = config.clone();
     let instruction_layers = automation_instruction_layers();
+    let chosen_model = automation
+        .model
+        .clone()
+        .unwrap_or_else(|| run_config.model.clone());
 
     if let Some(subagent_name) = automation.subagent.as_deref() {
         let definition = subagents::load_by_name(root, subagent_name)
@@ -332,7 +336,7 @@ fn prepare_automation_run(
     let effective = zdx_core::core::context::build_prompt_with_context_and_layers(
         &run_config,
         root,
-        &run_config.model,
+        &chosen_model,
         &instruction_layers,
         false,
         automation_prompt_context(),
@@ -340,10 +344,11 @@ fn prepare_automation_run(
     .context("render automation prompt")?;
     run_config.system_prompt = effective.prompt;
     run_config.system_prompt_file = None;
+    run_config.model.clone_from(&chosen_model);
 
     Ok(PreparedAutomationRun {
         config: run_config,
-        model_override: automation.model.clone(),
+        model_override: Some(chosen_model),
         thinking_override: None,
         tools_override: None,
     })
@@ -496,6 +501,8 @@ fn read_run_records(path: &Path) -> Result<Vec<AutomationRunRecord>> {
 mod tests {
     use chrono::TimeZone;
     use tempfile::tempdir;
+    use zdx_core::automations::AutomationSource;
+    use zdx_core::config::{Config, SkillSourceToggles, ThinkingLevel};
 
     use super::*;
 
@@ -648,5 +655,51 @@ mod tests {
             Some(exact),
             Some(exact)
         ));
+    }
+
+    #[test]
+    fn prepare_automation_run_uses_effective_model_and_project_context() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Automation project note").unwrap();
+
+        let mut config = Config {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            thinking_level: ThinkingLevel::Low,
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: Some("openai-codex:gpt-5.4".to_string()),
+            subagent: None,
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let prepared = prepare_automation_run(&config, dir.path(), &automation).unwrap();
+        let prompt = prepared.config.system_prompt.unwrap_or_default();
+
+        assert_eq!(
+            prepared.model_override.as_deref(),
+            Some("openai-codex:gpt-5.4")
+        );
+        assert_eq!(prepared.config.model, "openai-codex:gpt-5.4");
+        assert!(prompt.contains("Automation project note"));
+        assert!(prompt.contains("multi_tool_use.parallel"));
     }
 }

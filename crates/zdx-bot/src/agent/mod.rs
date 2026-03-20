@@ -2,12 +2,11 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
-use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
+use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
-use zdx_core::subagents;
 
 use crate::types::IncomingMessage;
 
@@ -87,12 +86,11 @@ pub(crate) struct AgentTurnHandle {
 struct PreparedBotTurn {
     config: Config,
     system_prompt: Option<String>,
-    tool_config: ToolConfig,
 }
 
 fn bot_prompt_context() -> PromptContextInclusion {
     PromptContextInclusion {
-        project_context: false,
+        project_context: true,
         memory_index: true,
         skills: true,
     }
@@ -106,69 +104,22 @@ fn prepare_bot_turn(
     config: &Config,
     root: &Path,
     bot_instruction_layer: Option<&str>,
-    tool_config: &ToolConfig,
 ) -> Result<PreparedBotTurn> {
-    let mut bot_config = config.clone();
+    let bot_config = config.clone();
     let instruction_layers = collect_bot_instruction_layers(bot_instruction_layer);
-
-    let Some(subagent_name) = config
-        .telegram
-        .subagent
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
-        let effective = build_prompt_with_context_and_layers(
-            &bot_config,
-            root,
-            &bot_config.model,
-            &instruction_layers,
-            true,
-            bot_prompt_context(),
-        )
-        .context("build bot prompt")?;
-
-        return Ok(PreparedBotTurn {
-            config: bot_config,
-            system_prompt: effective.prompt,
-            tool_config: tool_config.clone(),
-        });
-    };
-
-    let definition = subagents::load_by_name(root, subagent_name)
-        .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
-
-    if let Some(model) = definition.model.clone() {
-        bot_config.model = model;
-    }
-    if let Some(level) = definition.thinking_level {
-        bot_config.thinking_level = level;
-    }
-
-    let system_prompt = subagents::render_prompt(
+    let effective = build_prompt_with_context_and_layers(
         &bot_config,
         root,
-        &definition,
         &bot_config.model,
         &instruction_layers,
         true,
         bot_prompt_context(),
     )
-    .with_context(|| format!("render bot subagent '{subagent_name}'"))?;
-
-    let tool_config = definition.tools.clone().map_or_else(
-        || tool_config.clone(),
-        |tools| {
-            tool_config
-                .clone()
-                .with_selection(ToolSelection::Explicit(tools))
-        },
-    );
+    .context("build bot prompt")?;
 
     Ok(PreparedBotTurn {
         config: bot_config,
-        system_prompt: Some(system_prompt),
-        tool_config,
+        system_prompt: effective.prompt,
     })
 }
 
@@ -195,12 +146,11 @@ pub(crate) fn spawn_agent_turn(
     let PreparedBotTurn {
         config: bot_config,
         system_prompt,
-        tool_config,
-    } = prepare_bot_turn(config, root, bot_instruction_layer, tool_config)?;
+    } = prepare_bot_turn(config, root, bot_instruction_layer)?;
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
-        tool_config,
+        tool_config: tool_config.clone(),
         surface: Some("telegram".to_string()),
     };
 
@@ -300,10 +250,28 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use serde_json::json;
+    use zdx_core::config::{Config, SkillSourceToggles};
     use zdx_core::core::events::{AgentEvent, ToolOutput};
 
-    use super::{STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status};
+    use super::{
+        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status, prepare_bot_turn,
+    };
+
+    fn make_temp_dir() -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "zdx-bot-agent-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn maps_waiting_thinking_and_writing_states() {
@@ -349,5 +317,33 @@ mod tests {
             }),
             Some(STATUS_WAITING.to_string())
         );
+    }
+
+    #[test]
+    fn prepare_bot_turn_includes_project_context() {
+        let dir = make_temp_dir();
+        std::fs::write(dir.join("AGENTS.md"), "Bot project note").unwrap();
+
+        let mut config = Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let prepared = prepare_bot_turn(&config, &dir, None).unwrap();
+        let prompt = prepared.system_prompt.unwrap_or_default();
+
+        assert!(prompt.contains("Bot project note"));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

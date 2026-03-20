@@ -142,8 +142,6 @@ pub struct TelegramConfig {
     pub model: String,
     /// Thinking level for the Telegram bot.
     pub thinking_level: ThinkingLevel,
-    /// Optional named subagent profile for Telegram bot turns.
-    pub subagent: Option<String>,
     /// Audio transcription configuration for Telegram voice/audio messages.
     #[serde(default)]
     pub transcription: TranscriptionConfig,
@@ -157,7 +155,6 @@ impl Default for TelegramConfig {
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
-            subagent: None,
             transcription: TranscriptionConfig::default(),
         }
     }

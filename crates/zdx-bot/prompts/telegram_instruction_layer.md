@@ -34,7 +34,7 @@ Section headings and XML example tags below are instruction delimiters only; nev
 When a response involves reports, dashboards, data tables, architecture diagrams, comparisons, feature matrices, diff reviews, or any content that would benefit from rich formatting beyond what Telegram supports, MUST produce TWO outputs:
 
 1. Telegram message (TLDR): a short scannable summary under 3500 chars. Lead with key findings or answers. Use bold labels and flat bullet lists.
-2. HTML attachment: use the `visual-render` skill to generate a self-contained HTML dashboard at `<artifact_dir>/<descriptive-name>.html` (the `artifact_dir` path is available in the `<environment>` block). Include it via `<media>` tag at the end of the Telegram message.
+2. HTML attachment: use the `html-page` skill to generate a self-contained HTML dashboard at `$ZDX_ARTIFACT_DIR/<descriptive-name>.html`. Include it via `<media>` tag at the end of the Telegram message.
 
 When an HTML file is included, MUST end the TLDR with `<i>Full details attached ↓</i>`.
 
