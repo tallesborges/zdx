@@ -13,6 +13,7 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
 
     match app.active_section {
         Section::Services => render_services(f, app, chunks[1]),
+        Section::ActiveAgents => render_active_agents(f, app, chunks[1]),
         Section::Config => render_config(f, app, chunks[1]),
         Section::Threads => render_threads(f, app, chunks[1]),
         Section::Automations => render_automations(f, app, chunks[1]),
@@ -51,6 +52,44 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
         })
         .collect();
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Services"));
+    f.render_widget(list, area);
+}
+
+fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    if app.active_agents.is_empty() {
+        let p = Paragraph::new(" No active agent runs")
+            .style(Style::default().fg(Color::DarkGray))
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title("Active Agents"),
+            );
+        f.render_widget(p, area);
+        return;
+    }
+
+    let items: Vec<ListItem> = app
+        .active_agents
+        .iter()
+        .enumerate()
+        .map(|(i, a)| {
+            let line = format!(
+                " ● PID {:<7} {:<10} thread:{:<10} up {}",
+                a.pid, a.surface, a.thread_id, a.uptime
+            );
+            let style = if i == app.selected_index {
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::REVERSED)
+            } else {
+                Style::default().fg(Color::Green)
+            };
+            ListItem::new(line).style(style)
+        })
+        .collect();
+
+    let title = format!("Active Agents ({})", app.active_agents.len());
+    let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(list, area);
 }
 

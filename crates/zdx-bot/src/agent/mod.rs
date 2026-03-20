@@ -116,6 +116,7 @@ pub(crate) fn spawn_agent_turn(
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
         tool_config: tool_config.clone(),
+        surface: Some("telegram".to_string()),
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]

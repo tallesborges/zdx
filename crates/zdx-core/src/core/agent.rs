@@ -49,6 +49,8 @@ pub struct AgentOptions {
     pub root: PathBuf,
     /// Tool configuration (registry + selection).
     pub tool_config: ToolConfig,
+    /// Surface label for activity tracking (e.g., "chat", "exec", "telegram").
+    pub surface: Option<String>,
 }
 
 /// Tool configuration for agent execution.
@@ -663,6 +665,7 @@ pub async fn run_turn(
     thread_id: Option<&str>,
     tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
+    let _run_guard = crate::agent_activity::start(thread_id, options.surface.as_deref());
     let sender = EventSender::new(tx);
     match run_turn_inner(messages, config, options, system_prompt, thread_id, &sender).await {
         Ok(result) => Ok(result),

@@ -9,7 +9,7 @@ use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
 use zdx_core::config::{self, paths};
-use zdx_core::{automations, pidfile};
+use zdx_core::{agent_activity, automations, pidfile};
 
 use crate::ui;
 
@@ -18,6 +18,7 @@ pub struct MonitorApp {
     pub threads: Vec<ThreadInfo>,
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
+    pub active_agents: Vec<ActiveAgentInfo>,
     pub active_section: Section,
     pub selected_index: usize,
     pub should_quit: bool,
@@ -41,17 +42,26 @@ pub struct ServiceInfo {
     pub details: String,
 }
 
+pub struct ActiveAgentInfo {
+    pub pid: u32,
+    pub surface: String,
+    pub thread_id: String,
+    pub uptime: String,
+}
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Section {
     Services,
+    ActiveAgents,
     Config,
     Threads,
     Automations,
 }
 
 impl Section {
-    pub const ALL: [Section; 4] = [
+    pub const ALL: [Section; 5] = [
         Section::Services,
+        Section::ActiveAgents,
         Section::Config,
         Section::Threads,
         Section::Automations,
@@ -60,6 +70,7 @@ impl Section {
     pub fn label(self) -> &'static str {
         match self {
             Section::Services => "Services",
+            Section::ActiveAgents => "Active Agents",
             Section::Config => "Config",
             Section::Threads => "Threads",
             Section::Automations => "Automations",
@@ -68,7 +79,8 @@ impl Section {
 
     fn next(self) -> Self {
         match self {
-            Section::Services => Section::Config,
+            Section::Services => Section::ActiveAgents,
+            Section::ActiveAgents => Section::Config,
             Section::Config => Section::Threads,
             Section::Threads => Section::Automations,
             Section::Automations => Section::Services,
@@ -80,6 +92,7 @@ impl MonitorApp {
     fn item_count(&self) -> usize {
         match self.active_section {
             Section::Services | Section::Config => 0,
+            Section::ActiveAgents => self.active_agents.len(),
             Section::Threads => self.threads.len(),
             Section::Automations => self.automations.len(),
         }
@@ -96,12 +109,14 @@ pub fn run(root: &Path) -> Result<()> {
     let threads = load_threads();
     let automations = load_automations(root);
     let services = load_services();
+    let active_agents = load_active_agents();
 
     let mut app = MonitorApp {
         config,
         threads,
         automations,
         services,
+        active_agents,
         active_section: Section::Services,
         selected_index: 0,
         should_quit: false,
@@ -164,6 +179,7 @@ pub fn run(root: &Path) -> Result<()> {
 
         if last_tick.elapsed() >= tick_rate {
             app.services = load_services();
+            app.active_agents = load_active_agents();
             last_tick = Instant::now();
         }
 
@@ -305,4 +321,23 @@ fn format_duration(d: std::time::Duration) -> String {
     } else {
         format!("{}d {}h", secs / 86400, (secs % 86400) / 3600)
     }
+}
+
+fn load_active_agents() -> Vec<ActiveAgentInfo> {
+    agent_activity::list_active()
+        .into_iter()
+        .map(|r| {
+            let short_thread = r
+                .thread_id
+                .as_deref()
+                .map_or("-", |id| if id.len() > 8 { &id[..8] } else { id })
+                .to_string();
+            ActiveAgentInfo {
+                pid: r.pid,
+                surface: r.surface.unwrap_or_else(|| "-".to_string()),
+                thread_id: short_thread,
+                uptime: agent_activity::uptime_since(&r.started_at),
+            }
+        })
+        .collect()
 }
