@@ -65,6 +65,7 @@ impl BotContext {
             cancel_map,
             queue_cancel_map,
         } = deps;
+        let root = root.canonicalize().unwrap_or(root);
         Self {
             client,
             config: RwLock::new(config),
