@@ -957,15 +957,93 @@ fn generate_thread_id() -> String {
 /// ```
 pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut usage_persistor = UsagePersistor::default();
         while let Some(event) = rx.recv().await {
-            if let Some(thread_event) = ThreadEvent::from_agent(&event) {
+            for thread_event in usage_persistor.handle_event(&event) {
                 // Best-effort persistence - log errors but don't panic
                 if let Err(e) = thread.append(&thread_event) {
                     tracing::warn!(%e, "Failed to persist thread event");
                 }
             }
         }
+
+        for thread_event in usage_persistor.finish() {
+            if let Err(e) = thread.append(&thread_event) {
+                tracing::warn!(%e, "Failed to persist thread event");
+            }
+        }
     })
+}
+
+#[derive(Debug, Default)]
+struct UsagePersistor {
+    pending: Option<Usage>,
+}
+
+impl UsagePersistor {
+    fn handle_event(&mut self, event: &crate::core::events::AgentEvent) -> Vec<ThreadEvent> {
+        use crate::core::events::AgentEvent;
+
+        let mut events = Vec::new();
+
+        match event {
+            AgentEvent::UsageUpdate {
+                input_tokens,
+                output_tokens,
+                cache_read_input_tokens,
+                cache_creation_input_tokens,
+            } => {
+                if *input_tokens > 0
+                    || *cache_read_input_tokens > 0
+                    || *cache_creation_input_tokens > 0
+                {
+                    self.flush_pending(&mut events);
+                    self.pending = Some(Usage::new(
+                        *input_tokens,
+                        0,
+                        *cache_read_input_tokens,
+                        *cache_creation_input_tokens,
+                    ));
+                }
+
+                if *output_tokens > 0 {
+                    if let Some(mut usage) = self.pending.take() {
+                        usage.output += *output_tokens;
+                        events.push(ThreadEvent::usage(usage));
+                    } else {
+                        events.push(ThreadEvent::usage(Usage::new(0, *output_tokens, 0, 0)));
+                    }
+                }
+            }
+            AgentEvent::TurnFinished { .. } => {
+                self.flush_pending(&mut events);
+                if let Some(thread_event) = ThreadEvent::from_agent(event) {
+                    events.push(thread_event);
+                }
+            }
+            _ => {
+                if let Some(thread_event) = ThreadEvent::from_agent(event) {
+                    events.push(thread_event);
+                }
+            }
+        }
+
+        events
+    }
+
+    fn flush_pending(&mut self, events: &mut Vec<ThreadEvent>) {
+        if let Some(usage) = self.pending.take()
+            && usage.total() > 0
+        {
+            events.push(ThreadEvent::usage(usage));
+        }
+    }
+
+    fn finish(&mut self) -> Vec<ThreadEvent> {
+        let mut events = Vec::new();
+        self.flush_pending(&mut events);
+        events
+    }
 }
 
 /// Summary information about a saved thread.
@@ -1764,12 +1842,14 @@ impl ThreadPersistenceOptions {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::OnceLock;
+    use std::sync::{Arc, OnceLock};
 
     use serde_json::json;
     use tempfile::TempDir;
 
     use super::*;
+    use crate::core::agent::create_event_channel;
+    use crate::core::events::{AgentEvent, TurnStatus};
     use crate::providers::ReplayToken;
 
     fn setup_temp_zdx_home() -> &'static TempDir {
@@ -2525,6 +2605,127 @@ mod tests {
         // Single event: cumulative = latest
         assert_eq!(cumulative, Usage::new(1000, 500, 2000, 100));
         assert_eq!(latest, Usage::new(1000, 500, 2000, 100));
+    }
+
+    #[tokio::test]
+    async fn test_persist_task_saves_completed_usage_from_agent_events() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("persist-complete-usage")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 100,
+            output_tokens: 0,
+            cache_read_input_tokens: 20,
+            cache_creation_input_tokens: 5,
+        }))
+        .await
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 0,
+            output_tokens: 50,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        }))
+        .await
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "done".to_string(),
+            messages: Vec::new(),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let (cumulative, latest) = extract_usage_from_thread_events(&events);
+        assert_eq!(cumulative, Usage::new(100, 50, 20, 5));
+        assert_eq!(latest, Usage::new(100, 50, 20, 5));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, ThreadEvent::Usage { .. }))
+                .count(),
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn test_persist_task_flushes_partial_usage_on_interrupted_turn() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("persist-interrupted-usage")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 500,
+            output_tokens: 0,
+            cache_read_input_tokens: 100,
+            cache_creation_input_tokens: 25,
+        }))
+        .await
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Interrupted,
+            final_text: "partial".to_string(),
+            messages: Vec::new(),
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let (cumulative, latest) = extract_usage_from_thread_events(&events);
+        assert_eq!(cumulative, Usage::new(500, 0, 100, 25));
+        assert_eq!(latest, Usage::new(500, 0, 100, 25));
+        assert!(matches!(
+            events.last(),
+            Some(ThreadEvent::Interrupted {
+                partial_content: Some(content),
+                ..
+            }) if content == "partial"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_persist_task_flushes_pending_usage_on_channel_close() {
+        let _temp = setup_temp_zdx_home();
+
+        let thread = Thread::with_id(unique_thread_id("persist-close-usage")).unwrap();
+        let (tx, rx) = create_event_channel();
+        let persist_handle = spawn_thread_persist_task(thread.clone(), rx);
+
+        tx.send(Arc::new(AgentEvent::UsageUpdate {
+            input_tokens: 321,
+            output_tokens: 0,
+            cache_read_input_tokens: 45,
+            cache_creation_input_tokens: 6,
+        }))
+        .await
+        .unwrap();
+        drop(tx);
+
+        persist_handle.await.unwrap();
+
+        let events = thread.read_events().unwrap();
+        let (cumulative, latest) = extract_usage_from_thread_events(&events);
+        assert_eq!(cumulative, Usage::new(321, 0, 45, 6));
+        assert_eq!(latest, Usage::new(321, 0, 45, 6));
+        assert_eq!(
+            events
+                .iter()
+                .filter(|event| matches!(event, ThreadEvent::Usage { .. }))
+                .count(),
+            1
+        );
     }
 
     #[test]

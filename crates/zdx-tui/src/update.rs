@@ -157,22 +157,6 @@ fn handle_agent_event(
         app.tui.status_line.mark_tool_used();
     }
 
-    if let zdx_core::core::events::AgentEvent::UsageUpdate { output_tokens, .. } = agent_event
-        && *output_tokens > 0
-        && has_thread
-    {
-        save_current_turn_usage(app, &mut effects);
-    }
-
-    if matches!(
-        agent_event,
-        zdx_core::core::events::AgentEvent::TurnFinished { .. }
-    ) && has_thread
-        && app.tui.thread.usage.has_unsaved_usage()
-    {
-        save_current_turn_usage(app, &mut effects);
-    }
-
     let should_dequeue = matches!(
         agent_event,
         zdx_core::core::events::AgentEvent::TurnFinished { .. }
@@ -181,14 +165,6 @@ fn handle_agent_event(
     maybe_send_next_queued_prompt(app, should_dequeue, &mut effects);
 
     effects
-}
-
-fn save_current_turn_usage(app: &mut AppState, effects: &mut Vec<UiEffect>) {
-    let usage = app.tui.thread.usage.turn_usage();
-    effects.push(UiEffect::SaveThread {
-        event: zdx_core::core::thread_persistence::ThreadEvent::usage(usage),
-    });
-    app.tui.thread.usage.mark_saved();
 }
 
 fn maybe_push_timing_cell(app: &mut AppState, should_dequeue: bool) {

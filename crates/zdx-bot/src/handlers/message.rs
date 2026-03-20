@@ -1,5 +1,7 @@
 use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
@@ -7,6 +9,8 @@ use zdx_core::config::ThinkingLevel;
 use zdx_core::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
 use zdx_core::core::thread_persistence::{self, ThreadEvent};
 use zdx_core::core::worktree;
+use zdx_core::models::{ModelOption, ModelPricing};
+use zdx_core::providers::{ProviderAuthMode, provider_for_model};
 
 use crate::bot::context::BotContext;
 use crate::commands::{BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command};
@@ -180,6 +184,14 @@ async fn handle_thread_setup_commands(
             reply_ctx.topic_id,
         )
         .await?
+        || handle_status_command(
+            context,
+            incoming,
+            thread_id,
+            reply_ctx.reply_to_message_id,
+            reply_ctx.topic_id,
+        )
+        .await?
         || handle_thread_commands(
             context,
             incoming,
@@ -230,6 +242,18 @@ struct SpawnRequest<'a> {
     thread: &'a zdx_core::core::thread_persistence::Thread,
     messages: Vec<zdx_core::providers::ChatMessage>,
     config: &'a zdx_core::config::Config,
+}
+
+struct StatusSnapshot<'a> {
+    model_id: &'a str,
+    model_override: Option<&'a str>,
+    thinking: ThinkingLevel,
+    thinking_override: Option<ThinkingLevel>,
+    thread_id: &'a str,
+    root_path: &'a Path,
+    branch: Option<&'a str>,
+    cumulative_usage: thread_persistence::Usage,
+    latest_usage: thread_persistence::Usage,
 }
 
 fn escape_html(text: &str) -> String {
@@ -323,6 +347,7 @@ async fn handle_general_forum_commands(
         }
         BotCommand::WorktreeCreate => "/worktree must be used inside a topic, not General.",
         BotCommand::Rebuild => unreachable!("rebuild is handled by handle_rebuild_command"),
+        BotCommand::Status => unreachable!("status is handled by handle_status_command"),
     };
     context
         .client()
@@ -573,6 +598,55 @@ async fn handle_thinking_command(
     Ok(true)
 }
 
+async fn handle_status_command(
+    context: &BotContext,
+    incoming: &crate::types::IncomingMessage,
+    thread_id: &str,
+    reply_to_message_id: Option<i64>,
+    topic_id: Option<i64>,
+) -> Result<bool> {
+    if !incoming.images.is_empty() || !incoming.audios.is_empty() {
+        return Ok(false);
+    }
+    if !incoming
+        .text
+        .as_deref()
+        .is_some_and(|text| matches!(parse_command(text), Some(BotCommand::Status)))
+    {
+        return Ok(false);
+    }
+
+    let config = context.config();
+    let root_path = thread_persistence::read_thread_root_path(thread_id)?
+        .map_or_else(|| context.root().to_path_buf(), PathBuf::from);
+    let model_override = thread_persistence::read_thread_model_override(thread_id)?;
+    let thinking_override = thread_persistence::read_thread_thinking_override(thread_id)?;
+    let effective_model = model_override.as_deref().unwrap_or(&config.model);
+    let effective_thinking = thinking_override.unwrap_or(config.thinking_level);
+    let branch = git_branch_name(&root_path);
+    let events = thread_persistence::load_thread_events(thread_id)?;
+    let (cumulative_usage, latest_usage) =
+        thread_persistence::extract_usage_from_thread_events(&events);
+    let message = format_status_message(&StatusSnapshot {
+        model_id: effective_model,
+        model_override: model_override.as_deref(),
+        thinking: effective_thinking,
+        thinking_override,
+        thread_id,
+        root_path: &root_path,
+        branch: branch.as_deref(),
+        cumulative_usage,
+        latest_usage,
+    });
+
+    context
+        .client()
+        .send_message(incoming.chat_id, &message, reply_to_message_id, topic_id)
+        .await?;
+
+    Ok(true)
+}
+
 /// Build an inline keyboard showing provider names as buttons.
 /// Callback data format: `model_provider:{provider}:{scope}` where scope is `general` or `topic`.
 pub(crate) fn build_provider_keyboard(
@@ -763,7 +837,7 @@ async fn handle_thread_commands(
                 .await?;
             return Ok(true);
         }
-        BotCommand::Rebuild => return Ok(false),
+        BotCommand::Rebuild | BotCommand::Status => return Ok(false),
         BotCommand::WorktreeCreate => {}
     }
 
@@ -1579,6 +1653,185 @@ fn is_image_path(path: &Path) -> bool {
                 "png" | "jpg" | "jpeg" | "webp"
             )
         })
+}
+
+fn format_status_message(snapshot: &StatusSnapshot<'_>) -> String {
+    let model_meta = ModelOption::find_by_id(snapshot.model_id);
+    let provider = provider_for_model(snapshot.model_id);
+    let mut lines = vec!["<b>Status</b>".to_string()];
+
+    lines.push(format!(
+        "Model: <code>{}</code> ({})",
+        escape_html(snapshot.model_id),
+        if snapshot.model_override.is_some() {
+            "override"
+        } else {
+            "default"
+        }
+    ));
+    lines.push(format!(
+        "Thinking: <code>{}</code> ({})",
+        snapshot.thinking.display_name(),
+        if snapshot.thinking_override.is_some() {
+            "override"
+        } else {
+            "default"
+        }
+    ));
+    lines.push(format!(
+        "Thread: <code>{}</code>",
+        escape_html(snapshot.thread_id)
+    ));
+    lines.push(format!(
+        "Root: <code>{}</code>",
+        escape_html(&snapshot.root_path.display().to_string())
+    ));
+    lines.push(format!(
+        "Branch: <code>{}</code>",
+        escape_html(snapshot.branch.unwrap_or("n/a"))
+    ));
+
+    lines.push(format_context_usage_line(model_meta, snapshot.latest_usage));
+    lines.push(format!(
+        "Usage totals: <code>↑{} ↓{} R{} W{}</code>",
+        format_token_count(snapshot.cumulative_usage.input),
+        format_token_count(snapshot.cumulative_usage.output),
+        format_token_count(snapshot.cumulative_usage.cache_read),
+        format_token_count(snapshot.cumulative_usage.cache_write)
+    ));
+    lines.push(format_pricing_line(
+        model_meta,
+        provider.auth_mode(),
+        snapshot.cumulative_usage,
+    ));
+
+    lines.join("\n")
+}
+
+fn format_context_usage_line(
+    model_meta: Option<&ModelOption>,
+    latest_usage: thread_persistence::Usage,
+) -> String {
+    let context_tokens = latest_usage.context_input() + latest_usage.output;
+    match model_meta {
+        Some(model) if model.context_limit > 0 => {
+            let pct = (context_tokens as f64 / model.context_limit as f64) * 100.0;
+            format!(
+                "Context usage: <code>{pct:.0}% of {} ({})</code>",
+                format_context_limit(model.context_limit),
+                format_token_count(context_tokens)
+            )
+        }
+        _ => format!(
+            "Context usage: <code>{}</code> (limit unknown)",
+            format_token_count(context_tokens)
+        ),
+    }
+}
+
+fn format_pricing_line(
+    model_meta: Option<&ModelOption>,
+    auth_mode: ProviderAuthMode,
+    usage: thread_persistence::Usage,
+) -> String {
+    let Some(model) = model_meta else {
+        return "Pricing: <code>unknown</code> (model registry metadata not found)".to_string();
+    };
+
+    if auth_mode == ProviderAuthMode::OAuth {
+        return "Pricing: <code>subscription</code> (OAuth provider)".to_string();
+    }
+
+    let total_cost = calculate_usage_cost(usage, &model.pricing);
+    let cache_savings = calculate_cache_savings(usage, &model.pricing);
+    let mut line = format!(
+        "Pricing: <code>{}</code> total · rates <code>${}/${}/${}/${}</code>/1M",
+        format_cost(total_cost),
+        trim_price(model.pricing.input),
+        trim_price(model.pricing.output),
+        trim_price(model.pricing.cache_read),
+        trim_price(model.pricing.cache_write)
+    );
+
+    if cache_savings > 0.001 {
+        let _ = write!(line, " · saved <code>{}</code>", format_cost(cache_savings));
+    } else if usage.cache_read > 0 {
+        line.push_str(" · cached");
+    }
+
+    line
+}
+
+fn calculate_usage_cost(usage: thread_persistence::Usage, pricing: &ModelPricing) -> f64 {
+    let million = 1_000_000.0;
+    (usage.input as f64 / million) * pricing.input
+        + (usage.output as f64 / million) * pricing.output
+        + (usage.cache_read as f64 / million) * pricing.cache_read
+        + (usage.cache_write as f64 / million) * pricing.cache_write
+}
+
+fn calculate_cache_savings(usage: thread_persistence::Usage, pricing: &ModelPricing) -> f64 {
+    let million = 1_000_000.0;
+    let would_have_paid = (usage.cache_read as f64 / million) * pricing.input;
+    let actually_paid = (usage.cache_read as f64 / million) * pricing.cache_read;
+    would_have_paid - actually_paid
+}
+
+fn format_token_count(count: u64) -> String {
+    if count >= 1_000_000 {
+        format!("{:.1}M", count as f64 / 1_000_000.0)
+    } else if count >= 1_000 {
+        format!("{:.1}k", count as f64 / 1_000.0)
+    } else {
+        count.to_string()
+    }
+}
+
+fn format_context_limit(limit: u64) -> String {
+    if limit >= 1_000_000 {
+        format!("{:.0}M", limit as f64 / 1_000_000.0)
+    } else if limit >= 1_000 {
+        format!("{:.0}k", limit as f64 / 1_000.0)
+    } else {
+        limit.to_string()
+    }
+}
+
+fn format_cost(cost: f64) -> String {
+    if cost < 0.001 {
+        format!("${cost:.4}")
+    } else if cost < 0.01 {
+        format!("${cost:.3}")
+    } else {
+        format!("${cost:.2}")
+    }
+}
+
+fn trim_price(value: f64) -> String {
+    let mut text = format!("{value:.4}");
+    while text.contains('.') && text.ends_with('0') {
+        text.pop();
+    }
+    if text.ends_with('.') {
+        text.pop();
+    }
+    text
+}
+
+fn git_branch_name(root: &Path) -> Option<String> {
+    let output = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("branch")
+        .arg("--show-current")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    let branch = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    (!branch.is_empty()).then_some(branch)
 }
 
 fn thread_id_for_chat(chat_id: i64, message_thread_id: Option<i64>) -> String {

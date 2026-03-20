@@ -5,7 +5,7 @@ use tokio::sync::{Mutex, mpsc};
 use tokio_util::sync::CancellationToken;
 
 use crate::bot::context::{BotContext, QueueCancelKey};
-use crate::commands::is_topic_blocking_command;
+use crate::commands::{bypasses_queue, is_topic_blocking_command};
 use crate::handlers::message::handle_message;
 use crate::telegram::{InlineKeyboardButton, InlineKeyboardMarkup, Message};
 
@@ -54,13 +54,18 @@ pub(crate) async fn dispatch_message(
     let is_forum_general =
         message.chat.is_forum_enabled() && message.effective_thread_id().is_none();
 
-    if is_forum_general {
-        // Quick allowlist check before creating topic (avoid creating topics for
-        // unauthorized/bot messages). Full validation happens in handle_message.
-        if !should_process_message(context, &message) {
-            return;
-        }
+    if !should_process_message(context, &message) {
+        return;
+    }
 
+    if let Some(text) = message.text.as_deref()
+        && bypasses_queue(text)
+    {
+        spawn_standalone(Arc::clone(context), message);
+        return;
+    }
+
+    if is_forum_general {
         // Check for commands that shouldn't create a topic
         if let Some(text) = message.text.as_deref()
             && is_topic_blocking_command(text)
@@ -106,13 +111,6 @@ pub(crate) async fn dispatch_message(
             }
         });
     } else {
-        // Quick filter: skip bot messages and unauthorized users before enqueuing,
-        // so they don't produce a spurious "⏳ Queued" status message.
-        // (e.g. service messages from topic creation have thread_id set and would
-        // otherwise get enqueued and show "Queued" before being discarded.)
-        if !should_process_message(context, &message) {
-            return;
-        }
         enqueue_message(queues, context, message).await;
     }
 }
