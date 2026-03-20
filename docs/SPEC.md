@@ -133,6 +133,7 @@ The `meta` line (first line only) may be rewritten atomically to update thread m
 - Manual and daemon runs persist to timestamped thread IDs by default: `automation-<name>-<YYYYMMDD-HHMM>`.
 - `zdx automations run <name> --thread <ID>` uses the explicit thread ID instead.
 - `--no-thread` disables persistence for that run.
+- Automation frontmatter may include `subagent: <name>` to run with a named subagent prompt/tool/model configuration.
 
 ---
 
@@ -216,8 +217,22 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Template syntax: MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
 - `[prompt_template].file` — optional template path (relative paths resolve from `ZDX_HOME`).
-- The built-in template is the fallback. On custom template load/render failure, ZDX warns and falls back to the built-in.
+- The built-in fallback/default prompt is `prompts/system_prompt_template.md`. On custom template load/render failure, ZDX warns and falls back to that built-in template.
 - Providers consume the caller-composed prompt; they do not prepend hidden coding system prompts.
+
+### Prompt layers
+
+- Prompt layers are additive MiniJinja-rendered prompt fragments appended after the base system prompt.
+- The same mechanism is used for surface-specific constraints (for example Telegram or exec output guidance) and harness-style behavior layers (for example automation/headless execution instructions).
+- Prompt layers modify behavior without creating a separate subagent identity.
+
+### Named subagents
+
+- Named subagents are markdown files with YAML frontmatter plus a MiniJinja prompt body.
+- Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
+- `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
+- Built-in subagents currently include `general_assistant` as an alias of the base/default prompt with no extra specialization.
+- Subagent prompt bodies use the same template engine/features as the main system prompt pipeline.
 
 ### Models registry
 

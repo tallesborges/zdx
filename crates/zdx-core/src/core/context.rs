@@ -18,10 +18,9 @@ use minijinja::{Environment, UndefinedBehavior};
 use serde::Serialize;
 
 use crate::config::{Config, paths};
-use crate::prompts;
-use crate::prompts::SYSTEM_PROMPT_TEMPLATE;
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
+use crate::{prompts, subagents};
 
 /// Sets `ZDX_ARTIFACT_DIR` and `ZDX_THREAD_ID` as process environment variables.
 ///
@@ -58,9 +57,6 @@ pub const MAX_MEMORY_FILE_SIZE: usize = 16 * 1024;
 
 /// Preferred memory index filename.
 pub const MEMORY_INDEX_FILE_NAME: &str = "MEMORY.md";
-/// Default prompt template used when template mode is enabled and no file is configured.
-const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
-
 /// A warning generated during context loading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextWarning {
@@ -146,6 +142,13 @@ struct PromptTemplateSkill {
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateSubagents {
     available_models: Vec<String>,
+    available_subagents: Vec<PromptTemplateNamedSubagent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct PromptTemplateNamedSubagent {
+    name: String,
+    description: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -163,8 +166,8 @@ struct PromptTemplateVars {
     base_prompt: String,
     project_context: String,
     memory_index: String,
+    instruction_layers: Vec<String>,
     memory_suggestions: bool,
-    surface_rules: String,
     skills_list: Vec<PromptTemplateSkill>,
     scoped_context: Vec<PromptTemplateScopedContext>,
     subagents_config: Option<PromptTemplateSubagents>,
@@ -178,7 +181,6 @@ struct PromptTemplateSections<'a> {
     project_context: Option<&'a str>,
     memory_index: Option<&'a str>,
     memory_suggestions: bool,
-    surface_rules: Option<&'a str>,
     skills_list: &'a [Skill],
     scoped_context: &'a [ScopedContextFile],
     subagents_enabled: bool,
@@ -189,19 +191,21 @@ fn combine_prompt_sections(
     base_prompt: Option<&str>,
     inline_project_context: Option<&str>,
     memory_index_block: Option<&str>,
-    surface_rules_block: Option<&str>,
+    instruction_layers: &[String],
 ) -> Option<String> {
     let mut sections: Vec<&str> = Vec::new();
-    for value in [
-        base_prompt,
-        inline_project_context,
-        memory_index_block,
-        surface_rules_block,
-    ]
-    .into_iter()
-    .flatten()
+    for value in [base_prompt, inline_project_context, memory_index_block]
+        .into_iter()
+        .flatten()
     {
         let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed);
+        }
+    }
+
+    for layer in instruction_layers {
+        let trimmed = layer.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed);
         }
@@ -245,7 +249,7 @@ fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, 
     }
 
     Ok(TemplateSource {
-        content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+        content: prompts::default_system_prompt_template().to_string(),
         path: None,
     })
 }
@@ -262,11 +266,6 @@ fn build_prompt_template_vars(
         .trim()
         .to_string();
     let memory_index = sections.memory_index.unwrap_or_default().trim().to_string();
-    let surface_rules = sections
-        .surface_rules
-        .unwrap_or_default()
-        .trim()
-        .to_string();
     let skills_list = sections
         .skills_list
         .iter()
@@ -276,8 +275,21 @@ fn build_prompt_template_vars(
             path: skill.file_path.display().to_string(),
         })
         .collect();
+    let available_subagents = if sections.subagents_enabled {
+        subagents::list_summaries(root)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|subagent| PromptTemplateNamedSubagent {
+                name: subagent.name,
+                description: subagent.description,
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
     let subagents_config = sections.subagents_enabled.then(|| PromptTemplateSubagents {
         available_models: sections.subagent_models.to_vec(),
+        available_subagents,
     });
     let scoped_context = sections
         .scoped_context
@@ -307,8 +319,8 @@ fn build_prompt_template_vars(
         base_prompt,
         project_context,
         memory_index,
+        instruction_layers: Vec::new(),
         memory_suggestions: sections.memory_suggestions,
-        surface_rules,
         skills_list,
         scoped_context,
         subagents_config,
@@ -590,6 +602,24 @@ pub struct EffectivePrompt {
     pub loaded_skills: Vec<Skill>,
 }
 
+/// Selects which ambient context blocks are exposed to a rendered prompt template.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PromptContextInclusion {
+    pub project_context: bool,
+    pub memory_index: bool,
+    pub skills: bool,
+}
+
+impl Default for PromptContextInclusion {
+    fn default() -> Self {
+        Self {
+            project_context: true,
+            memory_index: true,
+            skills: true,
+        }
+    }
+}
+
 #[derive(Debug, Default)]
 struct PromptContextSectionsResult {
     loaded_agents_paths: Vec<PathBuf>,
@@ -637,6 +667,136 @@ fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
     load_skills(&skill_options)
 }
 
+/// Builds an effective prompt from the default system prompt template plus
+/// additive instruction layers rendered with the same context/template pipeline.
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub fn build_prompt_with_context_and_layers(
+    config: &Config,
+    root: &Path,
+    model: &str,
+    instruction_layers: &[&str],
+    memory_suggestions: bool,
+    inclusion: PromptContextInclusion,
+) -> Result<EffectivePrompt> {
+    let base_prompt = config.effective_system_prompt()?;
+
+    let sections_result = load_prompt_context_sections(root, config);
+    let loaded_agents_paths = if inclusion.project_context {
+        sections_result.loaded_agents_paths.clone()
+    } else {
+        Vec::new()
+    };
+    let scoped_context = if inclusion.project_context {
+        sections_result.scoped_context.clone()
+    } else {
+        Vec::new()
+    };
+    let mut warnings = sections_result.warnings.clone();
+    let inline_project_context = if inclusion.project_context {
+        sections_result.inline_project_context.clone()
+    } else {
+        None
+    };
+    let memory_index = if inclusion.memory_index {
+        sections_result.memory_index.clone()
+    } else {
+        None
+    };
+
+    let skills_result = if inclusion.skills {
+        load_skills_with_config(config, root)
+    } else {
+        LoadSkillsResult::default()
+    };
+    let LoadSkillsResult {
+        skills,
+        warnings: skill_warnings,
+    } = skills_result;
+
+    let subagent_models = if config.subagents.enabled {
+        config.subagent_available_models()
+    } else {
+        Vec::new()
+    };
+
+    let mut vars = build_prompt_template_vars(
+        root,
+        model,
+        PromptTemplateSections {
+            base_prompt: base_prompt.as_deref(),
+            project_context: inline_project_context.as_deref(),
+            memory_index: memory_index.as_deref(),
+            memory_suggestions,
+            skills_list: &skills,
+            scoped_context: &scoped_context,
+            subagents_enabled: config.subagents.enabled,
+            subagent_models: &subagent_models,
+        },
+    );
+
+    vars.instruction_layers = render_instruction_layers(instruction_layers, &vars, &mut warnings);
+
+    let prompt = render_system_prompt_with_fallback(
+        config,
+        &vars,
+        &mut warnings,
+        base_prompt.as_deref(),
+        inline_project_context.as_deref(),
+        memory_index.as_deref(),
+    );
+
+    if skills.len() > 20 {
+        warnings.push(ContextWarning {
+            path: None,
+            message: format!("Loaded {} skills; prompt may be large", skills.len()),
+        });
+    }
+
+    warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
+        path: Some(warning.skill_path),
+        message: warning.message,
+    }));
+
+    Ok(EffectivePrompt {
+        prompt,
+        loaded_agents_paths,
+        scoped_context_paths: scoped_context.iter().map(|sa| sa.path.clone()).collect(),
+        warnings,
+        loaded_skills: skills,
+    })
+}
+
+fn render_instruction_layers(
+    templates: &[&str],
+    vars: &PromptTemplateVars,
+    warnings: &mut Vec<ContextWarning>,
+) -> Vec<String> {
+    let mut rendered = Vec::new();
+
+    for (idx, template) in templates.iter().enumerate() {
+        let trimmed = template.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match render_prompt_template(trimmed, vars) {
+            Ok(Some(layer)) => rendered.push(layer),
+            Ok(None) => {}
+            Err(error) => warnings.push(ContextWarning {
+                path: None,
+                message: format!(
+                    "Failed to render instruction layer {}: {error}; skipping that layer",
+                    idx + 1
+                ),
+            }),
+        }
+    }
+
+    rendered
+}
+
 fn render_system_prompt_with_fallback(
     config: &Config,
     vars: &PromptTemplateVars,
@@ -644,14 +804,13 @@ fn render_system_prompt_with_fallback(
     base_prompt: Option<&str>,
     inline_project_context: Option<&str>,
     memory_index: Option<&str>,
-    surface_rules: Option<&str>,
 ) -> Option<String> {
     let template_source = match load_prompt_template(config) {
         Ok(source) => source,
         Err(warning) => {
             warnings.push(warning);
             TemplateSource {
-                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+                content: prompts::default_system_prompt_template().to_string(),
                 path: None,
             }
         }
@@ -660,14 +819,22 @@ fn render_system_prompt_with_fallback(
     match render_prompt_template(&template_source.content, vars) {
         Ok(rendered) => rendered,
         Err(error) => {
+            let legacy_surface_rules_hint = error.contains("surface_rules")
+                || template_source.content.contains("surface_rules");
             warnings.push(ContextWarning {
                 path: template_source.path.clone(),
-                message: format!(
-                    "Failed to render system prompt template: {error}; falling back to default template"
-                ),
+                message: if legacy_surface_rules_hint {
+                    format!(
+                        "Failed to render system prompt template: {error}; `surface_rules` is no longer available in template vars, use `instruction_layers` instead; falling back to default template"
+                    )
+                } else {
+                    format!(
+                        "Failed to render system prompt template: {error}; falling back to default template"
+                    )
+                },
             });
 
-            match render_prompt_template(DEFAULT_SYSTEM_PROMPT_TEMPLATE, vars) {
+            match render_prompt_template(prompts::default_system_prompt_template(), vars) {
                 Ok(rendered) => rendered,
                 Err(default_error) => {
                     warnings.push(ContextWarning {
@@ -680,7 +847,7 @@ fn render_system_prompt_with_fallback(
                         base_prompt,
                         inline_project_context,
                         memory_index,
-                        surface_rules,
+                        &vars.instruction_layers,
                     )
                 }
             }
@@ -707,95 +874,34 @@ pub fn build_effective_system_prompt_with_paths(
     root: &Path,
     memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
-    build_effective_system_prompt_with_paths_and_surface_rules(
+    build_effective_system_prompt_with_paths_and_instruction_layers(
         config,
         root,
-        None,
+        &[],
         memory_suggestions,
     )
 }
 
 /// Builds the effective system prompt by combining config, AGENTS.md files,
-/// an optional memory index, template-driven sections, and optional
-/// surface-specific output rules (e.g., Telegram formatting constraints).
+/// an optional memory index, template-driven sections, and additive
+/// instruction layers (for example surfaces or automation harnesses).
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub fn build_effective_system_prompt_with_paths_and_surface_rules(
+pub fn build_effective_system_prompt_with_paths_and_instruction_layers(
     config: &Config,
     root: &Path,
-    surface_rules: Option<&str>,
+    instruction_layers: &[&str],
     memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
-    let base_prompt = config.effective_system_prompt()?;
-    let PromptContextSectionsResult {
-        loaded_agents_paths,
-        scoped_context,
-        mut warnings,
-        inline_project_context,
-        memory_index,
-    } = load_prompt_context_sections(root, config);
-
-    let skills_result = load_skills_with_config(config, root);
-    let LoadSkillsResult {
-        skills,
-        warnings: skill_warnings,
-    } = skills_result;
-
-    let subagent_models = if config.subagents.enabled {
-        config.subagent_available_models()
-    } else {
-        Vec::new()
-    };
-
-    let vars = build_prompt_template_vars(
+    build_prompt_with_context_and_layers(
+        config,
         root,
         &config.model,
-        PromptTemplateSections {
-            base_prompt: base_prompt.as_deref(),
-            project_context: inline_project_context.as_deref(),
-            memory_index: memory_index.as_deref(),
-            memory_suggestions,
-            surface_rules,
-            skills_list: &skills,
-            scoped_context: &scoped_context,
-            subagents_enabled: config.subagents.enabled,
-            subagent_models: &subagent_models,
-        },
-    );
-
-    let system_prompt = render_system_prompt_with_fallback(
-        config,
-        &vars,
-        &mut warnings,
-        base_prompt.as_deref(),
-        inline_project_context.as_deref(),
-        memory_index.as_deref(),
-        surface_rules,
-    );
-
-    if skills.len() > 20 {
-        warnings.push(ContextWarning {
-            path: None,
-            message: format!("Loaded {} skills; prompt may be large", skills.len()),
-        });
-    }
-
-    warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
-        path: Some(warning.skill_path),
-        message: warning.message,
-    }));
-
-    let scoped_context_paths = scoped_context.iter().map(|sa| sa.path.clone()).collect();
-    let loaded_skills = skills;
-
-    Ok(EffectivePrompt {
-        prompt: system_prompt,
-        loaded_agents_paths,
-        scoped_context_paths,
-        warnings,
-        loaded_skills,
-    })
+        instruction_layers,
+        memory_suggestions,
+        PromptContextInclusion::default(),
+    )
 }
 
 #[cfg(test)]
@@ -1112,7 +1218,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1134,7 +1239,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1164,7 +1268,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: true,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1201,7 +1304,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &skills,
                 scoped_context: &[],
                 subagents_enabled: true,
@@ -1210,7 +1312,7 @@ mod tests {
         );
 
         let rendered = render_prompt_template(
-            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
+            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available named subagents: {% for subagent in subagents_config.available_subagents %}{{ subagent.name }}{% endfor %}\nAvailable model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
             &vars,
         )
         .unwrap()
@@ -1219,6 +1321,7 @@ mod tests {
         assert!(rendered.contains("<name>demo-skill</name>"));
         assert!(rendered.contains("Use <special> syntax"));
         assert!(rendered.contains("demo&skill"));
+        assert!(rendered.contains("general_assistant"));
         assert!(rendered.contains("codex:gpt-5.3-codex"));
     }
 
@@ -1232,7 +1335,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1252,7 +1354,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1366,7 +1467,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1386,7 +1486,7 @@ mod tests {
     }
 
     #[test]
-    fn test_template_mode_includes_surface_rules_when_provided() {
+    fn test_template_mode_includes_instruction_layers_when_provided() {
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -1404,17 +1504,18 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths_and_surface_rules(
+        let instruction_layers = vec!["Telegram output rules"];
+        let effective = build_effective_system_prompt_with_paths_and_instruction_layers(
             &config,
             dir.path(),
-            Some("Telegram output rules"),
+            &instruction_layers,
             false,
         )
         .unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
-        assert!(prompt.contains("<surface_rules>"));
         assert!(prompt.contains("Telegram output rules"));
+        assert!(prompt.contains("<instruction_layers>"));
     }
 
     #[test]

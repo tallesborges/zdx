@@ -42,6 +42,8 @@ pub struct AutomationDefinition {
     pub schedule: Option<String>,
     /// Optional model override for this automation run.
     pub model: Option<String>,
+    /// Optional named subagent for this automation run.
+    pub subagent: Option<String>,
     /// Optional per-run timeout in seconds.
     pub timeout_secs: Option<u32>,
     /// Number of retries after the initial attempt.
@@ -55,6 +57,7 @@ pub struct AutomationDefinition {
 struct AutomationFrontmatter {
     schedule: Option<String>,
     model: Option<String>,
+    subagent: Option<String>,
     timeout_secs: Option<u32>,
     max_retries: Option<u32>,
 }
@@ -213,6 +216,7 @@ fn parse_automation_file(path: &Path, source: AutomationSource) -> Result<Automa
     let name = file_stem(path)?;
     let schedule = normalize_optional_string(frontmatter.schedule, "schedule")?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
+    let subagent = normalize_optional_string(frontmatter.subagent, "subagent")?;
 
     if matches!(frontmatter.timeout_secs, Some(0)) {
         bail!("timeout_secs must be greater than zero");
@@ -229,6 +233,7 @@ fn parse_automation_file(path: &Path, source: AutomationSource) -> Result<Automa
         source,
         schedule,
         model,
+        subagent,
         timeout_secs: frontmatter.timeout_secs,
         max_retries: frontmatter.max_retries.unwrap_or(0),
         prompt,
@@ -362,11 +367,26 @@ mod tests {
         assert_eq!(parsed.name, "morning-report");
         assert!(parsed.schedule.is_none());
         assert!(parsed.model.is_none());
+        assert!(parsed.subagent.is_none());
         assert_eq!(parsed.max_retries, 0);
         assert_eq!(
             parsed.prompt,
             "Generate morning report from recent threads."
         );
+    }
+
+    #[test]
+    fn parse_automation_with_subagent() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("morning-report.md");
+        fs::write(
+            &file,
+            "---\nsubagent: general_assistant\n---\nGenerate morning report from recent threads.",
+        )
+        .unwrap();
+
+        let parsed = parse_automation_file(&file, AutomationSource::User).unwrap();
+        assert_eq!(parsed.subagent.as_deref(), Some("general_assistant"));
     }
 
     #[test]

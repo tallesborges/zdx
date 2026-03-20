@@ -91,6 +91,10 @@ enum Commands {
         #[arg(long = "no-system-prompt")]
         no_system_prompt: bool,
 
+        /// Internal: use this already-rendered system prompt as the final prompt for the run.
+        #[arg(long = "effective-system-prompt", hide = true)]
+        effective_system_prompt: Option<String>,
+
         /// Override the model from config
         #[arg(short, long)]
         model: Option<String>,
@@ -527,6 +531,7 @@ struct DispatchContext<'a> {
 struct ExecCommandInput {
     prompt: String,
     filter: Option<String>,
+    effective_system_prompt: Option<String>,
     model: Option<String>,
     thinking: Option<String>,
     tools: Option<String>,
@@ -553,6 +558,7 @@ async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput
         prompt: &input.prompt,
         config: context.config,
         model_override: input.model.as_deref(),
+        effective_system_prompt_override: input.effective_system_prompt.as_deref(),
         tool_timeout_override: None,
         thinking_override: input.thinking.as_deref(),
         event_filter_override: input.filter.as_deref(),
@@ -588,6 +594,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             prompt,
             filter,
             no_system_prompt,
+            effective_system_prompt,
             model,
             thinking,
             tools,
@@ -598,6 +605,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                 ExecCommandInput {
                     prompt,
                     filter,
+                    effective_system_prompt,
                     model,
                     thinking,
                     tools,
