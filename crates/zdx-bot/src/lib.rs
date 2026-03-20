@@ -24,9 +24,9 @@ mod topic_title;
 mod transcribe;
 mod types;
 
-const TELEGRAM_SURFACE_RULES: &str = include_str!(concat!(
+const TELEGRAM_INSTRUCTION_LAYER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/telegram_surface_rules.md"
+    "/prompts/telegram_instruction_layer.md"
 ));
 const MEDIA_GROUP_DEBOUNCE: Duration = Duration::from_millis(1500);
 
@@ -83,9 +83,9 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
     let queue_cancel_map = new_queue_cancel_map();
     let allowlist_user_len = settings.allowlist_user_ids.len();
     let allowlist_chat_len = settings.allowlist_chat_ids.len();
-    let trimmed_surface_rules = TELEGRAM_SURFACE_RULES.trim();
-    let bot_surface_rules =
-        (!trimmed_surface_rules.is_empty()).then(|| trimmed_surface_rules.to_string());
+    let trimmed_instruction_layer = TELEGRAM_INSTRUCTION_LAYER.trim();
+    let bot_instruction_layer =
+        (!trimmed_instruction_layer.is_empty()).then(|| trimmed_instruction_layer.to_string());
     let context = Arc::new(BotContext::new(
         client.clone(),
         config,
@@ -93,7 +93,7 @@ async fn run_bot(config: Config, settings: TelegramSettings, root: PathBuf) -> R
             allowlist_user_ids: settings.allowlist_user_ids,
             allowlist_chat_ids: settings.allowlist_chat_ids,
             root,
-            bot_surface_rules,
+            bot_instruction_layer,
             tool_config,
             cancel_map,
             queue_cancel_map,

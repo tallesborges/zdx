@@ -49,6 +49,18 @@ struct PreparedAutomationRun {
     tools_override: Option<String>,
 }
 
+fn automation_instruction_layers() -> [&'static str; 1] {
+    [prompts::AUTOMATION_HARNESS_INSTRUCTION_LAYER]
+}
+
+fn automation_prompt_context() -> PromptContextInclusion {
+    PromptContextInclusion {
+        project_context: false,
+        memory_index: true,
+        skills: true,
+    }
+}
+
 const ERROR_SUMMARY_MAX_LEN: usize = 400;
 
 /// Options for listing automation runs.
@@ -283,7 +295,7 @@ fn prepare_automation_run(
     automation: &AutomationDefinition,
 ) -> Result<PreparedAutomationRun> {
     let mut run_config = config.clone();
-    let instruction_layers = vec![prompts::AUTOMATION_HARNESS_PROMPT_LAYER];
+    let instruction_layers = automation_instruction_layers();
 
     if let Some(subagent_name) = automation.subagent.as_deref() {
         let definition = subagents::load_by_name(root, subagent_name)
@@ -300,11 +312,7 @@ fn prepare_automation_run(
             &chosen_model,
             &instruction_layers,
             false,
-            PromptContextInclusion {
-                project_context: false,
-                memory_index: true,
-                skills: true,
-            },
+            automation_prompt_context(),
         )
         .with_context(|| format!("render subagent '{subagent_name}'"))?;
 
@@ -327,11 +335,7 @@ fn prepare_automation_run(
         &run_config.model,
         &instruction_layers,
         false,
-        PromptContextInclusion {
-            project_context: false,
-            memory_index: true,
-            skills: true,
-        },
+        automation_prompt_context(),
     )
     .context("render automation prompt")?;
     run_config.system_prompt = effective.prompt;

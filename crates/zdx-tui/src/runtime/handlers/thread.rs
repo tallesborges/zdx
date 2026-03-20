@@ -140,7 +140,7 @@ pub fn resolve_root_display(path: PathBuf) -> UiEvent {
 
 /// Refreshes the effective system prompt for a new root.
 pub fn refresh_system_prompt(config: &zdx_core::config::Config, path: &Path) -> UiEvent {
-    let instruction_layers: Vec<&str> = crate::tui_surface_rules().into_iter().collect();
+    let instruction_layers = crate::tui_instruction_layers();
     let result =
         zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
@@ -287,7 +287,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
         };
 
         // Load AGENTS.md paths and skills
-        let instruction_layers: Vec<&str> = crate::tui_surface_rules().into_iter().collect();
+        let instruction_layers = crate::tui_instruction_layers();
         let context = zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             &config,
             &root,

@@ -166,8 +166,8 @@ struct PromptTemplateVars {
     base_prompt: String,
     project_context: String,
     memory_index: String,
+    instruction_layers: Vec<String>,
     memory_suggestions: bool,
-    surface_rules: String,
     skills_list: Vec<PromptTemplateSkill>,
     scoped_context: Vec<PromptTemplateScopedContext>,
     subagents_config: Option<PromptTemplateSubagents>,
@@ -181,7 +181,6 @@ struct PromptTemplateSections<'a> {
     project_context: Option<&'a str>,
     memory_index: Option<&'a str>,
     memory_suggestions: bool,
-    surface_rules: Option<&'a str>,
     skills_list: &'a [Skill],
     scoped_context: &'a [ScopedContextFile],
     subagents_enabled: bool,
@@ -192,19 +191,21 @@ fn combine_prompt_sections(
     base_prompt: Option<&str>,
     inline_project_context: Option<&str>,
     memory_index_block: Option<&str>,
-    surface_rules_block: Option<&str>,
+    instruction_layers: &[String],
 ) -> Option<String> {
     let mut sections: Vec<&str> = Vec::new();
-    for value in [
-        base_prompt,
-        inline_project_context,
-        memory_index_block,
-        surface_rules_block,
-    ]
-    .into_iter()
-    .flatten()
+    for value in [base_prompt, inline_project_context, memory_index_block]
+        .into_iter()
+        .flatten()
     {
         let trimmed = value.trim();
+        if !trimmed.is_empty() {
+            sections.push(trimmed);
+        }
+    }
+
+    for layer in instruction_layers {
+        let trimmed = layer.trim();
         if !trimmed.is_empty() {
             sections.push(trimmed);
         }
@@ -265,11 +266,6 @@ fn build_prompt_template_vars(
         .trim()
         .to_string();
     let memory_index = sections.memory_index.unwrap_or_default().trim().to_string();
-    let surface_rules = sections
-        .surface_rules
-        .unwrap_or_default()
-        .trim()
-        .to_string();
     let skills_list = sections
         .skills_list
         .iter()
@@ -323,8 +319,8 @@ fn build_prompt_template_vars(
         base_prompt,
         project_context,
         memory_index,
+        instruction_layers: Vec::new(),
         memory_suggestions: sections.memory_suggestions,
-        surface_rules,
         skills_list,
         scoped_context,
         subagents_config,
@@ -672,7 +668,7 @@ fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
 }
 
 /// Builds an effective prompt from the default system prompt template plus
-/// additive prompt layers rendered with the same context/template pipeline.
+/// additive instruction layers rendered with the same context/template pipeline.
 ///
 /// # Errors
 /// Returns an error if the operation fails.
@@ -725,7 +721,7 @@ pub fn build_prompt_with_context_and_layers(
         Vec::new()
     };
 
-    let vars = build_prompt_template_vars(
+    let mut vars = build_prompt_template_vars(
         root,
         model,
         PromptTemplateSections {
@@ -733,13 +729,14 @@ pub fn build_prompt_with_context_and_layers(
             project_context: inline_project_context.as_deref(),
             memory_index: memory_index.as_deref(),
             memory_suggestions,
-            surface_rules: None,
             skills_list: &skills,
             scoped_context: &scoped_context,
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
         },
     );
+
+    vars.instruction_layers = render_instruction_layers(instruction_layers, &vars, &mut warnings);
 
     let prompt = render_system_prompt_with_fallback(
         config,
@@ -748,7 +745,6 @@ pub fn build_prompt_with_context_and_layers(
         base_prompt.as_deref(),
         inline_project_context.as_deref(),
         memory_index.as_deref(),
-        instruction_layers,
     );
 
     if skills.len() > 20 {
@@ -791,7 +787,7 @@ fn render_instruction_layers(
             Err(error) => warnings.push(ContextWarning {
                 path: None,
                 message: format!(
-                    "Failed to render prompt layer {}: {error}; skipping that layer",
+                    "Failed to render instruction layer {}: {error}; skipping that layer",
                     idx + 1
                 ),
             }),
@@ -801,15 +797,6 @@ fn render_instruction_layers(
     rendered
 }
 
-fn combine_rendered_prompt(base: Option<String>, layers: Vec<String>) -> Option<String> {
-    let mut parts = Vec::new();
-    if let Some(base) = base.filter(|value| !value.trim().is_empty()) {
-        parts.push(base);
-    }
-    parts.extend(layers.into_iter().filter(|value| !value.trim().is_empty()));
-    (!parts.is_empty()).then(|| parts.join("\n\n"))
-}
-
 fn render_system_prompt_with_fallback(
     config: &Config,
     vars: &PromptTemplateVars,
@@ -817,7 +804,6 @@ fn render_system_prompt_with_fallback(
     base_prompt: Option<&str>,
     inline_project_context: Option<&str>,
     memory_index: Option<&str>,
-    instruction_layers: &[&str],
 ) -> Option<String> {
     let template_source = match load_prompt_template(config) {
         Ok(source) => source,
@@ -830,7 +816,7 @@ fn render_system_prompt_with_fallback(
         }
     };
 
-    let base_rendered = match render_prompt_template(&template_source.content, vars) {
+    match render_prompt_template(&template_source.content, vars) {
         Ok(rendered) => rendered,
         Err(error) => {
             warnings.push(ContextWarning {
@@ -849,14 +835,16 @@ fn render_system_prompt_with_fallback(
                             "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
                         ),
                     });
-                    combine_prompt_sections(base_prompt, inline_project_context, memory_index, None)
+                    combine_prompt_sections(
+                        base_prompt,
+                        inline_project_context,
+                        memory_index,
+                        &vars.instruction_layers,
+                    )
                 }
             }
         }
-    };
-
-    let rendered_layers = render_instruction_layers(instruction_layers, vars, warnings);
-    combine_rendered_prompt(base_rendered, rendered_layers)
+    }
 }
 
 /// Builds the effective system prompt by combining config, AGENTS.md files,
@@ -1222,7 +1210,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1244,7 +1231,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1274,7 +1260,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: true,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1311,7 +1296,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &skills,
                 scoped_context: &[],
                 subagents_enabled: true,
@@ -1343,7 +1327,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1363,7 +1346,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1477,7 +1459,6 @@ mod tests {
                 project_context: None,
                 memory_index: None,
                 memory_suggestions: false,
-                surface_rules: None,
                 skills_list: &[],
                 scoped_context: &[],
                 subagents_enabled: false,
@@ -1526,7 +1507,7 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("Telegram output rules"));
-        assert!(!prompt.contains("<surface_rules>"));
+        assert!(prompt.contains("<instruction_layers>"));
     }
 
     #[test]

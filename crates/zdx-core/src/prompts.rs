@@ -24,8 +24,8 @@ pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/system_prompt_template.md"
 ));
 
-/// Built-in prompt layer for headless automation behavior.
-pub const AUTOMATION_HARNESS_PROMPT_LAYER: &str = include_str!(concat!(
+/// Built-in instruction layer for headless automation behavior.
+pub const AUTOMATION_HARNESS_INSTRUCTION_LAYER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/instruction_layers/automation_harness.md"
 ));

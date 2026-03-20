@@ -42,8 +42,8 @@ pub struct SubagentDefinition {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub tools: Option<Vec<String>>,
-    /// Additive prompt layer appended on top of the base system prompt.
-    pub prompt_layer: String,
+    /// Additive instruction layer appended on top of the base system prompt.
+    pub instruction_layer: String,
 }
 
 /// Lightweight summary for listings and tool descriptions.
@@ -143,8 +143,8 @@ pub fn render_prompt(
     inclusion: PromptContextInclusion,
 ) -> Result<String> {
     let mut layers: Vec<&str> = instruction_layers.to_vec();
-    if !definition.prompt_layer.trim().is_empty() {
-        layers.push(&definition.prompt_layer);
+    if !definition.instruction_layer.trim().is_empty() {
+        layers.push(&definition.instruction_layer);
     }
 
     let effective = context::build_prompt_with_context_and_layers(
@@ -233,7 +233,7 @@ fn parse_subagent_content(
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let tools = normalize_tools(frontmatter.tools)?;
 
-    let prompt_layer = body.trim().to_string();
+    let instruction_layer = body.trim().to_string();
 
     Ok(SubagentDefinition {
         name,
@@ -243,7 +243,7 @@ fn parse_subagent_content(
         model,
         thinking_level: frontmatter.thinking_level,
         tools,
-        prompt_layer,
+        instruction_layer,
     })
 }
 
@@ -375,16 +375,16 @@ mod tests {
             definition.tools,
             Some(vec!["read".to_string(), "grep".to_string()])
         );
-        assert_eq!(definition.prompt_layer, "Search prompt");
+        assert_eq!(definition.instruction_layer, "Search prompt");
     }
 
     #[test]
-    fn parse_subagent_allows_empty_prompt_layer() {
+    fn parse_subagent_allows_empty_instruction_layer() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("general.md");
         fs::write(&file, "---\ndescription: General alias\n---\n").unwrap();
 
         let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
-        assert!(definition.prompt_layer.is_empty());
+        assert!(definition.instruction_layer.is_empty());
     }
 }

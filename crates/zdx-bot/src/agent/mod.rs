@@ -84,6 +84,94 @@ pub(crate) struct AgentTurnHandle {
     pub task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
 }
 
+struct PreparedBotTurn {
+    config: Config,
+    system_prompt: Option<String>,
+    tool_config: ToolConfig,
+}
+
+fn bot_prompt_context() -> PromptContextInclusion {
+    PromptContextInclusion {
+        project_context: false,
+        memory_index: true,
+        skills: true,
+    }
+}
+
+fn collect_bot_instruction_layers(bot_instruction_layer: Option<&str>) -> Vec<&str> {
+    bot_instruction_layer.into_iter().collect()
+}
+
+fn prepare_bot_turn(
+    config: &Config,
+    root: &Path,
+    bot_instruction_layer: Option<&str>,
+    tool_config: &ToolConfig,
+) -> Result<PreparedBotTurn> {
+    let mut bot_config = config.clone();
+    let instruction_layers = collect_bot_instruction_layers(bot_instruction_layer);
+
+    let Some(subagent_name) = config
+        .telegram
+        .subagent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    else {
+        let effective = build_prompt_with_context_and_layers(
+            &bot_config,
+            root,
+            &bot_config.model,
+            &instruction_layers,
+            true,
+            bot_prompt_context(),
+        )
+        .context("build bot prompt")?;
+
+        return Ok(PreparedBotTurn {
+            config: bot_config,
+            system_prompt: effective.prompt,
+            tool_config: tool_config.clone(),
+        });
+    };
+
+    let definition = subagents::load_by_name(root, subagent_name)
+        .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
+
+    if let Some(model) = definition.model.clone() {
+        bot_config.model = model;
+    }
+    if let Some(level) = definition.thinking_level {
+        bot_config.thinking_level = level;
+    }
+
+    let system_prompt = subagents::render_prompt(
+        &bot_config,
+        root,
+        &definition,
+        &bot_config.model,
+        &instruction_layers,
+        true,
+        bot_prompt_context(),
+    )
+    .with_context(|| format!("render bot subagent '{subagent_name}'"))?;
+
+    let tool_config = definition.tools.clone().map_or_else(
+        || tool_config.clone(),
+        |tools| {
+            tool_config
+                .clone()
+                .with_selection(ToolSelection::Explicit(tools))
+        },
+    );
+
+    Ok(PreparedBotTurn {
+        config: bot_config,
+        system_prompt: Some(system_prompt),
+        tool_config,
+    })
+}
+
 /// Spawns an agent turn and returns a handle with streaming events.
 ///
 /// Thread persistence is wired internally via `spawn_broadcaster`.
@@ -96,7 +184,7 @@ pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
     root: &Path,
-    bot_surface_rules: Option<&str>,
+    bot_instruction_layer: Option<&str>,
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
@@ -104,68 +192,11 @@ pub(crate) fn spawn_agent_turn(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, Some(thread_id));
 
-    let mut bot_config = config.clone();
-    let layer_templates: Vec<&str> = bot_surface_rules.into_iter().collect();
-
-    let (system_prompt, tool_config) = if let Some(subagent_name) = config
-        .telegram
-        .subagent
-        .as_deref()
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    {
-        let definition = subagents::load_by_name(root, subagent_name)
-            .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
-
-        if let Some(model) = definition.model.clone() {
-            bot_config.model = model;
-        }
-        if let Some(level) = definition.thinking_level {
-            bot_config.thinking_level = level;
-        }
-
-        let system_prompt = Some(
-            subagents::render_prompt(
-                &bot_config,
-                root,
-                &definition,
-                &bot_config.model,
-                &layer_templates,
-                true,
-                PromptContextInclusion {
-                    project_context: false,
-                    memory_index: true,
-                    skills: true,
-                },
-            )
-            .with_context(|| format!("render bot subagent '{subagent_name}'"))?,
-        );
-
-        let tool_config = if let Some(tools) = definition.tools.clone() {
-            tool_config
-                .clone()
-                .with_selection(ToolSelection::Explicit(tools))
-        } else {
-            tool_config.clone()
-        };
-
-        (system_prompt, tool_config)
-    } else {
-        let effective = build_prompt_with_context_and_layers(
-            &bot_config,
-            root,
-            &bot_config.model,
-            &layer_templates,
-            true,
-            PromptContextInclusion {
-                project_context: false,
-                memory_index: true,
-                skills: true,
-            },
-        )
-        .context("build bot prompt")?;
-        (effective.prompt, tool_config.clone())
-    };
+    let PreparedBotTurn {
+        config: bot_config,
+        system_prompt,
+        tool_config,
+    } = prepare_bot_turn(config, root, bot_instruction_layer, tool_config)?;
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
