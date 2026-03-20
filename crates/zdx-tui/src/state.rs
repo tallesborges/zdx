@@ -185,6 +185,7 @@ impl TuiState {
         let agent_opts = AgentOptions {
             root,
             tool_config: ToolConfig::default(),
+            surface: Some("chat".to_string()),
         };
 
         // Cache display values at startup (avoids I/O during render)

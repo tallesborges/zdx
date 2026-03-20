@@ -1,5 +1,6 @@
 //! Core ZDX library (engine, providers, tools, config).
 
+pub mod agent_activity;
 pub mod automations;
 pub mod config;
 pub mod core;
