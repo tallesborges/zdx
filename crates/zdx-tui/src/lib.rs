@@ -72,11 +72,12 @@ pub async fn run_interactive_chat_with_history(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, thread_id_ref);
 
+    let instruction_layers: Vec<&str> = tui_surface_rules().into_iter().collect();
     let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+        zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             &root,
-            tui_surface_rules(),
+            &instruction_layers,
             true,
         )?;
 

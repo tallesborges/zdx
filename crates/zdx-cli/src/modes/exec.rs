@@ -105,12 +105,15 @@ pub async fn run_exec(
         })
     } else {
         let trimmed_surface_rules = EXEC_SURFACE_RULES.trim();
-        let surface_rules = (!trimmed_surface_rules.is_empty()).then_some(trimmed_surface_rules);
+        let instruction_layers: Vec<&str> = (!trimmed_surface_rules.is_empty())
+            .then_some(trimmed_surface_rules)
+            .into_iter()
+            .collect();
         Some(
-            zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+            zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
                 config,
                 &options.root,
-                surface_rules,
+                &instruction_layers,
                 false,
             )?,
         )

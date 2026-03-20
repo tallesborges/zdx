@@ -671,17 +671,16 @@ fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
     load_skills(&skill_options)
 }
 
-/// Renders an arbitrary `MiniJinja` prompt template with the same variables and
-/// context pipeline used by the built-in system prompt.
+/// Builds an effective prompt from the default system prompt template plus
+/// additive prompt layers rendered with the same context/template pipeline.
 ///
 /// # Errors
-/// Returns an error if the operation fails or the template cannot be rendered.
-pub fn render_prompt_template_with_context(
+/// Returns an error if the operation fails.
+pub fn build_prompt_with_context_and_layers(
     config: &Config,
     root: &Path,
-    template: &str,
     model: &str,
-    surface_rules: Option<&str>,
+    instruction_layers: &[&str],
     memory_suggestions: bool,
     inclusion: PromptContextInclusion,
 ) -> Result<EffectivePrompt> {
@@ -734,7 +733,7 @@ pub fn render_prompt_template_with_context(
             project_context: inline_project_context.as_deref(),
             memory_index: memory_index.as_deref(),
             memory_suggestions,
-            surface_rules,
+            surface_rules: None,
             skills_list: &skills,
             scoped_context: &scoped_context,
             subagents_enabled: config.subagents.enabled,
@@ -742,8 +741,22 @@ pub fn render_prompt_template_with_context(
         },
     );
 
-    let prompt = render_prompt_template(template, &vars)
-        .map_err(|error| anyhow::anyhow!("Failed to render prompt template: {error}"))?;
+    let prompt = render_system_prompt_with_fallback(
+        config,
+        &vars,
+        &mut warnings,
+        base_prompt.as_deref(),
+        inline_project_context.as_deref(),
+        memory_index.as_deref(),
+        instruction_layers,
+    );
+
+    if skills.len() > 20 {
+        warnings.push(ContextWarning {
+            path: None,
+            message: format!("Loaded {} skills; prompt may be large", skills.len()),
+        });
+    }
 
     warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
         path: Some(warning.skill_path),
@@ -759,6 +772,44 @@ pub fn render_prompt_template_with_context(
     })
 }
 
+fn render_instruction_layers(
+    templates: &[&str],
+    vars: &PromptTemplateVars,
+    warnings: &mut Vec<ContextWarning>,
+) -> Vec<String> {
+    let mut rendered = Vec::new();
+
+    for (idx, template) in templates.iter().enumerate() {
+        let trimmed = template.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        match render_prompt_template(trimmed, vars) {
+            Ok(Some(layer)) => rendered.push(layer),
+            Ok(None) => {}
+            Err(error) => warnings.push(ContextWarning {
+                path: None,
+                message: format!(
+                    "Failed to render prompt layer {}: {error}; skipping that layer",
+                    idx + 1
+                ),
+            }),
+        }
+    }
+
+    rendered
+}
+
+fn combine_rendered_prompt(base: Option<String>, layers: Vec<String>) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(base) = base.filter(|value| !value.trim().is_empty()) {
+        parts.push(base);
+    }
+    parts.extend(layers.into_iter().filter(|value| !value.trim().is_empty()));
+    (!parts.is_empty()).then(|| parts.join("\n\n"))
+}
+
 fn render_system_prompt_with_fallback(
     config: &Config,
     vars: &PromptTemplateVars,
@@ -766,7 +817,7 @@ fn render_system_prompt_with_fallback(
     base_prompt: Option<&str>,
     inline_project_context: Option<&str>,
     memory_index: Option<&str>,
-    surface_rules: Option<&str>,
+    instruction_layers: &[&str],
 ) -> Option<String> {
     let template_source = match load_prompt_template(config) {
         Ok(source) => source,
@@ -779,7 +830,7 @@ fn render_system_prompt_with_fallback(
         }
     };
 
-    match render_prompt_template(&template_source.content, vars) {
+    let base_rendered = match render_prompt_template(&template_source.content, vars) {
         Ok(rendered) => rendered,
         Err(error) => {
             warnings.push(ContextWarning {
@@ -798,16 +849,14 @@ fn render_system_prompt_with_fallback(
                             "Failed to render default system prompt template: {default_error}; falling back to base prompt assembly"
                         ),
                     });
-                    combine_prompt_sections(
-                        base_prompt,
-                        inline_project_context,
-                        memory_index,
-                        surface_rules,
-                    )
+                    combine_prompt_sections(base_prompt, inline_project_context, memory_index, None)
                 }
             }
         }
-    }
+    };
+
+    let rendered_layers = render_instruction_layers(instruction_layers, vars, warnings);
+    combine_rendered_prompt(base_rendered, rendered_layers)
 }
 
 /// Builds the effective system prompt by combining config, AGENTS.md files,
@@ -829,95 +878,34 @@ pub fn build_effective_system_prompt_with_paths(
     root: &Path,
     memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
-    build_effective_system_prompt_with_paths_and_surface_rules(
+    build_effective_system_prompt_with_paths_and_instruction_layers(
         config,
         root,
-        None,
+        &[],
         memory_suggestions,
     )
 }
 
 /// Builds the effective system prompt by combining config, AGENTS.md files,
-/// an optional memory index, template-driven sections, and optional
-/// surface-specific output rules (e.g., Telegram formatting constraints).
+/// an optional memory index, template-driven sections, and additive
+/// instruction layers (for example surfaces or automation harnesses).
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub fn build_effective_system_prompt_with_paths_and_surface_rules(
+pub fn build_effective_system_prompt_with_paths_and_instruction_layers(
     config: &Config,
     root: &Path,
-    surface_rules: Option<&str>,
+    instruction_layers: &[&str],
     memory_suggestions: bool,
 ) -> Result<EffectivePrompt> {
-    let base_prompt = config.effective_system_prompt()?;
-    let PromptContextSectionsResult {
-        loaded_agents_paths,
-        scoped_context,
-        mut warnings,
-        inline_project_context,
-        memory_index,
-    } = load_prompt_context_sections(root, config);
-
-    let skills_result = load_skills_with_config(config, root);
-    let LoadSkillsResult {
-        skills,
-        warnings: skill_warnings,
-    } = skills_result;
-
-    let subagent_models = if config.subagents.enabled {
-        config.subagent_available_models()
-    } else {
-        Vec::new()
-    };
-
-    let vars = build_prompt_template_vars(
+    build_prompt_with_context_and_layers(
+        config,
         root,
         &config.model,
-        PromptTemplateSections {
-            base_prompt: base_prompt.as_deref(),
-            project_context: inline_project_context.as_deref(),
-            memory_index: memory_index.as_deref(),
-            memory_suggestions,
-            surface_rules,
-            skills_list: &skills,
-            scoped_context: &scoped_context,
-            subagents_enabled: config.subagents.enabled,
-            subagent_models: &subagent_models,
-        },
-    );
-
-    let system_prompt = render_system_prompt_with_fallback(
-        config,
-        &vars,
-        &mut warnings,
-        base_prompt.as_deref(),
-        inline_project_context.as_deref(),
-        memory_index.as_deref(),
-        surface_rules,
-    );
-
-    if skills.len() > 20 {
-        warnings.push(ContextWarning {
-            path: None,
-            message: format!("Loaded {} skills; prompt may be large", skills.len()),
-        });
-    }
-
-    warnings.extend(skill_warnings.into_iter().map(|warning| ContextWarning {
-        path: Some(warning.skill_path),
-        message: warning.message,
-    }));
-
-    let scoped_context_paths = scoped_context.iter().map(|sa| sa.path.clone()).collect();
-    let loaded_skills = skills;
-
-    Ok(EffectivePrompt {
-        prompt: system_prompt,
-        loaded_agents_paths,
-        scoped_context_paths,
-        warnings,
-        loaded_skills,
-    })
+        instruction_layers,
+        memory_suggestions,
+        PromptContextInclusion::default(),
+    )
 }
 
 #[cfg(test)]
@@ -1509,7 +1497,7 @@ mod tests {
     }
 
     #[test]
-    fn test_template_mode_includes_surface_rules_when_provided() {
+    fn test_template_mode_includes_instruction_layers_when_provided() {
         let dir = tempdir().unwrap();
 
         let mut config = crate::config::Config {
@@ -1527,17 +1515,18 @@ mod tests {
             agents_project: false,
         };
 
-        let effective = build_effective_system_prompt_with_paths_and_surface_rules(
+        let instruction_layers = vec!["Telegram output rules"];
+        let effective = build_effective_system_prompt_with_paths_and_instruction_layers(
             &config,
             dir.path(),
-            Some("Telegram output rules"),
+            &instruction_layers,
             false,
         )
         .unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
-        assert!(prompt.contains("<surface_rules>"));
         assert!(prompt.contains("Telegram output rules"));
+        assert!(!prompt.contains("<surface_rules>"));
     }
 
     #[test]

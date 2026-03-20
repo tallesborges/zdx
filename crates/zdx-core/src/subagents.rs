@@ -42,7 +42,8 @@ pub struct SubagentDefinition {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub tools: Option<Vec<String>>,
-    pub prompt_template: String,
+    /// Additive prompt layer appended on top of the base system prompt.
+    pub prompt_layer: String,
 }
 
 /// Lightweight summary for listings and tool descriptions.
@@ -137,16 +138,20 @@ pub fn render_prompt(
     root: &Path,
     definition: &SubagentDefinition,
     model: &str,
-    surface_rules: Option<&str>,
+    instruction_layers: &[&str],
     memory_suggestions: bool,
     inclusion: PromptContextInclusion,
 ) -> Result<String> {
-    let effective = context::render_prompt_template_with_context(
+    let mut layers: Vec<&str> = instruction_layers.to_vec();
+    if !definition.prompt_layer.trim().is_empty() {
+        layers.push(&definition.prompt_layer);
+    }
+
+    let effective = context::build_prompt_with_context_and_layers(
         config,
         root,
-        &definition.prompt_template,
         model,
-        surface_rules,
+        &layers,
         memory_suggestions,
         inclusion,
     )?;
@@ -193,18 +198,10 @@ fn collect_markdown_files(
 
 fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [
-        (
-            manifest_dir.join("subagents").join("general_assistant.md"),
-            include_str!("../subagents/general_assistant.md"),
-        ),
-        (
-            manifest_dir
-                .join("subagents")
-                .join("automation_assistant.md"),
-            include_str!("../subagents/automation_assistant.md"),
-        ),
-    ]
+    [(
+        manifest_dir.join("subagents").join("general_assistant.md"),
+        include_str!("../subagents/general_assistant.md"),
+    )]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
     .collect()
@@ -236,10 +233,7 @@ fn parse_subagent_content(
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let tools = normalize_tools(frontmatter.tools)?;
 
-    let prompt_template = body.trim().to_string();
-    if prompt_template.is_empty() {
-        bail!("Subagent prompt body cannot be empty");
-    }
+    let prompt_layer = body.trim().to_string();
 
     Ok(SubagentDefinition {
         name,
@@ -249,7 +243,7 @@ fn parse_subagent_content(
         model,
         thinking_level: frontmatter.thinking_level,
         tools,
-        prompt_template,
+        prompt_layer,
     })
 }
 
@@ -335,7 +329,6 @@ mod tests {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "general_assistant"));
-        assert!(all.iter().any(|s| s.name == "automation_assistant"));
     }
 
     #[test]
@@ -382,5 +375,16 @@ mod tests {
             definition.tools,
             Some(vec!["read".to_string(), "grep".to_string()])
         );
+        assert_eq!(definition.prompt_layer, "Search prompt");
+    }
+
+    #[test]
+    fn parse_subagent_allows_empty_prompt_layer() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("general.md");
+        fs::write(&file, "---\ndescription: General alias\n---\n").unwrap();
+
+        let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
+        assert!(definition.prompt_layer.is_empty());
     }
 }

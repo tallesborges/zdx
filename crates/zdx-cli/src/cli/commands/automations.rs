@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use zdx_core::automations::{self, AutomationDefinition};
 use zdx_core::core::context::PromptContextInclusion;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::{config, subagents};
+use zdx_core::{config, prompts, subagents};
 
 use super::exec;
 
@@ -40,6 +40,13 @@ struct AutomationRunRecord {
     schedule: Option<String>,
     model: Option<String>,
     subagent: Option<String>,
+}
+
+struct PreparedAutomationRun {
+    config: config::Config,
+    model_override: Option<String>,
+    thinking_override: Option<String>,
+    tools_override: Option<String>,
 }
 
 const ERROR_SUMMARY_MAX_LEN: usize = 400;
@@ -205,54 +212,19 @@ pub async fn run_definition(
         let started_at = Utc::now();
         let started = Instant::now();
 
-        let mut run_config = config.clone();
-        let mut model_override = automation.model.clone();
-        let mut thinking_override = None;
-        let mut tools_override = None;
-
-        if let Some(subagent_name) = automation.subagent.as_deref() {
-            let definition = subagents::load_by_name(root, subagent_name)
-                .with_context(|| format!("load subagent '{subagent_name}'"))?;
-            let chosen_model = automation
-                .model
-                .clone()
-                .or_else(|| definition.model.clone())
-                .unwrap_or_else(|| config.model.clone());
-            let system_prompt = subagents::render_prompt(
-                config,
-                root,
-                &definition,
-                &chosen_model,
-                None,
-                false,
-                PromptContextInclusion {
-                    project_context: false,
-                    memory_index: true,
-                    skills: true,
-                },
-            )
-            .with_context(|| format!("render subagent '{subagent_name}'"))?;
-
-            run_config.system_prompt = Some(system_prompt);
-            run_config.system_prompt_file = None;
-            model_override = Some(chosen_model);
-            thinking_override = definition
-                .thinking_level
-                .map(|level| level.display_name().to_string());
-            tools_override = definition.tools.map(|tools| tools.join(","));
-        }
+        let prepared = prepare_automation_run(config, root, automation)?;
 
         let result = exec::run(exec::ExecRunOptions {
             root: &root_string,
             thread_opts: &effective_thread_opts,
             prompt: &automation.prompt,
-            config: &run_config,
-            model_override: model_override.as_deref(),
-            effective_system_prompt_override: run_config.system_prompt.as_deref(),
+            config: &prepared.config,
+            model_override: prepared.model_override.as_deref(),
+            effective_system_prompt_override: prepared.config.system_prompt.as_deref(),
             tool_timeout_override: automation.timeout_secs,
-            thinking_override: thinking_override.as_deref(),
+            thinking_override: prepared.thinking_override.as_deref(),
             event_filter_override: None,
-            tools_override: tools_override.as_deref(),
+            tools_override: prepared.tools_override.as_deref(),
             no_tools: false,
             no_system_prompt: false,
         })
@@ -275,7 +247,7 @@ pub async fn run_definition(
             ok: result.is_ok(),
             error,
             schedule: automation.schedule.clone(),
-            model: model_override.clone(),
+            model: prepared.model_override.clone(),
             subagent: automation.subagent.clone(),
         };
 
@@ -303,6 +275,74 @@ pub async fn run_definition(
     }
 
     Ok(())
+}
+
+fn prepare_automation_run(
+    config: &config::Config,
+    root: &Path,
+    automation: &AutomationDefinition,
+) -> Result<PreparedAutomationRun> {
+    let mut run_config = config.clone();
+    let instruction_layers = vec![prompts::AUTOMATION_HARNESS_PROMPT_LAYER];
+
+    if let Some(subagent_name) = automation.subagent.as_deref() {
+        let definition = subagents::load_by_name(root, subagent_name)
+            .with_context(|| format!("load subagent '{subagent_name}'"))?;
+        let chosen_model = automation
+            .model
+            .clone()
+            .or_else(|| definition.model.clone())
+            .unwrap_or_else(|| config.model.clone());
+        let system_prompt = subagents::render_prompt(
+            config,
+            root,
+            &definition,
+            &chosen_model,
+            &instruction_layers,
+            false,
+            PromptContextInclusion {
+                project_context: false,
+                memory_index: true,
+                skills: true,
+            },
+        )
+        .with_context(|| format!("render subagent '{subagent_name}'"))?;
+
+        run_config.system_prompt = Some(system_prompt);
+        run_config.system_prompt_file = None;
+
+        return Ok(PreparedAutomationRun {
+            config: run_config,
+            model_override: Some(chosen_model),
+            thinking_override: definition
+                .thinking_level
+                .map(|level| level.display_name().to_string()),
+            tools_override: definition.tools.map(|tools| tools.join(",")),
+        });
+    }
+
+    let effective = zdx_core::core::context::build_prompt_with_context_and_layers(
+        &run_config,
+        root,
+        &run_config.model,
+        &instruction_layers,
+        false,
+        PromptContextInclusion {
+            project_context: false,
+            memory_index: true,
+            skills: true,
+        },
+    )
+    .context("render automation prompt")?;
+    run_config.system_prompt = effective.prompt;
+    run_config.system_prompt_file = None;
+
+    Ok(PreparedAutomationRun {
+        config: run_config,
+        model_override: automation.model.clone(),
+        thinking_override: None,
+        tools_override: None,
+    })
 }
 
 fn resolve_automation_thread_opts(
@@ -473,7 +513,7 @@ mod tests {
             error: None,
             schedule: Some("0 8 * * *".to_string()),
             model: Some("gemini-cli:gemini-2.5-flash".to_string()),
-            subagent: Some("automation_assistant".to_string()),
+            subagent: Some("general_assistant".to_string()),
         };
 
         append_run_record_to(&path, &record).unwrap();
@@ -553,7 +593,7 @@ mod tests {
             concat!(
                 r#"{"automation":"a","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":null,"model":null,"subagent":null}"#,
                 "\n",
-                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m","subagent":"automation_assistant"}"#,
+                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m","subagent":"general_assistant"}"#,
                 "\n"
             ),
         )

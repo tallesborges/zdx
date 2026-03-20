@@ -381,12 +381,12 @@ mod tests {
         let file = dir.path().join("morning-report.md");
         fs::write(
             &file,
-            "---\nsubagent: automation_assistant\n---\nGenerate morning report from recent threads.",
+            "---\nsubagent: general_assistant\n---\nGenerate morning report from recent threads.",
         )
         .unwrap();
 
         let parsed = parse_automation_file(&file, AutomationSource::User).unwrap();
-        assert_eq!(parsed.subagent.as_deref(), Some("automation_assistant"));
+        assert_eq!(parsed.subagent.as_deref(), Some("general_assistant"));
     }
 
     #[test]

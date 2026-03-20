@@ -7,12 +7,10 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
-use crate::core::context::PromptContextInclusion;
+use crate::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use crate::core::events::ToolOutput;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
 use crate::subagents::{self, SubagentSummary};
-
-const DEFAULT_SUBAGENT_NAME: &str = "general_assistant";
 
 /// Returns the tool definition for the `invoke_subagent` tool.
 pub fn definition() -> ToolDefinition {
@@ -33,7 +31,7 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                 },
                 "subagent": {
                     "type": "string",
-                    "description": "Optional named subagent configuration. Defaults to 'general_assistant'."
+                    "description": "Optional named subagent configuration. When omitted, uses the default base system prompt behavior."
                 },
                 "model": {
                     "type": "string",
@@ -63,92 +61,28 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         );
     }
 
-    let input: SubagentInput = match serde_json::from_value(input.clone()) {
-        Ok(i) => i,
-        Err(e) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                "Invalid input for invoke_subagent tool",
-                Some(format!("Parse error: {e}")),
-            );
-        }
+    let (input, prompt) = match parse_input(input) {
+        Ok(value) => value,
+        Err(err) => return err,
     };
-
-    let prompt = input.prompt.trim().to_string();
-    if prompt.is_empty() {
-        return ToolOutput::failure("invalid_input", "prompt cannot be empty", None);
-    }
 
     let config = ctx.config.clone().unwrap_or_default();
-    let requested_subagent = normalize_optional(input.subagent.clone())
-        .unwrap_or_else(|| DEFAULT_SUBAGENT_NAME.to_string());
-    let definition = match subagents::load_by_name(&ctx.root, &requested_subagent) {
+    let definition = match resolve_subagent_definition(&ctx.root, input.subagent.clone()) {
         Ok(definition) => definition,
-        Err(err) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                format!("Unknown subagent '{requested_subagent}'"),
-                Some(err.to_string()),
-            );
-        }
+        Err(err) => return err,
     };
 
-    let requested_model = normalize_optional(input.model.clone());
-    let model = match definition.model.clone() {
-        Some(model) => {
-            if let Some(err) = validate_model_supported(&model, ctx) {
-                return err;
-            }
-            model
-        }
-        None => match requested_model.clone() {
-            Some(model) => {
-                if let Some(err) = validate_model_supported(&model, ctx) {
-                    return err;
-                }
-                model
-            }
-            None => normalize_optional(ctx.model.clone()).unwrap_or_else(|| config.model.clone()),
-        },
+    let model = match resolve_execution_model(definition.as_ref(), &input, &config, ctx) {
+        Ok(model) => model,
+        Err(err) => return err,
     };
 
-    if model.trim().is_empty() {
-        return ToolOutput::failure(
-            "invalid_config",
-            "No model available for invoke_subagent",
-            Some("Provide input.model or ensure parent model is available".to_string()),
-        );
-    }
-
-    let system_prompt = match subagents::render_prompt(
-        &config,
-        &ctx.root,
-        &definition,
-        &model,
-        None,
-        false,
-        PromptContextInclusion::default(),
-    ) {
+    let system_prompt = match build_system_prompt(&config, &ctx.root, definition.as_ref(), &model) {
         Ok(prompt) => prompt,
-        Err(err) => {
-            return ToolOutput::failure(
-                "invalid_input",
-                format!("Failed to render subagent '{requested_subagent}'"),
-                Some(err.to_string()),
-            );
-        }
+        Err(err) => return err,
     };
 
-    let options = ExecSubagentOptions {
-        model: Some(model),
-        system_prompt: Some(system_prompt),
-        thinking_level: definition.thinking_level.or(ctx.thinking_level),
-        no_tools: false,
-        no_system_prompt: false,
-        tools_override: definition.tools.clone(),
-        event_filter: Some(vec!["turn_finished".to_string()]),
-        timeout: ctx.timeout,
-    };
+    let options = build_exec_options(definition.as_ref(), ctx, model, system_prompt);
 
     match run_exec_subagent(&ctx.root, &prompt, &options).await {
         Ok(response) => ToolOutput::success(Value::String(response)),
@@ -157,6 +91,146 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             "Subagent execution failed",
             Some(err.to_string()),
         ),
+    }
+}
+
+fn parse_input(input: &Value) -> Result<(SubagentInput, String), ToolOutput> {
+    let input: SubagentInput = serde_json::from_value(input.clone()).map_err(|e| {
+        ToolOutput::failure(
+            "invalid_input",
+            "Invalid input for invoke_subagent tool",
+            Some(format!("Parse error: {e}")),
+        )
+    })?;
+
+    let prompt = input.prompt.trim().to_string();
+    if prompt.is_empty() {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "prompt cannot be empty",
+            None,
+        ));
+    }
+
+    Ok((input, prompt))
+}
+
+fn resolve_subagent_definition(
+    root: &std::path::Path,
+    requested: Option<String>,
+) -> Result<Option<subagents::SubagentDefinition>, ToolOutput> {
+    let requested = normalize_optional(requested);
+    match requested.as_deref() {
+        Some(name) => subagents::load_by_name(root, name)
+            .map(Some)
+            .map_err(|err| {
+                ToolOutput::failure(
+                    "invalid_input",
+                    format!("Unknown subagent '{name}'"),
+                    Some(err.to_string()),
+                )
+            }),
+        None => Ok(None),
+    }
+}
+
+fn resolve_execution_model(
+    definition: Option<&subagents::SubagentDefinition>,
+    input: &SubagentInput,
+    config: &crate::config::Config,
+    ctx: &ToolContext,
+) -> Result<String, ToolOutput> {
+    let requested_model = normalize_optional(input.model.clone());
+    let model = match definition.and_then(|definition| definition.model.clone()) {
+        Some(model) => {
+            if let Some(err) = validate_model_supported(&model, ctx) {
+                return Err(err);
+            }
+            model
+        }
+        None => match requested_model {
+            Some(model) => {
+                if let Some(err) = validate_model_supported(&model, ctx) {
+                    return Err(err);
+                }
+                model
+            }
+            None => normalize_optional(ctx.model.clone()).unwrap_or_else(|| config.model.clone()),
+        },
+    };
+
+    if model.trim().is_empty() {
+        return Err(ToolOutput::failure(
+            "invalid_config",
+            "No model available for invoke_subagent",
+            Some("Provide input.model or ensure parent model is available".to_string()),
+        ));
+    }
+
+    Ok(model)
+}
+
+fn build_system_prompt(
+    config: &crate::config::Config,
+    root: &std::path::Path,
+    definition: Option<&subagents::SubagentDefinition>,
+    model: &str,
+) -> Result<String, ToolOutput> {
+    let result = match definition {
+        Some(definition) => subagents::render_prompt(
+            config,
+            root,
+            definition,
+            model,
+            &[],
+            false,
+            PromptContextInclusion::default(),
+        )
+        .map_err(|err| {
+            ToolOutput::failure(
+                "invalid_input",
+                format!("Failed to render subagent '{}'", definition.name),
+                Some(err.to_string()),
+            )
+        }),
+        None => build_prompt_with_context_and_layers(
+            config,
+            root,
+            model,
+            &[],
+            false,
+            PromptContextInclusion::default(),
+        )
+        .map(|effective| effective.prompt.unwrap_or_default())
+        .map_err(|err| {
+            ToolOutput::failure(
+                "invalid_input",
+                "Failed to build default subagent prompt",
+                Some(err.to_string()),
+            )
+        }),
+    }?;
+
+    Ok(result)
+}
+
+fn build_exec_options(
+    definition: Option<&subagents::SubagentDefinition>,
+    ctx: &ToolContext,
+    model: String,
+    system_prompt: String,
+) -> ExecSubagentOptions {
+    ExecSubagentOptions {
+        model: Some(model),
+        system_prompt: Some(system_prompt),
+        thinking_level: definition
+            .and_then(|definition| definition.thinking_level)
+            .or(ctx.thinking_level),
+        no_tools: false,
+        no_system_prompt: false,
+        tools_override: definition.and_then(|definition| definition.tools.clone()),
+        event_filter: Some(vec!["turn_finished".to_string()]),
+        timeout: ctx.timeout,
     }
 }
 
@@ -244,7 +318,7 @@ mod tests {
 
     #[test]
     fn test_input_validation_missing_prompt() {
-        let input = json!({"subagent": "general_assistant", "model": "codex:gpt-5.3-codex"});
+        let input = json!({"subagent": "coder", "model": "codex:gpt-5.3-codex"});
         let parsed: Result<SubagentInput, _> = serde_json::from_value(input);
         assert!(parsed.is_err());
     }
@@ -253,7 +327,7 @@ mod tests {
     fn test_resolve_model_priority() {
         let input = SubagentInput {
             prompt: "task".to_string(),
-            subagent: Some("general_assistant".to_string()),
+            subagent: Some("coder".to_string()),
             model: Some("codex:gpt-5.3-codex".to_string()),
         };
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
@@ -271,7 +345,7 @@ mod tests {
     fn test_implicit_model_does_not_require_supported_list_match() {
         let input = SubagentInput {
             prompt: "task".to_string(),
-            subagent: Some("general_assistant".to_string()),
+            subagent: Some("coder".to_string()),
             model: None,
         };
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
@@ -306,16 +380,16 @@ mod tests {
     fn test_build_description_includes_available_subagents() {
         let desc = build_description(&[
             SubagentSummary {
-                name: "general_assistant".to_string(),
-                description: "General helper".to_string(),
+                name: "coder".to_string(),
+                description: "Coding helper".to_string(),
             },
             SubagentSummary {
-                name: "automation_assistant".to_string(),
-                description: "Headless helper".to_string(),
+                name: "researcher".to_string(),
+                description: "Research helper".to_string(),
             },
         ]);
 
-        assert!(desc.contains("general_assistant (General helper)"));
-        assert!(desc.contains("automation_assistant (Headless helper)"));
+        assert!(desc.contains("coder (Coding helper)"));
+        assert!(desc.contains("researcher (Research helper)"));
     }
 }

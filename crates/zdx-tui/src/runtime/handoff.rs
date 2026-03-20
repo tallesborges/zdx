@@ -84,11 +84,12 @@ pub fn execute_handoff_submit(
     let thread_handle = thread_persistence::Thread::new_with_root_and_source(root, handoff_from)
         .map_err(|e| e.to_string())?;
 
+    let instruction_layers: Vec<&str> = crate::tui_surface_rules().into_iter().collect();
     let context_paths =
-        match zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+        match zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             root,
-            crate::tui_surface_rules(),
+            &instruction_layers,
             true,
         ) {
             Ok(effective) => effective.loaded_agents_paths,

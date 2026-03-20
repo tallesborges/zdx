@@ -18,10 +18,16 @@ pub const THREAD_TITLE_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/thread_title_prompt.md"
 ));
 
-/// Built-in `general_assistant` subagent template.
-pub const GENERAL_ASSISTANT_SUBAGENT_TEMPLATE: &str = include_str!(concat!(
+/// Prompt template for system prompt assembly (`MiniJinja`).
+pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/subagents/general_assistant.md"
+    "/prompts/system_prompt_template.md"
+));
+
+/// Built-in prompt layer for headless automation behavior.
+pub const AUTOMATION_HARNESS_PROMPT_LAYER: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/instruction_layers/automation_harness.md"
 ));
 
 /// Prompt template for read thread tool (shared with tool execution).
@@ -39,21 +45,5 @@ pub fn identity_prompt() -> &'static str {
 /// Returns the built-in default system prompt template body.
 #[must_use]
 pub fn default_system_prompt_template() -> &'static str {
-    strip_yaml_frontmatter(GENERAL_ASSISTANT_SUBAGENT_TEMPLATE).trim()
-}
-
-fn strip_yaml_frontmatter(content: &'static str) -> &'static str {
-    let Some(rest) = content.strip_prefix("---\n") else {
-        return content;
-    };
-
-    if let Some(idx) = rest.find("\n---\n") {
-        return &rest[idx + 5..];
-    }
-
-    if let Some(idx) = rest.find("\n...\n") {
-        return &rest[idx + 5..];
-    }
-
-    content
+    SYSTEM_PROMPT_TEMPLATE.trim()
 }

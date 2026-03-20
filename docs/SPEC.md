@@ -217,17 +217,23 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Template syntax: MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
 - `[prompt_template].file` — optional template path (relative paths resolve from `ZDX_HOME`).
-- The built-in fallback/default prompt is the `general_assistant` template. On custom template load/render failure, ZDX warns and falls back to that built-in template.
+- The built-in fallback/default prompt is `prompts/system_prompt_template.md`. On custom template load/render failure, ZDX warns and falls back to that built-in template.
 - Providers consume the caller-composed prompt; they do not prepend hidden coding system prompts.
+
+### Prompt layers
+
+- Prompt layers are additive MiniJinja-rendered prompt fragments appended after the base system prompt.
+- The same mechanism is used for surface-specific constraints (for example Telegram or exec output guidance) and harness-style behavior layers (for example automation/headless execution instructions).
+- Prompt layers modify behavior without creating a separate subagent identity.
 
 ### Named subagents
 
 - Named subagents are markdown files with YAML frontmatter plus a MiniJinja prompt body.
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
-- `invoke_subagent` accepts `subagent: <name>` and defaults to `general_assistant` when omitted.
-- Built-in subagents currently include `general_assistant` and `automation_assistant`.
+- `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
+- Built-in subagents currently include `general_assistant` as an alias of the base/default prompt with no extra specialization.
 - Subagent prompt bodies use the same template engine/features as the main system prompt pipeline.
-- `[telegram].subagent` selects the named subagent used by the Telegram bot runtime.
+- `[telegram].subagent` optionally selects a named subagent used by the Telegram bot runtime.
 
 ### Models registry
 

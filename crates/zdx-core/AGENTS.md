@@ -11,6 +11,8 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/models.rs`: model registry for model picker
 - `src/prompts.rs`: prompt template helpers
 - `prompts/identity_prompt.md`: shared minimal identity prompt for backend-safe/system prompt reuse
+- `prompts/system_prompt_template.md`: canonical base MiniJinja system prompt template
+- `instruction_layers/automation_harness.md`: built-in instruction layer for headless automation behavior
 - `src/skills.rs`: skills discovery + parsing
 - `src/subagents.rs`: named subagent discovery + parsing
 - `src/images/mod.rs`: shared image utilities module exports
@@ -18,8 +20,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
-- `subagents/general_assistant.md`: built-in default/general-purpose system prompt template and named subagent
-- `subagents/automation_assistant.md`: built-in headless automation named subagent template
+- `subagents/general_assistant.md`: built-in alias subagent for the default base prompt
 
 ### Core runtime (`src/core/`)
 

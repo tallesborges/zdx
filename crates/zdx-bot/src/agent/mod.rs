@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig, ToolSelection};
-use zdx_core::core::context::PromptContextInclusion;
+use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
@@ -104,25 +104,58 @@ pub(crate) fn spawn_agent_turn(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, Some(thread_id));
 
-    let subagent_name = config.telegram.subagent.trim();
-    let definition = subagents::load_by_name(root, subagent_name)
-        .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
-
     let mut bot_config = config.clone();
-    if let Some(model) = definition.model.clone() {
-        bot_config.model = model;
-    }
-    if let Some(level) = definition.thinking_level {
-        bot_config.thinking_level = level;
-    }
+    let layer_templates: Vec<&str> = bot_surface_rules.into_iter().collect();
 
-    let system_prompt = Some(
-        subagents::render_prompt(
+    let (system_prompt, tool_config) = if let Some(subagent_name) = config
+        .telegram
+        .subagent
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+    {
+        let definition = subagents::load_by_name(root, subagent_name)
+            .with_context(|| format!("load bot subagent '{subagent_name}'"))?;
+
+        if let Some(model) = definition.model.clone() {
+            bot_config.model = model;
+        }
+        if let Some(level) = definition.thinking_level {
+            bot_config.thinking_level = level;
+        }
+
+        let system_prompt = Some(
+            subagents::render_prompt(
+                &bot_config,
+                root,
+                &definition,
+                &bot_config.model,
+                &layer_templates,
+                true,
+                PromptContextInclusion {
+                    project_context: false,
+                    memory_index: true,
+                    skills: true,
+                },
+            )
+            .with_context(|| format!("render bot subagent '{subagent_name}'"))?,
+        );
+
+        let tool_config = if let Some(tools) = definition.tools.clone() {
+            tool_config
+                .clone()
+                .with_selection(ToolSelection::Explicit(tools))
+        } else {
+            tool_config.clone()
+        };
+
+        (system_prompt, tool_config)
+    } else {
+        let effective = build_prompt_with_context_and_layers(
             &bot_config,
             root,
-            &definition,
             &bot_config.model,
-            bot_surface_rules,
+            &layer_templates,
             true,
             PromptContextInclusion {
                 project_context: false,
@@ -130,15 +163,8 @@ pub(crate) fn spawn_agent_turn(
                 skills: true,
             },
         )
-        .with_context(|| format!("render bot subagent '{subagent_name}'"))?,
-    );
-
-    let tool_config = if let Some(tools) = definition.tools.clone() {
-        tool_config
-            .clone()
-            .with_selection(ToolSelection::Explicit(tools))
-    } else {
-        tool_config.clone()
+        .context("build bot prompt")?;
+        (effective.prompt, tool_config.clone())
     };
 
     let agent_opts = AgentOptions {
