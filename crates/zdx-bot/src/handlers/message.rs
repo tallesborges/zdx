@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::ThinkingLevel;
-use zdx_core::core::events::AgentEvent;
+use zdx_core::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
 use zdx_core::core::thread_persistence::{self, ThreadEvent};
 use zdx_core::core::worktree;
 
@@ -1102,23 +1102,30 @@ async fn stream_turn_events(
             event = handle.rx.recv() => {
                 let Some(event) = event else { break; };
                 match &*event {
-                    AgentEvent::TurnCompleted { final_text: text, .. } => {
+                    AgentEvent::TurnFinished {
+                        status,
+                        final_text: text,
+                        ..
+                    } => {
                         final_text.clone_from(text);
-                        got_result = true;
+                        match status {
+                            AgentTurnStatus::Completed => {
+                                got_result = true;
+                            }
+                            AgentTurnStatus::Interrupted => {}
+                            AgentTurnStatus::Failed { message, .. } => {
+                                had_error = true;
+                                error_message = Some(message.clone());
+                            }
+                        }
+                        break;
                     }
                     AgentEvent::Error { message, .. } => {
                         tracing::error!(message, "Agent error event");
-                        had_error = true;
-                        error_message = Some(message.clone());
-                    }
-                    AgentEvent::Interrupted { partial_content } => {
-                        if let Some(partial) = partial_content {
-                            final_text.clone_from(partial);
-                        }
+                        // Diagnostic only; terminal outcome is carried by TurnFinished.
                     }
                     other => update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await,
                 }
-                if got_result { break; }
             }
         }
     }

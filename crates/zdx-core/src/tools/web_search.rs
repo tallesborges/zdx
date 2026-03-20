@@ -285,19 +285,25 @@ mod tests {
         assert!(required.is_empty());
 
         let props = schema.get("properties").unwrap();
-        assert!(props["objective"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("instead of a `query` field"));
-        assert!(props["search_queries"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("instead of using a `query` field"));
+        assert!(
+            props["objective"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("instead of a `query` field")
+        );
+        assert!(
+            props["search_queries"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("instead of using a `query` field")
+        );
         assert_eq!(props["search_queries"]["minItems"], json!(1));
-        assert!(props["max_results"]["description"]
-            .as_str()
-            .unwrap()
-            .contains("default: 10"));
+        assert!(
+            props["max_results"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("default: 10")
+        );
     }
 
     #[test]

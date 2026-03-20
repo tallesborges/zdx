@@ -326,9 +326,13 @@ impl ThreadEvent {
                 let output = serde_json::to_value(result).unwrap_or_default();
                 Some(Self::tool_result(id.clone(), output, result.is_ok()))
             }
-            AgentEvent::Interrupted { partial_content } => {
-                Some(Self::interrupted(partial_content.clone()))
-            }
+            AgentEvent::TurnFinished {
+                status: crate::core::events::TurnStatus::Interrupted,
+                final_text,
+                ..
+            } => Some(Self::interrupted(
+                (!final_text.is_empty()).then(|| final_text.clone()),
+            )),
             AgentEvent::ReasoningCompleted { block } => {
                 Some(Self::reasoning(block.text.clone(), block.replay.clone()))
             }

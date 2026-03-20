@@ -347,7 +347,7 @@ async fn test_exec_keeps_reasoning_text_without_replay_in_stdout() {
 }
 
 #[tokio::test]
-async fn test_exec_filter_turn_completed_only_emits_turn_completed() {
+async fn test_exec_filter_turn_finished_only_emits_turn_finished() {
     if !can_bind_localhost() {
         eprintln!("Skipping: cannot bind localhost TCP port in this environment.");
         return;
@@ -371,14 +371,14 @@ async fn test_exec_filter_turn_completed_only_emits_turn_completed() {
             "--no-thread",
             "exec",
             "--filter",
-            "turn_completed",
+            "turn_finished",
             "-p",
             "Say hello",
         ])
         .assert()
         .success()
         .stdout(
-            predicate::str::contains("\"type\":\"turn_completed\"")
+            predicate::str::contains("\"type\":\"turn_finished\"")
                 .and(predicate::str::contains("\"final_text\":\"Hello world\"")),
         )
         .stdout(predicate::str::contains("\"type\":\"assistant_completed\"").not());

@@ -89,7 +89,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         no_tools: false,
         no_system_prompt: false,
         tools_override: None,
-        event_filter: Some(vec!["turn_completed".to_string()]),
+        event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: ctx.timeout,
     };
 

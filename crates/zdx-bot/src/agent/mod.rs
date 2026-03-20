@@ -87,7 +87,7 @@ pub(crate) struct AgentTurnHandle {
 ///
 /// Thread persistence is wired internally via `spawn_broadcaster`.
 /// The caller receives events through `AgentTurnHandle::rx` and should
-/// look for `TurnCompleted` to get the final result.
+/// look for `TurnFinished` to get the terminal result.
 ///
 /// # Errors
 /// Returns an error if the operation fails.

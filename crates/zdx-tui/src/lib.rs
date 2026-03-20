@@ -134,11 +134,7 @@ pub async fn run_interactive_chat_with_history(
         .thread_handle
         .as_ref()
         .map(|log| log.path().as_path());
-    for message in thread_startup_messages(
-        thread_path,
-        &loaded_agents_paths,
-        &loaded_skills,
-    ) {
+    for message in thread_startup_messages(thread_path, &loaded_agents_paths, &loaded_skills) {
         runtime
             .state
             .tui
