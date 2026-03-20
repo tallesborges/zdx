@@ -9,10 +9,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use zdx_core::automations::{self, AutomationDefinition};
-use zdx_core::config;
 use zdx_core::core::context::PromptContextInclusion;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::subagents;
+use zdx_core::{config, subagents};
 
 use super::exec;
 

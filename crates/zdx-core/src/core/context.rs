@@ -18,11 +18,9 @@ use minijinja::{Environment, UndefinedBehavior};
 use serde::Serialize;
 
 use crate::config::{Config, paths};
-use crate::prompts;
-use crate::prompts::SYSTEM_PROMPT_TEMPLATE;
 use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
-use crate::subagents;
+use crate::{prompts, subagents};
 
 /// Sets `ZDX_ARTIFACT_DIR` and `ZDX_THREAD_ID` as process environment variables.
 ///
@@ -59,9 +57,6 @@ pub const MAX_MEMORY_FILE_SIZE: usize = 16 * 1024;
 
 /// Preferred memory index filename.
 pub const MEMORY_INDEX_FILE_NAME: &str = "MEMORY.md";
-/// Default prompt template used when template mode is enabled and no file is configured.
-const DEFAULT_SYSTEM_PROMPT_TEMPLATE: &str = SYSTEM_PROMPT_TEMPLATE;
-
 /// A warning generated during context loading.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContextWarning {
@@ -253,7 +248,7 @@ fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, 
     }
 
     Ok(TemplateSource {
-        content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+        content: prompts::default_system_prompt_template().to_string(),
         path: None,
     })
 }
@@ -676,7 +671,7 @@ fn load_skills_with_config(config: &Config, root: &Path) -> LoadSkillsResult {
     load_skills(&skill_options)
 }
 
-/// Renders an arbitrary MiniJinja prompt template with the same variables and
+/// Renders an arbitrary `MiniJinja` prompt template with the same variables and
 /// context pipeline used by the built-in system prompt.
 ///
 /// # Errors
@@ -692,27 +687,28 @@ pub fn render_prompt_template_with_context(
 ) -> Result<EffectivePrompt> {
     let base_prompt = config.effective_system_prompt()?;
 
-    let mut loaded_agents_paths = Vec::new();
-    let mut warnings = Vec::new();
-    let mut project_context_block = None;
-    let mut memory_index = None;
-
-    if inclusion.project_context
-        && let Some(loaded) = load_all_agents_files(root)
-    {
-        loaded_agents_paths = loaded.loaded_paths;
-        warnings.extend(loaded.warnings);
-        project_context_block = format_project_context_block(&loaded.content);
-    }
-
-    if inclusion.memory_index
-        && let Some(loaded_memory_index) = load_memory_index(config)
-    {
-        warnings.extend(loaded_memory_index.warnings);
-        if !loaded_memory_index.content.trim().is_empty() {
-            memory_index = Some(loaded_memory_index.content);
-        }
-    }
+    let sections_result = load_prompt_context_sections(root, config);
+    let loaded_agents_paths = if inclusion.project_context {
+        sections_result.loaded_agents_paths.clone()
+    } else {
+        Vec::new()
+    };
+    let scoped_context = if inclusion.project_context {
+        sections_result.scoped_context.clone()
+    } else {
+        Vec::new()
+    };
+    let mut warnings = sections_result.warnings.clone();
+    let inline_project_context = if inclusion.project_context {
+        sections_result.inline_project_context.clone()
+    } else {
+        None
+    };
+    let memory_index = if inclusion.memory_index {
+        sections_result.memory_index.clone()
+    } else {
+        None
+    };
 
     let skills_result = if inclusion.skills {
         load_skills_with_config(config, root)
@@ -735,11 +731,12 @@ pub fn render_prompt_template_with_context(
         model,
         PromptTemplateSections {
             base_prompt: base_prompt.as_deref(),
-            project_context: project_context_block.as_deref(),
+            project_context: inline_project_context.as_deref(),
             memory_index: memory_index.as_deref(),
             memory_suggestions,
             surface_rules,
             skills_list: &skills,
+            scoped_context: &scoped_context,
             subagents_enabled: config.subagents.enabled,
             subagent_models: &subagent_models,
         },
@@ -756,6 +753,7 @@ pub fn render_prompt_template_with_context(
     Ok(EffectivePrompt {
         prompt,
         loaded_agents_paths,
+        scoped_context_paths: scoped_context.iter().map(|sa| sa.path.clone()).collect(),
         warnings,
         loaded_skills: skills,
     })
@@ -775,7 +773,7 @@ fn render_system_prompt_with_fallback(
         Err(warning) => {
             warnings.push(warning);
             TemplateSource {
-                content: DEFAULT_SYSTEM_PROMPT_TEMPLATE.to_string(),
+                content: prompts::default_system_prompt_template().to_string(),
                 path: None,
             }
         }
@@ -791,7 +789,7 @@ fn render_system_prompt_with_fallback(
                 ),
             });
 
-            match render_prompt_template(DEFAULT_SYSTEM_PROMPT_TEMPLATE, vars) {
+            match render_prompt_template(prompts::default_system_prompt_template(), vars) {
                 Ok(rendered) => rendered,
                 Err(default_error) => {
                     warnings.push(ContextWarning {

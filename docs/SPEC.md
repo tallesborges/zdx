@@ -217,7 +217,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Template syntax: MiniJinja (`{{ var }}`, `{% if %}`, `{% for %}`).
 - `[prompt_template].file` — optional template path (relative paths resolve from `ZDX_HOME`).
-- The built-in template is the fallback. On custom template load/render failure, ZDX warns and falls back to the built-in.
+- The built-in fallback/default prompt is the `general_assistant` template. On custom template load/render failure, ZDX warns and falls back to that built-in template.
 - Providers consume the caller-composed prompt; they do not prepend hidden coding system prompts.
 
 ### Named subagents

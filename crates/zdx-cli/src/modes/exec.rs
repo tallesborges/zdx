@@ -99,6 +99,7 @@ pub async fn run_exec(
         Some(zdx_core::core::context::EffectivePrompt {
             prompt: Some(prompt.clone()),
             loaded_agents_paths: Vec::new(),
+            scoped_context_paths: Vec::new(),
             warnings: Vec::new(),
             loaded_skills: Vec::new(),
         })

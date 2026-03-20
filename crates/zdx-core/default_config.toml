@@ -26,13 +26,13 @@ read_thread_model = "gemini:gemini-2.5-flash-lite"
 
 # Optional custom system prompt template file.
 # zdx always renders a MiniJinja system prompt template.
-# If this file is unset (default), zdx uses the built-in template.
+# If this file is unset (default), zdx uses the built-in `general_assistant` template.
 # MiniJinja syntax supported: {{ var }}, {% if %}, {% for %}
 # Useful vars: invocation_term, invocation_term_plural,
 # is_openai_codex, base_prompt, project_context,
 # skills_list, subagents_config, cwd, date
 [prompt_template]
-# file = "prompts/system_prompt_template.md"
+# file = "subagents/general_assistant.md"
 
 # Extended thinking level
 # Controls how much reasoning the model shows before responding.

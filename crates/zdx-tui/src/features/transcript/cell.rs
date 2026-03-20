@@ -158,8 +158,7 @@ fn tool_display_text(name: &str, input: &Value) -> String {
         "invoke_subagent" => value_as_trimmed_str(input, "subagent")
             .map(|subagent| format!("{name} {subagent}"))
             .or_else(|| {
-                value_as_trimmed_str(input, "model")
-                    .map(|model| format!("{name} model={model}"))
+                value_as_trimmed_str(input, "model").map(|model| format!("{name} model={model}"))
             })
             .unwrap_or_else(|| name.to_string()),
         _ => name.to_string(),

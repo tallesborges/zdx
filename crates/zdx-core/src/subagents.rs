@@ -76,8 +76,16 @@ pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
     }
 
     let mut entries: Vec<(PathBuf, SubagentSource)> = Vec::new();
-    collect_markdown_files(&paths::zdx_home().join("subagents"), SubagentSource::User, &mut entries)?;
-    collect_markdown_files(&root.join(".zdx").join("subagents"), SubagentSource::Project, &mut entries)?;
+    collect_markdown_files(
+        &paths::zdx_home().join("subagents"),
+        SubagentSource::User,
+        &mut entries,
+    )?;
+    collect_markdown_files(
+        &root.join(".zdx").join("subagents"),
+        SubagentSource::Project,
+        &mut entries,
+    )?;
 
     for (path, source) in entries {
         let definition = parse_subagent_file(&path, source)
@@ -145,7 +153,10 @@ pub fn render_prompt(
 
     let prompt = effective.prompt.unwrap_or_default().trim().to_string();
     if prompt.is_empty() {
-        bail!("Subagent '{}' rendered an empty system prompt", definition.name);
+        bail!(
+            "Subagent '{}' rendered an empty system prompt",
+            definition.name
+        );
     }
 
     Ok(prompt)
@@ -188,7 +199,9 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             include_str!("../subagents/general_assistant.md"),
         ),
         (
-            manifest_dir.join("subagents").join("automation_assistant.md"),
+            manifest_dir
+                .join("subagents")
+                .join("automation_assistant.md"),
             include_str!("../subagents/automation_assistant.md"),
         ),
     ]
@@ -365,6 +378,9 @@ mod tests {
         assert_eq!(definition.name, "search");
         assert_eq!(definition.model.as_deref(), Some("gemini:gemini-2.5-flash"));
         assert_eq!(definition.thinking_level, Some(ThinkingLevel::Low));
-        assert_eq!(definition.tools, Some(vec!["read".to_string(), "grep".to_string()]));
+        assert_eq!(
+            definition.tools,
+            Some(vec!["read".to_string(), "grep".to_string()])
+        );
     }
 }

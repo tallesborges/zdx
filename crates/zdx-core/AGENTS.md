@@ -18,8 +18,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
-- `prompts/system_prompt_template.md`: unified MiniJinja system prompt template
-- `subagents/general_assistant.md`: built-in general-purpose named subagent template
+- `subagents/general_assistant.md`: built-in default/general-purpose system prompt template and named subagent
 - `subagents/automation_assistant.md`: built-in headless automation named subagent template
 
 ### Core runtime (`src/core/`)

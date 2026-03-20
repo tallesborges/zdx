@@ -134,7 +134,9 @@ pub(crate) fn spawn_agent_turn(
     );
 
     let tool_config = if let Some(tools) = definition.tools.clone() {
-        tool_config.clone().with_selection(ToolSelection::Explicit(tools))
+        tool_config
+            .clone()
+            .with_selection(ToolSelection::Explicit(tools))
     } else {
         tool_config.clone()
     };
