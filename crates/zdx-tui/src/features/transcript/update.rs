@@ -6,7 +6,7 @@
 //! - Delta coalescing (pending text, scroll)
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use zdx_core::core::events::AgentEvent;
+use zdx_core::core::events::{AgentEvent, TurnStatus};
 use zdx_core::core::interrupt;
 use zdx_core::core::thread_persistence::ThreadEvent;
 
@@ -42,7 +42,7 @@ pub fn handle_agent_event(
         AgentEvent::AssistantCompleted { .. } => {
             // Apply any pending delta before finalizing to ensure no content is lost.
             // This is critical because multiple events can be processed in one loop
-            // iteration, and TurnCompleted may follow immediately after AssistantCompleted.
+            // iteration, and TurnFinished may follow immediately after AssistantCompleted.
             apply_pending_delta(transcript, agent_state);
 
             if let AgentState::Streaming { cell_id, .. } = &agent_state {
@@ -51,20 +51,7 @@ pub fn handle_agent_event(
             vec![]
         }
         AgentEvent::Error { message, .. } => {
-            // Apply any pending delta before resetting agent state to preserve
-            // partial content that was streamed before the error occurred.
-            apply_pending_delta(transcript, agent_state);
-
-            // Mark all running/streaming cells as errored (stops spinner, shows error state)
-            transcript.mark_errored();
-
             transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
-            // Reset agent state - the turn is over due to the error
-            *agent_state = AgentState::Idle;
-            vec![]
-        }
-        AgentEvent::Interrupted { .. } => {
-            handle_interrupted(transcript, agent_state);
             vec![]
         }
         AgentEvent::ToolRequested { id, name, input } => {
@@ -98,7 +85,8 @@ pub fn handle_agent_event(
             transcript.set_tool_result_for(id, result.clone());
             vec![]
         }
-        AgentEvent::TurnCompleted {
+        AgentEvent::TurnFinished {
+            status,
             final_text,
             messages,
         } => {
@@ -106,22 +94,41 @@ pub fn handle_agent_event(
             // content is lost. This handles edge cases where AssistantCompleted wasn't
             // received or didn't have a chance to apply the delta.
             apply_pending_delta(transcript, agent_state);
+            match status {
+                TurnStatus::Completed => {
+                    mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
+                        messages.clone(),
+                    )));
+                    *agent_state = AgentState::Idle;
 
-            mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
-                messages.clone(),
-            )));
-            *agent_state = AgentState::Idle;
-
-            // Save assistant message to thread if enabled
-            if !final_text.is_empty() && has_thread {
-                vec![UiEffect::SaveThread {
-                    event: ThreadEvent::assistant_message_with_phase(
-                        final_text,
-                        Some("final_answer".to_string()),
-                    ),
-                }]
-            } else {
-                vec![]
+                    if !final_text.is_empty() && has_thread {
+                        vec![UiEffect::SaveThread {
+                            event: ThreadEvent::assistant_message_with_phase(
+                                final_text,
+                                Some("final_answer".to_string()),
+                            ),
+                        }]
+                    } else {
+                        vec![]
+                    }
+                }
+                TurnStatus::Interrupted => {
+                    if !messages.is_empty() {
+                        mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
+                            messages.clone(),
+                        )));
+                    }
+                    transcript.mark_interrupted();
+                    interrupt::reset();
+                    *agent_state = AgentState::Idle;
+                    vec![]
+                }
+                TurnStatus::Failed { message, .. } => {
+                    transcript.mark_errored();
+                    transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
+                    *agent_state = AgentState::Idle;
+                    vec![]
+                }
             }
         }
         // Reasoning events - create or update thinking cells in transcript
@@ -300,19 +307,6 @@ fn handle_thinking_delta(
         // Append to the existing streaming thinking cell
         transcript.append_thinking_delta_to_last(text);
     }
-}
-
-/// Handles interruption events.
-fn handle_interrupted(transcript: &mut TranscriptState, agent_state: &mut AgentState) {
-    // Apply any pending delta before resetting agent state to preserve
-    // partial content that was streamed before the interruption.
-    apply_pending_delta(transcript, agent_state);
-
-    // Mark all running/streaming cells as cancelled
-    transcript.mark_interrupted();
-
-    interrupt::reset();
-    *agent_state = AgentState::Idle;
 }
 
 // ============================================================================

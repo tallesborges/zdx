@@ -8,12 +8,11 @@ use std::io::{Stdout, Write, stdout};
 use std::path::PathBuf;
 
 use anyhow::Result;
-use serde_json::json;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
-use zdx_core::core::events::AgentEvent;
+use zdx_core::core::events::{AgentEvent, TurnStatus};
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::ChatMessage;
 
@@ -181,7 +180,7 @@ pub async fn run_exec(
     // Propagate error after tasks complete
     let (final_text, _messages) = result?;
 
-    emit_final_turn_completed(&final_text, &options.event_filter);
+    emit_final_turn_finished(&final_text, &options.event_filter);
 
     // Log assistant response to thread
     if let Some(ref mut s) = thread {
@@ -272,8 +271,7 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
         AgentEvent::ToolOutputDelta { .. } => "tool_output_delta",
         AgentEvent::ToolCompleted { .. } => "tool_completed",
         AgentEvent::Error { .. } => "error",
-        AgentEvent::Interrupted { .. } => "interrupted",
-        AgentEvent::TurnCompleted { .. } => "turn_completed",
+        AgentEvent::TurnFinished { .. } => "turn_finished",
         AgentEvent::UsageUpdate { .. } => "usage_update",
     }
 }
@@ -284,7 +282,7 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
         | AgentEvent::ReasoningDelta { .. }
         | AgentEvent::ToolOutputDelta { .. }
         | AgentEvent::ToolInputDelta { .. }
-        | AgentEvent::TurnCompleted { .. } => None,
+        | AgentEvent::TurnFinished { .. } => None,
         AgentEvent::ReasoningCompleted { block } => {
             let sanitized = zdx_core::providers::ReasoningBlock {
                 text: block.text.clone(),
@@ -300,20 +298,20 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
     }
 }
 
-fn emit_final_turn_completed(final_text: &str, event_filter: &[String]) {
+fn emit_final_turn_finished(final_text: &str, event_filter: &[String]) {
     if !event_filter.is_empty()
         && !event_filter
             .iter()
-            .any(|wanted| wanted.eq_ignore_ascii_case("turn_completed"))
+            .any(|wanted| wanted.eq_ignore_ascii_case("turn_finished"))
     {
         return;
     }
 
-    let event = json!({
-        "type": "turn_completed",
-        "final_text": final_text,
-        "messages": [],
-    });
+    let event = AgentEvent::TurnFinished {
+        status: TurnStatus::Completed,
+        final_text: final_text.to_string(),
+        messages: Vec::new(),
+    };
     if let Ok(line) = serde_json::to_string(&event) {
         let mut out = stdout();
         let _ = writeln!(out, "{line}");

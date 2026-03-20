@@ -60,7 +60,7 @@ async fn run_subagent(
         no_tools: false,
         no_system_prompt: true,
         tools_override: Some(vec!["read".to_string()]),
-        event_filter: Some(vec!["turn_completed".to_string()]),
+        event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(HANDOFF_TIMEOUT_SECS)),
     };
 

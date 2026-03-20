@@ -169,14 +169,14 @@ fn process_subagent_output(output: &std::process::Output) -> Result<String> {
     let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     ensure!(!stdout.is_empty(), "Subagent returned empty output");
 
-    if let Some(final_text) = extract_turn_completed_text(&stdout)? {
+    if let Some(final_text) = extract_turn_finished_text(&stdout)? {
         return Ok(final_text);
     }
 
     Ok(stdout)
 }
 
-fn extract_turn_completed_text(stdout: &str) -> Result<Option<String>> {
+fn extract_turn_finished_text(stdout: &str) -> Result<Option<String>> {
     let mut saw_json_event = false;
     let mut final_text = None;
 
@@ -186,11 +186,21 @@ fn extract_turn_completed_text(stdout: &str) -> Result<Option<String>> {
         .filter(|line| !line.is_empty())
     {
         match serde_json::from_str::<AgentEvent>(line) {
-            Ok(AgentEvent::TurnCompleted {
-                final_text: text, ..
+            Ok(AgentEvent::TurnFinished {
+                status,
+                final_text: text,
+                ..
             }) => {
                 saw_json_event = true;
-                final_text = Some(text);
+                match status {
+                    crate::core::events::TurnStatus::Completed
+                    | crate::core::events::TurnStatus::Interrupted => {
+                        final_text = Some(text);
+                    }
+                    crate::core::events::TurnStatus::Failed { message, .. } => {
+                        bail!("Subagent turn failed: {message}");
+                    }
+                }
             }
             Ok(_) => {
                 saw_json_event = true;
@@ -209,7 +219,7 @@ fn extract_turn_completed_text(stdout: &str) -> Result<Option<String>> {
             .filter(|text| !text.trim().is_empty())
             .map(Some)
             .ok_or_else(|| {
-                anyhow::anyhow!("Subagent JSONL output missing turn_completed.final_text")
+                anyhow::anyhow!("Subagent JSONL output missing turn_finished.final_text")
             });
     }
 
@@ -259,7 +269,7 @@ mod tests {
                 no_tools: false,
                 no_system_prompt: true,
                 tools_override: Some(vec!["read".to_string(), "glob".to_string()]),
-                event_filter: Some(vec!["turn_completed".to_string()]),
+                event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
             },
         );
@@ -281,7 +291,7 @@ mod tests {
                 "--tools",
                 "read,glob",
                 "--filter",
-                "turn_completed",
+                "turn_finished",
                 "-m",
                 "openai:gpt-5.2",
                 "-t",
@@ -291,14 +301,19 @@ mod tests {
     }
 
     #[test]
-    fn process_subagent_output_extracts_turn_completed_text() {
+    fn process_subagent_output_extracts_turn_finished_text() {
+        let terminal = serde_json::to_string(&AgentEvent::TurnFinished {
+            status: crate::core::events::TurnStatus::Completed,
+            final_text: "final answer".to_string(),
+            messages: Vec::new(),
+        })
+        .unwrap();
         let output = std::process::Output {
             status: std::process::ExitStatus::from_raw(0),
-            stdout: br#"{"type":"usage_update","input_tokens":1,"output_tokens":2,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}
-{"type":"assistant_completed","text":"partial"}
-{"type":"turn_completed","final_text":"final answer","messages":[]}
-"#
-            .to_vec(),
+            stdout: format!(
+                "{{\"type\":\"usage_update\",\"input_tokens\":1,\"output_tokens\":2,\"cache_read_input_tokens\":0,\"cache_creation_input_tokens\":0}}\n{{\"type\":\"assistant_completed\",\"text\":\"partial\"}}\n{terminal}\n"
+            )
+            .into_bytes(),
             stderr: Vec::new(),
         };
 

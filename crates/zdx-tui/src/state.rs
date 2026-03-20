@@ -95,7 +95,7 @@ impl AppState {
 /// Agent execution state.
 ///
 /// Tracks the current agent task and its event channel.
-/// The task sends events through the channel, including `TurnCompleted` when done.
+/// The task sends events through the channel, including `TurnFinished` when done.
 #[derive(Debug)]
 pub enum AgentState {
     /// No agent task running, ready for input.

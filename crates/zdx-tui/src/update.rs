@@ -166,8 +166,7 @@ fn handle_agent_event(
 
     if matches!(
         agent_event,
-        zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-            | zdx_core::core::events::AgentEvent::Interrupted { .. }
+        zdx_core::core::events::AgentEvent::TurnFinished { .. }
     ) && has_thread
         && app.tui.thread.usage.has_unsaved_usage()
     {
@@ -176,9 +175,7 @@ fn handle_agent_event(
 
     let should_dequeue = matches!(
         agent_event,
-        zdx_core::core::events::AgentEvent::TurnCompleted { .. }
-            | zdx_core::core::events::AgentEvent::Interrupted { .. }
-            | zdx_core::core::events::AgentEvent::Error { .. }
+        zdx_core::core::events::AgentEvent::TurnFinished { .. }
     );
     maybe_push_timing_cell(app, should_dequeue);
     maybe_send_next_queued_prompt(app, should_dequeue, &mut effects);
@@ -926,14 +923,15 @@ mod tests {
     }
 
     #[test]
-    fn test_queue_drains_on_turn_completed() {
+    fn test_queue_drains_on_turn_finished() {
         let config = zdx_core::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.input.enqueue_prompt("queued prompt".to_string());
 
         let effects = update(
             &mut app,
-            UiEvent::Agent(AgentEvent::TurnCompleted {
+            UiEvent::Agent(AgentEvent::TurnFinished {
+                status: zdx_core::core::events::TurnStatus::Completed,
                 final_text: String::new(),
                 messages: Vec::new(),
             }),

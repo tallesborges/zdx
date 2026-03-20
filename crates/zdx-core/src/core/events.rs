@@ -73,16 +73,11 @@ pub enum AgentEvent {
         details: Option<String>,
     },
 
-    /// Execution was interrupted (e.g., by user signal).
-    Interrupted {
-        /// Partial assistant text received before interruption (streaming only).
-        #[serde(skip_serializing_if = "Option::is_none")]
-        partial_content: Option<String>,
-    },
-
-    /// Turn completed successfully with final result.
-    TurnCompleted {
-        /// Final accumulated text from the assistant.
+    /// Turn reached a terminal state with the latest text and message snapshot.
+    TurnFinished {
+        /// Terminal status for the turn.
+        status: TurnStatus,
+        /// Final or partial accumulated text from the assistant.
         final_text: String,
         /// Updated message history (includes assistant responses and tool results).
         messages: Vec<ChatMessage>,
@@ -118,6 +113,20 @@ pub enum ErrorKind {
     ApiError,
     /// Internal/unknown error
     Internal,
+}
+
+/// Terminal status for a turn.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "status")]
+pub enum TurnStatus {
+    Completed,
+    Interrupted,
+    Failed {
+        kind: ErrorKind,
+        message: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<String>,
+    },
 }
 
 impl From<ProviderErrorKind> for ErrorKind {

@@ -16,7 +16,7 @@ use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 
 use crate::config::{Config, ThinkingLevel};
-use crate::core::events::{AgentEvent, ErrorKind, ToolOutput};
+use crate::core::events::{AgentEvent, ErrorKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
@@ -457,24 +457,154 @@ fn decode_partial_json_string(input: &str) -> String {
     out
 }
 
-/// Sends an error event via the async channel and returns the original error.
-/// This preserves the full error chain (including `ProviderError` details) for callers.
-async fn emit_error_async(err: anyhow::Error, sender: &EventSender) -> anyhow::Error {
-    let event = if let Some(provider_err) = err.downcast_ref::<ProviderError>() {
-        AgentEvent::Error {
-            kind: provider_err.kind.clone().into(),
-            message: provider_err.message.clone(),
-            details: provider_err.details.clone(),
+type TurnResult<T> = std::result::Result<T, TurnError>;
+
+#[derive(Debug, Clone)]
+struct CompletedTurn {
+    final_text: String,
+    messages: Vec<ChatMessage>,
+}
+
+#[derive(Debug)]
+enum TurnError {
+    Interrupted {
+        partial_content: Option<String>,
+        completed_turn: Option<CompletedTurn>,
+    },
+    Provider(ProviderError),
+    Parse {
+        message: String,
+        details: Option<String>,
+    },
+    Internal(anyhow::Error),
+}
+
+#[derive(Debug, Clone)]
+enum TurnDiagnostic {
+    Parse {
+        message: String,
+        details: Option<String>,
+    },
+}
+
+impl TurnError {
+    fn interrupted(partial_content: Option<String>) -> Self {
+        Self::Interrupted {
+            partial_content,
+            completed_turn: None,
         }
-    } else {
-        AgentEvent::Error {
-            kind: ErrorKind::Internal,
-            message: err.to_string(),
-            details: None,
+    }
+
+    fn interrupted_with_completion(
+        partial_content: Option<String>,
+        final_text: String,
+        messages: Vec<ChatMessage>,
+    ) -> Self {
+        Self::Interrupted {
+            partial_content,
+            completed_turn: Some(CompletedTurn {
+                final_text,
+                messages,
+            }),
         }
-    };
-    sender.send_important(event).await;
-    err
+    }
+
+    fn from_anyhow(err: anyhow::Error) -> Self {
+        match err.downcast::<ProviderError>() {
+            Ok(provider_err) => Self::Provider(provider_err),
+            Err(err) => Self::Internal(err),
+        }
+    }
+
+    fn into_anyhow(self) -> anyhow::Error {
+        match self {
+            Self::Interrupted { .. } => InterruptedError.into(),
+            Self::Provider(provider_err) => anyhow::Error::new(provider_err),
+            Self::Parse { message, .. } => anyhow!(message),
+            Self::Internal(err) => err,
+        }
+    }
+}
+
+async fn emit_turn_error_async(err: &TurnError, sender: &EventSender) {
+    match err {
+        TurnError::Interrupted {
+            partial_content,
+            completed_turn,
+        } => {
+            let final_text = completed_turn
+                .as_ref()
+                .map(|turn| turn.final_text.clone())
+                .or_else(|| partial_content.clone())
+                .unwrap_or_default();
+            let messages = completed_turn
+                .as_ref()
+                .map(|turn| turn.messages.clone())
+                .unwrap_or_default();
+            sender
+                .send_important(AgentEvent::TurnFinished {
+                    status: TurnStatus::Interrupted,
+                    final_text,
+                    messages,
+                })
+                .await;
+        }
+        TurnError::Provider(provider_err) => {
+            sender
+                .send_important(AgentEvent::TurnFinished {
+                    status: TurnStatus::Failed {
+                        kind: provider_err.kind.clone().into(),
+                        message: provider_err.message.clone(),
+                        details: provider_err.details.clone(),
+                    },
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                })
+                .await;
+        }
+        TurnError::Parse { message, details } => {
+            sender
+                .send_important(AgentEvent::TurnFinished {
+                    status: TurnStatus::Failed {
+                        kind: ErrorKind::Parse,
+                        message: message.clone(),
+                        details: details.clone(),
+                    },
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                })
+                .await;
+        }
+        TurnError::Internal(err) => {
+            sender
+                .send_important(AgentEvent::TurnFinished {
+                    status: TurnStatus::Failed {
+                        kind: ErrorKind::Internal,
+                        message: err.to_string(),
+                        details: None,
+                    },
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                })
+                .await;
+        }
+    }
+}
+
+async fn emit_turn_diagnostics_async(diagnostics: &[TurnDiagnostic], sender: &EventSender) {
+    for diagnostic in diagnostics {
+        match diagnostic {
+            TurnDiagnostic::Parse { message, details } => {
+                sender
+                    .send_important(AgentEvent::Error {
+                        kind: ErrorKind::Parse,
+                        message: message.clone(),
+                        details: details.clone(),
+                    })
+                    .await;
+            }
+        }
+    }
 }
 
 /// Truncates a string for error reporting to avoid bloating logs and model context.
@@ -534,39 +664,45 @@ pub async fn run_turn(
     tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
     let sender = EventSender::new(tx);
-    let setup = build_run_turn_setup(config, options, thread_id)?;
+    match run_turn_inner(messages, config, options, system_prompt, thread_id, &sender).await {
+        Ok(result) => Ok(result),
+        Err(err) => {
+            emit_turn_error_async(&err, &sender).await;
+            Err(err.into_anyhow())
+        }
+    }
+}
+
+async fn run_turn_inner(
+    messages: Vec<ChatMessage>,
+    config: &Config,
+    options: &AgentOptions,
+    system_prompt: Option<&str>,
+    thread_id: Option<&str>,
+    sender: &EventSender,
+) -> TurnResult<(String, Vec<ChatMessage>)> {
+    let setup = build_run_turn_setup(config, options, thread_id).map_err(TurnError::from_anyhow)?;
     let mut messages = messages;
     let mut consecutive_malformed_tool_turns = 0usize;
 
     loop {
-        ensure_not_interrupted(&sender, None).await?;
-        let stream = request_stream(
-            &setup.client,
-            &messages,
-            &setup.tools,
-            system_prompt,
-            &sender,
-        )
-        .await?;
-        let mut stream_state = consume_stream(stream, &sender).await?;
+        ensure_not_interrupted(None)?;
+        let stream = request_stream(&setup.client, &messages, &setup.tools, system_prompt).await?;
+        let mut stream_state = consume_stream(stream, sender).await?;
 
         if stream_state.needs_tool_execution() {
             let stats =
-                process_tool_turn(&mut messages, &mut stream_state.turn, &setup, &sender).await?;
+                process_tool_turn(&mut messages, &mut stream_state.turn, &setup, sender).await?;
             if stats.executable == 0 && stats.malformed > 0 {
                 consecutive_malformed_tool_turns += 1;
                 if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
-                    sender
-                        .send_important(AgentEvent::Error {
-                            kind: ErrorKind::Parse,
-                            message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
-                            details: Some(
-                                "Provider repeatedly requested tool calls without valid arguments"
-                                    .to_string(),
-                            ),
-                        })
-                        .await;
-                    return Err(anyhow!(MALFORMED_TOOL_LOOP_ABORT_MESSAGE));
+                    return Err(TurnError::Parse {
+                        message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
+                        details: Some(
+                            "Provider repeatedly requested tool calls without valid arguments"
+                                .to_string(),
+                        ),
+                    });
                 }
             } else {
                 consecutive_malformed_tool_turns = 0;
@@ -574,7 +710,7 @@ pub async fn run_turn(
             continue;
         }
 
-        return finalize_non_tool_turn(&mut messages, stream_state.turn, &sender).await;
+        return finalize_non_tool_turn(&mut messages, stream_state.turn, sender).await;
     }
 }
 
@@ -1032,15 +1168,9 @@ impl StreamState {
     }
 }
 
-async fn ensure_not_interrupted(
-    sender: &EventSender,
-    partial_content: Option<String>,
-) -> Result<()> {
+fn ensure_not_interrupted(partial_content: Option<String>) -> TurnResult<()> {
     if interrupt::is_interrupted() {
-        sender
-            .send_important(AgentEvent::Interrupted { partial_content })
-            .await;
-        return Err(InterruptedError.into());
+        return Err(TurnError::interrupted(partial_content));
     }
     Ok(())
 }
@@ -1050,30 +1180,31 @@ async fn request_stream(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system_prompt: Option<&str>,
-    sender: &EventSender,
-) -> Result<ProviderStream> {
+) -> TurnResult<ProviderStream> {
     let stream_result = tokio::select! {
         biased;
         () = interrupt::wait_for_interrupt() => {
-            sender.send_important(AgentEvent::Interrupted { partial_content: None }).await;
-            return Err(InterruptedError.into());
+            return Err(TurnError::interrupted(None));
         }
         result = client.send_messages_stream(messages, tools, system_prompt) => result,
     };
     match stream_result {
         Ok(stream) => Ok(stream),
-        Err(err) => Err(emit_error_async(err, sender).await),
+        Err(err) => Err(TurnError::from_anyhow(err)),
     }
 }
 
-async fn consume_stream(mut stream: ProviderStream, sender: &EventSender) -> Result<StreamState> {
+async fn consume_stream(
+    mut stream: ProviderStream,
+    sender: &EventSender,
+) -> TurnResult<StreamState> {
     let mut state = StreamState::new();
 
     loop {
         let partial = (!state.turn.text.is_empty()).then(|| state.turn.text.clone());
-        ensure_not_interrupted(sender, partial).await?;
+        ensure_not_interrupted(partial)?;
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
-            Ok(Some(result)) => result.map_err(anyhow::Error::new)?,
+            Ok(Some(result)) => result.map_err(TurnError::Provider)?,
             Ok(None) => return Ok(state),
             Err(_) => continue,
         };
@@ -1085,7 +1216,7 @@ async fn handle_stream_event(
     event: StreamEvent,
     sender: &EventSender,
     state: &mut StreamState,
-) -> Result<()> {
+) -> TurnResult<()> {
     match event {
         StreamEvent::TextDelta { text, .. } if !text.is_empty() => {
             state.turn.text.push_str(&text);
@@ -1148,15 +1279,10 @@ async fn handle_stream_event(
             error_type,
             message,
         } => {
-            let provider_err = ProviderError::api_error(&error_type, &message);
-            sender
-                .send_important(AgentEvent::Error {
-                    kind: ErrorKind::ApiError,
-                    message: provider_err.message.clone(),
-                    details: provider_err.details.clone(),
-                })
-                .await;
-            return Err(anyhow::Error::new(provider_err));
+            return Err(TurnError::Provider(ProviderError::api_error(
+                &error_type,
+                &message,
+            )));
         }
         StreamEvent::MessageStart { usage, .. } => emit_message_start_usage(sender, usage).await,
         StreamEvent::ReasoningCompleted {
@@ -1322,6 +1448,7 @@ struct ToolTurnOutcome {
     assistant_tools: Vec<ToolUse>,
     malformed_results: Vec<ToolResult>,
     malformed_tools: Vec<(String, String, ToolOutput)>,
+    diagnostics: Vec<TurnDiagnostic>,
 }
 
 struct ToolTurnStats {
@@ -1334,11 +1461,12 @@ async fn process_tool_turn(
     turn: &mut AssistantTurnBuilder,
     setup: &RunTurnSetup,
     sender: &EventSender,
-) -> Result<ToolTurnStats> {
-    let outcome = finalize_tool_calls(turn, sender).await;
+) -> TurnResult<ToolTurnStats> {
+    let outcome = finalize_tool_calls(turn);
     let executable_count = outcome.executable.len();
     let malformed_count = outcome.malformed_results.len();
     emit_assistant_completed_if_present(sender, &turn.text).await;
+    emit_turn_diagnostics_async(&outcome.diagnostics, sender).await;
     emit_malformed_tool_events(sender, outcome.malformed_tools).await;
 
     let turn_text = turn.text.clone();
@@ -1358,18 +1486,11 @@ async fn process_tool_turn(
     messages.push(ChatMessage::tool_results(tool_results));
 
     if interrupt::is_interrupted() {
-        sender
-            .send_important(AgentEvent::TurnCompleted {
-                final_text: turn_text.clone(),
-                messages: messages.clone(),
-            })
-            .await;
-        sender
-            .send_important(AgentEvent::Interrupted {
-                partial_content: (!turn_text.is_empty()).then_some(turn_text),
-            })
-            .await;
-        return Err(InterruptedError.into());
+        return Err(TurnError::interrupted_with_completion(
+            (!turn_text.is_empty()).then_some(turn_text.clone()),
+            turn_text,
+            messages.clone(),
+        ));
     }
 
     Ok(ToolTurnStats {
@@ -1382,7 +1503,7 @@ async fn finalize_non_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: AssistantTurnBuilder,
     sender: &EventSender,
-) -> Result<(String, Vec<ChatMessage>)> {
+) -> TurnResult<(String, Vec<ChatMessage>)> {
     let final_text = turn.text.clone();
     emit_assistant_completed_if_present(sender, &final_text).await;
     let assistant_blocks = turn.into_blocks(Vec::new());
@@ -1390,7 +1511,8 @@ async fn finalize_non_tool_turn(
         messages.push(ChatMessage::assistant_blocks(assistant_blocks));
     }
     sender
-        .send_important(AgentEvent::TurnCompleted {
+        .send_important(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
             final_text: final_text.clone(),
             messages: messages.clone(),
         })
@@ -1428,14 +1550,12 @@ async fn emit_malformed_tool_events(
     }
 }
 
-async fn finalize_tool_calls(
-    turn: &mut AssistantTurnBuilder,
-    sender: &EventSender,
-) -> ToolTurnOutcome {
+fn finalize_tool_calls(turn: &mut AssistantTurnBuilder) -> ToolTurnOutcome {
     let mut executable = Vec::with_capacity(turn.tool_uses.len());
     let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
     let mut malformed_results = Vec::new();
     let mut malformed_tools = Vec::new();
+    let mut diagnostics = Vec::new();
 
     for tu in turn.tool_uses.drain(..) {
         match tu.clone().finalize() {
@@ -1444,13 +1564,10 @@ async fn finalize_tool_calls(
                 executable.push(tool_use);
             }
             Err(e) => {
-                sender
-                    .send_important(AgentEvent::Error {
-                        kind: ErrorKind::Parse,
-                        message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
-                        details: Some(truncate_for_error(&tu.input_json, 500)),
-                    })
-                    .await;
+                diagnostics.push(TurnDiagnostic::Parse {
+                    message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
+                    details: Some(truncate_for_error(&tu.input_json, 500)),
+                });
                 assistant_tools.push(ToolUse {
                     id: tu.id.clone(),
                     name: tu.name.clone(),
@@ -1472,6 +1589,7 @@ async fn finalize_tool_calls(
         assistant_tools,
         malformed_results,
         malformed_tools,
+        diagnostics,
     }
 }
 
@@ -1705,6 +1823,93 @@ mod tests {
             });
         }
         // If we got here without blocking, the test passes
+    }
+
+    /// Verifies provider failures are rendered as a failed terminal event.
+    #[tokio::test]
+    async fn test_emit_turn_error_async_provider_emits_failed_turn_finished() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let err = TurnError::Provider(ProviderError::api_error("overloaded_error", "HTTP 502"));
+        emit_turn_error_async(&err, &sender).await;
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed unexpectedly");
+        assert!(matches!(
+            &*event,
+            AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: ErrorKind::ApiError,
+                    message,
+                    details: _,
+                },
+                final_text,
+                messages,
+            } if message == "overloaded_error: HTTP 502"
+                && final_text.is_empty()
+                && messages.is_empty()
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Verifies non-fatal diagnostics are emitted through the centralized helper.
+    #[tokio::test]
+    async fn test_emit_turn_diagnostics_async_parse_emits_error_event() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let diagnostics = vec![TurnDiagnostic::Parse {
+            message: "Invalid tool input JSON for read: expected value".to_string(),
+            details: Some("{bad json}".to_string()),
+        }];
+
+        emit_turn_diagnostics_async(&diagnostics, &sender).await;
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed unexpectedly");
+        assert!(matches!(
+            &*event,
+            AgentEvent::Error {
+                kind: ErrorKind::Parse,
+                message,
+                details
+            } if message == "Invalid tool input JSON for read: expected value"
+                && details.as_deref() == Some("{bad json}")
+        ));
+        assert!(rx.try_recv().is_err());
+    }
+
+    /// Verifies interrupted turns emit a single interrupted terminal event.
+    #[tokio::test]
+    async fn test_emit_turn_error_async_interrupted_emits_turn_finished() {
+        let (tx, mut rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let messages = vec![ChatMessage::assistant_text("partial", None)];
+
+        let err = TurnError::interrupted_with_completion(
+            Some("partial".to_string()),
+            "partial".to_string(),
+            messages.clone(),
+        );
+        emit_turn_error_async(&err, &sender).await;
+
+        let event = timeout(Duration::from_secs(1), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed unexpectedly");
+        assert!(matches!(
+            &*event,
+            AgentEvent::TurnFinished {
+                status: TurnStatus::Interrupted,
+                final_text,
+                messages: event_messages,
+            } if final_text == "partial" && event_messages == &messages
+        ));
+        assert!(rx.try_recv().is_err());
     }
 
     /// Verifies `ToolUseBuilder` finalization fails on invalid JSON.
