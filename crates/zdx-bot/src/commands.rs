@@ -2,6 +2,7 @@
 pub(crate) enum BotCommand {
     New,
     Rebuild,
+    Status,
     WorktreeCreate,
 }
 
@@ -36,6 +37,15 @@ const COMMAND_DEFS: &[CommandDef] = &[
         telegram_spec: TelegramCommandSpec {
             command: "rebuild",
             description: "Rebuild and restart the bot",
+        },
+    },
+    CommandDef {
+        command: BotCommand::Status,
+        patterns: &["/status"],
+        blocks_topic_autocreate: true,
+        telegram_spec: TelegramCommandSpec {
+            command: "status",
+            description: "Show thread, model, usage, and pricing",
         },
     },
     CommandDef {
@@ -85,6 +95,10 @@ pub(crate) fn is_topic_blocking_command(text: &str) -> bool {
     parse_command(text).is_some_and(blocks_topic_autocreate)
         || parse_model_command(text).is_some()
         || parse_thinking_command(text).is_some()
+}
+
+pub(crate) fn bypasses_queue(text: &str) -> bool {
+    matches!(parse_command(text), Some(BotCommand::Status))
 }
 
 fn command_matches(trimmed_text: &str, command: &str) -> bool {
@@ -174,12 +188,12 @@ mod tests {
     use std::collections::HashSet;
 
     use super::{
-        BotCommand, command_matches, is_topic_blocking_command, parse_command, parse_model_command,
-        parse_thinking_command, telegram_command_specs,
+        BotCommand, bypasses_queue, command_matches, is_topic_blocking_command, parse_command,
+        parse_model_command, parse_thinking_command, telegram_command_specs,
     };
 
     #[test]
-    fn parse_new_and_rebuild_commands() {
+    fn parse_basic_commands() {
         assert_eq!(parse_command("/new"), Some(BotCommand::New));
         assert_eq!(parse_command(" /new@zdx_bot "), Some(BotCommand::New));
         assert_eq!(parse_command("/rebuild"), Some(BotCommand::Rebuild));
@@ -187,6 +201,8 @@ mod tests {
             parse_command("/rebuild@zdx_bot please"),
             Some(BotCommand::Rebuild)
         );
+        assert_eq!(parse_command("/status"), Some(BotCommand::Status));
+        assert_eq!(parse_command(" /status@zdx_bot "), Some(BotCommand::Status));
     }
 
     #[test]
@@ -226,12 +242,21 @@ mod tests {
     fn blocking_topic_creation_uses_same_parser() {
         assert!(is_topic_blocking_command("/new"));
         assert!(is_topic_blocking_command("/rebuild@zdx_bot"));
+        assert!(is_topic_blocking_command("/status"));
         assert!(is_topic_blocking_command("/worktree"));
         assert!(is_topic_blocking_command("/model"));
         assert!(is_topic_blocking_command("/model list"));
         assert!(is_topic_blocking_command("/thinking"));
         assert!(is_topic_blocking_command("/thinking set high"));
         assert!(!is_topic_blocking_command("let's chat"));
+    }
+
+    #[test]
+    fn queue_bypass_is_limited_to_status() {
+        assert!(bypasses_queue("/status"));
+        assert!(bypasses_queue("/status@zdx_bot"));
+        assert!(!bypasses_queue("/new"));
+        assert!(!bypasses_queue("/model"));
     }
 
     #[test]

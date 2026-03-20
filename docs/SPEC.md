@@ -324,6 +324,7 @@ Contracts:
 When the Telegram bot is used in a forum-enabled supergroup:
 
 - A normal user message sent in `General` creates a new topic and routes that message into the topic before the agent replies.
+- Slash commands that act on setup/status do not auto-create topics from `General`; they run in place instead (for example `/model`, `/thinking`, `/status`, `/worktree`).
 - `/new` sent in `General` creates an empty topic only:
   - no prompt is routed into the new topic
   - no agent turn starts

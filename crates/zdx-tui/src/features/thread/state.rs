@@ -107,32 +107,12 @@ pub struct ThreadUsage {
     pub cache_write_tokens: u64,
 
     // ========================================================================
-    // Current turn (for persistence as per-turn deltas)
-    // ========================================================================
-    /// Input tokens for current turn (reset on new turn)
-    turn_input: u64,
-    /// Output tokens for current turn (accumulated during turn)
-    turn_output: u64,
-    /// Cache read tokens for current turn
-    turn_cache_read: u64,
-    /// Cache write tokens for current turn
-    turn_cache_write: u64,
-
-    // ========================================================================
     // Latest request (for context window percentage)
     // ========================================================================
     /// Total input tokens from latest request (input + `cache_read` + `cache_write`)
     latest_input: u64,
     /// Output tokens from latest request
     latest_output: u64,
-
-    // ========================================================================
-    // Save tracking (to ensure interrupted requests are persisted)
-    // ========================================================================
-    /// Whether the current request's usage has been saved to disk.
-    /// Set to false when a new request starts (input tokens arrive).
-    /// Set to true when usage is saved via `mark_saved()`.
-    request_saved: bool,
 }
 
 impl ThreadUsage {
@@ -143,8 +123,7 @@ impl ThreadUsage {
 
     /// Adds usage from a single API response.
     ///
-    /// Updates cumulative totals (for cost), turn values (for persistence),
-    /// and latest values (for context %).
+    /// Updates cumulative totals (for cost) and latest values (for context %).
     ///
     /// Note: Usage updates for a single API request come in two parts:
     /// 1. `MessageStart`: `input_tokens`, `cache_read`, `cache_write` (`output_tokens=0`)
@@ -164,54 +143,11 @@ impl ThreadUsage {
             // This is a new request (MessageStart) - reset and set input
             self.latest_input = input + cache_read + cache_write;
             self.latest_output = 0; // Will be updated by MessageDelta
-
-            // Reset turn tracking for new turn
-            self.turn_input = input;
-            self.turn_output = 0;
-            self.turn_cache_read = cache_read;
-            self.turn_cache_write = cache_write;
-
-            // Mark as unsaved - this request needs to be persisted
-            self.request_saved = false;
         }
         if output > 0 {
             // This is the output update (MessageDelta) - add to latest
             self.latest_output += output;
-            self.turn_output += output;
         }
-    }
-
-    /// Returns the current turn's usage values for persistence.
-    ///
-    /// These are per-request deltas (not cumulative) for event-sourcing style storage.
-    pub fn turn_usage(&self) -> Usage {
-        Usage::new(
-            self.turn_input,
-            self.turn_output,
-            self.turn_cache_read,
-            self.turn_cache_write,
-        )
-    }
-
-    /// Marks the current request's usage as saved.
-    ///
-    /// Called after persisting usage to disk. Resets turn values and sets
-    /// the saved flag to prevent duplicate saves.
-    pub fn mark_saved(&mut self) {
-        self.request_saved = true;
-        // Reset turn values since they've been persisted
-        self.turn_input = 0;
-        self.turn_output = 0;
-        self.turn_cache_read = 0;
-        self.turn_cache_write = 0;
-    }
-
-    /// Returns true if there's unsaved usage that should be persisted.
-    ///
-    /// This handles the case where a request is interrupted before output
-    /// tokens arrive - we still want to save the input tokens that were consumed.
-    pub fn has_unsaved_usage(&self) -> bool {
-        !self.request_saved && self.turn_usage().total() > 0
     }
 
     /// Restores usage state from persisted thread data.
@@ -228,12 +164,6 @@ impl ThreadUsage {
         // Set latest for context window calculation
         self.latest_input = latest.context_input();
         self.latest_output = latest.output;
-
-        // Turn values are not needed after restore (no pending save)
-        self.turn_input = 0;
-        self.turn_output = 0;
-        self.turn_cache_read = 0;
-        self.turn_cache_write = 0;
     }
 
     /// Context tokens for the latest request (for context window percentage).
@@ -496,69 +426,5 @@ mod tests {
         assert_eq!(ThreadUsage::format_cost(0.008), "$0.008");
         assert_eq!(ThreadUsage::format_cost(0.15), "$0.15");
         assert_eq!(ThreadUsage::format_cost(1.50), "$1.50");
-    }
-
-    #[test]
-    fn test_thread_usage_has_unsaved_usage_after_input() {
-        let mut usage = ThreadUsage::new();
-        // Initially no unsaved usage
-        assert!(!usage.has_unsaved_usage());
-
-        // After receiving input tokens (MessageStart), we have unsaved usage
-        usage.add(1000, 0, 500, 100);
-        assert!(usage.has_unsaved_usage());
-
-        // After receiving output tokens (MessageDelta), still unsaved
-        usage.add(0, 200, 0, 0);
-        assert!(usage.has_unsaved_usage());
-    }
-
-    #[test]
-    fn test_thread_usage_mark_saved_clears_unsaved() {
-        let mut usage = ThreadUsage::new();
-        usage.add(1000, 0, 500, 100);
-        assert!(usage.has_unsaved_usage());
-
-        // After marking saved, no unsaved usage
-        usage.mark_saved();
-        assert!(!usage.has_unsaved_usage());
-
-        // turn_usage should be zeroed
-        let turn = usage.turn_usage();
-        assert_eq!(turn.total(), 0);
-    }
-
-    #[test]
-    fn test_thread_usage_new_request_resets_saved_flag() {
-        let mut usage = ThreadUsage::new();
-
-        // First request: receive input, mark saved
-        usage.add(1000, 0, 0, 0);
-        usage.add(0, 200, 0, 0);
-        usage.mark_saved();
-        assert!(!usage.has_unsaved_usage());
-
-        // Second request: new input tokens should reset saved flag
-        usage.add(2000, 0, 0, 0);
-        assert!(usage.has_unsaved_usage());
-    }
-
-    #[test]
-    fn test_thread_usage_interrupted_request_has_unsaved_input() {
-        let mut usage = ThreadUsage::new();
-
-        // Simulate interrupted request: input arrives but no output
-        usage.add(50000, 0, 10000, 5000);
-        // User interrupts before MessageDelta arrives
-
-        // Should still have unsaved usage (the input tokens)
-        assert!(usage.has_unsaved_usage());
-
-        let turn = usage.turn_usage();
-        assert_eq!(turn.input, 50000);
-        assert_eq!(turn.cache_read, 10000);
-        assert_eq!(turn.cache_write, 5000);
-        assert_eq!(turn.output, 0); // No output because interrupted
-        assert_eq!(turn.total(), 65000);
     }
 }
