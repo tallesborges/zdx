@@ -30,9 +30,6 @@ const INTERNAL_CAP_PER_FILE: usize = MAX_MATCHES;
 /// Maximum file size to search (skip files larger than this).
 const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024; // 4MB
 
-/// Maximum characters per matched line (truncate long lines).
-const MAX_LINE_LENGTH: usize = 500;
-
 /// Maximum allowed value for `context_lines`.
 const MAX_CONTEXT_LINES: usize = 5;
 
@@ -168,17 +165,6 @@ struct Match {
 /// Bare `${` is invalid regex syntax; escape it to `\$\{`.
 fn sanitize_pattern(pattern: &str) -> String {
     pattern.replace("${", r"\$\{")
-}
-
-/// Truncate a line to `MAX_LINE_LENGTH` characters and trim trailing whitespace.
-fn truncate_line(line: &str) -> String {
-    let trimmed = line.trim_end_matches(['\n', '\r']);
-    if trimmed.chars().count() > MAX_LINE_LENGTH {
-        let truncated: String = trimmed.chars().take(MAX_LINE_LENGTH).collect();
-        truncated
-    } else {
-        trimmed.to_string()
-    }
 }
 
 /// Resolve the search path from user input + context root.
@@ -505,7 +491,7 @@ fn search_file(
 
         for &lnum in &match_line_numbers {
             let idx = (lnum - 1) as usize;
-            let text = lines.get(idx).map(|l| truncate_line(l)).unwrap_or_default();
+            let text = lines.get(idx).map(|l| (*l).to_string()).unwrap_or_default();
 
             file_matches.push(Match {
                 file: relative_path.clone(),
@@ -525,18 +511,18 @@ fn search_file(
 
         for &lnum in &match_line_numbers {
             let idx = (lnum - 1) as usize;
-            let text = lines.get(idx).map(|l| truncate_line(l)).unwrap_or_default();
+            let text = lines.get(idx).map(|l| (*l).to_string()).unwrap_or_default();
 
             let ctx_start = idx.saturating_sub(context_lines);
             let ctx_end = (idx + context_lines + 1).min(lines.len());
 
             let context_before: Vec<String> = lines[ctx_start..idx]
                 .iter()
-                .map(|l| truncate_line(l))
+                .map(|l| (*l).to_string())
                 .collect();
             let context_after: Vec<String> = lines[(idx + 1).min(lines.len())..ctx_end]
                 .iter()
-                .map(|l| truncate_line(l))
+                .map(|l| (*l).to_string())
                 .collect();
 
             file_matches.push(Match {
@@ -715,7 +701,7 @@ mod tests {
     }
 
     #[test]
-    fn test_long_line_truncation() {
+    fn test_long_line_preserved() {
         let temp = TempDir::new().unwrap();
         let long_line = format!("prefix {}\n", "x".repeat(1000));
         fs::write(temp.path().join("test.txt"), &long_line).unwrap();
@@ -727,7 +713,7 @@ mod tests {
         assert!(result.is_ok());
         let data = result.data().unwrap();
         let text = data["matches"][0]["text"].as_str().unwrap();
-        assert!(text.chars().count() <= MAX_LINE_LENGTH);
+        assert_eq!(text, long_line.trim_end());
     }
 
     #[test]
