@@ -7,7 +7,7 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition};
+use super::{ToolContext, ToolDefinition, insert_path_fields};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the write tool.
@@ -22,7 +22,7 @@ pub fn definition() -> ToolDefinition {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to write (relative to root directory)"
+                    "description": "Path to the file to write (relative to root directory; supports $VAR/${VAR} env vars)"
                 },
                 "content": {
                     "type": "string",
@@ -54,10 +54,11 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let path = super::expand_env_vars(input.path.trim());
-    if path.is_empty() {
+    let display_path = input.path.trim();
+    if display_path.is_empty() {
         return ToolOutput::failure("invalid_input", "path cannot be empty", None);
     }
+    let path = super::expand_env_vars(display_path);
 
     // Resolve path (relative to root, or absolute as-is)
     let file_path = if std::path::Path::new(path.as_str()).is_absolute() {
@@ -84,11 +85,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     // Write the content
     let bytes = input.content.len();
     match fs::write(&file_path, &input.content) {
-        Ok(()) => ToolOutput::success(json!({
-            "path": file_path.display().to_string(),
-            "bytes": bytes,
-            "created": created
-        })),
+        Ok(()) => {
+            let resolved_path = file_path.canonicalize().ok();
+            let mut data = serde_json::Map::new();
+            insert_path_fields(&mut data, display_path, resolved_path.as_deref());
+            data.insert("bytes".to_string(), Value::from(bytes));
+            data.insert("created".to_string(), Value::from(created));
+            ToolOutput::success(Value::Object(data))
+        }
         Err(e) => ToolOutput::failure(
             "write_error",
             format!("Failed to write file '{}'", file_path.display()),
@@ -212,5 +216,25 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         assert_eq!(fs::read_to_string(&abs_path).unwrap(), "absolute content");
+    }
+
+    #[test]
+    fn test_write_preserves_requested_path_and_reports_resolved_path() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("subdir")).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "subdir/../written.txt", "content": "hello"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        let data = result.data().expect("should have data");
+        let file_path = temp.path().join("written.txt");
+        assert_eq!(data["path"], "subdir/../written.txt");
+        assert_eq!(
+            data["resolved_path"],
+            file_path.canonicalize().unwrap().display().to_string()
+        );
     }
 }

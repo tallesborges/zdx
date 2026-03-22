@@ -53,7 +53,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory or file to search in (defaults to project root)"
+                    "description": "Directory or file to search in (defaults to project root; supports $VAR/${VAR} env vars)"
                 },
                 "glob": {
                     "type": "string",

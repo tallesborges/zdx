@@ -24,7 +24,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use crate::core::events::ToolOutput;
 
@@ -188,6 +188,29 @@ pub fn expand_env_vars(input: &str) -> String {
     result
 }
 
+/// A user-facing path plus its canonical filesystem resolution.
+#[derive(Debug, Clone)]
+pub struct ResolvedPath {
+    pub path: String,
+    pub resolved_path: PathBuf,
+}
+
+/// Insert `path` and optional `resolved_path` fields into a JSON object.
+pub fn insert_path_fields(
+    object: &mut Map<String, Value>,
+    path: &str,
+    resolved_path: Option<&Path>,
+) {
+    object.insert("path".to_string(), Value::String(path.to_string()));
+
+    if let Some(resolved_path) = resolved_path {
+        let resolved_display = resolved_path.display().to_string();
+        if resolved_display != path {
+            object.insert("resolved_path".to_string(), Value::String(resolved_display));
+        }
+    }
+}
+
 /// - Joins relative paths with root
 /// - Canonicalizes the path (resolves symlinks, `..`, etc.)
 /// - Returns error if the file doesn't exist
@@ -196,8 +219,9 @@ pub fn expand_env_vars(input: &str) -> String {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
-    let expanded = expand_env_vars(path);
+pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, ToolOutput> {
+    let display_path = path.trim().to_string();
+    let expanded = expand_env_vars(&display_path);
     let requested = Path::new(&expanded);
 
     // Join with root (handles both absolute and relative paths)
@@ -208,13 +232,19 @@ pub fn resolve_existing_path(path: &str, root: &Path) -> Result<PathBuf, ToolOut
     };
 
     // Canonicalize to resolve any .. or symlinks (requires file to exist)
-    full_path.canonicalize().map_err(|e| {
-        ToolOutput::failure(
-            "path_error",
-            format!("Path does not exist '{}'", full_path.display()),
-            Some(format!("OS error: {e}")),
-        )
-    })
+    full_path
+        .canonicalize()
+        .map(|resolved_path| ResolvedPath {
+            path: display_path,
+            resolved_path,
+        })
+        .map_err(|e| {
+            ToolOutput::failure(
+                "path_error",
+                format!("Path does not exist '{}'", full_path.display()),
+                Some(format!("OS error: {e}")),
+            )
+        })
 }
 
 /// Tool definition for the Anthropic API.
