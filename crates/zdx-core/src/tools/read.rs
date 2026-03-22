@@ -5,7 +5,7 @@
 
 use std::fs;
 use std::fs::File;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::path::Path;
 
 use base64::Engine;
@@ -54,16 +54,9 @@ use crate::core::events::{ImageContent, ToolOutput};
 /// Maximum number of lines to return (truncation threshold).
 const MAX_LINES: usize = 2000;
 
-/// Maximum characters per line before silent truncation.
-const MAX_LINE_LENGTH: usize = 500;
-
-/// Maximum bytes to read per line (memory-safe buffer for huge single-line files).
-/// Set to `MAX_LINE_LENGTH` * 4 to accommodate multi-byte UTF-8 characters.
-const MAX_LINE_BYTES: usize = MAX_LINE_LENGTH * 4;
-
 /// Maximum bytes per page (secondary safety limit).
 /// Even within line-count constraints, a single page should not exceed 40KB
-/// to prevent context window bloat from files with many long lines.
+/// to prevent context window bloat from files with many lines.
 const MAX_PAGE_BYTES: usize = 40 * 1024; // 40KB
 
 /// Maximum image file size (3.75MB).
@@ -219,8 +212,7 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
 /// - Skips to `offset` line (1-indexed)
 /// - Returns at most `limit` lines
 /// - Enforces a secondary `MAX_PAGE_BYTES` (40KB) limit per page
-/// - Silently truncates individual lines at `MAX_LINE_LENGTH` characters
-/// - Uses `MAX_LINE_BYTES` buffer to prevent OOM on huge single-line files
+/// - Returns whole lines without per-line truncation
 /// - Always scans entire file for `total_lines` count
 fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let file = match File::open(path) {
@@ -233,25 +225,35 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     let mut total_lines: usize = 0;
     let mut accumulated_bytes: usize = 0;
     let mut byte_limited = false;
-    let mut buffer = Vec::with_capacity(MAX_LINE_BYTES);
+    let mut page_full = false;
+    let mut buffer = Vec::new();
     let start_line = offset.saturating_sub(1);
 
     loop {
-        let read = match read_next_line(&mut reader, &mut buffer, path) {
+        match read_next_line(&mut reader, &mut buffer, path) {
             Ok(None) => break,
-            Ok(Some(read)) => read,
+            Ok(Some(())) => {}
             Err(output) => return output,
         };
         total_lines += 1;
         let current_line_idx = total_lines - 1;
-        if current_line_idx >= start_line && collected_lines.len() < limit && !byte_limited {
-            let truncated_line = format_truncated_line(&buffer, &read);
-            let line_bytes = truncated_line.len();
-            if accumulated_bytes + line_bytes > MAX_PAGE_BYTES {
+        if current_line_idx >= start_line && collected_lines.len() < limit {
+            if page_full {
+                byte_limited = true;
+                continue;
+            }
+
+            let line = format_line(&buffer);
+            let line_bytes = line.len();
+            if accumulated_bytes + line_bytes > MAX_PAGE_BYTES && !collected_lines.is_empty() {
+                page_full = true;
                 byte_limited = true;
             } else {
                 accumulated_bytes += line_bytes;
-                collected_lines.push(truncated_line);
+                collected_lines.push(line);
+                if accumulated_bytes >= MAX_PAGE_BYTES {
+                    page_full = true;
+                }
             }
         }
     }
@@ -272,89 +274,24 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     ToolOutput::success(Value::Object(data))
 }
 
-struct LineRead {
-    bytes_read: usize,
-    drained_line_ending: Option<&'static str>,
-}
-
 fn read_next_line(
     reader: &mut BufReader<File>,
     buffer: &mut Vec<u8>,
     path: &Path,
-) -> Result<Option<LineRead>, ToolOutput> {
+) -> Result<Option<()>, ToolOutput> {
     buffer.clear();
     let bytes_read = reader
-        .by_ref()
-        .take(MAX_LINE_BYTES as u64)
         .read_until(b'\n', buffer)
         .map_err(|e| read_text_error(path, &e))?;
     if bytes_read == 0 {
         return Ok(None);
     }
 
-    let found_newline = buffer.last() == Some(&b'\n');
-    let drained_line_ending = if !found_newline && bytes_read == MAX_LINE_BYTES {
-        drain_line_remainder(reader, path)?
-    } else {
-        None
-    };
-
-    Ok(Some(LineRead {
-        bytes_read,
-        drained_line_ending,
-    }))
+    Ok(Some(()))
 }
 
-fn drain_line_remainder(
-    reader: &mut BufReader<File>,
-    path: &Path,
-) -> Result<Option<&'static str>, ToolOutput> {
-    let mut drained_line_ending = None;
-    loop {
-        let available = reader.fill_buf().map_err(|e| read_text_error(path, &e))?;
-        if available.is_empty() {
-            break;
-        }
-        if let Some(pos) = available.iter().position(|&b| b == b'\n') {
-            drained_line_ending = Some(if pos > 0 && available[pos - 1] == b'\r' {
-                "\r\n"
-            } else {
-                "\n"
-            });
-            reader.consume(pos + 1);
-            break;
-        }
-        let len = available.len();
-        reader.consume(len);
-    }
-    Ok(drained_line_ending)
-}
-
-fn format_truncated_line(buffer: &[u8], read: &LineRead) -> String {
-    let line_str = String::from_utf8_lossy(buffer);
-    let line_str = line_str.as_ref();
-    let (line_body, line_ending) =
-        split_line_ending(line_str, read.bytes_read, read.drained_line_ending);
-    let mut truncated_line: String = line_body.chars().take(MAX_LINE_LENGTH).collect();
-    truncated_line.push_str(line_ending);
-    truncated_line
-}
-
-fn split_line_ending<'a>(
-    line_str: &'a str,
-    bytes_read: usize,
-    drained_line_ending: Option<&'static str>,
-) -> (&'a str, &'static str) {
-    if let Some(stripped) = line_str.strip_suffix("\r\n") {
-        return (stripped, "\r\n");
-    }
-    if let Some(stripped) = line_str.strip_suffix('\n') {
-        return (stripped, "\n");
-    }
-    if bytes_read == MAX_LINE_BYTES {
-        return (line_str, drained_line_ending.unwrap_or(""));
-    }
-    (line_str, "")
+fn format_line(buffer: &[u8]) -> String {
+    String::from_utf8_lossy(buffer).into_owned()
 }
 
 fn read_text_error(path: &Path, e: &std::io::Error) -> ToolOutput {
@@ -457,7 +394,7 @@ mod tests {
     fn test_read_huge_single_line() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("huge_line.txt");
-        // Create a file with a 100KB single line (tests memory safety)
+        // Create a file with a 100KB single line and verify it is returned intact.
         let huge_line = "y".repeat(100 * 1024);
         fs::write(&file_path, &huge_line).unwrap();
 
@@ -468,11 +405,32 @@ mod tests {
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["truncated"], false);
+        assert_eq!(data["byte_limited"], false);
         assert_eq!(data["lines_shown"], 1);
         assert_eq!(data["total_lines"], 1);
-        // Content should be truncated to MAX_LINE_LENGTH (500) chars
         let content = data["content"].as_str().unwrap();
-        assert_eq!(content.len(), 500);
+        assert_eq!(content, huge_line);
+    }
+
+    #[test]
+    fn test_read_huge_first_line_then_byte_limit() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("huge_first_line.txt");
+        let huge_line = "y".repeat(100 * 1024);
+        let content = format!("{huge_line}\nsecond line\n");
+        fs::write(&file_path, &content).unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "huge_first_line.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["byte_limited"], true);
+        assert_eq!(data["lines_shown"], 1);
+        assert_eq!(data["total_lines"], 2);
+        assert_eq!(data["content"], format!("{huge_line}\n"));
     }
 
     #[test]
