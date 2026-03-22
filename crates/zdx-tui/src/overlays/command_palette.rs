@@ -218,6 +218,10 @@ fn execute_command(
         }
         "thinking" => (Some(OverlayRequest::ThinkingPicker), vec![], vec![]),
         "timeline" => (Some(OverlayRequest::Timeline), vec![], vec![]),
+        "voice" => {
+            let (effects, mutations) = execute_voice(tui);
+            (None, effects, mutations)
+        }
         "handoff" => {
             let (effects, mutations) = execute_handoff(tui);
             (None, effects, mutations)
@@ -327,6 +331,39 @@ fn execute_handoff(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
         vec![
             StateMutation::Input(InputMutation::SetHandoffState(HandoffState::Pending)),
             StateMutation::Input(InputMutation::Clear),
+        ],
+    )
+}
+
+fn execute_voice(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
+    let target = !tui.input.voice.enabled;
+    let mut effects = Vec::new();
+
+    if !target {
+        if tui.input.voice.is_recording() {
+            effects.push(UiEffect::StopVoiceRecording);
+        }
+        if tui.input.voice.is_transcribing()
+            || tui.tasks.state(TaskKind::VoiceTranscribe).is_running()
+        {
+            effects.push(UiEffect::CancelTask {
+                kind: TaskKind::VoiceTranscribe,
+                token: None,
+            });
+        }
+    }
+
+    let message = if target {
+        "Voice dictation enabled. Press Ctrl+Space to start/stop recording.".to_string()
+    } else {
+        "Voice dictation disabled.".to_string()
+    };
+
+    (
+        effects,
+        vec![
+            StateMutation::Input(InputMutation::SetVoiceEnabled(target)),
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
         ],
     )
 }

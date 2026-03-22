@@ -605,6 +605,7 @@ mod tests {
             InputMutation::SetText(text) => input.set_text(&text),
             InputMutation::InsertText(text) => input.textarea.insert_str(&text),
             InputMutation::InsertChar(ch) => input.textarea.insert_char(ch),
+            InputMutation::SetVoiceEnabled(enabled) => input.voice.set_enabled(enabled),
             InputMutation::ClearHistory => input.clear_history(),
             InputMutation::ClearQueue => input.queued.clear(),
             InputMutation::SetHandoffState(state) => input.handoff = state,

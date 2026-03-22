@@ -55,6 +55,7 @@ pub enum InputMutation {
     SetText(String),
     InsertText(String),
     InsertChar(char),
+    SetVoiceEnabled(bool),
     SetTextAndCursor {
         text: String,
         cursor_row: usize,

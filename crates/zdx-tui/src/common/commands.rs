@@ -182,6 +182,13 @@ pub const COMMANDS: &[Command] = &[
         category: "thread",
         shortcut: None,
     },
+    Command {
+        name: "voice",
+        aliases: &["mic"],
+        description: "Toggle voice dictation",
+        category: "input",
+        shortcut: Some("Ctrl+Space"),
+    },
 ];
 
 pub fn command_available(command: &Command, model_id: &str) -> bool {
@@ -254,5 +261,6 @@ mod tests {
         assert_eq!(find_command("root-new").display_name(), "root-new (root)");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
+        assert_eq!(find_command("voice").display_name(), "voice (mic)");
     }
 }

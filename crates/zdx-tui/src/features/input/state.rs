@@ -791,6 +791,7 @@ impl InputState {
                 self.textarea.insert_char(ch);
                 self.sync_pending_pastes();
             }
+            InputMutation::SetVoiceEnabled(enabled) => self.voice.set_enabled(enabled),
             InputMutation::SetTextAndCursor {
                 text,
                 cursor_row,
