@@ -27,7 +27,7 @@ pub async fn voice_transcribe(
     audio: RecordedAudio,
     cancel: Option<CancellationToken>,
 ) -> UiEvent {
-    let transcription = config.telegram.transcription.clone();
+    let transcription = config.transcription.clone();
     let result = zdx_core::audio::transcribe::transcribe_audio_if_configured(
         &config,
         &transcription,

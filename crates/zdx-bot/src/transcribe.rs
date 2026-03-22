@@ -20,9 +20,10 @@ pub async fn transcribe_audio_if_configured(
     mime_type: Option<&str>,
     cancel_token: Option<&CancellationToken>,
 ) -> Result<Option<String>> {
+    let transcription = config.effective_telegram_transcription();
     transcribe::transcribe_audio_if_configured(
         config,
-        &config.telegram.transcription,
+        &transcription,
         bytes,
         filename,
         mime_type,
