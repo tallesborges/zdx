@@ -1,6 +1,10 @@
 [workspace]
 members = ["cargo:crates/zdx-cli"]
 
+# System dependencies for Linux builds
+[dist.dependencies.apt]
+libasound2-dev = "*"
+
 # Config for 'dist'
 [dist]
 # The preferred dist version to use in CI (Cargo.toml SemVer syntax)
