@@ -3,9 +3,8 @@
 use anyhow::Result;
 use tokio_util::sync::CancellationToken;
 use zdx_core::audio::transcribe;
-use zdx_core::config::Config;
-
 pub use zdx_core::audio::transcribe::{OperationCancelled, is_operation_cancelled};
+use zdx_core::config::Config;
 
 /// Transcribes audio if a supported provider is configured.
 ///
