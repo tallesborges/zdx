@@ -7,7 +7,7 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, insert_path_fields};
+use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_input_path};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the write tool.
@@ -55,16 +55,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     let display_path = input.path.trim();
-    if display_path.is_empty() {
-        return ToolOutput::failure("invalid_input", "path cannot be empty", None);
-    }
-    let path = super::expand_env_vars(display_path);
-
-    // Resolve path (relative to root, or absolute as-is)
-    let file_path = if std::path::Path::new(path.as_str()).is_absolute() {
-        std::path::PathBuf::from(path.as_str())
-    } else {
-        ctx.root.join(path)
+    let file_path = match resolve_input_path(display_path, &ctx.root) {
+        Ok(path) => path,
+        Err(output) => return output,
     };
 
     // Create parent directories if needed (mkdir -p behavior)

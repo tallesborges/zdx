@@ -188,6 +188,38 @@ pub fn expand_env_vars(input: &str) -> String {
     result
 }
 
+/// Resolve a path against the tool root after expanding environment variables.
+#[must_use]
+pub fn resolve_path_against_root(path: &Path, root: &Path) -> PathBuf {
+    let expanded = expand_env_vars(path.to_string_lossy().as_ref());
+    let requested = Path::new(&expanded);
+
+    if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        root.join(requested)
+    }
+}
+
+/// Resolve a non-empty user path string against the tool root.
+///
+/// Expands environment variables and joins relative paths with `root`.
+///
+/// # Errors
+/// Returns an error if the path is empty.
+pub fn resolve_input_path(path: &str, root: &Path) -> Result<PathBuf, ToolOutput> {
+    let display_path = path.trim();
+    if display_path.is_empty() {
+        return Err(ToolOutput::failure(
+            "invalid_input",
+            "path cannot be empty",
+            None,
+        ));
+    }
+
+    Ok(resolve_path_against_root(Path::new(display_path), root))
+}
+
 /// A user-facing path plus its canonical filesystem resolution.
 #[derive(Debug, Clone)]
 pub struct ResolvedPath {
@@ -221,15 +253,7 @@ pub fn insert_path_fields(
 /// Returns an error if the operation fails.
 pub fn resolve_existing_path(path: &str, root: &Path) -> Result<ResolvedPath, ToolOutput> {
     let display_path = path.trim().to_string();
-    let expanded = expand_env_vars(&display_path);
-    let requested = Path::new(&expanded);
-
-    // Join with root (handles both absolute and relative paths)
-    let full_path = if requested.is_absolute() {
-        requested.to_path_buf()
-    } else {
-        root.join(requested)
-    };
+    let full_path = resolve_input_path(&display_path, root)?;
 
     // Canonicalize to resolve any .. or symlinks (requires file to exist)
     full_path
@@ -862,6 +886,19 @@ mod tests {
     /// Helper to create `enabled_tools` set with all tools (canonical names)
     fn all_enabled_tools() -> std::collections::HashSet<String> {
         all_tools().into_iter().map(|t| t.name).collect()
+    }
+
+    #[test]
+    fn test_resolve_input_path_expands_env_vars() {
+        let home = std::env::var("HOME").expect("HOME must be set for tests");
+        let temp = TempDir::new_in(&home).unwrap();
+        let root = TempDir::new().unwrap();
+
+        let relative_to_home = temp.path().strip_prefix(&home).unwrap();
+        let requested = format!("$HOME/{}/nested.txt", relative_to_home.display());
+
+        let resolved = resolve_input_path(&requested, root.path()).unwrap();
+        assert_eq!(resolved, temp.path().join("nested.txt"));
     }
 
     #[tokio::test]

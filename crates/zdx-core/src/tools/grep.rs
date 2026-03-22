@@ -189,13 +189,7 @@ fn resolve_search_path(user_path: Option<&str>, root: &Path) -> Result<PathBuf, 
             if p.is_empty() {
                 return Ok(root.to_path_buf());
             }
-            let expanded = super::expand_env_vars(p);
-            let requested = Path::new(&expanded);
-            let full = if requested.is_absolute() {
-                requested.to_path_buf()
-            } else {
-                root.join(requested)
-            };
+            let full = super::resolve_input_path(p, root)?;
             if full.exists() {
                 Ok(full)
             } else {

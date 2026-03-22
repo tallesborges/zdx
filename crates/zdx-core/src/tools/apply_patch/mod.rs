@@ -20,13 +20,13 @@ pub use types::{Hunk, ParseError, UpdateFileChunk};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Apply_Patch".to_string(),
-        description: "Apply a file-oriented patch. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
+        description: "Apply a file-oriented patch. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Paths embedded in the patch support $VAR/${VAR} env vars. Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "patch": {
                     "type": "string",
-                    "description": "Patch text in the Codex apply_patch format"
+                    "description": "Patch text in the Codex apply_patch format. Embedded file paths in Add/Delete/Update/Move sections support $VAR/${VAR} env vars."
                 }
             },
             "required": ["patch"],
@@ -272,11 +272,7 @@ pub fn apply_patch(patch: &str, root: &Path) -> Result<ApplyResult, ApplyPatchEr
 }
 
 fn resolve_path(path: &Path, root: &Path) -> PathBuf {
-    if path.is_absolute() {
-        path.to_path_buf()
-    } else {
-        root.join(path)
-    }
+    super::resolve_path_against_root(path, root)
 }
 
 fn apply_update(path: &Path, chunks: &[UpdateFileChunk]) -> Result<usize, ApplyPatchError> {
@@ -417,6 +413,28 @@ mod tests {
         let file_path = temp.path().join("hello.txt");
         assert!(file_path.exists());
         assert_eq!(fs::read_to_string(file_path).unwrap(), "Hello\nWorld");
+    }
+
+    #[test]
+    fn test_apply_patch_add_file_expands_env_vars() {
+        let home = std::env::var("HOME").expect("HOME must be set for tests");
+        let target_root = TempDir::new_in(&home).unwrap();
+        let ctx_root = TempDir::new().unwrap();
+        let ctx = ToolContext::new(ctx_root.path().to_path_buf(), None);
+
+        let relative_to_home = target_root.path().strip_prefix(&home).unwrap();
+        let patch = format!(
+            "*** Begin Patch\n*** Add File: $HOME/{}/env.txt\n+hello from env\n*** End Patch",
+            relative_to_home.display()
+        );
+        let input = json!({"patch": patch});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        let file_path = target_root.path().join("env.txt");
+        assert!(file_path.exists());
+        assert_eq!(fs::read_to_string(file_path).unwrap(), "hello from env");
     }
 
     #[test]
