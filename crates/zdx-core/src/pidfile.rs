@@ -7,6 +7,25 @@ use anyhow::{Context, Result};
 
 use crate::config::paths;
 
+/// Ensure no other instance of the named service is already running.
+///
+/// Checks the PID file; if it exists and the process is alive, returns an error.
+/// Stale PID files (dead process) are cleaned up automatically.
+///
+/// # Errors
+///
+/// Returns an error if another instance is already running.
+pub fn ensure_unique(name: &str) -> Result<()> {
+    match status(name) {
+        ServiceStatus::Running { pid, .. } => {
+            anyhow::bail!(
+                "{name} is already running (PID {pid}). Stop the existing process first."
+            );
+        }
+        ServiceStatus::Stopped => Ok(()),
+    }
+}
+
 /// Write a PID file for the given service name.
 /// Creates `~/.zdx/run/{name}.pid` with the current process PID.
 ///

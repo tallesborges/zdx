@@ -31,6 +31,7 @@ pub async fn run(
     poll_interval_secs: u64,
 ) -> Result<()> {
     let poll = Duration::from_secs(poll_interval_secs.max(1));
+    zdx_core::pidfile::ensure_unique("daemon")?;
     let state_path = daemon_state_path();
     let mut state = load_state(&state_path)?;
     let _pid_guard = zdx_core::pidfile::write("daemon").context("write daemon PID file")?;
