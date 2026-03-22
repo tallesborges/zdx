@@ -431,18 +431,6 @@ fn handle_control_keys(
 }
 
 fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
-    if !input.voice.enabled {
-        return (
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(
-                    "Voice dictation is off. Run /voice to enable it.".to_string(),
-                ),
-            )],
-            None,
-        );
-    }
-
     if input.voice.is_recording() {
         return (vec![UiEffect::StopVoiceRecording], vec![], None);
     }
@@ -648,12 +636,6 @@ fn submit_input(
     let text = input.get_text_with_pending();
     let trimmed = text.trim();
 
-    if !input.handoff.is_active()
-        && let Some(result) = handle_slash_commands(input, tasks, trimmed)
-    {
-        return result;
-    }
-
     let agent_running = agent_state.is_running();
     if agent_running {
         return handle_submit_while_agent_running(input, trimmed, &text);
@@ -763,76 +745,6 @@ fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Op
     }
 
     None
-}
-
-fn handle_slash_commands(
-    input: &mut InputState,
-    tasks: &Tasks,
-    trimmed: &str,
-) -> Option<KeyResult> {
-    let command = trimmed.strip_prefix('/')?.trim();
-
-    match command {
-        "voice" => Some(toggle_voice_command(input, tasks, None)),
-        "voice on" => Some(toggle_voice_command(input, tasks, Some(true))),
-        "voice off" => Some(toggle_voice_command(input, tasks, Some(false))),
-        _ => None,
-    }
-}
-
-fn toggle_voice_command(input: &mut InputState, tasks: &Tasks, desired: Option<bool>) -> KeyResult {
-    let target = desired.unwrap_or(!input.voice.enabled);
-
-    if target == input.voice.enabled {
-        input.clear();
-        let message = if target {
-            "Voice dictation is already enabled.".to_string()
-        } else {
-            "Voice dictation is already disabled.".to_string()
-        };
-        return (
-            vec![],
-            vec![StateMutation::Transcript(
-                TranscriptMutation::AppendSystemMessage(message),
-            )],
-            None,
-        );
-    }
-
-    let mut effects = Vec::new();
-    let discard_capture = !target && input.voice.is_recording();
-    if !target {
-        if discard_capture {
-            input.voice.discard_next_capture = true;
-            effects.push(UiEffect::StopVoiceRecording);
-        }
-        if input.voice.is_transcribing() || tasks.state(TaskKind::VoiceTranscribe).is_running() {
-            effects.push(UiEffect::CancelTask {
-                kind: TaskKind::VoiceTranscribe,
-                token: None,
-            });
-        }
-    }
-
-    input.clear();
-    input.voice.set_enabled(target);
-    if discard_capture {
-        input.voice.discard_next_capture = true;
-    }
-
-    let message = if target {
-        "Voice dictation enabled. Press Ctrl+Space to start/stop recording.".to_string()
-    } else {
-        "Voice dictation disabled.".to_string()
-    };
-
-    (
-        effects,
-        vec![StateMutation::Transcript(
-            TranscriptMutation::AppendSystemMessage(message),
-        )],
-        None,
-    )
 }
 
 fn handle_handoff_submission(
