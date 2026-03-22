@@ -85,7 +85,6 @@ These are user-defined base instructions. Treat them as authoritative for this r
 - MUST use only explicitly supported `subagent` values listed in this prompt or the tool schema.
 - MUST NOT delegate trivial tasks that can be completed directly.
 {% if specialized_capabilities %}
-- For tool-backed capabilities, use the listed tools directly.
 - Available specialized capabilities:
 {% for capability in specialized_capabilities %}
   - {{ capability.title }} (`{{ capability.name }}`) — {{ capability.description }} [{{ capability.kind_label }}; {{ capability.backing }}]

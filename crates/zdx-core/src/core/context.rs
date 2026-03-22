@@ -335,20 +335,11 @@ fn prompt_template_capability(
 ) -> PromptTemplateCapability {
     let kind_label = match &capability.kind {
         subagents::CapabilityKind::Subagent { .. } => "standalone subagent".to_string(),
-        subagents::CapabilityKind::Tool { .. } => "tool-backed".to_string(),
         subagents::CapabilityKind::BuiltinAlias(_) => "builtin alias".to_string(),
     };
     let backing = match capability.kind {
         subagents::CapabilityKind::Subagent { subagent } => {
             format!("`invoke_subagent(subagent: \"{subagent}\", prompt: \"...\")`")
-        }
-        subagents::CapabilityKind::Tool { tools } => {
-            let tools = tools
-                .into_iter()
-                .map(|tool| format!("`{tool}`"))
-                .collect::<Vec<_>>()
-                .join(" + ");
-            format!("use {tools} directly")
         }
         subagents::CapabilityKind::BuiltinAlias(alias) => format!(
             "`invoke_subagent(subagent: \"{}\", prompt: \"...\")`",
@@ -1419,9 +1410,7 @@ mod tests {
         assert!(rendered.contains("demo&skill"));
         assert!(rendered.contains("<title>Task</title>"));
         assert!(rendered.contains("<title>Oracle</title>"));
-        assert!(rendered.contains("<title>Librarian</title>"));
         assert!(rendered.contains("invoke_subagent"));
-        assert!(rendered.contains("use `grep` + `read` directly"));
     }
 
     #[test]
@@ -1809,9 +1798,6 @@ mod tests {
         let effective =
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
-        assert!(prompt.contains("Available specialized capabilities"));
-        assert!(prompt.contains("Librarian (`librarian`)"));
-        assert!(prompt.contains("Finder (`finder`)"));
         assert!(!prompt.contains("Task (`task`)"));
         assert!(!prompt.contains("Oracle (`oracle`)"));
     }

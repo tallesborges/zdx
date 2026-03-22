@@ -234,7 +234,7 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
             Ok(None) => break,
             Ok(Some(())) => {}
             Err(output) => return output,
-        };
+        }
         total_lines += 1;
         let current_line_idx = total_lines - 1;
         if current_line_idx >= start_line && collected_lines.len() < limit {
