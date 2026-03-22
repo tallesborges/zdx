@@ -66,7 +66,6 @@ pub enum VoicePhase {
 
 #[derive(Debug, Default)]
 pub struct VoiceState {
-    pub enabled: bool,
     pub phase: VoicePhase,
     pub discard_next_capture: bool,
     pub last_error: Option<String>,
@@ -79,15 +78,6 @@ impl VoiceState {
 
     pub fn is_transcribing(&self) -> bool {
         matches!(self.phase, VoicePhase::Transcribing)
-    }
-
-    pub fn set_enabled(&mut self, enabled: bool) {
-        self.enabled = enabled;
-        self.last_error = None;
-        if !enabled {
-            self.phase = VoicePhase::Idle;
-            self.discard_next_capture = false;
-        }
     }
 
     pub fn start_recording(&mut self) {
@@ -117,8 +107,6 @@ impl VoiceState {
             Some("voice: recording")
         } else if self.is_transcribing() {
             Some("voice: transcribing")
-        } else if self.enabled {
-            Some("voice")
         } else {
             None
         }
@@ -791,7 +779,6 @@ impl InputState {
                 self.textarea.insert_char(ch);
                 self.sync_pending_pastes();
             }
-            InputMutation::SetVoiceEnabled(enabled) => self.voice.set_enabled(enabled),
             InputMutation::SetTextAndCursor {
                 text,
                 cursor_row,
