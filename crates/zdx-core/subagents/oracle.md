@@ -1,6 +1,7 @@
 ---
 name: oracle
 description: Deep reasoning and synthesis specialist for ambiguous or high-stakes delegated tasks.
+model: openai-codex:gpt-5.4
 thinking_level: high
 tools:
   - read
