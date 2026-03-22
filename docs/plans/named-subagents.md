@@ -1,5 +1,5 @@
 # Goals
-- `invoke_subagent(subagent: "general_assistant", prompt: "...")` and `invoke_subagent(subagent: "automation_assistant", prompt: "...")` cover the immediate normal-use and headless-use flows
+- `invoke_subagent(subagent: "task", prompt: "...")` and `invoke_subagent(subagent: "automation_assistant", prompt: "...")` cover the immediate normal-use and headless-use flows
 - Named subagents configure: standalone prompt body + model + tools + thinking — stored as markdown files with YAML frontmatter
 - Unified subagent consumers: subagent tool and automations (`subagent:` in frontmatter)
 - Available subagents dynamically listed in tool description
@@ -22,7 +22,7 @@
 - Prefer a simple standalone-prompt model for subagents over implicit inheritance/composition
 
 # User journey
-1. User invokes subagent without changes → works with built-in `general_assistant` subagent (default behavior mapping of today's normal mode)
+1. User invokes delegated work without choosing a named subagent → works via the reserved `task` alias (default behavior mapping of today's normal mode)
 2. User sets `subagent: automation_assistant` in an automation frontmatter → automation runs in a headless, non-interactive mode tuned to finish the task without depending on follow-up questions
 3. User creates `~/.zdx/subagents/my-analyst.md` → it appears in available subagents
 4. Later, user adds specialized subagents like `search`, `review`, `plan`, or `orchestrator` only when needed
@@ -53,16 +53,16 @@
   - [ ] Subagent parser: read `.md` file → split YAML frontmatter + markdown body → deserialize into `SubagentDefinition`
   - [ ] `load_subagent(name, project_root)` → searches `.zdx/subagents/` then `~/.zdx/subagents/` then built-in defaults
   - [ ] `list_subagents(project_root)` → returns all available subagent names+descriptions (deduplicated by name, project wins)
-  - [ ] Built-in subagents embedded via `include_str!`: `general_assistant`, `automation_assistant`
+  - [ ] Built-in subagents embedded via `include_str!`: `oracle`, `automation_assistant`
   - [ ] Built-in subagent markdown files in `crates/zdx-core/src/subagents/` (or similar)
   - [ ] Subagent markdown body is treated as a MiniJinja template, not just a literal string
   - [ ] Unit tests for parsing and precedence
-- **✅ Demo**: Unit test loads built-in `general_assistant` and `automation_assistant` subagents, verifies model/tools/system_prompt fields
+- **✅ Demo**: Unit test loads built-in `oracle` and `automation_assistant` subagents, verifies model/tools/system_prompt fields
 - **Risks / failure modes**:
   - YAML frontmatter parsing edge cases → mitigate: reuse same parsing as skills/automations if they already parse frontmatter
 
 ## Slice 2: Wire subagents into subagent execution
-- **Goal**: `invoke_subagent(subagent: "general_assistant", prompt: "...")` or `invoke_subagent(subagent: "automation_assistant", prompt: "...")` resolves the named subagent and passes config to child `zdx exec`
+- **Goal**: `invoke_subagent(subagent: "task", prompt: "...")` or `invoke_subagent(subagent: "automation_assistant", prompt: "...")` resolves the requested runtime behavior and passes config to child `zdx exec`
 - **Scope checklist**:
   - [ ] Add `subagent` param to `invoke_subagent` tool schema (optional string, replaces `model`)
   - [ ] Remove `model` param from tool schema (named subagent owns model selection)
@@ -71,7 +71,7 @@
   - [ ] Pass custom system prompt to child: add `--system-prompt <TEXT>` support to `ExecSubagentOptions` / `build_exec_args` (reuse existing root `--system-prompt` CLI flag)
   - [ ] Pass `--tools` list from subagent to child exec args
   - [ ] Keep `--no-system-prompt` as an advanced CLI escape hatch, not part of the subagent schema
-  - [ ] Default to `general_assistant` subagent when no subagent is specified
+  - [ ] Default to the `task` runtime alias when no subagent is specified
   - [ ] Dynamic tool description: inject available subagent names+descriptions into `Invoke_Subagent` tool description
   - [ ] Update system prompt `<subagents>` block to reference named subagents instead of `<available_models>`
   - [ ] Update tests
@@ -126,11 +126,11 @@
 - Subagent `extends:` field for inheriting from another subagent
 - `tools_add` / `tools_remove` fields (modify base tool set instead of full override)
 - Subagent-specific timeout configuration
-- ✅ Check-in demo: custom subagent with `extends: general_assistant` inherits general_assistant defaults and overrides model
+- ✅ Check-in demo: custom subagent with `extends: oracle` inherits oracle defaults and overrides model
 
 # Later / Deferred
 - **Subagent templates/generators** — create a subagent from an interactive wizard. Trigger: users frequently create subagents with similar patterns.
 - **Subagent marketplace/sharing** — import subagents from URLs/repos. Trigger: community demand.
 - **Per-subagent environment variables** — inject env vars into child process. Trigger: subagents need API keys or runtime config.
 - **TUI subagent picker** — select a subagent from an overlay menu. Trigger: TUI becomes primary subagent consumer.
-- **Specialized built-ins (`search`, `review`, `plan`, `orchestrator`, `bot`)** — add once the two-subagent MVP (`general_assistant` + `automation_assistant`) is dogfooded enough to show clear repeated patterns.
+- **Specialized built-ins (`search`, `review`, `plan`, `orchestrator`, `bot`)** — add once the `task` alias + `automation_assistant`/`oracle` pattern is dogfooded enough to show clear repeated patterns.

@@ -20,7 +20,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
-- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`general_assistant`, `oracle`)
+- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`oracle`)
 
 ### Core runtime (`src/core/`)
 

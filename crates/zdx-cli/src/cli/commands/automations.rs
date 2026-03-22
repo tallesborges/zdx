@@ -526,7 +526,7 @@ mod tests {
             error: None,
             schedule: Some("0 8 * * *".to_string()),
             model: Some("gemini-cli:gemini-2.5-flash".to_string()),
-            subagent: Some("general_assistant".to_string()),
+            subagent: Some("task".to_string()),
         };
 
         append_run_record_to(&path, &record).unwrap();
@@ -606,7 +606,7 @@ mod tests {
             concat!(
                 r#"{"automation":"a","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":null,"model":null,"subagent":null}"#,
                 "\n",
-                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m","subagent":"general_assistant"}"#,
+                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m","subagent":"task"}"#,
                 "\n"
             ),
         )

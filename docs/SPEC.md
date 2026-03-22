@@ -232,7 +232,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
 - When a named subagent is selected, its body becomes the child run's system prompt directly; it does not inherit the default ZDX prompt/context pipeline unless that text is written into the subagent body.
-- Built-in subagents currently include `general_assistant` as a minimal general-purpose standalone subagent.
+- Built-in subagents currently include `oracle` as a deep reasoning standalone subagent.
 
 ### Models registry
 

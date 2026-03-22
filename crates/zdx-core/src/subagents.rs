@@ -304,16 +304,10 @@ fn collect_markdown_files(
 
 fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [
-        (
-            manifest_dir.join("subagents").join("general_assistant.md"),
-            include_str!("../subagents/general_assistant.md"),
-        ),
-        (
-            manifest_dir.join("subagents").join("oracle.md"),
-            include_str!("../subagents/oracle.md"),
-        ),
-    ]
+    [(
+        manifest_dir.join("subagents").join("oracle.md"),
+        include_str!("../subagents/oracle.md"),
+    )]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
     .collect()
@@ -499,7 +493,6 @@ mod tests {
     fn discover_includes_built_ins() {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
-        assert!(all.iter().any(|s| s.name == "general_assistant"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -509,12 +502,12 @@ mod tests {
         let project_dir = root.path().join(".zdx").join("subagents");
         fs::create_dir_all(&project_dir).unwrap();
         fs::write(
-            project_dir.join("general_assistant.md"),
+            project_dir.join("oracle.md"),
             "---\ndescription: Project override\n---\nProject prompt",
         )
         .unwrap();
 
-        let definition = load_by_name(root.path(), "general_assistant").unwrap();
+        let definition = load_by_name(root.path(), "oracle").unwrap();
         assert_eq!(definition.source, SubagentSource::Project);
         assert_eq!(definition.description, "Project override");
     }
