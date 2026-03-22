@@ -366,6 +366,7 @@ fn handle_control_keys(
     mods: &Modifiers,
 ) -> Option<KeyResult> {
     match code {
+        KeyCode::Char(' ') | KeyCode::Null if mods.only_ctrl() => Some(handle_voice_hotkey(input)),
         // Ctrl+C: interrupt agent, clear input, or quit
         KeyCode::Char('c') if mods.ctrl() => {
             if ctx.agent_state.is_running() {
@@ -381,7 +382,20 @@ fn handle_control_keys(
         }
         // Escape: cancel current operation or clear input
         KeyCode::Esc => {
-            if input.handoff.is_generating() {
+            if input.voice.is_recording() {
+                input.voice.discard_next_capture = true;
+                Some((vec![UiEffect::StopVoiceRecording], vec![], None))
+            } else if input.voice.is_transcribing() {
+                input.voice.mark_idle();
+                Some((
+                    vec![UiEffect::CancelTask {
+                        kind: TaskKind::VoiceTranscribe,
+                        token: None,
+                    }],
+                    vec![],
+                    None,
+                ))
+            } else if input.handoff.is_generating() {
                 input.handoff = HandoffState::Idle;
                 input.clear();
                 Some((
@@ -414,6 +428,26 @@ fn handle_control_keys(
         }
         _ => None,
     }
+}
+
+fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
+    if input.voice.is_recording() {
+        return (vec![UiEffect::StopVoiceRecording], vec![], None);
+    }
+
+    if input.voice.is_transcribing() {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "Voice transcription already in progress.".to_string(),
+                ),
+            )],
+            None,
+        );
+    }
+
+    (vec![UiEffect::StartVoiceRecording], vec![], None)
 }
 
 // =============================================================================

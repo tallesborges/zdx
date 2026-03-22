@@ -35,6 +35,8 @@ pub enum TaskKind {
     LoginExchange,
     LoginCallback,
     ImageDecode,
+    VoiceRecord,
+    VoiceTranscribe,
 }
 
 #[derive(Debug, Clone, Default)]

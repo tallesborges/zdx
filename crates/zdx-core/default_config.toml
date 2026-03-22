@@ -51,6 +51,16 @@ title_model = "gemini:gemini-2.5-flash"
 # daily_path = "~/SecondBrain/Calendar"  # default: $ZDX_HOME/memory/calendar
 # index_file = "~/.zdx/MEMORY.md"       # default: $ZDX_HOME/MEMORY.md
 
+# Shared audio transcription configuration
+# Used by TUI/CLI voice transcription and as the default for integrations.
+# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
+# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
+# language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
+[transcription]
+# provider = "openai"
+# model = "whisper-1"
+# language = "en"
+
 # Subagent delegation configuration
 # enabled: Expose invoke_subagent tool to the model.
 # available_models: Auto-populated from enabled providers + model registry (TUI picker source).
@@ -90,15 +100,6 @@ agents_project = true
 model = "claude-cli:claude-opus-4-6"
 # Thinking level used by the Telegram bot
 thinking_level = "minimal"
-
-# Telegram audio transcription configuration
-# provider: Transcription provider to use ("openai" or "mistral", defaults to auto-detect)
-# model: Model to use for transcription (provider-specific, defaults to "whisper-1" for OpenAI, "voxtral-mini-latest" for Mistral)
-# language: Optional language hint (ISO 639-1 code like "en", "pt", "es") for better accuracy
-[telegram.transcription]
-# provider = "openai"
-# model = "whisper-1"
-# language = "en"
 
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
