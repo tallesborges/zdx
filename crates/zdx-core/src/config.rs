@@ -142,9 +142,6 @@ pub struct TelegramConfig {
     pub model: String,
     /// Thinking level for the Telegram bot.
     pub thinking_level: ThinkingLevel,
-    /// Audio transcription configuration for Telegram voice/audio messages.
-    #[serde(default)]
-    pub transcription: TranscriptionConfig,
 }
 
 impl Default for TelegramConfig {
@@ -155,7 +152,6 @@ impl Default for TelegramConfig {
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
-            transcription: TranscriptionConfig::default(),
         }
     }
 }
@@ -430,28 +426,6 @@ pub struct TranscriptionConfig {
     pub model: Option<String>,
     /// Language hint (ISO 639-1 code like "en", "pt", etc.)
     pub language: Option<String>,
-}
-
-impl TranscriptionConfig {
-    #[must_use]
-    pub fn is_empty(&self) -> bool {
-        self.provider.is_none() && self.model.is_none() && self.language.is_none()
-    }
-
-    #[must_use]
-    pub fn merged_with_override(&self, override_config: &Self) -> Self {
-        Self {
-            provider: override_config
-                .provider
-                .clone()
-                .or_else(|| self.provider.clone()),
-            model: override_config.model.clone().or_else(|| self.model.clone()),
-            language: override_config
-                .language
-                .clone()
-                .or_else(|| self.language.clone()),
-        }
-    }
 }
 
 /// Memory system configuration.
@@ -789,12 +763,6 @@ impl Config {
     pub fn models_path(&self) -> std::path::PathBuf {
         let base = paths::zdx_home();
         base.join("models.toml")
-    }
-
-    #[must_use]
-    pub fn effective_telegram_transcription(&self) -> TranscriptionConfig {
-        self.transcription
-            .merged_with_override(&self.telegram.transcription)
     }
 
     /// Returns all model ids available for subagent model overrides.
@@ -1359,7 +1327,9 @@ mod tests {
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
         assert_eq!(config.max_tokens, None);
-        assert!(config.transcription.is_empty());
+        assert!(config.transcription.provider.is_none());
+        assert!(config.transcription.model.is_none());
+        assert!(config.transcription.language.is_none());
     }
 
     #[test]
@@ -1381,52 +1351,6 @@ language = "pt"
         assert_eq!(config.transcription.provider.as_deref(), Some("openai"));
         assert_eq!(config.transcription.model.as_deref(), Some("whisper-1"));
         assert_eq!(config.transcription.language.as_deref(), Some("pt"));
-    }
-
-    #[test]
-    fn test_effective_telegram_transcription_falls_back_to_top_level() {
-        let config = Config {
-            transcription: TranscriptionConfig {
-                provider: Some("openai".to_string()),
-                model: Some("whisper-1".to_string()),
-                language: Some("en".to_string()),
-            },
-            telegram: TelegramConfig {
-                transcription: TranscriptionConfig::default(),
-                ..TelegramConfig::default()
-            },
-            ..Config::default()
-        };
-
-        let effective = config.effective_telegram_transcription();
-        assert_eq!(effective.provider.as_deref(), Some("openai"));
-        assert_eq!(effective.model.as_deref(), Some("whisper-1"));
-        assert_eq!(effective.language.as_deref(), Some("en"));
-    }
-
-    #[test]
-    fn test_effective_telegram_transcription_prefers_telegram_override() {
-        let config = Config {
-            transcription: TranscriptionConfig {
-                provider: Some("openai".to_string()),
-                model: Some("whisper-1".to_string()),
-                language: Some("en".to_string()),
-            },
-            telegram: TelegramConfig {
-                transcription: TranscriptionConfig {
-                    provider: Some("mistral".to_string()),
-                    model: Some("voxtral-mini-latest".to_string()),
-                    language: Some("pt".to_string()),
-                },
-                ..TelegramConfig::default()
-            },
-            ..Config::default()
-        };
-
-        let effective = config.effective_telegram_transcription();
-        assert_eq!(effective.provider.as_deref(), Some("mistral"));
-        assert_eq!(effective.model.as_deref(), Some("voxtral-mini-latest"));
-        assert_eq!(effective.language.as_deref(), Some("pt"));
     }
 
     #[test]

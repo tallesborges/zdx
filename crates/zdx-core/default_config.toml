@@ -101,13 +101,6 @@ model = "claude-cli:claude-opus-4-6"
 # Thinking level used by the Telegram bot
 thinking_level = "minimal"
 
-# Telegram audio transcription override
-# Optional override for Telegram only. When unset, the bot falls back to top-level [transcription].
-[telegram.transcription]
-# provider = "openai"
-# model = "whisper-1"
-# language = "en"
-
 # OpenAI reasoning effort (used by Codex models).
 # Options: low, medium, high, xhigh
 
