@@ -5,6 +5,8 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 ## Where things are
 
 - `src/lib.rs`: core crate exports
+- `src/audio/mod.rs`: shared audio module exports
+- `src/audio/transcribe.rs`: shared audio transcription helpers (OpenAI/Mistral)
 - `src/agent_activity.rs`: active-run registry (ephemeral marker files for agent turns)
 - `src/automations.rs`: automation discovery + frontmatter parsing
 - `src/config.rs`: config loading + paths

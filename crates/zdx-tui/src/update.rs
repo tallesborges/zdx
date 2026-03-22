@@ -12,7 +12,7 @@ use crate::common::{TaskKind, TaskMeta};
 use crate::effects::UiEffect;
 use crate::events::{SkillUiEvent, ThreadUiEvent, UiEvent};
 use crate::input::HandoffState;
-use crate::mutations::{ConfigMutation, StateMutation, TranscriptMutation};
+use crate::mutations::{ConfigMutation, InputMutation, StateMutation, TranscriptMutation};
 use crate::overlays::{self, FilePickerState, Overlay};
 use crate::state::{AgentState, AppState, TuiState};
 use crate::transcript::HistoryCell;
@@ -134,7 +134,71 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             }
             vec![]
         }
+        UiEvent::VoiceRecorded { result } => handle_voice_recorded(app, result),
+        UiEvent::VoiceTranscribed { result } => handle_voice_transcribed(app, result),
     }
+}
+
+fn handle_voice_recorded(
+    app: &mut AppState,
+    result: Result<crate::events::RecordedAudio, String>,
+) -> Vec<UiEffect> {
+    if app.tui.input.voice.discard_next_capture {
+        app.tui.input.voice.mark_idle();
+        return vec![];
+    }
+
+    match result {
+        Ok(audio) => vec![UiEffect::StartVoiceTranscription { audio }],
+        Err(error) => {
+            let message = format!("Voice recording failed: {error}");
+            app.tui.input.voice.mark_error(message.clone());
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(message),
+                )],
+            );
+            vec![]
+        }
+    }
+}
+
+fn handle_voice_transcribed(
+    app: &mut AppState,
+    result: Result<Option<String>, String>,
+) -> Vec<UiEffect> {
+    match result {
+        Ok(Some(text)) => {
+            app.tui.input.voice.mark_idle();
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Input(InputMutation::InsertText(text))],
+            );
+        }
+        Ok(None) => {
+            app.tui.input.voice.mark_idle();
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(
+                        "Voice transcription unavailable. Configure an OpenAI or Mistral transcription provider (or set ZDX_TRANSCRIPTION_MODEL).".to_string(),
+                    ),
+                )],
+            );
+        }
+        Err(error) => {
+            let message = format!("Voice transcription failed: {error}");
+            app.tui.input.voice.mark_error(message.clone());
+            apply_mutations(
+                &mut app.tui,
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(message),
+                )],
+            );
+        }
+    }
+    vec![]
 }
 
 fn handle_agent_event(
@@ -307,6 +371,8 @@ fn handle_task_started_event(
                     .push_cell(HistoryCell::tool_running(id, "bash", input));
             }
         }
+        TaskKind::VoiceRecord => app.tui.input.voice.start_recording(),
+        TaskKind::VoiceTranscribe => app.tui.input.voice.start_transcribing(),
         TaskKind::FileDiscovery
         | TaskKind::SkillsFetch
         | TaskKind::SkillInstall

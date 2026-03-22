@@ -26,6 +26,7 @@ use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::providers::ProviderKind;
 
 use crate::common::TaskKind;
+use crate::events::RecordedAudio;
 
 /// Effects returned by the reducer for the runtime to execute.
 ///
@@ -176,4 +177,13 @@ pub enum UiEffect {
     /// Decode an image for preview on a background thread.
     /// Reads the file, converts to PNG if needed, and base64-encodes for Kitty protocol.
     DecodeImagePreview { image_path: String },
+
+    /// Start microphone capture for voice dictation.
+    StartVoiceRecording,
+
+    /// Stop microphone capture and finalize the recording.
+    StopVoiceRecording,
+
+    /// Transcribe a completed voice recording into text.
+    StartVoiceTranscription { audio: RecordedAudio },
 }

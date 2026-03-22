@@ -53,6 +53,7 @@ pub enum TranscriptMutation {
 pub enum InputMutation {
     Clear,
     SetText(String),
+    InsertText(String),
     InsertChar(char),
     SetTextAndCursor {
         text: String,

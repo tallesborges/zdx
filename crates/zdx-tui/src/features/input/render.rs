@@ -312,6 +312,13 @@ pub fn render_input_with_cursor(
         ));
     }
 
+    if let Some(voice_badge) = state.input.voice.badge() {
+        title_spans.push(Span::styled(
+            format!(" [{voice_badge}]"),
+            Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM),
+        ));
+    }
+
     title_spans.push(Span::styled(" ", base_style));
 
     // Build top-right title: AMP-style usage display

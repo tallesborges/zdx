@@ -187,6 +187,13 @@ pub struct KittyImageData {
     pub height: u32,
 }
 
+#[derive(Debug)]
+pub struct RecordedAudio {
+    pub bytes: Vec<u8>,
+    pub filename: String,
+    pub mime_type: String,
+}
+
 ///
 /// With the inbox pattern, async operations send events directly to the runtime's
 /// event inbox. `TaskStarted`/`TaskCompleted` provide a uniform lifecycle for
@@ -279,5 +286,15 @@ pub enum UiEvent {
     /// Image preview decode completed (from background thread).
     ImagePreviewDecoded {
         result: Result<KittyImageData, String>,
+    },
+
+    /// Voice recording completed (WAV bytes ready for transcription).
+    VoiceRecorded {
+        result: Result<RecordedAudio, String>,
+    },
+
+    /// Voice transcription completed.
+    VoiceTranscribed {
+        result: Result<Option<String>, String>,
     },
 }

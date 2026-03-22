@@ -142,9 +142,6 @@ pub struct TelegramConfig {
     pub model: String,
     /// Thinking level for the Telegram bot.
     pub thinking_level: ThinkingLevel,
-    /// Audio transcription configuration for Telegram voice/audio messages.
-    #[serde(default)]
-    pub transcription: TranscriptionConfig,
 }
 
 impl Default for TelegramConfig {
@@ -155,7 +152,6 @@ impl Default for TelegramConfig {
             allowlist_chat_ids: Vec::new(),
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
-            transcription: TranscriptionConfig::default(),
         }
     }
 }
@@ -549,6 +545,10 @@ pub struct Config {
     #[serde(default)]
     pub memory: MemoryConfig,
 
+    /// Shared audio transcription configuration for TUI/CLI and as the default for integrations.
+    #[serde(default)]
+    pub transcription: TranscriptionConfig,
+
     /// Telegram bot configuration
     #[serde(default)]
     pub telegram: TelegramConfig,
@@ -925,6 +925,7 @@ impl Default for Config {
             subagents: SubagentsConfig::default(),
             prompt_template: PromptTemplateConfig::default(),
             memory: MemoryConfig::default(),
+            transcription: TranscriptionConfig::default(),
             telegram: TelegramConfig::default(),
         }
     }
@@ -1326,6 +1327,30 @@ mod tests {
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.model, "claude-3-opus");
         assert_eq!(config.max_tokens, None);
+        assert!(config.transcription.provider.is_none());
+        assert!(config.transcription.model.is_none());
+        assert!(config.transcription.language.is_none());
+    }
+
+    #[test]
+    fn test_top_level_transcription_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"[transcription]
+provider = "openai"
+model = "whisper-1"
+language = "pt"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.transcription.provider.as_deref(), Some("openai"));
+        assert_eq!(config.transcription.model.as_deref(), Some("whisper-1"));
+        assert_eq!(config.transcription.language.as_deref(), Some("pt"));
     }
 
     #[test]
@@ -1351,6 +1376,7 @@ mod tests {
         assert!(generated.contains("[skills.sources]"));
         assert!(generated.contains("zdx_user = true"));
         assert!(!generated.contains("zdx_user = \"on\""));
+        assert!(generated.contains("[transcription]"));
     }
 
     /// Config init: creates file with defaults, creates parent dirs (SPEC §9).
@@ -1962,6 +1988,7 @@ max_tokens = 4096
     #[test]
     fn test_transcription_config_defaults() {
         let config = TranscriptionConfig::default();
+        assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.language.is_none());
     }

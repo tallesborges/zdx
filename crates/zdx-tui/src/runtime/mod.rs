@@ -503,6 +503,40 @@ impl TuiRuntime {
                     cancel.cancel();
                 }
             }
+            UiEffect::StartVoiceRecording => {
+                if !self
+                    .state
+                    .tui
+                    .tasks
+                    .state(TaskKind::VoiceRecord)
+                    .is_running()
+                {
+                    self.spawn_task(TaskKind::VoiceRecord, TaskMeta::None, true, move |cancel| {
+                        handlers::voice_record(cancel)
+                    });
+                }
+            }
+            UiEffect::StopVoiceRecording => {
+                if let Some(cancel) = self
+                    .state
+                    .tui
+                    .tasks
+                    .state(TaskKind::VoiceRecord)
+                    .cancel
+                    .clone()
+                {
+                    cancel.cancel();
+                }
+            }
+            UiEffect::StartVoiceTranscription { audio } => {
+                let config = self.state.tui.config.clone();
+                self.spawn_task(
+                    TaskKind::VoiceTranscribe,
+                    TaskMeta::None,
+                    true,
+                    move |cancel| handlers::voice_transcribe(config, audio, cancel),
+                );
+            }
 
             UiEffect::AttachImage { path } => match image_ops::read_and_encode_image(&path) {
                 Ok((mime_type, data)) => {
