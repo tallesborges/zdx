@@ -9,8 +9,9 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
 use zdx_core::automations::{self, AutomationDefinition};
-use zdx_core::config;
+use zdx_core::core::context::PromptContextInclusion;
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_core::{config, prompts, subagents};
 
 use super::exec;
 
@@ -38,6 +39,27 @@ struct AutomationRunRecord {
     error: Option<String>,
     schedule: Option<String>,
     model: Option<String>,
+    subagent: Option<String>,
+}
+
+#[derive(Debug)]
+struct PreparedAutomationRun {
+    config: config::Config,
+    model_override: Option<String>,
+    thinking_override: Option<String>,
+    tools_override: Option<String>,
+}
+
+fn automation_instruction_layers() -> [&'static str; 1] {
+    [prompts::AUTOMATION_HARNESS_INSTRUCTION_LAYER]
+}
+
+fn automation_prompt_context() -> PromptContextInclusion {
+    PromptContextInclusion {
+        project_context: true,
+        memory_index: true,
+        skills: true,
+    }
 }
 
 const ERROR_SUMMARY_MAX_LEN: usize = 400;
@@ -158,9 +180,14 @@ pub fn list(root: &Path) -> Result<()> {
 }
 
 /// Validates all discovered automations.
-pub fn validate(root: &Path) -> Result<()> {
+pub fn validate(root: &Path, config: &config::Config) -> Result<()> {
     let automations = automations::discover(root)
         .with_context(|| format!("discover automations from {}", root.display()))?;
+
+    for automation in &automations {
+        prepare_automation_run(config, root, automation)
+            .with_context(|| format!("validate automation '{}'", automation.name))?;
+    }
 
     println!("Validated {} automation(s).", automations.len());
     for automation in automations {
@@ -203,16 +230,19 @@ pub async fn run_definition(
         let started_at = Utc::now();
         let started = Instant::now();
 
+        let prepared = prepare_automation_run(config, root, automation)?;
+
         let result = exec::run(exec::ExecRunOptions {
             root: &root_string,
             thread_opts: &effective_thread_opts,
             prompt: &automation.prompt,
-            config,
-            model_override: automation.model.as_deref(),
+            config: &prepared.config,
+            model_override: prepared.model_override.as_deref(),
+            effective_system_prompt_override: prepared.config.system_prompt.as_deref(),
             tool_timeout_override: automation.timeout_secs,
-            thinking_override: None,
+            thinking_override: prepared.thinking_override.as_deref(),
             event_filter_override: None,
-            tools_override: None,
+            tools_override: prepared.tools_override.as_deref(),
             no_tools: false,
             no_system_prompt: false,
         })
@@ -235,7 +265,8 @@ pub async fn run_definition(
             ok: result.is_ok(),
             error,
             schedule: automation.schedule.clone(),
-            model: automation.model.clone(),
+            model: prepared.model_override.clone(),
+            subagent: automation.subagent.clone(),
         };
 
         if let Err(err) = append_run_record(&record) {
@@ -264,6 +295,74 @@ pub async fn run_definition(
     Ok(())
 }
 
+fn prepare_automation_run(
+    config: &config::Config,
+    root: &Path,
+    automation: &AutomationDefinition,
+) -> Result<PreparedAutomationRun> {
+    let mut run_config = config.clone();
+    let instruction_layers = automation_instruction_layers();
+    let chosen_model = automation
+        .model
+        .clone()
+        .unwrap_or_else(|| run_config.model.clone());
+
+    if let Some(subagent_name) = automation.subagent.as_deref() {
+        match subagents::resolve_runtime_selection(root, Some(subagent_name))
+            .with_context(|| format!("load subagent '{subagent_name}'"))?
+        {
+            subagents::RuntimeSubagentSelection::Default => {}
+            subagents::RuntimeSubagentSelection::Named(definition) => {
+                let chosen_model = automation
+                    .model
+                    .clone()
+                    .or_else(|| definition.model.clone())
+                    .unwrap_or_else(|| config.model.clone());
+                let system_prompt = subagents::render_prompt(
+                    &run_config,
+                    root,
+                    &definition,
+                    &chosen_model,
+                    automation_prompt_context(),
+                )
+                .with_context(|| format!("render subagent '{subagent_name}'"))?;
+
+                run_config.system_prompt = Some(system_prompt);
+                run_config.system_prompt_file = None;
+
+                return Ok(PreparedAutomationRun {
+                    config: run_config,
+                    model_override: Some(chosen_model),
+                    thinking_override: definition
+                        .thinking_level
+                        .map(|level| level.display_name().to_string()),
+                    tools_override: definition.tools.map(|tools| tools.join(",")),
+                });
+            }
+        }
+    }
+
+    let effective = zdx_core::core::context::build_prompt_with_context_and_layers(
+        &run_config,
+        root,
+        &chosen_model,
+        &instruction_layers,
+        false,
+        automation_prompt_context(),
+    )
+    .context("render automation prompt")?;
+    run_config.system_prompt = effective.prompt;
+    run_config.system_prompt_file = None;
+    run_config.model.clone_from(&chosen_model);
+
+    Ok(PreparedAutomationRun {
+        config: run_config,
+        model_override: Some(chosen_model),
+        thinking_override: None,
+        tools_override: None,
+    })
+}
+
 fn resolve_automation_thread_opts(
     thread_opts: &ThreadPersistenceOptions,
     automation_name: &str,
@@ -283,11 +382,12 @@ fn resolve_automation_thread_opts(
 
 fn print_validation_line(automation: &AutomationDefinition) {
     println!(
-        "- {} ({}): schedule={}, model={}, timeout_secs={}, max_retries={}",
+        "- {} ({}): schedule={}, model={}, subagent={}, timeout_secs={}, max_retries={}",
         automation.name,
         automation.source.as_str(),
         automation.schedule.as_deref().unwrap_or("manual"),
         automation.model.as_deref().unwrap_or("<default>"),
+        automation.subagent.as_deref().unwrap_or("<default>"),
         automation
             .timeout_secs
             .map_or_else(|| "<default>".to_string(), |v| v.to_string()),
@@ -410,6 +510,8 @@ fn read_run_records(path: &Path) -> Result<Vec<AutomationRunRecord>> {
 mod tests {
     use chrono::TimeZone;
     use tempfile::tempdir;
+    use zdx_core::automations::AutomationSource;
+    use zdx_core::config::{Config, SkillSourceToggles, ThinkingLevel};
 
     use super::*;
 
@@ -431,6 +533,7 @@ mod tests {
             error: None,
             schedule: Some("0 8 * * *".to_string()),
             model: Some("gemini-cli:gemini-2.5-flash".to_string()),
+            subagent: Some("task".to_string()),
         };
 
         append_run_record_to(&path, &record).unwrap();
@@ -508,9 +611,9 @@ mod tests {
         std::fs::write(
             &path,
             concat!(
-                r#"{"automation":"a","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":null,"model":null}"#,
+                r#"{"automation":"a","trigger":"manual","attempt":1,"max_attempts":1,"started_at":"2026-02-11T08:00:00Z","finished_at":"2026-02-11T08:00:01Z","duration_ms":1000,"ok":true,"error":null,"schedule":null,"model":null,"subagent":null}"#,
                 "\n",
-                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m"}"#,
+                r#"{"automation":"b","trigger":"daemon","attempt":1,"max_attempts":2,"started_at":"2026-02-11T08:01:00Z","finished_at":"2026-02-11T08:01:02Z","duration_ms":2000,"ok":false,"error":"oops","schedule":"0 8 * * *","model":"m","subagent":"task"}"#,
                 "\n"
             ),
         )
@@ -547,6 +650,7 @@ mod tests {
             error: None,
             schedule: None,
             model: None,
+            subagent: None,
         };
 
         let exact = chrono::NaiveDate::from_ymd_opt(2026, 2, 11).unwrap();
@@ -560,5 +664,142 @@ mod tests {
             Some(exact),
             Some(exact)
         ));
+    }
+
+    #[test]
+    fn prepare_automation_run_uses_effective_model_and_project_context() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Automation project note").unwrap();
+
+        let mut config = Config {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            thinking_level: ThinkingLevel::Low,
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: Some("openai-codex:gpt-5.4".to_string()),
+            subagent: None,
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let prepared = prepare_automation_run(&config, dir.path(), &automation).unwrap();
+        let prompt = prepared.config.system_prompt.unwrap_or_default();
+
+        assert_eq!(
+            prepared.model_override.as_deref(),
+            Some("openai-codex:gpt-5.4")
+        );
+        assert_eq!(prepared.config.model, "openai-codex:gpt-5.4");
+        assert!(prompt.contains("Automation project note"));
+        assert!(prompt.contains("multi_tool_use.parallel"));
+    }
+
+    #[test]
+    fn validate_fails_for_missing_subagent() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("missing-subagent".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let Err(err) = prepare_automation_run(&config, dir.path(), &automation) else {
+            panic!("missing subagent should fail validation");
+        };
+        assert!(format!("{err:#}").contains("missing-subagent"));
+    }
+
+    #[test]
+    fn validate_fails_for_subagent_with_unknown_tool() {
+        let dir = tempdir().unwrap();
+        let subagents_dir = dir.path().join(".zdx").join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join("broken.md"),
+            "---\ndescription: Broken\ntools:\n  - reed\n---\nPrompt",
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("broken".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let err = prepare_automation_run(&config, dir.path(), &automation).unwrap_err();
+        assert!(format!("{err:#}").contains("Unknown tool(s): reed"));
+    }
+
+    #[test]
+    fn prepare_automation_run_task_alias_uses_default_prompt_pipeline() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Automation task alias note").unwrap();
+
+        let mut config = Config {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = true;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("task".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let prepared = prepare_automation_run(&config, dir.path(), &automation).unwrap();
+        let prompt = prepared.config.system_prompt.unwrap_or_default();
+
+        assert!(prompt.contains("Base prompt"));
+        assert!(prompt.contains("Automation task alias note"));
+        assert!(prompt.contains("Task (`task`)"));
     }
 }

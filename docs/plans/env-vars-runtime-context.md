@@ -81,7 +81,7 @@
     ```
   - [x] Remove `artifact_dir` and `thread_id` from `PromptTemplateVars` struct (context.rs ~132)
   - [x] Remove their computation from `build_template_vars()` (context.rs ~277)
-  - [x] Remove `thread_id` parameter from `build_prompt_template_vars` (internal), `build_effective_system_prompt_with_paths`, and `build_effective_system_prompt_with_paths_and_surface_rules` (public API)
+  - [x] Remove `thread_id` parameter from `build_prompt_template_vars` (internal), `build_effective_system_prompt_with_paths`, and the layered effective-prompt builder public API
   - [x] Keep `cwd` and `date` in template vars (model reasons about these without running commands)
   - [x] Update tests that assert on `<environment>` block content (context.rs)
   - [x] Update all callers: TUI (lib.rs, handoff.rs, thread.rs), exec, bot

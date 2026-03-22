@@ -95,6 +95,25 @@ fn test_automations_validate_single_file() {
 }
 
 #[test]
+fn test_automations_validate_fails_for_missing_subagent() {
+    let user_home = tempdir().unwrap();
+    let automations_dir = user_home.path().join("automations");
+    fs::create_dir_all(&automations_dir).unwrap();
+    fs::write(
+        automations_dir.join("morning-report.md"),
+        "---\nsubagent: missing-subagent\n---\nGenerate morning report.",
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", user_home.path())
+        .args(["automations", "validate"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("missing-subagent"));
+}
+
+#[test]
 fn test_automations_runs_reads_jsonl_log() {
     let dir = tempdir().unwrap();
     let runs_path = dir.path().join("automations_runs.jsonl");

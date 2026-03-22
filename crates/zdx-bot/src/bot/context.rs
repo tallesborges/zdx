@@ -37,7 +37,7 @@ pub(crate) struct BotContext {
     allowlist_user_ids: HashSet<i64>,
     allowlist_chat_ids: HashSet<i64>,
     root: PathBuf,
-    bot_surface_rules: Option<String>,
+    bot_instruction_layer: Option<String>,
     tool_config: ToolConfig,
     rebuild_signal: Notify,
     cancel_map: CancelMap,
@@ -48,7 +48,7 @@ pub(crate) struct BotContextDeps {
     pub allowlist_user_ids: HashSet<i64>,
     pub allowlist_chat_ids: HashSet<i64>,
     pub root: PathBuf,
-    pub bot_surface_rules: Option<String>,
+    pub bot_instruction_layer: Option<String>,
     pub tool_config: ToolConfig,
     pub cancel_map: CancelMap,
     pub queue_cancel_map: QueueCancelMap,
@@ -60,7 +60,7 @@ impl BotContext {
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
-            bot_surface_rules,
+            bot_instruction_layer,
             tool_config,
             cancel_map,
             queue_cancel_map,
@@ -72,7 +72,7 @@ impl BotContext {
             allowlist_user_ids,
             allowlist_chat_ids,
             root,
-            bot_surface_rules,
+            bot_instruction_layer,
             tool_config,
             rebuild_signal: Notify::new(),
             cancel_map,
@@ -108,8 +108,8 @@ impl BotContext {
         self.root.as_path()
     }
 
-    pub(crate) fn bot_surface_rules(&self) -> Option<&str> {
-        self.bot_surface_rules.as_deref()
+    pub(crate) fn bot_instruction_layer(&self) -> Option<&str> {
+        self.bot_instruction_layer.as_deref()
     }
 
     pub(crate) fn tool_config(&self) -> &ToolConfig {

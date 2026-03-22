@@ -10,5 +10,6 @@ pub mod pidfile;
 pub mod prompts;
 pub mod providers;
 pub mod skills;
+pub mod subagents;
 pub mod tools;
 pub mod tracing_init;

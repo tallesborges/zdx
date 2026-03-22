@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use zdx_core::config::Config;
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
-use zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules;
+use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
@@ -83,6 +83,46 @@ pub(crate) struct AgentTurnHandle {
     pub task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
 }
 
+struct PreparedBotTurn {
+    config: Config,
+    system_prompt: Option<String>,
+}
+
+fn bot_prompt_context() -> PromptContextInclusion {
+    PromptContextInclusion {
+        project_context: true,
+        memory_index: true,
+        skills: true,
+    }
+}
+
+fn collect_bot_instruction_layers(bot_instruction_layer: Option<&str>) -> Vec<&str> {
+    bot_instruction_layer.into_iter().collect()
+}
+
+fn prepare_bot_turn(
+    config: &Config,
+    root: &Path,
+    bot_instruction_layer: Option<&str>,
+) -> Result<PreparedBotTurn> {
+    let bot_config = config.clone();
+    let instruction_layers = collect_bot_instruction_layers(bot_instruction_layer);
+    let effective = build_prompt_with_context_and_layers(
+        &bot_config,
+        root,
+        &bot_config.model,
+        &instruction_layers,
+        true,
+        bot_prompt_context(),
+    )
+    .context("build bot prompt")?;
+
+    Ok(PreparedBotTurn {
+        config: bot_config,
+        system_prompt: effective.prompt,
+    })
+}
+
 /// Spawns an agent turn and returns a handle with streaming events.
 ///
 /// Thread persistence is wired internally via `spawn_broadcaster`.
@@ -95,7 +135,7 @@ pub(crate) fn spawn_agent_turn(
     messages: Vec<ChatMessage>,
     config: &Config,
     root: &Path,
-    bot_surface_rules: Option<&str>,
+    bot_instruction_layer: Option<&str>,
     thread_id: &str,
     thread: &Thread,
     tool_config: &ToolConfig,
@@ -103,15 +143,10 @@ pub(crate) fn spawn_agent_turn(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, Some(thread_id));
 
-    // Build effective system prompt from config + AGENTS.md + memory + skills + optional surface rules.
-    let effective = build_effective_system_prompt_with_paths_and_surface_rules(
-        config,
-        root,
-        bot_surface_rules,
-        true,
-    )
-    .context("build system prompt")?;
-    let system_prompt = effective.prompt;
+    let PreparedBotTurn {
+        config: bot_config,
+        system_prompt,
+    } = prepare_bot_turn(config, root, bot_instruction_layer)?;
 
     let agent_opts = AgentOptions {
         root: root.to_path_buf(),
@@ -128,7 +163,7 @@ pub(crate) fn spawn_agent_turn(
     thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
 
     // Spawn agent in background — owned values moved in
-    let config = config.clone();
+    let config = bot_config;
     let thread_id = thread_id.to_string();
     let task = tokio::spawn(async move {
         agent::run_turn(
@@ -215,10 +250,28 @@ fn build_user_text(incoming: &IncomingMessage) -> String {
 
 #[cfg(test)]
 mod tests {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
     use serde_json::json;
+    use zdx_core::config::{Config, SkillSourceToggles};
     use zdx_core::core::events::{AgentEvent, ToolOutput};
 
-    use super::{STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status};
+    use super::{
+        STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status, prepare_bot_turn,
+    };
+
+    fn make_temp_dir() -> std::path::PathBuf {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "zdx-bot-agent-test-{}-{unique}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn maps_waiting_thinking_and_writing_states() {
@@ -264,5 +317,33 @@ mod tests {
             }),
             Some(STATUS_WAITING.to_string())
         );
+    }
+
+    #[test]
+    fn prepare_bot_turn_includes_project_context() {
+        let dir = make_temp_dir();
+        std::fs::write(dir.join("AGENTS.md"), "Bot project note").unwrap();
+
+        let mut config = Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let prepared = prepare_bot_turn(&config, &dir, None).unwrap();
+        let prompt = prepared.system_prompt.unwrap_or_default();
+
+        assert!(prompt.contains("Bot project note"));
+
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

@@ -1124,7 +1124,7 @@ async fn spawn_or_fail(
         spawn.messages,
         spawn.config,
         spawn.worktree_root,
-        context.bot_surface_rules(),
+        context.bot_instruction_layer(),
         spawn.thread_id,
         spawn.thread,
         context.tool_config(),

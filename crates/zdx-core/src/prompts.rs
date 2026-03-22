@@ -24,6 +24,12 @@ pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!(concat!(
     "/prompts/system_prompt_template.md"
 ));
 
+/// Built-in instruction layer for headless automation behavior.
+pub const AUTOMATION_HARNESS_INSTRUCTION_LAYER: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/instruction_layers/automation_harness.md"
+));
+
 /// Prompt template for read thread tool (shared with tool execution).
 pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -34,4 +40,10 @@ pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!(concat!(
 #[must_use]
 pub fn identity_prompt() -> &'static str {
     IDENTITY_PROMPT_TEMPLATE.trim()
+}
+
+/// Returns the built-in default system prompt template body.
+#[must_use]
+pub fn default_system_prompt_template() -> &'static str {
+    SYSTEM_PROMPT_TEMPLATE.trim()
 }
