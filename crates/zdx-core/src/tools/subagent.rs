@@ -19,6 +19,7 @@ pub fn definition() -> ToolDefinition {
 
 /// Returns the tool definition enriched with available named subagents.
 pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinition {
+    let valid_subagents = supported_subagent_names(subagents);
     ToolDefinition {
         name: "Invoke_Subagent".to_string(),
         description: build_description(subagents),
@@ -31,7 +32,8 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                 },
                 "subagent": {
                     "type": "string",
-                    "description": "Optional named subagent or reserved runtime alias. Use `task` for the default delegated ZDX behavior with the base prompt + context."
+                    "description": build_subagent_field_description(subagents),
+                    "enum": valid_subagents
                 }
             },
             "required": ["prompt"],
@@ -224,8 +226,30 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
         .filter(|s| !s.is_empty())
 }
 
+fn supported_subagent_names(subagents: &[SubagentSummary]) -> Vec<String> {
+    let mut names = Vec::with_capacity(subagents.len() + 1);
+    names.push(subagents::TASK_BUILTIN_ALIAS_NAME.to_string());
+    for subagent in subagents {
+        if !names.iter().any(|name| name == &subagent.name) {
+            names.push(subagent.name.clone());
+        }
+    }
+    names
+}
+
+fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
+    let valid = supported_subagent_names(subagents)
+        .into_iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "Optional named subagent or reserved runtime alias. Use `task` for the default delegated ZDX behavior with the base prompt + context. Valid values: {valid}. Skill names are invalid unless they are also listed here."
+    )
+}
+
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents
@@ -280,6 +304,7 @@ mod tests {
         let def = definition();
         assert_eq!(def.name, "Invoke_Subagent");
         assert!(def.description.contains("Use `subagent`"));
+        assert!(def.description.contains("Skill names are invalid"));
 
         let required = def
             .input_schema
@@ -289,6 +314,17 @@ mod tests {
         assert!(required.iter().any(|v| v == "prompt"));
         assert!(!required.iter().any(|v| v == "model"));
         assert!(!required.iter().any(|v| v == "subagent"));
+
+        let subagent = def
+            .input_schema
+            .get("properties")
+            .and_then(|props| props.get("subagent"))
+            .unwrap();
+        let enum_values = subagent
+            .get("enum")
+            .and_then(serde_json::Value::as_array)
+            .unwrap();
+        assert!(enum_values.iter().any(|v| v == "task"));
     }
 
     #[test]
@@ -359,6 +395,18 @@ mod tests {
         assert!(desc.contains("coder (Coding helper)"));
         assert!(desc.contains("researcher (Research helper)"));
         assert!(desc.contains("`task`"));
+        assert!(desc.contains("Skill names are invalid"));
+    }
+
+    #[test]
+    fn test_subagent_field_description_lists_valid_values() {
+        let description = build_subagent_field_description(&[SubagentSummary {
+            name: "oracle".to_string(),
+            description: "Deep reasoning".to_string(),
+        }]);
+
+        assert!(description.contains("Valid values: `task`, `oracle`"));
+        assert!(description.contains("Skill names are invalid"));
     }
 
     #[test]

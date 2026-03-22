@@ -1425,6 +1425,53 @@ mod tests {
     }
 
     #[test]
+    fn test_default_template_disambiguates_skills_memory_and_subagents() {
+        let skills = vec![Skill {
+            name: "memory".to_string(),
+            description: "Memory workflow".to_string(),
+            file_path: PathBuf::from("/tmp/memory/SKILL.md"),
+            base_dir: PathBuf::from("/tmp/memory"),
+            source: SkillSource::ZdxUser,
+        }];
+        let capabilities = build_prompt_template_capabilities(Path::new("/tmp"), true).unwrap();
+
+        let vars = build_prompt_template_vars(
+            Path::new("/tmp"),
+            "codex:gpt-5.3-codex",
+            PromptTemplateSections {
+                base_prompt: None,
+                project_context: None,
+                memory_index: Some("# Memory Index\nUse the `memory` skill for detailed memory."),
+                memory_suggestions: false,
+                skills_list: &skills,
+                scoped_context: &[],
+                specialized_capabilities: &capabilities,
+            },
+        );
+
+        let rendered = render_prompt_template(crate::prompts::default_system_prompt_template(), &vars)
+            .unwrap()
+            .unwrap();
+
+        assert!(rendered.contains("### When to consult memory"));
+        assert!(rendered.contains("### How to use memory"));
+        assert!(rendered.contains(
+            "The user's memory is stored in markdown notes and the memory index at `$ZDX_HOME/MEMORY.md`."
+        ));
+        assert!(rendered.contains(
+            "If the `memory` skill is available, read it first and follow it with normal file tools."
+        ));
+        assert!(rendered.contains("### Memory index rules"));
+        assert!(rendered.contains(
+            "Use the normal file tools (for example `read`, `grep`, and `glob`) to inspect memory files."
+        ));
+        assert!(rendered.contains("Keep full detail in notes and `MEMORY.md` as a concise index."));
+        assert!(rendered.contains(
+            "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
+        ));
+    }
+
+    #[test]
     fn test_prompt_template_vars_provider_terms() {
         let anthropic = build_prompt_template_vars(
             Path::new("/tmp"),
