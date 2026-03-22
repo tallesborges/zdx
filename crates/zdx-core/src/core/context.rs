@@ -1449,26 +1449,51 @@ mod tests {
             },
         );
 
-        let rendered = render_prompt_template(crate::prompts::default_system_prompt_template(), &vars)
-            .unwrap()
-            .unwrap();
+        let rendered =
+            render_prompt_template(crate::prompts::default_system_prompt_template(), &vars)
+                .unwrap()
+                .unwrap();
 
+        assert!(!rendered.contains("### How to use memory"));
         assert!(rendered.contains("### When to consult memory"));
-        assert!(rendered.contains("### How to use memory"));
         assert!(rendered.contains(
-            "The user's memory is stored in markdown notes and the memory index at `$ZDX_HOME/MEMORY.md`."
+            "For any memory-related task, the first step is to read the `memory` skill `SKILL.md`."
         ));
         assert!(rendered.contains(
-            "If the `memory` skill is available, read it first and follow it with normal file tools."
+            "For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context."
         ));
-        assert!(rendered.contains("### Memory index rules"));
-        assert!(rendered.contains(
+        assert!(rendered.contains("### Saving memory"));
+        assert!(
+            rendered
+                .contains("If the user explicitly says \"remember X\", MUST save it immediately.")
+        );
+        assert!(!rendered.contains("### Memory index rules"));
+        assert!(!rendered.contains(
             "Use the normal file tools (for example `read`, `grep`, and `glob`) to inspect memory files."
         ));
-        assert!(rendered.contains("Keep full detail in notes and `MEMORY.md` as a concise index."));
+        assert!(
+            !rendered
+                .contains("Keep full detail in notes and the memory index as a concise index.")
+        );
+        assert!(rendered.contains("<memory_index>"));
         assert!(rendered.contains(
             "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
         ));
+
+        let skills_pos = rendered.find("<skills_registry>").unwrap();
+        let memory_pos = rendered.find("<memory_contract>").unwrap();
+        assert!(skills_pos < memory_pos);
+
+        let memory_skill_pos = rendered
+            .find("For any memory-related task, the first step is to read the `memory` skill `SKILL.md`.")
+            .unwrap();
+        let when_to_consult_pos = rendered.find("### When to consult memory").unwrap();
+        let saving_memory_pos = rendered.find("### Saving memory").unwrap();
+        let memory_index_pos = rendered.find("<memory_index>").unwrap();
+        assert!(memory_skill_pos < when_to_consult_pos);
+        assert!(when_to_consult_pos < saving_memory_pos);
+        assert!(saving_memory_pos < memory_index_pos);
+        assert!(memory_skill_pos < memory_index_pos);
     }
 
     #[test]
@@ -1620,13 +1645,13 @@ mod tests {
         );
 
         let rendered = render_prompt_template(
-            "{% if memory_index %}## Memory\n<memory>{{ memory_index }}</memory>{% endif %}",
+            "{% if memory_index %}## Memory\n<memory_index>{{ memory_index }}</memory_index>{% endif %}",
             &vars,
         )
         .unwrap()
         .unwrap_or_default();
 
-        assert!(!rendered.contains("<memory>"));
+        assert!(!rendered.contains("<memory_index>"));
         assert!(!rendered.contains("## Memory"));
     }
 

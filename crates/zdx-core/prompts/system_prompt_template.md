@@ -138,44 +138,6 @@ The following directories have their own AGENTS.md rules.
 </project-context>
 {% endif %}
 
-{% if memory_index %}
-<memory_contract>
-## Memory
-The user's memory is stored in markdown notes and the memory index at `$ZDX_HOME/MEMORY.md`.
-Access it with the normal file tools.
-
-### When to consult memory
-- For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult `$ZDX_HOME/MEMORY.md` and relevant memory notes before answering from general knowledge or asking for more context.
-- If the answer is more likely to live in a connected live system, SHOULD use the corresponding skill instead of memory (for example Google Calendar/Gmail/Contacts via `gog`, Apple Reminders, or WhatsApp).
-
-### How to use memory
-- Start with `$ZDX_HOME/MEMORY.md`.
-- If the `memory` skill is available, read it first and follow it with normal file tools.
-- Load only the specific note(s) needed for the task.
-- Use the normal file tools (for example `read`, `grep`, and `glob`) to inspect memory files.
-
-### Memory index rules
-- Keep `$ZDX_HOME/MEMORY.md` concise — only core facts and pointers.
-- Treat `$ZDX_HOME/MEMORY.md` as a high-signal index, not a general knowledge dump.
-- Prefer saving new information in the right note first.
-- Promote to `$ZDX_HOME/MEMORY.md` only when it should act as a frequent shortcut or durable pointer.
-- Do not add occasional reference material, study notes, cheatsheets, or other one-off content unless explicitly requested.
-- When notes are added, renamed, or removed, update `$ZDX_HOME/MEMORY.md`.
-{% if memory_suggestions %}
-### Saving memory
-- If the user explicitly says "remember X", MUST save it immediately.
-- Keep full detail in notes and `MEMORY.md` as a concise index.
-- MAY suggest saving useful durable information, sparingly.
-{% else %}
-- If the user explicitly says "remember X", MUST save it immediately.
-- Keep full detail in notes and `MEMORY.md` as a concise index.
-{% endif %}
-<memory>
-{{ memory_index }}
-</memory>
-</memory_contract>
-{% endif %}
-
 {% if skills_list %}
 <skills_registry>
 ## Skills
@@ -209,5 +171,25 @@ Assistant: [read the skill <path>]
 {% endfor %}
 </available_skills>
 </skills_registry>
+{% endif %}
+
+{% if memory_index %}
+<memory_contract>
+## Memory
+- For any memory-related task, the first step is to read the `memory` skill `SKILL.md`.
+
+### When to consult memory
+- For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context.
+- If the answer is more likely to live in a connected live system, SHOULD use the corresponding skill instead of memory (for example Google Calendar/Gmail/Contacts via `gog`, Apple Reminders, or WhatsApp).
+
+### Saving memory
+- If the user explicitly says "remember X", MUST save it immediately.
+{% if memory_suggestions %}
+- MAY suggest saving useful durable information, sparingly.
+{% endif %}
+<memory_index>
+{{ memory_index }}
+</memory_index>
+</memory_contract>
 {% endif %}
 </system_contract>
