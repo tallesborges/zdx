@@ -163,7 +163,14 @@ fn build_system_prompt(
     model: &str,
 ) -> Result<String, ToolOutput> {
     let result = match definition {
-        Some(definition) => subagents::render_prompt(definition).map_err(|err| {
+        Some(definition) => subagents::render_prompt(
+            config,
+            root,
+            definition,
+            model,
+            PromptContextInclusion::default(),
+        )
+        .map_err(|err| {
             ToolOutput::failure(
                 "invalid_input",
                 format!("Failed to render subagent '{}'", definition.name),

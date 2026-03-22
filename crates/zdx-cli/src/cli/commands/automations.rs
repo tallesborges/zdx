@@ -42,6 +42,7 @@ struct AutomationRunRecord {
     subagent: Option<String>,
 }
 
+#[derive(Debug)]
 struct PreparedAutomationRun {
     config: config::Config,
     model_override: Option<String>,
@@ -317,8 +318,14 @@ fn prepare_automation_run(
                     .clone()
                     .or_else(|| definition.model.clone())
                     .unwrap_or_else(|| config.model.clone());
-                let system_prompt = subagents::render_prompt(&definition)
-                    .with_context(|| format!("render subagent '{subagent_name}'"))?;
+                let system_prompt = subagents::render_prompt(
+                    &run_config,
+                    root,
+                    &definition,
+                    &chosen_model,
+                    automation_prompt_context(),
+                )
+                .with_context(|| format!("render subagent '{subagent_name}'"))?;
 
                 run_config.system_prompt = Some(system_prompt);
                 run_config.system_prompt_file = None;
@@ -725,6 +732,34 @@ mod tests {
             panic!("missing subagent should fail validation");
         };
         assert!(format!("{err:#}").contains("missing-subagent"));
+    }
+
+    #[test]
+    fn validate_fails_for_subagent_with_unknown_tool() {
+        let dir = tempdir().unwrap();
+        let subagents_dir = dir.path().join(".zdx").join("subagents");
+        std::fs::create_dir_all(&subagents_dir).unwrap();
+        std::fs::write(
+            subagents_dir.join("broken.md"),
+            "---\ndescription: Broken\ntools:\n  - reed\n---\nPrompt",
+        )
+        .unwrap();
+
+        let config = Config::default();
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("broken".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let err = prepare_automation_run(&config, dir.path(), &automation).unwrap_err();
+        assert!(format!("{err:#}").contains("Unknown tool(s): reed"));
     }
 
     #[test]

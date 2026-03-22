@@ -36,6 +36,23 @@ pub struct ExecSubagentOptions {
     pub timeout: Option<Duration>,
 }
 
+#[derive(Debug)]
+struct TempPromptFile {
+    path: PathBuf,
+}
+
+impl TempPromptFile {
+    fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPromptFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
+}
+
 /// Runs an isolated child `zdx exec` process and returns response text only.
 ///
 /// The child process always runs with `--no-thread` to avoid thread pollution.
@@ -76,7 +93,9 @@ pub async fn run_exec_subagent_with_cancel(
         root,
         prompt,
         options,
-        effective_system_prompt_file.as_deref(),
+        effective_system_prompt_file
+            .as_ref()
+            .map(TempPromptFile::as_path),
     );
 
     let mut command = Command::new(exe);
@@ -114,13 +133,7 @@ pub async fn run_exec_subagent_with_cancel(
         (None, None) => wait_future.await.context("Failed to get subagent output")?,
     };
 
-    let result = process_subagent_output(&output);
-
-    if let Some(path) = &effective_system_prompt_file {
-        let _ = fs::remove_file(path);
-    }
-
-    result
+    process_subagent_output(&output)
 }
 
 fn build_exec_args(
@@ -186,7 +199,7 @@ fn normalize_optional(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
 }
 
-fn write_effective_system_prompt_file(system_prompt: &str) -> Result<PathBuf> {
+fn write_effective_system_prompt_file(system_prompt: &str) -> Result<TempPromptFile> {
     let unique = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .context("system clock before unix epoch")?
@@ -197,7 +210,7 @@ fn write_effective_system_prompt_file(system_prompt: &str) -> Result<PathBuf> {
     ));
     fs::write(&path, system_prompt)
         .with_context(|| format!("write effective system prompt file {}", path.display()))?;
-    Ok(path)
+    Ok(TempPromptFile { path })
 }
 
 fn process_subagent_output(output: &std::process::Output) -> Result<String> {
@@ -382,5 +395,16 @@ mod tests {
 
         let text = process_subagent_output(&output).expect("should keep plain text");
         assert_eq!(text, "plain text output");
+    }
+
+    #[test]
+    fn temp_prompt_file_is_removed_on_drop() {
+        let file = write_effective_system_prompt_file("prompt body").unwrap();
+        let path = file.path.clone();
+        assert!(path.exists());
+
+        drop(file);
+
+        assert!(!path.exists());
     }
 }

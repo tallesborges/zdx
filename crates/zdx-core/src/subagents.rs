@@ -8,6 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::config::{ThinkingLevel, paths};
+use crate::core::context::PromptContextInclusion;
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
@@ -261,16 +262,22 @@ pub fn load_by_name(root: &Path, name: &str) -> Result<SubagentDefinition> {
 ///
 /// # Errors
 /// Returns an error if rendering fails or produces an empty prompt.
-pub fn render_prompt(definition: &SubagentDefinition) -> Result<String> {
-    let prompt = definition.prompt_body.trim().to_string();
-    if prompt.is_empty() {
-        bail!(
-            "Subagent '{}' rendered an empty system prompt",
-            definition.name
-        );
-    }
-
-    Ok(prompt)
+pub fn render_prompt(
+    config: &crate::config::Config,
+    root: &Path,
+    definition: &SubagentDefinition,
+    model: &str,
+    inclusion: PromptContextInclusion,
+) -> Result<String> {
+    crate::core::context::render_standalone_prompt_template(
+        config,
+        root,
+        model,
+        &definition.prompt_body,
+        false,
+        inclusion,
+    )
+    .with_context(|| format!("render subagent '{}'", definition.name))
 }
 
 fn collect_markdown_files(
@@ -393,6 +400,9 @@ fn parse_subagent_content(
 
     let fallback_name = file_stem(path)?;
     let name = normalize_required_string(frontmatter.name, "name")?.unwrap_or(fallback_name);
+    if is_reserved_runtime_alias(&name) {
+        bail!("Subagent name '{name}' is reserved for runtime aliases and cannot be used");
+    }
     let description = normalize_required_string(frontmatter.description, "description")?
         .ok_or_else(|| anyhow::anyhow!("description is required"))?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
@@ -453,10 +463,37 @@ fn normalize_tools(value: Option<Vec<String>>) -> Result<Option<Vec<String>>> {
             if tools.is_empty() {
                 bail!("tools cannot be empty when provided");
             }
+            validate_tool_names(&tools)?;
             Ok(Some(tools))
         }
         None => Ok(None),
     }
+}
+
+fn validate_tool_names(tools: &[String]) -> Result<()> {
+    let available = crate::tools::all_tool_names();
+    let available_set: std::collections::BTreeSet<String> = available
+        .iter()
+        .map(|tool| tool.to_ascii_lowercase())
+        .collect();
+    let mut unknown: Vec<String> = tools
+        .iter()
+        .filter(|tool| !available_set.contains(&tool.to_ascii_lowercase()))
+        .cloned()
+        .collect();
+
+    if unknown.is_empty() {
+        return Ok(());
+    }
+
+    unknown.sort();
+    let mut available = available;
+    available.sort();
+    bail!(
+        "Unknown tool(s): {}. Available tools: {}",
+        unknown.join(", "),
+        available.join(", ")
+    );
 }
 
 fn split_frontmatter(content: &str) -> Result<(String, String)> {
@@ -554,6 +591,30 @@ mod tests {
     }
 
     #[test]
+    fn parse_subagent_rejects_reserved_runtime_alias_name() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("task.md");
+        fs::write(&file, "---\ndescription: Reserved\n---\nPrompt").unwrap();
+
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(err.to_string().contains("reserved for runtime aliases"));
+    }
+
+    #[test]
+    fn parse_subagent_rejects_unknown_tool_names() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("bad-tools.md");
+        fs::write(
+            &file,
+            "---\ndescription: Bad tools\ntools:\n  - reed\n---\nPrompt",
+        )
+        .unwrap();
+
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(err.to_string().contains("Unknown tool(s): reed"));
+    }
+
+    #[test]
     fn resolve_runtime_selection_treats_task_alias_as_default() {
         let root = tempdir().unwrap();
 
@@ -562,7 +623,7 @@ mod tests {
     }
 
     #[test]
-    fn list_summaries_omits_reserved_runtime_alias_names() {
+    fn discover_rejects_reserved_runtime_alias_files() {
         let root = tempdir().unwrap();
         let project_dir = root.path().join(".zdx").join("subagents");
         fs::create_dir_all(&project_dir).unwrap();
@@ -572,8 +633,8 @@ mod tests {
         )
         .unwrap();
 
-        let summaries = list_summaries(root.path()).unwrap();
-        assert!(!summaries.iter().any(|summary| summary.name == "task"));
+        let err = discover(root.path()).unwrap_err();
+        assert!(format!("{err:#}").contains("reserved for runtime aliases"));
     }
 
     #[test]
@@ -588,5 +649,35 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["task", "oracle", "librarian", "finder"]
         );
+    }
+
+    #[test]
+    fn render_prompt_supports_template_vars() {
+        let root = tempdir().unwrap();
+        fs::write(root.path().join("AGENTS.md"), "Project note").unwrap();
+
+        let definition = SubagentDefinition {
+            name: "templated".to_string(),
+            description: "Templated subagent".to_string(),
+            path: root.path().join("templated.md"),
+            source: SubagentSource::User,
+            model: None,
+            thinking_level: None,
+            tools: None,
+            prompt_body: "{% if project_context %}{{ project_context }}{% endif %}\n{{ cwd }}"
+                .to_string(),
+        };
+
+        let rendered = render_prompt(
+            &crate::config::Config::default(),
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            PromptContextInclusion::default(),
+        )
+        .unwrap();
+
+        assert!(rendered.contains("Project note"));
+        assert!(rendered.contains(&root.path().display().to_string()));
     }
 }

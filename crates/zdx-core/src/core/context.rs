@@ -385,6 +385,61 @@ fn render_prompt_template(
     Ok((!trimmed.is_empty()).then(|| trimmed.to_string()))
 }
 
+/// Renders an arbitrary standalone prompt template using the same template vars
+/// available to the main system prompt pipeline, without automatically wrapping
+/// it in the default ZDX base prompt.
+///
+/// # Errors
+/// Returns an error if template rendering fails or produces an empty prompt.
+pub fn render_standalone_prompt_template(
+    config: &Config,
+    root: &Path,
+    model: &str,
+    template: &str,
+    memory_suggestions: bool,
+    inclusion: PromptContextInclusion,
+) -> Result<String> {
+    let sections_result = load_prompt_context_sections(root, config);
+    let inline_project_context = if inclusion.project_context {
+        sections_result.inline_project_context.as_deref()
+    } else {
+        None
+    };
+    let memory_index = if inclusion.memory_index {
+        sections_result.memory_index.as_deref()
+    } else {
+        None
+    };
+    let skills_result = if inclusion.skills {
+        load_skills_with_config(config, root)
+    } else {
+        LoadSkillsResult::default()
+    };
+
+    let specialized_capabilities =
+        build_prompt_template_capabilities(root, config.subagents.enabled)
+            .unwrap_or_else(|_| fallback_prompt_template_capabilities(config.subagents.enabled));
+
+    let vars = build_prompt_template_vars(
+        root,
+        model,
+        PromptTemplateSections {
+            base_prompt: None,
+            project_context: inline_project_context,
+            memory_index,
+            memory_suggestions,
+            skills_list: &skills_result.skills,
+            scoped_context: &sections_result.scoped_context,
+            specialized_capabilities: &specialized_capabilities,
+        },
+    );
+
+    render_prompt_template(template.trim(), &vars)
+        .map_err(|error| anyhow::anyhow!(error))?
+        .filter(|prompt| !prompt.trim().is_empty())
+        .ok_or_else(|| anyhow::anyhow!("standalone prompt template rendered an empty prompt"))
+}
+
 /// Collects all AGENTS.md paths to check, in order.
 ///
 /// Order:
