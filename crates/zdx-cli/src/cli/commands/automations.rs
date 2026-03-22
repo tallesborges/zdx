@@ -179,9 +179,14 @@ pub fn list(root: &Path) -> Result<()> {
 }
 
 /// Validates all discovered automations.
-pub fn validate(root: &Path) -> Result<()> {
+pub fn validate(root: &Path, config: &config::Config) -> Result<()> {
     let automations = automations::discover(root)
         .with_context(|| format!("discover automations from {}", root.display()))?;
+
+    for automation in &automations {
+        prepare_automation_run(config, root, automation)
+            .with_context(|| format!("validate automation '{}'", automation.name))?;
+    }
 
     println!("Validated {} automation(s).", automations.len());
     for automation in automations {
@@ -701,5 +706,27 @@ mod tests {
         assert_eq!(prepared.config.model, "openai-codex:gpt-5.4");
         assert!(prompt.contains("Automation project note"));
         assert!(prompt.contains("multi_tool_use.parallel"));
+    }
+
+    #[test]
+    fn validate_fails_for_missing_subagent() {
+        let dir = tempdir().unwrap();
+        let config = Config::default();
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("missing-subagent".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let Err(err) = prepare_automation_run(&config, dir.path(), &automation) else {
+            panic!("missing subagent should fail validation");
+        };
+        assert!(format!("{err:#}").contains("missing-subagent"));
     }
 }

@@ -1,7 +1,7 @@
 # Goals
 - `invoke_subagent(subagent: "general_assistant", prompt: "...")` and `invoke_subagent(subagent: "automation_assistant", prompt: "...")` cover the immediate normal-use and headless-use flows
 - Named subagents configure: system_prompt + model + tools + thinking — stored as markdown files with YAML frontmatter
-- Unified subagent consumers: subagent tool, automations (`subagent:` in frontmatter), telegram bot
+- Unified subagent consumers: subagent tool and automations (`subagent:` in frontmatter)
 - Available subagents dynamically listed in tool description
 - Users can create custom subagents at `~/.zdx/subagents/` (global) and `.zdx/subagents/` (project-level)
 - Subagent prompt bodies support the same template engine/features as the current system prompt pipeline
@@ -24,9 +24,8 @@
 # User journey
 1. User invokes subagent without changes → works with built-in `general_assistant` subagent (default behavior mapping of today's normal mode)
 2. User sets `subagent: automation_assistant` in an automation frontmatter → automation runs in a headless, non-interactive mode tuned to finish the task without depending on follow-up questions
-3. Telegram bot uses `general_assistant` subagent → no AGENTS.md/coding context pollution, but still keeps general assistant behavior
-4. User creates `~/.zdx/subagents/my-analyst.md` → it appears in available subagents
-5. Later, user adds specialized subagents like `search`, `review`, `plan`, or `orchestrator` only when needed
+3. User creates `~/.zdx/subagents/my-analyst.md` → it appears in available subagents
+4. Later, user adds specialized subagents like `search`, `review`, `plan`, or `orchestrator` only when needed
 
 # Foundations / Already shipped (✅)
 
@@ -82,13 +81,11 @@
   - System prompt text might be very long when passed as CLI arg → mitigate: use `--system-prompt-file` or temp file if needed; for MVP, CLI arg is fine (OS arg limit is 256KB+)
   - Removing `model` param is breaking for existing usage → mitigate: keep `model` as deprecated fallback in Slice 2, remove in polish
 
-## Slice 3: Automation + bot subagent integration
-- **Goal**: Automations and telegram bot use `subagent:` to configure their exec runs
+## Slice 3: Automation subagent integration
+- **Goal**: Automations use `subagent:` to configure their exec runs
 - **Scope checklist**:
   - [ ] Add optional `subagent` field to automation YAML frontmatter schema
   - [ ] When automation has `subagent: X`, resolve subagent and apply model/tools/system_prompt to the automation's exec run
-  - [ ] Telegram bot: configure default subagent (e.g., `general_assistant`) in `[telegram]` config section
-  - [ ] Bot uses subagent system_prompt/tools/model instead of default coding context
   - [ ] Update automation validation to check subagent exists
 - **✅ Demo**: Create automation with `subagent: automation_assistant` in frontmatter → `just automations run <name>` uses automation prompt/constraints and finishes in headless mode
 - **Risks / failure modes**:

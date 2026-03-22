@@ -721,6 +721,17 @@ pub fn build_prompt_with_context_and_layers(
         Vec::new()
     };
 
+    if config.subagents.enabled
+        && let Err(error) = subagents::list_summaries(root)
+    {
+        warnings.push(ContextWarning {
+            path: None,
+            message: format!(
+                "Failed to discover subagents for prompt context: {error}; available subagent metadata may be incomplete"
+            ),
+        });
+    }
+
     let mut vars = build_prompt_template_vars(
         root,
         model,

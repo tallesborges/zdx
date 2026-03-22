@@ -721,7 +721,7 @@ async fn dispatch_automations(
     let root_path = resolve_root(context.root, context.worktree_id)?;
     match command {
         AutomationCommands::List => commands::automations::list(&root_path),
-        AutomationCommands::Validate => commands::automations::validate(&root_path),
+        AutomationCommands::Validate => commands::automations::validate(&root_path, context.config),
         AutomationCommands::Daemon { poll_interval_secs } => {
             let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
             commands::daemon::run(&root_path, &thread_opts, context.config, poll_interval_secs)
