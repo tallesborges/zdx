@@ -7,7 +7,7 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, resolve_existing_path};
+use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_existing_path};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the edit tool.
@@ -20,7 +20,7 @@ pub fn definition() -> ToolDefinition {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to edit (relative to root directory)"
+                    "description": "Path to the file to edit (relative to root directory; supports $VAR/${VAR} env vars)"
                 },
                 "old": {
                     "type": "string",
@@ -90,13 +90,14 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // Resolve path
-    let file_path = match resolve_existing_path(&input.path, &ctx.root) {
+    let resolved = match resolve_existing_path(&input.path, &ctx.root) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    let file_path = &resolved.resolved_path;
 
     // Read file content
-    let content = match fs::read_to_string(&file_path) {
+    let content = match fs::read_to_string(file_path) {
         Ok(c) => c,
         Err(e) => {
             return ToolOutput::failure(
@@ -133,11 +134,13 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let new_content = content.replace(&input.old, &input.new);
 
     // Write back
-    match fs::write(&file_path, &new_content) {
-        Ok(()) => ToolOutput::success(json!({
-            "path": file_path.display().to_string(),
-            "replacements": count
-        })),
+    match fs::write(file_path, &new_content) {
+        Ok(()) => {
+            let mut data = serde_json::Map::new();
+            insert_path_fields(&mut data, &resolved.path, Some(file_path));
+            data.insert("replacements".to_string(), Value::from(count));
+            ToolOutput::success(Value::Object(data))
+        }
         Err(e) => ToolOutput::failure(
             "write_error",
             format!("Failed to write file '{}'", file_path.display()),
@@ -292,5 +295,26 @@ mod tests {
         // Verify CRLF is preserved
         let content = fs::read_to_string(&file_path).unwrap();
         assert_eq!(content, "line1\r\nreplaced\r\nline3");
+    }
+
+    #[test]
+    fn test_edit_preserves_requested_path_and_reports_resolved_path() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("subdir")).unwrap();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "Hello world!").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "subdir/../test.txt", "old": "world", "new": "Rust"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["path"], "subdir/../test.txt");
+        assert_eq!(
+            data["resolved_path"],
+            file_path.canonicalize().unwrap().display().to_string()
+        );
     }
 }

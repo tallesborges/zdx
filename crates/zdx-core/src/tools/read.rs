@@ -48,7 +48,7 @@ where
     }
 }
 
-use super::{ToolContext, ToolDefinition, resolve_existing_path};
+use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_existing_path};
 use crate::core::events::{ImageContent, ToolOutput};
 
 /// Maximum number of lines to return (truncation threshold).
@@ -86,7 +86,7 @@ pub fn definition() -> ToolDefinition {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read (relative to root directory)"
+                    "description": "Path to the file to read (relative to root directory; supports $VAR/${VAR} env vars)"
                 },
                 "offset": {
                     "type": "integer",
@@ -135,24 +135,26 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let normalized_path = crate::images::path_mime::normalize_input_path(path);
     let normalized_path_str = normalized_path.to_string_lossy();
 
-    let file_path = match resolve_existing_path(normalized_path_str.as_ref(), &ctx.root) {
+    let mut resolved = match resolve_existing_path(normalized_path_str.as_ref(), &ctx.root) {
         Ok(p) => p,
         Err(e) => return e,
     };
+    resolved.path = path.to_string();
+    let file_path = &resolved.resolved_path;
 
     // Check if this is an image file based on extension.
     if let Some(mime_type) = image_mime_type(&normalized_path) {
-        return read_image(&file_path, mime_type);
+        return read_image(&resolved.path, file_path, mime_type);
     }
 
     // Read as text file with offset/limit
     let offset = input.offset.unwrap_or(1).max(1); // 1-indexed, minimum 1
     let limit = input.limit.unwrap_or(MAX_LINES).min(MAX_LINES); // Cap at MAX_LINES
-    read_text(&file_path, offset, limit)
+    read_text(&resolved.path, file_path, offset, limit)
 }
 
 /// Reads an image file and returns it as base64-encoded content.
-fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
+fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     // Check file size
     let metadata = match fs::metadata(path) {
         Ok(m) => m,
@@ -197,12 +199,17 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
     };
 
     ToolOutput::success_with_image(
-        json!({
-            "path": path.display().to_string(),
-            "type": "image",
-            "mime_type": mime_type,
-            "bytes": file_size,
-        }),
+        {
+            let mut data = serde_json::Map::new();
+            insert_path_fields(&mut data, display_path, Some(path));
+            data.insert("type".to_string(), Value::String("image".to_string()));
+            data.insert(
+                "mime_type".to_string(),
+                Value::String(mime_type.to_string()),
+            );
+            data.insert("bytes".to_string(), Value::from(file_size));
+            Value::Object(data)
+        },
         image,
     )
 }
@@ -215,7 +222,7 @@ fn read_image(path: &Path, mime_type: &str) -> ToolOutput {
 /// - Silently truncates individual lines at `MAX_LINE_LENGTH` characters
 /// - Uses `MAX_LINE_BYTES` buffer to prevent OOM on huge single-line files
 /// - Always scans entire file for `total_lines` count
-fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
+fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let file = match File::open(path) {
         Ok(f) => f,
         Err(e) => return read_text_error(path, &e),
@@ -253,15 +260,16 @@ fn read_text(path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let truncated = (start_line + lines_shown) < total_lines || byte_limited;
     let content = collected_lines.concat();
 
-    ToolOutput::success(json!({
-        "path": path.display().to_string(),
-        "content": content,
-        "offset": offset,
-        "lines_shown": lines_shown,
-        "total_lines": total_lines,
-        "truncated": truncated,
-        "byte_limited": byte_limited
-    }))
+    let mut data = serde_json::Map::new();
+    insert_path_fields(&mut data, display_path, Some(path));
+    data.insert("content".to_string(), Value::String(content));
+    data.insert("offset".to_string(), Value::from(offset));
+    data.insert("lines_shown".to_string(), Value::from(lines_shown));
+    data.insert("total_lines".to_string(), Value::from(total_lines));
+    data.insert("truncated".to_string(), Value::from(truncated));
+    data.insert("byte_limited".to_string(), Value::from(byte_limited));
+
+    ToolOutput::success(Value::Object(data))
 }
 
 struct LineRead {
@@ -909,5 +917,26 @@ mod tests {
 
         // Text files should NOT have image content
         assert!(result.image().is_none());
+    }
+
+    #[test]
+    fn test_read_preserves_requested_path_and_reports_resolved_path() {
+        let temp = TempDir::new().unwrap();
+        fs::create_dir_all(temp.path().join("subdir")).unwrap();
+        let file_path = temp.path().join("note.md");
+        fs::write(&file_path, "hello\n").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"path": "subdir/../note.md"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+
+        let data = result.data().expect("should have data");
+        assert_eq!(data["path"], "subdir/../note.md");
+        assert_eq!(
+            data["resolved_path"],
+            file_path.canonicalize().unwrap().display().to_string()
+        );
     }
 }
