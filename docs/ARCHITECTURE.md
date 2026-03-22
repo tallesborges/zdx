@@ -14,9 +14,9 @@ Prompt assembly is layered in `zdx-core`:
 
 - **Base system prompt:** `prompts/system_prompt_template.md` is the canonical default prompt.
 - **Prompt layers:** additive prompt fragments appended after the base prompt. These are used for surface/runtime constraints (for example Telegram or exec output guidance) and behavior harnesses (for example automation/headless execution).
-- **Named subagents:** optional specialization layer on top of the base prompt. A subagent can add prompt instructions and override model/tool/thinking configuration without replacing the shared base prompt.
+- **Named subagents:** optional standalone prompt profiles for delegated child runs. A subagent provides its own prompt body and can override model/tool/thinking configuration without inheriting the shared base prompt.
 
-This keeps one source of truth for the default assistant while allowing surfaces, automation behavior, and specialist subagents to compose cleanly.
+This keeps one source of truth for the default assistant while allowing surfaces and automation behavior to compose cleanly, and still supports specialist standalone subagents when needed.
 
 ## TUI Architecture (Elm/MVU)
 

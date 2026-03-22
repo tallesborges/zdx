@@ -307,35 +307,32 @@ fn prepare_automation_run(
         .unwrap_or_else(|| run_config.model.clone());
 
     if let Some(subagent_name) = automation.subagent.as_deref() {
-        let definition = subagents::load_by_name(root, subagent_name)
-            .with_context(|| format!("load subagent '{subagent_name}'"))?;
-        let chosen_model = automation
-            .model
-            .clone()
-            .or_else(|| definition.model.clone())
-            .unwrap_or_else(|| config.model.clone());
-        let system_prompt = subagents::render_prompt(
-            config,
-            root,
-            &definition,
-            &chosen_model,
-            &instruction_layers,
-            false,
-            automation_prompt_context(),
-        )
-        .with_context(|| format!("render subagent '{subagent_name}'"))?;
+        match subagents::resolve_runtime_selection(root, Some(subagent_name))
+            .with_context(|| format!("load subagent '{subagent_name}'"))?
+        {
+            subagents::RuntimeSubagentSelection::Default => {}
+            subagents::RuntimeSubagentSelection::Named(definition) => {
+                let chosen_model = automation
+                    .model
+                    .clone()
+                    .or_else(|| definition.model.clone())
+                    .unwrap_or_else(|| config.model.clone());
+                let system_prompt = subagents::render_prompt(&definition)
+                    .with_context(|| format!("render subagent '{subagent_name}'"))?;
 
-        run_config.system_prompt = Some(system_prompt);
-        run_config.system_prompt_file = None;
+                run_config.system_prompt = Some(system_prompt);
+                run_config.system_prompt_file = None;
 
-        return Ok(PreparedAutomationRun {
-            config: run_config,
-            model_override: Some(chosen_model),
-            thinking_override: definition
-                .thinking_level
-                .map(|level| level.display_name().to_string()),
-            tools_override: definition.tools.map(|tools| tools.join(",")),
-        });
+                return Ok(PreparedAutomationRun {
+                    config: run_config,
+                    model_override: Some(chosen_model),
+                    thinking_override: definition
+                        .thinking_level
+                        .map(|level| level.display_name().to_string()),
+                    tools_override: definition.tools.map(|tools| tools.join(",")),
+                });
+            }
+        }
     }
 
     let effective = zdx_core::core::context::build_prompt_with_context_and_layers(
@@ -728,5 +725,46 @@ mod tests {
             panic!("missing subagent should fail validation");
         };
         assert!(format!("{err:#}").contains("missing-subagent"));
+    }
+
+    #[test]
+    fn prepare_automation_run_task_alias_uses_default_prompt_pipeline() {
+        let dir = tempdir().unwrap();
+        std::fs::write(dir.path().join("AGENTS.md"), "Automation task alias note").unwrap();
+
+        let mut config = Config {
+            model: "anthropic:claude-opus-4-6".to_string(),
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = true;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let automation = AutomationDefinition {
+            name: "demo".to_string(),
+            path: dir.path().join("demo.md"),
+            source: AutomationSource::User,
+            schedule: None,
+            model: None,
+            subagent: Some("task".to_string()),
+            timeout_secs: None,
+            max_retries: 0,
+            prompt: "Do the thing".to_string(),
+        };
+
+        let prepared = prepare_automation_run(&config, dir.path(), &automation).unwrap();
+        let prompt = prepared.config.system_prompt.unwrap_or_default();
+
+        assert!(prompt.contains("Base prompt"));
+        assert!(prompt.contains("Automation task alias note"));
+        assert!(prompt.contains("Task (`task`)"));
     }
 }

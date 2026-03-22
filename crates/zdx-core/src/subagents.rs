@@ -7,8 +7,84 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
-use crate::config::{Config, ThinkingLevel, paths};
-use crate::core::context::{self, PromptContextInclusion};
+use crate::config::{ThinkingLevel, paths};
+
+pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
+pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
+
+/// Reserved runtime aliases that are not backed by a markdown subagent file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BuiltinAlias {
+    /// Default delegated ZDX behavior using the base prompt + context pipeline.
+    Task,
+}
+
+impl BuiltinAlias {
+    #[must_use]
+    pub const fn runtime_name(self) -> &'static str {
+        match self {
+            Self::Task => TASK_BUILTIN_ALIAS_NAME,
+        }
+    }
+
+    #[must_use]
+    pub const fn display_name(self) -> &'static str {
+        match self {
+            Self::Task => "Task",
+        }
+    }
+
+    #[must_use]
+    pub const fn description(self) -> &'static str {
+        match self {
+            Self::Task => {
+                "Delegate a focused task to a child ZDX run using the default base prompt and current project context."
+            }
+        }
+    }
+}
+
+#[must_use]
+pub fn builtin_alias_from_name(name: &str) -> Option<BuiltinAlias> {
+    match name.trim() {
+        name if name.eq_ignore_ascii_case(TASK_BUILTIN_ALIAS_NAME) => Some(BuiltinAlias::Task),
+        _ => None,
+    }
+}
+
+#[must_use]
+pub fn is_reserved_runtime_alias(name: &str) -> bool {
+    builtin_alias_from_name(name).is_some()
+}
+
+/// Curated capability metadata surfaced in the main system prompt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CapabilityDescriptor {
+    pub name: String,
+    pub title: String,
+    pub description: String,
+    pub kind: CapabilityKind,
+}
+
+/// Internal implementation backing a curated capability.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CapabilityKind {
+    /// Backed by a named standalone subagent prompt.
+    Subagent { subagent: String },
+    /// Backed directly by one or more first-class tools.
+    Tool { tools: Vec<String> },
+    /// Backed by a reserved runtime alias.
+    BuiltinAlias(BuiltinAlias),
+}
+
+/// Runtime resolution for `subagent:` inputs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RuntimeSubagentSelection {
+    /// Use the default delegated ZDX prompt/context behavior.
+    Default,
+    /// Use a named standalone subagent prompt.
+    Named(SubagentDefinition),
+}
 
 /// Source location for a subagent definition.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -42,8 +118,8 @@ pub struct SubagentDefinition {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub tools: Option<Vec<String>>,
-    /// Additive instruction layer appended on top of the base system prompt.
-    pub instruction_layer: String,
+    /// Standalone prompt body used as the child subagent system prompt.
+    pub prompt_body: String,
 }
 
 /// Lightweight summary for listings and tool descriptions.
@@ -104,12 +180,65 @@ pub fn discover(root: &Path) -> Result<Vec<SubagentDefinition>> {
 pub fn list_summaries(root: &Path) -> Result<Vec<SubagentSummary>> {
     discover(root).map(|defs| {
         defs.into_iter()
+            .filter(|definition| !is_reserved_runtime_alias(&definition.name))
             .map(|definition| SubagentSummary {
                 name: definition.name,
                 description: definition.description,
             })
             .collect()
     })
+}
+
+/// Resolves a runtime `subagent` selection, including reserved aliases.
+///
+/// # Errors
+/// Returns an error if a named subagent is requested but missing or invalid.
+pub fn resolve_runtime_selection(
+    root: &Path,
+    requested: Option<&str>,
+) -> Result<RuntimeSubagentSelection> {
+    match requested.map(str::trim).filter(|name| !name.is_empty()) {
+        None => Ok(RuntimeSubagentSelection::Default),
+        Some(name) if builtin_alias_from_name(name) == Some(BuiltinAlias::Task) => {
+            Ok(RuntimeSubagentSelection::Default)
+        }
+        Some(name) => load_by_name(root, name).map(RuntimeSubagentSelection::Named),
+    }
+}
+
+/// Builds the curated specialized capability catalog for the main system prompt.
+///
+/// # Errors
+/// Returns an error if a required named subagent capability cannot be resolved.
+pub fn capability_catalog(
+    root: &Path,
+    delegation_enabled: bool,
+) -> Result<Vec<CapabilityDescriptor>> {
+    let mut capabilities = Vec::new();
+
+    if delegation_enabled {
+        capabilities.push(task_capability());
+        capabilities.push(oracle_capability(root)?);
+    }
+
+    capabilities.push(librarian_capability());
+    capabilities.push(finder_capability());
+    Ok(capabilities)
+}
+
+/// Returns a built-in fallback specialized capability catalog.
+#[must_use]
+pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDescriptor> {
+    let mut capabilities = Vec::new();
+
+    if delegation_enabled {
+        capabilities.push(task_capability());
+        capabilities.push(fallback_oracle_capability());
+    }
+
+    capabilities.push(librarian_capability());
+    capabilities.push(finder_capability());
+    capabilities
 }
 
 /// Loads a single subagent by name.
@@ -128,35 +257,12 @@ pub fn load_by_name(root: &Path, name: &str) -> Result<SubagentDefinition> {
         .ok_or_else(|| anyhow::anyhow!("Subagent '{trimmed}' not found"))
 }
 
-/// Renders a subagent prompt template with the same context/template pipeline used
-/// for the main system prompt.
+/// Renders a subagent prompt body as the standalone system prompt for the child run.
 ///
 /// # Errors
 /// Returns an error if rendering fails or produces an empty prompt.
-pub fn render_prompt(
-    config: &Config,
-    root: &Path,
-    definition: &SubagentDefinition,
-    model: &str,
-    instruction_layers: &[&str],
-    memory_suggestions: bool,
-    inclusion: PromptContextInclusion,
-) -> Result<String> {
-    let mut layers: Vec<&str> = instruction_layers.to_vec();
-    if !definition.instruction_layer.trim().is_empty() {
-        layers.push(&definition.instruction_layer);
-    }
-
-    let effective = context::build_prompt_with_context_and_layers(
-        config,
-        root,
-        model,
-        &layers,
-        memory_suggestions,
-        inclusion,
-    )?;
-
-    let prompt = effective.prompt.unwrap_or_default().trim().to_string();
+pub fn render_prompt(definition: &SubagentDefinition) -> Result<String> {
+    let prompt = definition.prompt_body.trim().to_string();
     if prompt.is_empty() {
         bail!(
             "Subagent '{}' rendered an empty system prompt",
@@ -198,13 +304,78 @@ fn collect_markdown_files(
 
 fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [(
-        manifest_dir.join("subagents").join("general_assistant.md"),
-        include_str!("../subagents/general_assistant.md"),
-    )]
+    [
+        (
+            manifest_dir.join("subagents").join("general_assistant.md"),
+            include_str!("../subagents/general_assistant.md"),
+        ),
+        (
+            manifest_dir.join("subagents").join("oracle.md"),
+            include_str!("../subagents/oracle.md"),
+        ),
+    ]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
     .collect()
+}
+
+fn task_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: BuiltinAlias::Task.runtime_name().to_string(),
+        title: BuiltinAlias::Task.display_name().to_string(),
+        description: BuiltinAlias::Task.description().to_string(),
+        kind: CapabilityKind::BuiltinAlias(BuiltinAlias::Task),
+    }
+}
+
+fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, ORACLE_SUBAGENT_NAME)?;
+    Ok(CapabilityDescriptor {
+        name: definition.name.clone(),
+        title: "Oracle".to_string(),
+        description: definition.description,
+        kind: CapabilityKind::Subagent {
+            subagent: definition.name,
+        },
+    })
+}
+
+fn fallback_oracle_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: ORACLE_SUBAGENT_NAME.to_string(),
+        title: "Oracle".to_string(),
+        description:
+            "Deep reasoning and synthesis specialist for ambiguous or high-stakes delegated tasks."
+                .to_string(),
+        kind: CapabilityKind::Subagent {
+            subagent: ORACLE_SUBAGENT_NAME.to_string(),
+        },
+    }
+}
+
+fn librarian_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: "librarian".to_string(),
+        title: "Librarian".to_string(),
+        description:
+            "Search and read the most relevant code or docs when you need grounded evidence."
+                .to_string(),
+        kind: CapabilityKind::Tool {
+            tools: vec!["grep".to_string(), "read".to_string()],
+        },
+    }
+}
+
+fn finder_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: "finder".to_string(),
+        title: "Finder".to_string(),
+        description: "Locate files or directories by pattern before drilling into their contents."
+            .to_string(),
+        kind: CapabilityKind::Tool {
+            tools: vec!["glob".to_string()],
+        },
+    }
 }
 
 fn parse_subagent_file(path: &Path, source: SubagentSource) -> Result<SubagentDefinition> {
@@ -233,7 +404,7 @@ fn parse_subagent_content(
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let tools = normalize_tools(frontmatter.tools)?;
 
-    let instruction_layer = body.trim().to_string();
+    let prompt_body = body.trim().to_string();
 
     Ok(SubagentDefinition {
         name,
@@ -243,7 +414,7 @@ fn parse_subagent_content(
         model,
         thinking_level: frontmatter.thinking_level,
         tools,
-        instruction_layer,
+        prompt_body,
     })
 }
 
@@ -329,6 +500,7 @@ mod tests {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "general_assistant"));
+        assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
     #[test]
@@ -375,16 +547,53 @@ mod tests {
             definition.tools,
             Some(vec!["read".to_string(), "grep".to_string()])
         );
-        assert_eq!(definition.instruction_layer, "Search prompt");
+        assert_eq!(definition.prompt_body, "Search prompt");
     }
 
     #[test]
-    fn parse_subagent_allows_empty_instruction_layer() {
+    fn parse_subagent_allows_empty_prompt_body() {
         let dir = tempdir().unwrap();
         let file = dir.path().join("general.md");
         fs::write(&file, "---\ndescription: General alias\n---\n").unwrap();
 
         let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
-        assert!(definition.instruction_layer.is_empty());
+        assert!(definition.prompt_body.is_empty());
+    }
+
+    #[test]
+    fn resolve_runtime_selection_treats_task_alias_as_default() {
+        let root = tempdir().unwrap();
+
+        let selection = resolve_runtime_selection(root.path(), Some("task")).unwrap();
+        assert_eq!(selection, RuntimeSubagentSelection::Default);
+    }
+
+    #[test]
+    fn list_summaries_omits_reserved_runtime_alias_names() {
+        let root = tempdir().unwrap();
+        let project_dir = root.path().join(".zdx").join("subagents");
+        fs::create_dir_all(&project_dir).unwrap();
+        fs::write(
+            project_dir.join("task.md"),
+            "---\ndescription: User-defined task file\n---\nPrompt",
+        )
+        .unwrap();
+
+        let summaries = list_summaries(root.path()).unwrap();
+        assert!(!summaries.iter().any(|summary| summary.name == "task"));
+    }
+
+    #[test]
+    fn capability_catalog_includes_curated_entries() {
+        let root = tempdir().unwrap();
+        let capabilities = capability_catalog(root.path(), true).unwrap();
+
+        assert_eq!(
+            capabilities
+                .iter()
+                .map(|cap| cap.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["task", "oracle", "librarian", "finder"]
+        );
     }
 }

@@ -4,9 +4,10 @@
 //! capture response text only.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Command;
@@ -64,7 +65,19 @@ pub async fn run_exec_subagent_with_cancel(
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
 
     let exe = std::env::current_exe().context("Failed to get executable path")?;
-    let args = build_exec_args(root, prompt, options);
+    let effective_system_prompt_file = options
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(write_effective_system_prompt_file)
+        .transpose()?;
+    let args = build_exec_args(
+        root,
+        prompt,
+        options,
+        effective_system_prompt_file.as_deref(),
+    );
 
     let mut command = Command::new(exe);
     command
@@ -101,10 +114,21 @@ pub async fn run_exec_subagent_with_cancel(
         (None, None) => wait_future.await.context("Failed to get subagent output")?,
     };
 
-    process_subagent_output(&output)
+    let result = process_subagent_output(&output);
+
+    if let Some(path) = &effective_system_prompt_file {
+        let _ = fs::remove_file(path);
+    }
+
+    result
 }
 
-fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> Vec<OsString> {
+fn build_exec_args(
+    root: &Path,
+    prompt: &str,
+    options: &ExecSubagentOptions,
+    effective_system_prompt_file: Option<&Path>,
+) -> Vec<OsString> {
     let mut args = vec![OsString::from("--root"), root.as_os_str().to_os_string()];
 
     args.extend([
@@ -145,9 +169,9 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
         args.push(OsString::from(model));
     }
 
-    if let Some(system_prompt) = normalize_optional(options.system_prompt.as_deref()) {
-        args.push(OsString::from("--effective-system-prompt"));
-        args.push(OsString::from(system_prompt));
+    if let Some(system_prompt_file) = effective_system_prompt_file {
+        args.push(OsString::from("--effective-system-prompt-file"));
+        args.push(system_prompt_file.as_os_str().to_os_string());
     }
 
     if let Some(level) = options.thinking_level {
@@ -160,6 +184,20 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
 
 fn normalize_optional(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn write_effective_system_prompt_file(system_prompt: &str) -> Result<PathBuf> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock before unix epoch")?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "zdx-effective-system-prompt-{}-{unique}.md",
+        std::process::id()
+    ));
+    fs::write(&path, system_prompt)
+        .with_context(|| format!("write effective system prompt file {}", path.display()))?;
+    Ok(path)
 }
 
 fn process_subagent_output(output: &std::process::Output) -> Result<String> {
@@ -246,6 +284,7 @@ mod tests {
             Path::new("/tmp/project"),
             "do work",
             &ExecSubagentOptions::default(),
+            None,
         );
         let args: Vec<String> = args
             .iter()
@@ -267,6 +306,7 @@ mod tests {
 
     #[test]
     fn build_exec_args_includes_optional_flags() {
+        let prompt_file = Path::new("/tmp/effective-system-prompt.md");
         let args = build_exec_args(
             Path::new("/tmp/project"),
             "task",
@@ -280,6 +320,7 @@ mod tests {
                 event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
             },
+            Some(prompt_file),
         );
         let args: Vec<String> = args
             .iter()
@@ -302,8 +343,8 @@ mod tests {
                 "turn_finished",
                 "-m",
                 "openai:gpt-5.2",
-                "--effective-system-prompt",
-                "You are a focused assistant",
+                "--effective-system-prompt-file",
+                "/tmp/effective-system-prompt.md",
                 "-t",
                 "low"
             ]

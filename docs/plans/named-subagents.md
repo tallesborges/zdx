@@ -1,10 +1,10 @@
 # Goals
 - `invoke_subagent(subagent: "general_assistant", prompt: "...")` and `invoke_subagent(subagent: "automation_assistant", prompt: "...")` cover the immediate normal-use and headless-use flows
-- Named subagents configure: system_prompt + model + tools + thinking — stored as markdown files with YAML frontmatter
+- Named subagents configure: standalone prompt body + model + tools + thinking — stored as markdown files with YAML frontmatter
 - Unified subagent consumers: subagent tool and automations (`subagent:` in frontmatter)
 - Available subagents dynamically listed in tool description
 - Users can create custom subagents at `~/.zdx/subagents/` (global) and `.zdx/subagents/` (project-level)
-- Subagent prompt bodies support the same template engine/features as the current system prompt pipeline
+- Subagent prompt bodies are standalone prompts (no automatic inheritance from the default ZDX prompt/context pipeline)
 
 # Non-goals
 - Subagent inheritance / composability (subagents are flat)
@@ -19,7 +19,7 @@
 - Convention over configuration: built-in defaults work out of the box
 - Project subagents override global subagents override built-in defaults (by name)
 - Start with the minimum useful set of built-ins; add specialized subagents only after real usage proves the need
-- Reuse the existing prompt-template pipeline instead of inventing a second templating model for subagents
+- Prefer a simple standalone-prompt model for subagents over implicit inheritance/composition
 
 # User journey
 1. User invokes subagent without changes → works with built-in `general_assistant` subagent (default behavior mapping of today's normal mode)
@@ -67,8 +67,7 @@
   - [ ] Add `subagent` param to `invoke_subagent` tool schema (optional string, replaces `model`)
   - [ ] Remove `model` param from tool schema (named subagent owns model selection)
   - [ ] In `execute()`: resolve subagent → build `ExecSubagentOptions` from subagent fields
-  - [ ] Render subagent prompt body through the same MiniJinja/template pipeline used by the current system prompt
-  - [ ] Reuse the same supported template features and variables the current system prompt supports (for example conditionals/loops and the existing prompt-template vars)
+  - [ ] Treat the subagent markdown body as the complete child system prompt
   - [ ] Pass custom system prompt to child: add `--system-prompt <TEXT>` support to `ExecSubagentOptions` / `build_exec_args` (reuse existing root `--system-prompt` CLI flag)
   - [ ] Pass `--tools` list from subagent to child exec args
   - [ ] Keep `--no-system-prompt` as an advanced CLI escape hatch, not part of the subagent schema
@@ -91,10 +90,10 @@
   - Automation already has `model:` in frontmatter — need to decide precedence (subagent wins, explicit model overrides subagent) → decide in key decisions
 
 # Contracts (guardrails)
-- `invoke_subagent` without `subagent` must still work (defaults to `general_assistant`)
+- `invoke_subagent` without `subagent` must still work (defaults to the base/default prompt behavior)
 - Built-in subagents must always be available even with no user files
 - Subagent `tools` list is an allowlist — child exec gets exactly those tools
-- Subagent system_prompt replaces (not appends to) the default system prompt composition
+- Named subagent prompt bodies are standalone system prompts and do not append to the default system prompt composition
 - Project-level subagents override global subagents override built-in (by name match)
 - Existing `zdx exec` CLI flags continue to work independently of named subagents
 - `automation_assistant` subagent must be written for non-interactive execution: complete the task with reasonable assumptions instead of depending on user clarification
@@ -105,8 +104,7 @@
 - **Automation `model:` vs `subagent:`**: when both present, explicit `model:` in frontmatter overrides subagent's model (subagent provides defaults, frontmatter overrides specific fields)
 - **System prompt passthrough mechanism**: reuse existing root-level `--system-prompt` CLI flag (already wired to override config system prompt)
 - **Frontmatter parser**: reuse whatever skills/automations already use for YAML frontmatter parsing (avoid new dependency if possible)
-- **Subagent context model**: subagent prompt replaces default composition; `--no-system-prompt` remains only as an advanced CLI escape hatch outside the subagent schema
-- **Subagent templating model**: reuse the same MiniJinja renderer and supported variables/features as the current system prompt template path, not a reduced or custom subset
+- **Subagent context model**: named subagents are standalone prompts; omitted `subagent` keeps default composition
 
 # Testing
 - Manual smoke demos per slice

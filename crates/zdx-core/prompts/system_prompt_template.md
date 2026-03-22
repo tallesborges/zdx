@@ -83,9 +83,13 @@ These are user-defined base instructions. Treat them as authoritative for this r
 - SHOULD use `invoke_subagent` for large, splittable, or isolated tasks to keep context focused.
 - MUST delegate with a specific prompt and expected output.
 - MUST NOT delegate trivial tasks that can be completed directly.
-{% if subagents_config %}
-- Available named subagents: {% if subagents_config.available_subagents %}{% for subagent in subagents_config.available_subagents %}{{ subagent.name }} — {{ subagent.description }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}(none){% endif %}
-- Available model overrides: {% if subagents_config.available_models %}{% for model in subagents_config.available_models %}{{ model }}{% if not loop.last %}, {% endif %}{% endfor %}{% else %}(none){% endif %}
+{% if specialized_capabilities %}
+- Specialized capabilities are curated labels for advanced behaviors. Some map to delegated subagents, some to reserved runtime aliases, and some to direct tool workflows.
+- When a capability is tool-backed, SHOULD use the listed tools directly instead of calling `invoke_subagent`.
+- Available specialized capabilities:
+{% for capability in specialized_capabilities %}
+  - {{ capability.title }} (`{{ capability.name }}`) — {{ capability.description }} [{{ capability.kind_label }}; {{ capability.backing }}]
+{% endfor %}
 {% endif %}
 </delegation_rules>
 

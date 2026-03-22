@@ -10,7 +10,7 @@ use super::{ToolContext, ToolDefinition};
 use crate::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use crate::core::events::ToolOutput;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
-use crate::subagents::{self, SubagentSummary};
+use crate::subagents::{self, RuntimeSubagentSelection, SubagentSummary};
 
 /// Returns the tool definition for the `invoke_subagent` tool.
 pub fn definition() -> ToolDefinition {
@@ -31,7 +31,7 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                 },
                 "subagent": {
                     "type": "string",
-                    "description": "Optional named subagent configuration. When omitted, uses the default base system prompt behavior."
+                    "description": "Optional named subagent or reserved runtime alias. Use `task` for the default delegated ZDX behavior with the base prompt + context."
                 }
             },
             "required": ["prompt"],
@@ -62,22 +62,27 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     let config = ctx.config.clone().unwrap_or_default();
-    let definition = match resolve_subagent_definition(&ctx.root, input.subagent.clone()) {
-        Ok(definition) => definition,
+    let selection = match resolve_subagent_selection(&ctx.root, input.subagent.clone()) {
+        Ok(selection) => selection,
         Err(err) => return err,
     };
 
-    let model = match resolve_execution_model(definition.as_ref(), &config, ctx) {
+    let definition = match &selection {
+        RuntimeSubagentSelection::Default => None,
+        RuntimeSubagentSelection::Named(definition) => Some(definition),
+    };
+
+    let model = match resolve_execution_model(definition, &config, ctx) {
         Ok(model) => model,
         Err(err) => return err,
     };
 
-    let system_prompt = match build_system_prompt(&config, &ctx.root, definition.as_ref(), &model) {
+    let system_prompt = match build_system_prompt(&config, &ctx.root, definition, &model) {
         Ok(prompt) => prompt,
         Err(err) => return err,
     };
 
-    let options = build_exec_options(definition.as_ref(), ctx, model, system_prompt);
+    let options = build_exec_options(definition, ctx, model, system_prompt);
 
     match run_exec_subagent(&ctx.root, &prompt, &options).await {
         Ok(response) => ToolOutput::success(Value::String(response)),
@@ -110,23 +115,19 @@ fn parse_input(input: &Value) -> Result<(SubagentInput, String), ToolOutput> {
     Ok((input, prompt))
 }
 
-fn resolve_subagent_definition(
+fn resolve_subagent_selection(
     root: &std::path::Path,
     requested: Option<String>,
-) -> Result<Option<subagents::SubagentDefinition>, ToolOutput> {
+) -> Result<RuntimeSubagentSelection, ToolOutput> {
     let requested = normalize_optional(requested);
-    match requested.as_deref() {
-        Some(name) => subagents::load_by_name(root, name)
-            .map(Some)
-            .map_err(|err| {
-                ToolOutput::failure(
-                    "invalid_input",
-                    format!("Unknown subagent '{name}'"),
-                    Some(err.to_string()),
-                )
-            }),
-        None => Ok(None),
-    }
+    subagents::resolve_runtime_selection(root, requested.as_deref()).map_err(|err| {
+        let label = requested.unwrap_or_else(|| "<default>".to_string());
+        ToolOutput::failure(
+            "invalid_input",
+            format!("Unknown subagent '{label}'"),
+            Some(err.to_string()),
+        )
+    })
 }
 
 fn resolve_execution_model(
@@ -162,16 +163,7 @@ fn build_system_prompt(
     model: &str,
 ) -> Result<String, ToolOutput> {
     let result = match definition {
-        Some(definition) => subagents::render_prompt(
-            config,
-            root,
-            definition,
-            model,
-            &[],
-            false,
-            PromptContextInclusion::default(),
-        )
-        .map_err(|err| {
+        Some(definition) => subagents::render_prompt(definition).map_err(|err| {
             ToolOutput::failure(
                 "invalid_input",
                 format!("Failed to render subagent '{}'", definition.name),
@@ -226,7 +218,7 @@ fn normalize_optional(value: Option<String>) -> Option<String> {
 }
 
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Use `subagent` to select a named configuration. Returns response text only.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents
@@ -359,5 +351,15 @@ mod tests {
 
         assert!(desc.contains("coder (Coding helper)"));
         assert!(desc.contains("researcher (Research helper)"));
+        assert!(desc.contains("`task`"));
+    }
+
+    #[test]
+    fn test_task_alias_resolves_to_default_runtime_behavior() {
+        let selection =
+            resolve_subagent_selection(std::path::Path::new("."), Some("task".to_string()))
+                .unwrap();
+
+        assert_eq!(selection, RuntimeSubagentSelection::Default);
     }
 }

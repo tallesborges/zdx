@@ -140,15 +140,12 @@ struct PromptTemplateSkill {
 }
 
 #[derive(Debug, Clone, Serialize)]
-struct PromptTemplateSubagents {
-    available_models: Vec<String>,
-    available_subagents: Vec<PromptTemplateNamedSubagent>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct PromptTemplateNamedSubagent {
+struct PromptTemplateCapability {
     name: String,
+    title: String,
     description: String,
+    kind_label: String,
+    backing: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -170,7 +167,7 @@ struct PromptTemplateVars {
     memory_suggestions: bool,
     skills_list: Vec<PromptTemplateSkill>,
     scoped_context: Vec<PromptTemplateScopedContext>,
-    subagents_config: Option<PromptTemplateSubagents>,
+    specialized_capabilities: Vec<PromptTemplateCapability>,
     cwd: String,
     date: String,
 }
@@ -183,8 +180,7 @@ struct PromptTemplateSections<'a> {
     memory_suggestions: bool,
     skills_list: &'a [Skill],
     scoped_context: &'a [ScopedContextFile],
-    subagents_enabled: bool,
-    subagent_models: &'a [String],
+    specialized_capabilities: &'a [PromptTemplateCapability],
 }
 
 fn combine_prompt_sections(
@@ -275,22 +271,6 @@ fn build_prompt_template_vars(
             path: skill.file_path.display().to_string(),
         })
         .collect();
-    let available_subagents = if sections.subagents_enabled {
-        subagents::list_summaries(root)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|subagent| PromptTemplateNamedSubagent {
-                name: subagent.name,
-                description: subagent.description,
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-    let subagents_config = sections.subagents_enabled.then(|| PromptTemplateSubagents {
-        available_models: sections.subagent_models.to_vec(),
-        available_subagents,
-    });
     let scoped_context = sections
         .scoped_context
         .iter()
@@ -323,9 +303,65 @@ fn build_prompt_template_vars(
         memory_suggestions: sections.memory_suggestions,
         skills_list,
         scoped_context,
-        subagents_config,
+        specialized_capabilities: sections.specialized_capabilities.to_vec(),
         cwd: root.display().to_string(),
         date: Utc::now().format("%Y-%m-%d").to_string(),
+    }
+}
+
+fn build_prompt_template_capabilities(
+    root: &Path,
+    delegation_enabled: bool,
+) -> Result<Vec<PromptTemplateCapability>> {
+    subagents::capability_catalog(root, delegation_enabled).map(|capabilities| {
+        capabilities
+            .into_iter()
+            .map(prompt_template_capability)
+            .collect()
+    })
+}
+
+fn fallback_prompt_template_capabilities(
+    delegation_enabled: bool,
+) -> Vec<PromptTemplateCapability> {
+    subagents::fallback_capability_catalog(delegation_enabled)
+        .into_iter()
+        .map(prompt_template_capability)
+        .collect()
+}
+
+fn prompt_template_capability(
+    capability: subagents::CapabilityDescriptor,
+) -> PromptTemplateCapability {
+    let kind_label = match &capability.kind {
+        subagents::CapabilityKind::Subagent { .. } => "standalone subagent".to_string(),
+        subagents::CapabilityKind::Tool { .. } => "tool-backed".to_string(),
+        subagents::CapabilityKind::BuiltinAlias(_) => "builtin alias".to_string(),
+    };
+    let backing = match capability.kind {
+        subagents::CapabilityKind::Subagent { subagent } => {
+            format!("`invoke_subagent(subagent: \"{subagent}\", prompt: \"...\")`")
+        }
+        subagents::CapabilityKind::Tool { tools } => {
+            let tools = tools
+                .into_iter()
+                .map(|tool| format!("`{tool}`"))
+                .collect::<Vec<_>>()
+                .join(" + ");
+            format!("use {tools} directly")
+        }
+        subagents::CapabilityKind::BuiltinAlias(alias) => format!(
+            "`invoke_subagent(subagent: \"{}\", prompt: \"...\")`",
+            alias.runtime_name()
+        ),
+    };
+
+    PromptTemplateCapability {
+        name: capability.name,
+        title: capability.title,
+        description: capability.description,
+        kind_label,
+        backing,
     }
 }
 
@@ -715,22 +751,21 @@ pub fn build_prompt_with_context_and_layers(
         warnings: skill_warnings,
     } = skills_result;
 
-    let subagent_models = if config.subagents.enabled {
-        config.subagent_available_models()
-    } else {
-        Vec::new()
+    let specialized_capabilities = match build_prompt_template_capabilities(
+        root,
+        config.subagents.enabled,
+    ) {
+        Ok(capabilities) => capabilities,
+        Err(error) => {
+            warnings.push(ContextWarning {
+                path: None,
+                message: format!(
+                    "Failed to build specialized capability catalog for prompt context: {error}; falling back to built-in capability metadata"
+                ),
+            });
+            fallback_prompt_template_capabilities(config.subagents.enabled)
+        }
     };
-
-    if config.subagents.enabled
-        && let Err(error) = subagents::list_summaries(root)
-    {
-        warnings.push(ContextWarning {
-            path: None,
-            message: format!(
-                "Failed to discover subagents for prompt context: {error}; available subagent metadata may be incomplete"
-            ),
-        });
-    }
 
     let mut vars = build_prompt_template_vars(
         root,
@@ -742,8 +777,7 @@ pub fn build_prompt_with_context_and_layers(
             memory_suggestions,
             skills_list: &skills,
             scoped_context: &scoped_context,
-            subagents_enabled: config.subagents.enabled,
-            subagent_models: &subagent_models,
+            specialized_capabilities: &specialized_capabilities,
         },
     );
 
@@ -1231,8 +1265,7 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1252,8 +1285,7 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1281,8 +1313,7 @@ mod tests {
                 memory_suggestions: true,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1297,7 +1328,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_prompt_template_supports_structured_skills_and_subagents() {
+    fn test_render_prompt_template_supports_structured_skills_and_capabilities() {
         let skills = vec![Skill {
             name: "demo-skill".to_string(),
             description: "Use <special> syntax".to_string(),
@@ -1305,7 +1336,7 @@ mod tests {
             base_dir: PathBuf::from("/tmp/demo&skill"),
             source: SkillSource::ZdxUser,
         }];
-        let models = vec!["codex:gpt-5.3-codex".to_string()];
+        let capabilities = build_prompt_template_capabilities(Path::new("/tmp"), true).unwrap();
 
         let vars = build_prompt_template_vars(
             Path::new("/tmp"),
@@ -1317,13 +1348,12 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &skills,
                 scoped_context: &[],
-                subagents_enabled: true,
-                subagent_models: &models,
+                specialized_capabilities: &capabilities,
             },
         );
 
         let rendered = render_prompt_template(
-            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% if subagents_config %}Available named subagents: {% for subagent in subagents_config.available_subagents %}{{ subagent.name }}{% endfor %}\nAvailable model overrides: {% for model in subagents_config.available_models %}{{ model }}{% endfor %}{% endif %}",
+            "{% for skill in skills_list %}<name>{{ skill.name }}</name><description>{{ skill.description }}</description><path>{{ skill.path }}</path>{% endfor %}\n{% for capability in specialized_capabilities %}<title>{{ capability.title }}</title><name>{{ capability.name }}</name><kind>{{ capability.kind_label }}</kind><backing>{{ capability.backing }}</backing>{% endfor %}",
             &vars,
         )
         .unwrap()
@@ -1332,8 +1362,11 @@ mod tests {
         assert!(rendered.contains("<name>demo-skill</name>"));
         assert!(rendered.contains("Use <special> syntax"));
         assert!(rendered.contains("demo&skill"));
-        assert!(rendered.contains("general_assistant"));
-        assert!(rendered.contains("codex:gpt-5.3-codex"));
+        assert!(rendered.contains("<title>Task</title>"));
+        assert!(rendered.contains("<title>Oracle</title>"));
+        assert!(rendered.contains("<title>Librarian</title>"));
+        assert!(rendered.contains("invoke_subagent"));
+        assert!(rendered.contains("use `grep` + `read` directly"));
     }
 
     #[test]
@@ -1348,8 +1381,7 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1367,8 +1399,7 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1465,7 +1496,9 @@ mod tests {
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("<project-context>"));
         assert!(prompt.contains("Agent note"));
-        assert!(prompt.contains("Available model overrides"));
+        assert!(prompt.contains("Available specialized capabilities"));
+        assert!(prompt.contains("Task (`task`)"));
+        assert!(prompt.contains("Oracle (`oracle`)"));
     }
 
     #[test]
@@ -1480,8 +1513,7 @@ mod tests {
                 memory_suggestions: false,
                 skills_list: &[],
                 scoped_context: &[],
-                subagents_enabled: false,
-                subagent_models: &[],
+                specialized_capabilities: &[],
             },
         );
 
@@ -1633,7 +1665,7 @@ mod tests {
     }
 
     #[test]
-    fn test_subagents_block_not_appended_when_disabled() {
+    fn test_delegation_capabilities_omit_task_and_oracle_when_subagents_disabled() {
         let dir = tempdir().unwrap();
         let mut config = crate::config::Config::default();
         config.subagents.enabled = false;
@@ -1650,6 +1682,10 @@ mod tests {
         let effective =
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
-        assert!(!prompt.contains("Available model overrides"));
+        assert!(prompt.contains("Available specialized capabilities"));
+        assert!(prompt.contains("Librarian (`librarian`)"));
+        assert!(prompt.contains("Finder (`finder`)"));
+        assert!(!prompt.contains("Task (`task`)"));
+        assert!(!prompt.contains("Oracle (`oracle`)"));
     }
 }
