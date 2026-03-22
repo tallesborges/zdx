@@ -35,7 +35,7 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                 },
                 "model": {
                     "type": "string",
-                    "description": "Deprecated optional model override. Used only when the selected subagent does not define its own model. Use a model from <available_models> in the <subagents> system prompt block."
+                    "description": "Deprecated optional model override. Used only when the selected subagent does not define its own model. Use a model from the 'Available model overrides' list in the <delegation_rules> system prompt block."
                 }
             },
             "required": ["prompt"],
