@@ -56,6 +56,75 @@ pub enum HandoffState {
     Ready,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum VoicePhase {
+    #[default]
+    Idle,
+    Recording,
+    Transcribing,
+}
+
+#[derive(Debug, Default)]
+pub struct VoiceState {
+    pub enabled: bool,
+    pub phase: VoicePhase,
+    pub discard_next_capture: bool,
+    pub last_error: Option<String>,
+}
+
+impl VoiceState {
+    pub fn is_recording(&self) -> bool {
+        matches!(self.phase, VoicePhase::Recording)
+    }
+
+    pub fn is_transcribing(&self) -> bool {
+        matches!(self.phase, VoicePhase::Transcribing)
+    }
+
+    pub fn set_enabled(&mut self, enabled: bool) {
+        self.enabled = enabled;
+        self.last_error = None;
+        if !enabled {
+            self.phase = VoicePhase::Idle;
+            self.discard_next_capture = false;
+        }
+    }
+
+    pub fn start_recording(&mut self) {
+        self.phase = VoicePhase::Recording;
+        self.discard_next_capture = false;
+        self.last_error = None;
+    }
+
+    pub fn start_transcribing(&mut self) {
+        self.phase = VoicePhase::Transcribing;
+        self.last_error = None;
+    }
+
+    pub fn mark_idle(&mut self) {
+        self.phase = VoicePhase::Idle;
+        self.discard_next_capture = false;
+    }
+
+    pub fn mark_error(&mut self, error: String) {
+        self.phase = VoicePhase::Idle;
+        self.discard_next_capture = false;
+        self.last_error = Some(error);
+    }
+
+    pub fn badge(&self) -> Option<&'static str> {
+        if self.is_recording() {
+            Some("voice: recording")
+        } else if self.is_transcribing() {
+            Some("voice: transcribing")
+        } else if self.enabled {
+            Some("voice")
+        } else {
+            None
+        }
+    }
+}
+
 impl HandoffState {
     /// Returns true if handoff is in any active state (not Idle).
     pub fn is_active(&self) -> bool {
@@ -119,6 +188,9 @@ pub struct InputState {
 
     /// Monotonic counter for generating unique image IDs.
     image_counter: u32,
+
+    /// Voice dictation state.
+    pub voice: VoiceState,
 }
 
 impl Default for InputState {
@@ -143,6 +215,7 @@ impl InputState {
             paste_counter: 0,
             pending_images: Vec::new(),
             image_counter: 0,
+            voice: VoiceState::default(),
         }
     }
 
@@ -709,6 +782,11 @@ impl InputState {
         match mutation {
             InputMutation::Clear => self.clear(),
             InputMutation::SetText(text) => self.set_text(&text),
+            InputMutation::InsertText(text) => {
+                self.textarea.insert_str(&text);
+                self.sync_pending_pastes();
+                self.sync_pending_images();
+            }
             InputMutation::InsertChar(ch) => {
                 self.textarea.insert_char(ch);
                 self.sync_pending_pastes();

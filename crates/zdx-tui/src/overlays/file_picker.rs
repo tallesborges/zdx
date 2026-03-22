@@ -603,6 +603,7 @@ mod tests {
             }
             InputMutation::Clear => input.clear(),
             InputMutation::SetText(text) => input.set_text(&text),
+            InputMutation::InsertText(text) => input.textarea.insert_str(&text),
             InputMutation::InsertChar(ch) => input.textarea.insert_char(ch),
             InputMutation::ClearHistory => input.clear_history(),
             InputMutation::ClearQueue => input.queued.clear(),

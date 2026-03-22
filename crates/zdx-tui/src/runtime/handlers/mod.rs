@@ -23,6 +23,7 @@ pub mod bash;
 pub mod file_picker;
 pub mod skills;
 pub mod thread;
+pub mod voice;
 
 pub use agent::*;
 pub use auth::*;
@@ -30,6 +31,7 @@ pub use bash::*;
 pub use file_picker::*;
 pub use skills::*;
 pub use thread::*;
+pub use voice::*;
 
 #[cfg(test)]
 mod tests;
