@@ -30,9 +30,9 @@
 # Foundations / Already shipped (✅)
 
 ## Subagent execution
-- What exists: `invoke_subagent` tool with `prompt` + `model` params, `ExecSubagentOptions` with model/thinking/no_tools/no_system_prompt/timeout, spawns `zdx exec` child process
+- What exists: `invoke_subagent` tool with `prompt` + `subagent` params, `ExecSubagentOptions` with model/thinking/no_tools/no_system_prompt/timeout, spawns `zdx exec` child process
 - ✅ Demo: `invoke_subagent(prompt: "echo hello")` works in interactive TUI
-- Gaps: no `subagent` param, no custom system_prompt passthrough, no per-tool filtering (only `--no-tools` or `--tools` comma list)
+- Gaps: no per-tool filtering beyond explicit `--tools` allowlists in child exec args
 
 ## CLI exec flags
 - What exists: `zdx exec --prompt X --model M --thinking T --tools "read,grep" --no-tools --no-system-prompt`
@@ -79,7 +79,6 @@
 - **✅ Demo**: In TUI, agent uses `invoke_subagent(subagent: "automation_assistant", prompt: "summarize yesterday's thread activity into a structured report")` → child runs with automation prompt/constraints and completes without asking follow-up questions
 - **Risks / failure modes**:
   - System prompt text might be very long when passed as CLI arg → mitigate: use `--system-prompt-file` or temp file if needed; for MVP, CLI arg is fine (OS arg limit is 256KB+)
-  - Removing `model` param is breaking for existing usage → mitigate: keep `model` as deprecated fallback in Slice 2, remove in polish
 
 ## Slice 3: Automation subagent integration
 - **Goal**: Automations use `subagent:` to configure their exec runs
@@ -103,7 +102,6 @@
 
 # Key decisions (decide early)
 - **Subagent `model` format**: use the existing `provider:model` format (e.g., `gemini:gemini-2.5-flash-lite`)
-- **`model` param on tool schema**: keep as deprecated optional override in Slice 2 (subagent takes precedence); remove in polish
 - **Automation `model:` vs `subagent:`**: when both present, explicit `model:` in frontmatter overrides subagent's model (subagent provides defaults, frontmatter overrides specific fields)
 - **System prompt passthrough mechanism**: reuse existing root-level `--system-prompt` CLI flag (already wired to override config system prompt)
 - **Frontmatter parser**: reuse whatever skills/automations already use for YAML frontmatter parsing (avoid new dependency if possible)

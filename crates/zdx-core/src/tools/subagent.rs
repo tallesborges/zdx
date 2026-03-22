@@ -32,10 +32,6 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
                 "subagent": {
                     "type": "string",
                     "description": "Optional named subagent configuration. When omitted, uses the default base system prompt behavior."
-                },
-                "model": {
-                    "type": "string",
-                    "description": "Deprecated optional model override. Used only when the selected subagent does not define its own model. Use a model from the 'Available model overrides' list in the <delegation_rules> system prompt block."
                 }
             },
             "required": ["prompt"],
@@ -48,7 +44,6 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
 struct SubagentInput {
     prompt: String,
     subagent: Option<String>,
-    model: Option<String>,
 }
 
 /// Executes the `invoke_subagent` tool and returns a structured envelope.
@@ -72,7 +67,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Err(err) => return err,
     };
 
-    let model = match resolve_execution_model(definition.as_ref(), &input, &config, ctx) {
+    let model = match resolve_execution_model(definition.as_ref(), &config, ctx) {
         Ok(model) => model,
         Err(err) => return err,
     };
@@ -136,11 +131,9 @@ fn resolve_subagent_definition(
 
 fn resolve_execution_model(
     definition: Option<&subagents::SubagentDefinition>,
-    input: &SubagentInput,
     config: &crate::config::Config,
     ctx: &ToolContext,
 ) -> Result<String, ToolOutput> {
-    let requested_model = normalize_optional(input.model.clone());
     let model = match definition.and_then(|definition| definition.model.clone()) {
         Some(model) => {
             if let Some(err) = validate_model_supported(&model, ctx) {
@@ -148,22 +141,14 @@ fn resolve_execution_model(
             }
             model
         }
-        None => match requested_model {
-            Some(model) => {
-                if let Some(err) = validate_model_supported(&model, ctx) {
-                    return Err(err);
-                }
-                model
-            }
-            None => normalize_optional(ctx.model.clone()).unwrap_or_else(|| config.model.clone()),
-        },
+        None => normalize_optional(ctx.model.clone()).unwrap_or_else(|| config.model.clone()),
     };
 
     if model.trim().is_empty() {
         return Err(ToolOutput::failure(
             "invalid_config",
             "No model available for invoke_subagent",
-            Some("Provide input.model or ensure parent model is available".to_string()),
+            Some("Ensure a parent/default model is available in config".to_string()),
         ));
     }
 
@@ -313,51 +298,34 @@ mod tests {
         let props = def.input_schema.get("properties").unwrap();
         assert!(props.get("system_prompt").is_none());
         assert!(props.get("subagent").is_some());
-        assert!(props.get("model").is_some());
+        assert!(props.get("model").is_none());
     }
 
     #[test]
     fn test_input_validation_missing_prompt() {
-        let input = json!({"subagent": "coder", "model": "codex:gpt-5.3-codex"});
+        let input = json!({"subagent": "coder"});
         let parsed: Result<SubagentInput, _> = serde_json::from_value(input);
         assert!(parsed.is_err());
     }
 
     #[test]
     fn test_resolve_model_priority() {
-        let input = SubagentInput {
-            prompt: "task".to_string(),
-            subagent: Some("coder".to_string()),
-            model: Some("codex:gpt-5.3-codex".to_string()),
-        };
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.model = Some("openai:gpt-5.2".to_string());
 
         assert_eq!(
-            normalize_optional(input.model.clone())
-                .or_else(|| normalize_optional(ctx.model.clone()))
-                .as_deref(),
-            Some("codex:gpt-5.3-codex")
+            normalize_optional(ctx.model.clone()).as_deref(),
+            Some("openai:gpt-5.2")
         );
     }
 
     #[test]
-    fn test_implicit_model_does_not_require_supported_list_match() {
-        let input = SubagentInput {
-            prompt: "task".to_string(),
-            subagent: Some("coder".to_string()),
-            model: None,
-        };
+    fn test_parent_model_does_not_require_supported_list_match() {
         let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         ctx.model = Some("openai:gpt-5.2".to_string());
         ctx.subagent_available_models = vec!["codex:gpt-5.3-codex".to_string()];
 
-        let requested_model = normalize_optional(input.model.clone());
-        assert!(requested_model.is_none());
-
-        let chosen = requested_model
-            .clone()
-            .or_else(|| normalize_optional(ctx.model.clone()));
+        let chosen = normalize_optional(ctx.model.clone());
         assert_eq!(chosen.as_deref(), Some("openai:gpt-5.2"));
     }
 
