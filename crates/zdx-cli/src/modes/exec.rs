@@ -16,10 +16,18 @@ use zdx_core::core::events::{AgentEvent, TurnStatus};
 use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
 use zdx_core::providers::ChatMessage;
 
-const EXEC_SURFACE_RULES: &str = include_str!(concat!(
+const EXEC_INSTRUCTION_LAYER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/exec_surface_rules.md"
+    "/prompts/exec_instruction_layer.md"
 ));
+
+fn exec_instruction_layers() -> Vec<&'static str> {
+    let trimmed_instruction_layer = EXEC_INSTRUCTION_LAYER.trim();
+    (!trimmed_instruction_layer.is_empty())
+        .then_some(trimmed_instruction_layer)
+        .into_iter()
+        .collect()
+}
 
 /// Options for exec execution.
 #[derive(Debug, Clone)]
@@ -30,6 +38,8 @@ pub struct ExecOptions {
     pub tool_config: ToolConfig,
     /// Optional event type filters to emit.
     pub event_filter: Vec<String>,
+    /// Optional fully-rendered system prompt override.
+    pub effective_system_prompt: Option<String>,
     /// Disable all system prompt/context composition.
     pub no_system_prompt: bool,
 }
@@ -93,14 +103,21 @@ pub async fn run_exec(
 
     let effective = if options.no_system_prompt {
         None
+    } else if let Some(prompt) = options.effective_system_prompt.as_ref() {
+        Some(zdx_core::core::context::EffectivePrompt {
+            prompt: Some(prompt.clone()),
+            loaded_agents_paths: Vec::new(),
+            scoped_context_paths: Vec::new(),
+            warnings: Vec::new(),
+            loaded_skills: Vec::new(),
+        })
     } else {
-        let trimmed_surface_rules = EXEC_SURFACE_RULES.trim();
-        let surface_rules = (!trimmed_surface_rules.is_empty()).then_some(trimmed_surface_rules);
+        let instruction_layers = exec_instruction_layers();
         Some(
-            zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+            zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
                 config,
                 &options.root,
-                surface_rules,
+                &instruction_layers,
                 false,
             )?,
         )

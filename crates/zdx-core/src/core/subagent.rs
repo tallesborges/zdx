@@ -4,9 +4,10 @@
 //! capture response text only.
 
 use std::ffi::OsString;
-use std::path::Path;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result, bail, ensure};
 use tokio::process::Command;
@@ -19,6 +20,8 @@ use crate::core::events::AgentEvent;
 pub struct ExecSubagentOptions {
     /// Optional model override (`-m`).
     pub model: Option<String>,
+    /// Optional final system prompt override (`--effective-system-prompt`).
+    pub system_prompt: Option<String>,
     /// Optional thinking override (`-t`).
     pub thinking_level: Option<crate::config::ThinkingLevel>,
     /// Disable tools for the child run (`--no-tools`).
@@ -31,6 +34,23 @@ pub struct ExecSubagentOptions {
     pub event_filter: Option<Vec<String>>,
     /// Optional timeout for the child process.
     pub timeout: Option<Duration>,
+}
+
+#[derive(Debug)]
+struct TempPromptFile {
+    path: PathBuf,
+}
+
+impl TempPromptFile {
+    fn as_path(&self) -> &Path {
+        &self.path
+    }
+}
+
+impl Drop for TempPromptFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.path);
+    }
 }
 
 /// Runs an isolated child `zdx exec` process and returns response text only.
@@ -62,7 +82,21 @@ pub async fn run_exec_subagent_with_cancel(
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
 
     let exe = std::env::current_exe().context("Failed to get executable path")?;
-    let args = build_exec_args(root, prompt, options);
+    let effective_system_prompt_file = options
+        .system_prompt
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(write_effective_system_prompt_file)
+        .transpose()?;
+    let args = build_exec_args(
+        root,
+        prompt,
+        options,
+        effective_system_prompt_file
+            .as_ref()
+            .map(TempPromptFile::as_path),
+    );
 
     let mut command = Command::new(exe);
     command
@@ -102,7 +136,12 @@ pub async fn run_exec_subagent_with_cancel(
     process_subagent_output(&output)
 }
 
-fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> Vec<OsString> {
+fn build_exec_args(
+    root: &Path,
+    prompt: &str,
+    options: &ExecSubagentOptions,
+    effective_system_prompt_file: Option<&Path>,
+) -> Vec<OsString> {
     let mut args = vec![OsString::from("--root"), root.as_os_str().to_os_string()];
 
     args.extend([
@@ -143,6 +182,11 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
         args.push(OsString::from(model));
     }
 
+    if let Some(system_prompt_file) = effective_system_prompt_file {
+        args.push(OsString::from("--effective-system-prompt-file"));
+        args.push(system_prompt_file.as_os_str().to_os_string());
+    }
+
     if let Some(level) = options.thinking_level {
         args.push(OsString::from("-t"));
         args.push(OsString::from(level.display_name()));
@@ -153,6 +197,20 @@ fn build_exec_args(root: &Path, prompt: &str, options: &ExecSubagentOptions) -> 
 
 fn normalize_optional(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn write_effective_system_prompt_file(system_prompt: &str) -> Result<TempPromptFile> {
+    let unique = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .context("system clock before unix epoch")?
+        .as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "zdx-effective-system-prompt-{}-{unique}.md",
+        std::process::id()
+    ));
+    fs::write(&path, system_prompt)
+        .with_context(|| format!("write effective system prompt file {}", path.display()))?;
+    Ok(TempPromptFile { path })
 }
 
 fn process_subagent_output(output: &std::process::Output) -> Result<String> {
@@ -239,6 +297,7 @@ mod tests {
             Path::new("/tmp/project"),
             "do work",
             &ExecSubagentOptions::default(),
+            None,
         );
         let args: Vec<String> = args
             .iter()
@@ -260,11 +319,13 @@ mod tests {
 
     #[test]
     fn build_exec_args_includes_optional_flags() {
+        let prompt_file = Path::new("/tmp/effective-system-prompt.md");
         let args = build_exec_args(
             Path::new("/tmp/project"),
             "task",
             &ExecSubagentOptions {
                 model: Some("openai:gpt-5.2".to_string()),
+                system_prompt: Some("You are a focused assistant".to_string()),
                 thinking_level: Some(crate::config::ThinkingLevel::Low),
                 no_tools: false,
                 no_system_prompt: true,
@@ -272,6 +333,7 @@ mod tests {
                 event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
             },
+            Some(prompt_file),
         );
         let args: Vec<String> = args
             .iter()
@@ -294,6 +356,8 @@ mod tests {
                 "turn_finished",
                 "-m",
                 "openai:gpt-5.2",
+                "--effective-system-prompt-file",
+                "/tmp/effective-system-prompt.md",
                 "-t",
                 "low"
             ]
@@ -331,5 +395,16 @@ mod tests {
 
         let text = process_subagent_output(&output).expect("should keep plain text");
         assert_eq!(text, "plain text output");
+    }
+
+    #[test]
+    fn temp_prompt_file_is_removed_on_drop() {
+        let file = write_effective_system_prompt_file("prompt body").unwrap();
+        let path = file.path.clone();
+        assert!(path.exists());
+
+        drop(file);
+
+        assert!(!path.exists());
     }
 }

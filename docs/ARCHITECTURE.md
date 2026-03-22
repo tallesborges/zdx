@@ -8,6 +8,16 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 - **zdx-core:** engine, config, providers, tools, thread persistence, and agent runtime (UI-agnostic).
 - **zdx-tui:** full-screen TUI (Elm/MVU), depends on zdx-core.
 
+## Prompt Architecture
+
+Prompt assembly is layered in `zdx-core`:
+
+- **Base system prompt:** `prompts/system_prompt_template.md` is the canonical default prompt.
+- **Prompt layers:** additive prompt fragments appended after the base prompt. These are used for surface/runtime constraints (for example Telegram or exec output guidance) and behavior harnesses (for example automation/headless execution).
+- **Named subagents:** optional standalone prompt profiles for delegated child runs. A subagent provides its own prompt body and can override model/tool/thinking configuration without inheriting the shared base prompt.
+
+This keeps one source of truth for the default assistant while allowing surfaces and automation behavior to compose cleanly, and still supports specialist standalone subagents when needed.
+
 ## TUI Architecture (Elm/MVU)
 
 The interactive mode (`crates/zdx-tui/src/`) strictly follows The Elm Architecture (Model-View-Update).

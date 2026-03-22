@@ -5,7 +5,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ## Where things are
 
 - `src/lib.rs`: TUI exports (`run_interactive_chat`, `TuiRuntime`)
-- `prompts/chat_surface_rules.md`: interactive chat/TUI-specific output rules
+- `prompts/chat_instruction_layer.md`: interactive chat/TUI-specific output rules
 - `src/terminal.rs`: terminal setup/restore + panic hooks
 - `src/state.rs`: `AppState` + TUI state structs
 - `src/events.rs`: UI event types
@@ -50,4 +50,5 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 ## Maintenance
 
 - Add/move/delete `.rs` files in this crate: update this file.
+- Add/move/delete prompt layer files in this crate: update this file.
 - Architecture changes: update `docs/ARCHITECTURE.md`.

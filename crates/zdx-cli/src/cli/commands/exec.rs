@@ -16,6 +16,7 @@ pub struct ExecRunOptions<'a> {
     pub prompt: &'a str,
     pub config: &'a config::Config,
     pub model_override: Option<&'a str>,
+    pub effective_system_prompt_override: Option<&'a str>,
     pub tool_timeout_override: Option<u32>,
     pub thinking_override: Option<&'a str>,
     pub event_filter_override: Option<&'a str>,
@@ -60,6 +61,9 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
             .map(parse_event_filter)
             .transpose()?
             .unwrap_or_default(),
+        effective_system_prompt: options
+            .effective_system_prompt_override
+            .map(std::string::ToString::to_string),
         no_system_prompt: options.no_system_prompt,
     };
 

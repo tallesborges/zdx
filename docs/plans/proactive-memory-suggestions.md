@@ -31,7 +31,7 @@
 - Gaps: None
 
 ## System prompt template rendering
-- What exists: MiniJinja template at `crates/zdx-core/prompts/system_prompt_template.md`. `PromptTemplateVars` struct with conditional blocks. `build_effective_system_prompt_with_paths_and_surface_rules()` is the main entry point.
+- What exists: MiniJinja template at `crates/zdx-core/prompts/system_prompt_template.md`. `PromptTemplateVars` struct with conditional blocks. The layered effective-prompt builder in `context.rs` is the main entry point.
 - ✅ Demo: Tests in `context.rs` verify template rendering with/without memory, surface rules, skills
 - Gaps: No explicit "index vs detail" policy yet (what goes to NotePlan only vs `MEMORY.md` index)
 

@@ -26,14 +26,17 @@ use zdx_core::skills::Skill;
 
 use crate::transcript::HistoryCell;
 
-pub(crate) const TUI_SURFACE_RULES: &str = include_str!(concat!(
+pub(crate) const TUI_INSTRUCTION_LAYER: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/prompts/chat_surface_rules.md"
+    "/prompts/chat_instruction_layer.md"
 ));
 
-pub(crate) fn tui_surface_rules() -> Option<&'static str> {
-    let trimmed = TUI_SURFACE_RULES.trim();
-    (!trimmed.is_empty()).then_some(trimmed)
+pub(crate) fn tui_instruction_layers() -> Vec<&'static str> {
+    let trimmed = TUI_INSTRUCTION_LAYER.trim();
+    (!trimmed.is_empty())
+        .then_some(trimmed)
+        .into_iter()
+        .collect()
 }
 
 /// Runs the interactive chat loop.
@@ -72,11 +75,12 @@ pub async fn run_interactive_chat_with_history(
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
     zdx_core::core::context::set_runtime_env(config, thread_id_ref);
 
+    let instruction_layers = tui_instruction_layers();
     let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths_and_surface_rules(
+        zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             &root,
-            tui_surface_rules(),
+            &instruction_layers,
             true,
         )?;
 
