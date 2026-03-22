@@ -72,8 +72,6 @@ pub struct CapabilityDescriptor {
 pub enum CapabilityKind {
     /// Backed by a named standalone subagent prompt.
     Subagent { subagent: String },
-    /// Backed directly by one or more first-class tools.
-    Tool { tools: Vec<String> },
     /// Backed by a reserved runtime alias.
     BuiltinAlias(BuiltinAlias),
 }
@@ -222,8 +220,6 @@ pub fn capability_catalog(
         capabilities.push(oracle_capability(root)?);
     }
 
-    capabilities.push(librarian_capability());
-    capabilities.push(finder_capability());
     Ok(capabilities)
 }
 
@@ -237,8 +233,6 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
         capabilities.push(fallback_oracle_capability());
     }
 
-    capabilities.push(librarian_capability());
-    capabilities.push(finder_capability());
     capabilities
 }
 
@@ -350,31 +344,6 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
-        },
-    }
-}
-
-fn librarian_capability() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name: "librarian".to_string(),
-        title: "Librarian".to_string(),
-        description:
-            "Search and read the most relevant code or docs when you need grounded evidence."
-                .to_string(),
-        kind: CapabilityKind::Tool {
-            tools: vec!["grep".to_string(), "read".to_string()],
-        },
-    }
-}
-
-fn finder_capability() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name: "finder".to_string(),
-        title: "Finder".to_string(),
-        description: "Locate files or directories by pattern before drilling into their contents."
-            .to_string(),
-        kind: CapabilityKind::Tool {
-            tools: vec!["glob".to_string()],
         },
     }
 }
@@ -647,7 +616,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "oracle", "librarian", "finder"]
+            vec!["task", "oracle"]
         );
     }
 
