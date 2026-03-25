@@ -9,6 +9,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/automations.rs`: automations commands (`list`, `validate`, `run`)
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
+- `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler
 - `prompts/exec_instruction_layer.md`: exec/terminal-specific output rules

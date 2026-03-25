@@ -30,6 +30,7 @@ image.workspace = true
 minijinja.workspace = true
 nucleo-matcher.workspace = true
 reqwest = { workspace = true, features = ["multipart"] }
+rmcp = { workspace = true, default-features = false, features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest", "reqwest-native-tls"] }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml.workspace = true

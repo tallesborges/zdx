@@ -149,6 +149,11 @@ enum Commands {
         #[command(subcommand)]
         command: AutomationCommands,
     },
+    /// Inspect and call MCP servers through the internal helper CLI
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommands,
+    },
     /// Manage configuration
     Config {
         #[command(subcommand)]
@@ -313,6 +318,43 @@ enum AutomationCommands {
         /// Automation name (file stem)
         #[arg(value_name = "NAME")]
         name: String,
+    },
+}
+
+#[derive(clap::Subcommand)]
+enum McpCommands {
+    /// List configured MCP servers and their load status
+    #[command(alias = "list")]
+    Servers,
+    /// List tools exposed by one loaded MCP server
+    Tools {
+        /// MCP server name from `.mcp.json`
+        #[arg(value_name = "SERVER")]
+        server: String,
+    },
+    /// Print the input schema for one MCP tool
+    Schema {
+        /// MCP server name from `.mcp.json`
+        #[arg(value_name = "SERVER")]
+        server: String,
+
+        /// MCP tool name as reported by the server
+        #[arg(value_name = "TOOL")]
+        tool: String,
+    },
+    /// Call one MCP tool with a JSON object payload
+    Call {
+        /// MCP server name from `.mcp.json`
+        #[arg(value_name = "SERVER")]
+        server: String,
+
+        /// MCP tool name as reported by the server
+        #[arg(value_name = "TOOL")]
+        tool: String,
+
+        /// JSON object payload to send as the tool arguments
+        #[arg(long = "json", value_name = "JSON")]
+        input_json: String,
     },
 }
 
@@ -646,6 +688,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
             .await
         }
         Commands::Automations { command } => dispatch_automations(command, context).await,
+        Commands::Mcp { command } => dispatch_mcp(command, context).await,
         Commands::Config { command } => dispatch_config(&command),
         Commands::Login {
             anthropic,
@@ -752,6 +795,22 @@ async fn dispatch_automations(
             let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
             commands::automations::run(&root_path, &thread_opts, context.config, &name).await
         }
+    }
+}
+
+async fn dispatch_mcp(command: McpCommands, context: &DispatchContext<'_>) -> Result<()> {
+    let root_path = resolve_root(context.root, context.worktree_id)?;
+    match command {
+        McpCommands::Servers => commands::mcp::servers(&root_path).await,
+        McpCommands::Tools { server } => commands::mcp::tools(&root_path, &server).await,
+        McpCommands::Schema { server, tool } => {
+            commands::mcp::schema(&root_path, &server, &tool).await
+        }
+        McpCommands::Call {
+            server,
+            tool,
+            input_json,
+        } => commands::mcp::call(&root_path, &server, &tool, &input_json).await,
     }
 }
 
