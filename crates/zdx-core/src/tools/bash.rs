@@ -255,6 +255,10 @@ async fn run_command(
         // in most well-behaved CLI tools (e.g. gcloud, npm, pip).
         .env("TERM", "dumb")
         .env("NO_COLOR", "1")
+        // Force non-interactive stdin so child processes do not block waiting
+        // for user input or keep client/daemon sessions alive (for example,
+        // `gradlew` under piped exec environments).
+        .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
