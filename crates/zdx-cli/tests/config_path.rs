@@ -2,6 +2,7 @@ use std::fs;
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
+use serde_json::Value;
 use tempfile::tempdir;
 
 #[test]
@@ -135,4 +136,63 @@ fn test_automations_runs_reads_jsonl_log() {
         .stdout(predicate::str::contains("morning-report"))
         .stdout(predicate::str::contains("manual"))
         .stdout(predicate::str::contains("ok"));
+}
+
+#[test]
+fn test_mcp_servers_reports_missing_config() {
+    let root = tempdir().unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .args(["--root", root.path().to_str().unwrap(), "mcp", "servers"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["config_exists"], Value::Bool(false));
+    assert_eq!(parsed["servers"], Value::Array(Vec::new()));
+}
+
+#[test]
+fn test_mcp_servers_reports_invalid_config() {
+    let root = tempdir().unwrap();
+    fs::write(root.path().join(".mcp.json"), "not json").unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .args(["--root", root.path().to_str().unwrap(), "mcp", "servers"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["config_exists"], Value::Bool(true));
+    assert_eq!(parsed["servers"], Value::Array(Vec::new()));
+    assert_eq!(
+        parsed["diagnostics"][0]["kind"],
+        Value::String("config_error".to_string())
+    );
+}
+
+#[test]
+fn test_mcp_call_rejects_invalid_json() {
+    let root = tempdir().unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "call",
+            "demo",
+            "tool",
+            "--json",
+            "not-json",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("parse --json input"));
 }

@@ -79,6 +79,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT> [--no-system-prompt]` — run one prompt non-interactively
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
+- `zdx mcp servers|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
 - `zdx threads list|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
@@ -99,6 +100,13 @@ ZDX solves this with a boring, reliable core:
 
 - **stdout:** generated image file path(s), one per line.
 - **stderr:** diagnostics and errors.
+
+### `zdx mcp ...` (non-interactive helper, scriptable)
+
+- **stdout:** JSON only.
+  - `servers`, `tools`, and `schema` print structured inspection data.
+  - `call` prints the normal ZDX `ToolOutput` JSON envelope.
+- **stderr:** CLI usage/runtime errors.
 
 ### `zdx` (interactive)
 
@@ -140,6 +148,43 @@ The `meta` line (first line only) may be rewritten atomically to update thread m
 ## 9) Tools
 
 Tools are intentionally few, stable, and machine-parseable.
+
+### MCP-backed tools
+
+- MCP support is an internal engine backed by a project-local `.mcp.json` file.
+- MCP tools are **not** added to the model-visible tool list by default in `zdx exec`, the TUI, or the Telegram bot.
+- The supported user/skill-facing MCP surface in this slice is `zdx mcp ...`.
+- Supported MCP config source for this slice: `<project-root>/.mcp.json`
+- Supported config shape:
+
+```json
+{
+  "mcpServers": {
+    "xcode": {
+      "type": "stdio",
+      "command": "xcrun",
+      "args": ["mcpbridge"]
+    },
+    "figma": {
+      "url": "https://mcp.figma.com/mcp"
+    }
+  }
+}
+```
+
+- Supported transports: `stdio` and streamable `http`.
+- Optional fields:
+  - `stdio`: `env`
+  - `http`: `type` (defaults to `http` when `url` is present), `headers`
+- `zdx mcp servers|tools|schema|call` is the preferred way for skills and operators to inspect/call MCP servers.
+- Discovered MCP tools still get stable, collision-safe internal names in the form `mcp__<server>__<tool>`, which are surfaced in helper metadata/output.
+- Discovery lifecycle for the shipped helper CLI: each `zdx mcp ...` invocation loads the current root's MCP workspace and prints diagnostics/status in JSON.
+- MCP tool execution through the helper CLI uses the same ZDX `ToolOutput` envelope as built-in tools.
+- MCP server failures are isolated per server. A broken or unreachable MCP server does not disable built-in tools or healthy MCP servers.
+- Timeout behavior:
+  - connect: 10s
+  - discovery (`tools/list`): 15s
+  - tool call: `tool_timeout_secs` when configured, otherwise 30s for MCP tools
 
 ### Envelope
 
@@ -205,6 +250,13 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 - Location: `<base>/config.toml`
 - Format: TOML
+
+### MCP configuration
+
+- MCP server configuration is not stored in `config.toml` for this slice.
+- The authoritative supported MCP source is a project-local `.mcp.json` file using the standard `mcpServers` JSON shape.
+- Missing `.mcp.json` is normal and does not affect startup.
+- Invalid `.mcp.json` or server-specific MCP failures are warnings/non-fatal conditions rather than startup errors.
 
 ### Contracts
 

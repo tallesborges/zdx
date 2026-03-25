@@ -6,6 +6,7 @@ pub mod automations;
 pub mod config;
 pub mod core;
 pub mod images;
+pub mod mcp;
 pub mod models;
 pub mod pidfile;
 pub mod prompts;

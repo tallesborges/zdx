@@ -6,7 +6,7 @@ use anyhow::{Context, Result};
 use zdx_core::config::{self, ThinkingLevel};
 use zdx_core::core::agent::{ToolConfig, ToolSelection};
 use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::tools;
+use zdx_core::tools::ToolRegistry;
 
 use crate::modes;
 
@@ -47,15 +47,21 @@ pub async fn run(options: ExecRunOptions<'_>) -> Result<()> {
         c
     };
 
+    let tool_registry = ToolRegistry::builtins();
+    let available_tool_names = tool_registry.tool_names();
+
     let exec_opts = modes::exec::ExecOptions {
         root: root_path,
-        tool_config: ToolConfig::default().with_selection(if options.no_tools {
-            ToolSelection::Explicit(Vec::new())
-        } else if let Some(raw) = options.tools_override {
-            ToolSelection::Explicit(parse_tools_override(raw)?)
-        } else {
-            ToolSelection::default()
-        }),
+        tool_config: ToolConfig::new(
+            tool_registry,
+            if options.no_tools {
+                ToolSelection::Explicit(Vec::new())
+            } else if let Some(raw) = options.tools_override {
+                ToolSelection::Explicit(parse_tools_override(raw, &available_tool_names)?)
+            } else {
+                ToolSelection::default()
+            },
+        ),
         event_filter: options
             .event_filter_override
             .map(parse_event_filter)
@@ -89,7 +95,7 @@ pub(super) fn parse_thinking_level(s: &str) -> Result<ThinkingLevel> {
     }
 }
 
-fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
+fn parse_tools_override(raw: &str, available: &[String]) -> Result<Vec<String>> {
     let tools: Vec<String> = raw
         .split(',')
         .map(str::trim)
@@ -101,7 +107,6 @@ fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
         anyhow::bail!("--tools requires a comma-separated list of tool names");
     }
 
-    let available = tools::all_tool_names();
     let available_set: std::collections::HashSet<String> =
         available.iter().map(|t| t.to_ascii_lowercase()).collect();
     let mut unknown: Vec<String> = tools
@@ -112,7 +117,7 @@ fn parse_tools_override(raw: &str) -> Result<Vec<String>> {
 
     if !unknown.is_empty() {
         unknown.sort();
-        let mut available_sorted = available;
+        let mut available_sorted = available.to_vec();
         available_sorted.sort();
         anyhow::bail!(
             "Unknown tool(s): {}. Available tools: {}",

@@ -11,6 +11,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/automations.rs`: automation discovery + frontmatter parsing
 - `src/config.rs`: config loading + paths
 - `src/models.rs`: model registry for model picker
+- `src/mcp.rs`: MCP config loading, server discovery, helper workspace/runtime, and MCP tool-call execution helpers
 - `src/prompts.rs`: prompt template helpers
 - `prompts/identity_prompt.md`: shared minimal identity prompt for backend-safe/system prompt reuse
 - `prompts/system_prompt_template.md`: canonical base MiniJinja system prompt template

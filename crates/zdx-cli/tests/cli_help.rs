@@ -9,10 +9,32 @@ fn test_help_shows_all_commands() {
         .success()
         .stdout(predicate::str::contains("exec"))
         .stdout(predicate::str::contains("imagine"))
+        .stdout(predicate::str::contains("mcp"))
         .stdout(predicate::str::contains("automations"))
         .stdout(predicate::str::contains("threads"))
         .stdout(predicate::str::contains("--model"))
         .stdout(predicate::str::contains("--thinking"));
+}
+
+#[test]
+fn test_mcp_help_shows_subcommands() {
+    cargo_bin_cmd!("zdx")
+        .args(["mcp", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("servers"))
+        .stdout(predicate::str::contains("tools"))
+        .stdout(predicate::str::contains("schema"))
+        .stdout(predicate::str::contains("call"));
+}
+
+#[test]
+fn test_mcp_call_help_shows_json_flag() {
+    cargo_bin_cmd!("zdx")
+        .args(["mcp", "call", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--json"));
 }
 
 #[test]
