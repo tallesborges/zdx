@@ -116,15 +116,15 @@ The following runtime environment variables may be available and should be used 
 
 {% if project_context or scoped_context %}
 <project-context>
-AGENTS.md files define project-local rules. Deeper files override higher ones.
+`AGENTS.md` files define project-local rules. If a directory does not contain `AGENTS.md`, use `CLAUDE.md` instead. Deeper files override higher ones.
 **MUST** follow these rules when making changes in their scope.
 {% if project_context %}
 {{ project_context }}
 {% endif %}
 {% if scoped_context %}
-The following directories have their own AGENTS.md rules.
+The following directories have their own `AGENTS.md` or `CLAUDE.md` rules.
 **MUST** read the relevant file before modifying code in that scope:
-{% for ctx in scoped_context %}- `{{ ctx.scope }}/AGENTS.md`
+{% for ctx in scoped_context %}- `{{ ctx.path }}`
 {% endfor %}
 {% endif %}
 </project-context>

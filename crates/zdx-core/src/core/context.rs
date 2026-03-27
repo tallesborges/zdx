@@ -1,10 +1,10 @@
 //! Context module for loading project-specific guidelines.
 //!
-//! AGENTS.md files are loaded hierarchically:
-//! 1. `ZDX_HOME/AGENTS.md` (global user guidelines)
-//! 2. ~/AGENTS.md (user home)
+//! Project context files are loaded hierarchically:
+//! 1. `ZDX_HOME/AGENTS.md` (or `CLAUDE.md` if `AGENTS.md` is missing)
+//! 2. `~/AGENTS.md` (or `CLAUDE.md` if `AGENTS.md` is missing)
 //! 3. Ancestor directories from home to project root
-//! 4. Project root (--root or cwd)
+//! 4. Project root (`--root` or cwd)
 //!
 //! This module is UI-agnostic: it returns structured warnings instead of
 //! printing directly. The caller (renderer) decides how to display them.
@@ -47,9 +47,12 @@ pub fn set_runtime_env(config: &Config, thread_id: Option<&str>) {
     }
 }
 
-/// Maximum size for a single AGENTS.md file (64KB).
+/// Maximum size for a single project context file (`AGENTS.md`/`CLAUDE.md`) (64KB).
 /// Files larger than this are truncated with a warning.
 pub const MAX_AGENTS_FILE_SIZE: usize = 64 * 1024;
+
+const PRIMARY_CONTEXT_FILE_NAME: &str = "AGENTS.md";
+const FALLBACK_CONTEXT_FILE_NAME: &str = "CLAUDE.md";
 
 /// Maximum size for a single MEMORY.md file (16KB).
 /// Files larger than this are truncated with a warning.
@@ -94,10 +97,10 @@ impl ContextWarning {
     }
 }
 
-/// Result of loading AGENTS.md files.
+/// Result of loading inline project context files.
 #[derive(Debug, Clone)]
 pub struct LoadedContext {
-    /// Combined content from all AGENTS.md files.
+    /// Combined content from all loaded project context files.
     pub content: String,
     /// Paths of files that were loaded (in order).
     pub loaded_paths: Vec<PathBuf>,
@@ -105,11 +108,11 @@ pub struct LoadedContext {
     pub warnings: Vec<ContextWarning>,
 }
 
-/// A scoped AGENTS.md file discovered in a project subdirectory.
+/// A scoped project context file discovered in a project subdirectory.
 /// These are listed by path in the prompt (not inlined) — the agent reads on demand.
 #[derive(Debug, Clone)]
 pub struct ScopedContextFile {
-    /// Absolute path to the AGENTS.md file.
+    /// Absolute path to the context file.
     pub path: PathBuf,
     /// Relative scope directory from project root (e.g., "crates/zdx-core").
     pub scope: String,
@@ -151,6 +154,7 @@ struct PromptTemplateCapability {
 #[derive(Debug, Clone, Serialize)]
 struct PromptTemplateScopedContext {
     scope: String,
+    path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -255,6 +259,7 @@ fn build_prompt_template_vars(
     model: &str,
     sections: PromptTemplateSections<'_>,
 ) -> PromptTemplateVars {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let base_prompt = sections.base_prompt.unwrap_or_default().trim().to_string();
     let project_context = sections
         .project_context
@@ -274,8 +279,19 @@ fn build_prompt_template_vars(
     let scoped_context = sections
         .scoped_context
         .iter()
-        .map(|sa| PromptTemplateScopedContext {
-            scope: sa.scope.clone(),
+        .map(|sa| {
+            let relative_path = sa
+                .path
+                .strip_prefix(&canonical_root)
+                .or_else(|_| sa.path.strip_prefix(root))
+                .unwrap_or(sa.path.as_path())
+                .display()
+                .to_string();
+
+            PromptTemplateScopedContext {
+                scope: sa.scope.clone(),
+                path: relative_path,
+            }
         })
         .collect();
     let provider_selection = resolve_provider(model);
@@ -506,26 +522,51 @@ fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
         .collect()
 }
 
-/// Maximum depth to walk when discovering scoped AGENTS.md files.
+fn select_context_file(dir: &Path) -> Option<PathBuf> {
+    let primary = dir.join(PRIMARY_CONTEXT_FILE_NAME);
+    if primary.is_file() {
+        return Some(primary);
+    }
+
+    let fallback = dir.join(FALLBACK_CONTEXT_FILE_NAME);
+    fallback.is_file().then_some(fallback)
+}
+
+fn collect_existing_context_paths(root: &Path) -> Vec<PathBuf> {
+    collect_agents_paths(root)
+        .into_iter()
+        .filter_map(|agents_path| agents_path.parent().and_then(select_context_file))
+        .collect()
+}
+
+fn context_file_priority(path: &Path) -> Option<u8> {
+    match path.file_name()?.to_str()? {
+        PRIMARY_CONTEXT_FILE_NAME => Some(0),
+        FALLBACK_CONTEXT_FILE_NAME => Some(1),
+        _ => None,
+    }
+}
+
+/// Maximum depth to walk when discovering scoped project context files.
 /// Keeps traversal fast in large repos.
 const SCOPED_CONTEXT_MAX_DEPTH: usize = 4;
 
-/// Maximum number of scoped AGENTS.md files to discover.
+/// Maximum number of scoped project context files to discover.
 const SCOPED_CONTEXT_LIMIT: usize = 200;
 
-/// Discovers AGENTS.md files in subdirectories of the project root.
+/// Discovers scoped `AGENTS.md`/`CLAUDE.md` files in subdirectories of the project root.
 ///
 /// Uses gitignore-aware walking to skip ignored directories (target/, .git/, etc.).
 /// Limited to [`SCOPED_CONTEXT_MAX_DEPTH`] levels deep and [`SCOPED_CONTEXT_LIMIT`] files.
 /// Returns files sorted by path for deterministic ordering.
-/// The root AGENTS.md itself is excluded (it's handled as inline context).
+/// The root context file itself is excluded (it's handled as inline context).
 pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
     use ignore::WalkBuilder;
 
     let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let root_agents = canonical_root.join("AGENTS.md");
-
-    let mut scoped: Vec<ScopedContextFile> = Vec::new();
+    let root_primary = canonical_root.join(PRIMARY_CONTEXT_FILE_NAME);
+    let root_fallback = canonical_root.join(FALLBACK_CONTEXT_FILE_NAME);
+    let mut candidates: Vec<(String, PathBuf, u8)> = Vec::new();
 
     let walker = WalkBuilder::new(&canonical_root)
         .hidden(true)
@@ -536,40 +577,59 @@ pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
         .build();
 
     for entry in walker.flatten() {
-        if scoped.len() >= SCOPED_CONTEXT_LIMIT {
-            break;
-        }
         let path = entry.path();
-        if path.file_name().is_none_or(|f| f != "AGENTS.md") || !path.is_file() {
+        let Some(priority) = context_file_priority(path) else {
+            continue;
+        };
+        if !path.is_file() {
             continue;
         }
         let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-        if canonical == root_agents {
+        if canonical == root_primary || canonical == root_fallback {
             continue;
         }
         if let Ok(relative) = canonical.strip_prefix(&canonical_root)
             && let Some(scope_dir) = relative.parent()
+            && !scope_dir.as_os_str().is_empty()
         {
             let scope = scope_dir.display().to_string();
-            scoped.push(ScopedContextFile {
-                path: canonical,
-                scope,
-            });
+            candidates.push((scope, canonical, priority));
         }
     }
 
-    scoped.sort_by(|a, b| a.path.cmp(&b.path));
+    candidates.sort_by(
+        |(scope_a, path_a, priority_a), (scope_b, path_b, priority_b)| {
+            scope_a
+                .cmp(scope_b)
+                .then(priority_a.cmp(priority_b))
+                .then(path_a.cmp(path_b))
+        },
+    );
+
+    let mut seen_scopes = std::collections::HashSet::new();
+    let mut scoped: Vec<ScopedContextFile> = Vec::new();
+    for (scope, path, _) in candidates {
+        if scoped.len() >= SCOPED_CONTEXT_LIMIT {
+            break;
+        }
+        if seen_scopes.insert(scope.clone()) {
+            scoped.push(ScopedContextFile { path, scope });
+        }
+    }
+
     scoped
 }
 
-/// Loads all AGENTS.md files from the collected paths.
+/// Loads inline project context files from the collected hierarchy.
 ///
+/// For each directory in the hierarchy, `AGENTS.md` is preferred; `CLAUDE.md`
+/// is used only when `AGENTS.md` is absent.
 /// Returns None if no files were found or all were empty.
 /// Empty files are skipped silently.
 /// Unreadable files generate a warning but don't fail.
 /// Large files are truncated with a warning.
 pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
-    let paths = collect_agents_paths(root);
+    let paths = collect_existing_context_paths(root);
     let mut loaded_paths: Vec<PathBuf> = Vec::new();
     let mut sections: Vec<String> = Vec::new();
     let mut warnings: Vec<ContextWarning> = Vec::new();
@@ -672,11 +732,11 @@ fn load_memory_index_from_path(path: &Path) -> Option<LoadedMemoryIndex> {
 /// Result of building the effective system prompt.
 #[derive(Debug, Clone, Default)]
 pub struct EffectivePrompt {
-    /// The combined system prompt (config + AGENTS.md + optional memory index + template sections).
+    /// The combined system prompt (config + inline project context + optional memory index + template sections).
     pub prompt: Option<String>,
-    /// Paths of AGENTS.md files that were inlined (in order).
+    /// Paths of inline project context files that were inlined (in order).
     pub loaded_agents_paths: Vec<PathBuf>,
-    /// Scoped AGENTS.md files discovered in subdirectories (listed as paths, not inlined).
+    /// Scoped project context files discovered in subdirectories (listed as paths, not inlined).
     pub scoped_context_paths: Vec<PathBuf>,
     /// Warnings generated during context loading.
     pub warnings: Vec<ContextWarning>,
@@ -946,16 +1006,16 @@ fn render_system_prompt_with_fallback(
     }
 }
 
-/// Builds the effective system prompt by combining config, AGENTS.md files,
+/// Builds the effective system prompt by combining config, inline project context,
 /// an optional memory index, and template-driven sections.
 ///
-/// AGENTS.md files are loaded hierarchically from:
-/// 1. `ZDX_HOME/AGENTS.md`
-/// 2. ~/AGENTS.md  
+/// Project context files are loaded hierarchically from:
+/// 1. `ZDX_HOME/AGENTS.md` (or `CLAUDE.md` if absent)
+/// 2. `~/AGENTS.md` (or `CLAUDE.md` if absent)
 /// 3. Ancestor directories from home to project root
 /// 4. Project root
 ///
-/// Returns the combined prompt, the list of loaded AGENTS.md paths, and any warnings.
+/// Returns the combined prompt, the list of loaded project context file paths, and any warnings.
 /// This function is UI-agnostic; callers should surface warnings via the renderer.
 ///
 /// # Errors
@@ -973,7 +1033,7 @@ pub fn build_effective_system_prompt_with_paths(
     )
 }
 
-/// Builds the effective system prompt by combining config, AGENTS.md files,
+/// Builds the effective system prompt by combining config, inline project context,
 /// an optional memory index, template-driven sections, and additive
 /// instruction layers (for example surfaces or automation harnesses).
 ///
@@ -1069,6 +1129,56 @@ mod tests {
     }
 
     #[test]
+    fn test_load_all_agents_files_falls_back_to_claude() {
+        let dir = tempdir().unwrap();
+        let claude_md = dir.path().join("CLAUDE.md");
+        fs::write(&claude_md, "Claude fallback content").unwrap();
+        let canonical_claude_md = claude_md.canonicalize().unwrap();
+
+        let result = load_all_agents_files(dir.path());
+        assert!(result.is_some());
+
+        let loaded = result.unwrap();
+        assert!(loaded.content.contains("Claude fallback content"));
+        assert!(
+            loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_claude_md)
+        );
+    }
+
+    #[test]
+    fn test_load_all_agents_files_prefers_agents_over_claude() {
+        let dir = tempdir().unwrap();
+        let agents_md = dir.path().join("AGENTS.md");
+        let claude_md = dir.path().join("CLAUDE.md");
+        fs::write(&agents_md, "Agents content").unwrap();
+        fs::write(&claude_md, "Claude should be ignored").unwrap();
+        let canonical_agents_md = agents_md.canonicalize().unwrap();
+        let canonical_claude_md = claude_md.canonicalize().unwrap();
+
+        let result = load_all_agents_files(dir.path());
+        assert!(result.is_some());
+
+        let loaded = result.unwrap();
+        assert!(loaded.content.contains("Agents content"));
+        assert!(!loaded.content.contains("Claude should be ignored"));
+        assert!(
+            loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_agents_md)
+        );
+        assert!(
+            !loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_claude_md)
+        );
+    }
+
+    #[test]
     fn test_load_all_agents_files_none() {
         let dir = tempdir().unwrap();
         // Create a subdirectory with no AGENTS.md anywhere in hierarchy
@@ -1120,6 +1230,50 @@ mod tests {
         assert!(
             loaded.content.contains("Child guidelines"),
             "Should include child/root"
+        );
+    }
+
+    #[test]
+    fn test_discover_scoped_context_prefers_agents_and_falls_back_to_claude() {
+        let dir = tempdir().unwrap();
+        let claude_scope = dir.path().join("claude-scope");
+        let agents_scope = dir.path().join("agents-scope");
+        let mixed_scope = dir.path().join("mixed-scope");
+        fs::create_dir_all(&claude_scope).unwrap();
+        fs::create_dir_all(&agents_scope).unwrap();
+        fs::create_dir_all(&mixed_scope).unwrap();
+
+        fs::write(claude_scope.join("CLAUDE.md"), "Claude scoped rule").unwrap();
+        fs::write(agents_scope.join("AGENTS.md"), "Agents scoped rule").unwrap();
+        fs::write(
+            mixed_scope.join("AGENTS.md"),
+            "Preferred agents scoped rule",
+        )
+        .unwrap();
+        fs::write(mixed_scope.join("CLAUDE.md"), "Ignored claude scoped rule").unwrap();
+
+        let scoped = discover_scoped_context(dir.path());
+        let paths: Vec<PathBuf> = scoped.iter().map(|entry| entry.path.clone()).collect();
+
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("claude-scope/CLAUDE.md"))
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("agents-scope/AGENTS.md"))
+        );
+        assert!(
+            paths
+                .iter()
+                .any(|path| path.ends_with("mixed-scope/AGENTS.md"))
+        );
+        assert!(
+            !paths
+                .iter()
+                .any(|path| path.ends_with("mixed-scope/CLAUDE.md"))
         );
     }
 
@@ -1615,6 +1769,36 @@ mod tests {
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
+    }
+
+    #[test]
+    fn test_template_mode_lists_scoped_claude_context_path() {
+        let dir = tempdir().unwrap();
+        let nested = dir.path().join("nested");
+        fs::create_dir_all(&nested).unwrap();
+        fs::write(nested.join("CLAUDE.md"), "Nested Claude note").unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective =
+            build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("nested/CLAUDE.md"));
+        assert!(!prompt.contains("nested/AGENTS.md"));
     }
 
     #[test]

@@ -171,7 +171,7 @@ pub(crate) fn thread_startup_messages(
             .map(|p| format!("  - {}", p.display()))
             .collect();
         messages.push(format!(
-            "AGENTS.md context available from:\n{}",
+            "Project context files available from:\n{}",
             paths_list.join("\n")
         ));
     }

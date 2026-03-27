@@ -286,7 +286,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
             }
         };
 
-        // Load AGENTS.md paths and skills
+        // Load project context file paths and skills
         let instruction_layers = crate::tui_instruction_layers();
         let context = zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             &config,

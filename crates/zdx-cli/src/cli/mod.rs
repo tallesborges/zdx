@@ -87,7 +87,7 @@ enum Commands {
         #[arg(long, value_name = "EVENTS")]
         filter: Option<String>,
 
-        /// Disable all system prompt/context composition (system prompt, AGENTS.md, memory, skills)
+        /// Disable all system prompt/context composition (system prompt, AGENTS.md/CLAUDE.md, memory, skills)
         #[arg(long = "no-system-prompt")]
         no_system_prompt: bool,
 

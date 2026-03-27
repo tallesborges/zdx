@@ -94,7 +94,7 @@ ZDX solves this with a boring, reliable core:
 
 - **stdout:** assistant text only (or JSON if/when `--format json` ships).
 - **stderr:** diagnostics, warnings, tool status, errors.
-- `--no-system-prompt` disables all system/context composition for that run (config system prompt, `AGENTS.md`, memory, skills).
+- `--no-system-prompt` disables all system/context composition for that run (config system prompt, `AGENTS.md`/`CLAUDE.md`, memory, skills).
 
 ### `zdx imagine` (non-interactive, scriptable)
 
@@ -306,12 +306,12 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 ---
 
-## 13) Project Context + Memory (`AGENTS.md`, `MEMORY.md`)
+## 13) Project Context + Memory (`AGENTS.md`, `CLAUDE.md`, `MEMORY.md`)
 
 ZDX composes project/user context in this order before skills/subagents sections:
 
 1. Base/system prompt from config (`system_prompt` / `system_prompt_file`)
-2. Hierarchical `AGENTS.md` context (global + user + project ancestry)
+2. Hierarchical project context: prefer `AGENTS.md`, fall back to `CLAUDE.md` per directory (global + user + project ancestry)
 3. Optional memory index from configured path (default: `$ZDX_HOME/MEMORY.md`)
 
 ### Memory configuration
@@ -329,6 +329,7 @@ ZDX composes project/user context in this order before skills/subagents sections
 
 ### Contracts
 
+- At each directory scope, ZDX loads `AGENTS.md` if present; otherwise it loads `CLAUDE.md`.
 - Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
 - `MEMORY.md` content is capped at 16 KiB with truncation warning.
