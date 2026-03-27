@@ -35,10 +35,34 @@ use crate::core::events::ToolOutput;
 /// Serde helper that accepts either a JSON array of strings or a single string.
 ///
 /// LLMs sometimes send `"search_queries": "single query"` instead of
-/// `"search_queries": ["single query"]`. This module gracefully coerces
-/// a bare string into a one-element `Vec<String>`.
+/// `"search_queries": ["single query"]`. Some manual tool-entry flows also
+/// stringify JSON arrays, producing values like
+/// `"search_queries": "[\"alpha\",\"beta\"]"`. This module gracefully
+/// coerces both forms into a normalized `Vec<String>`.
 pub(crate) mod string_or_vec {
     use serde::{Deserialize, Deserializer, de};
+
+    fn normalize_vec<E>(values: Vec<String>) -> Result<Option<Vec<String>>, E>
+    where
+        E: de::Error,
+    {
+        let mut normalized = Vec::with_capacity(values.len());
+        for item in values {
+            let trimmed = item.trim();
+            if trimmed.is_empty() {
+                return Err(de::Error::custom(
+                    "search_queries array contains empty string",
+                ));
+            }
+            normalized.push(trimmed.to_string());
+        }
+
+        if normalized.is_empty() {
+            Ok(None)
+        } else {
+            Ok(Some(normalized))
+        }
+    }
 
     /// Deserializes a `Vec<String>` that also accepts a single string.
     ///
@@ -65,28 +89,17 @@ pub(crate) mod string_or_vec {
                 let trimmed = s.trim();
                 if trimmed.is_empty() {
                     Ok(None)
+                } else if trimmed.starts_with('[') && trimmed.ends_with(']') {
+                    if let Ok(values) = serde_json::from_str::<Vec<String>>(trimmed) {
+                        normalize_vec(values)
+                    } else {
+                        Ok(Some(vec![trimmed.to_string()]))
+                    }
                 } else {
                     Ok(Some(vec![trimmed.to_string()]))
                 }
             }
-            Some(StringOrVec::Vec(v)) => {
-                // Validate and normalize every element as non-empty trimmed strings.
-                let mut normalized = Vec::with_capacity(v.len());
-                for item in v {
-                    let trimmed = item.trim();
-                    if trimmed.is_empty() {
-                        return Err(de::Error::custom(
-                            "search_queries array contains empty string",
-                        ));
-                    }
-                    normalized.push(trimmed.to_string());
-                }
-                if normalized.is_empty() {
-                    Ok(None)
-                } else {
-                    Ok(Some(normalized))
-                }
-            }
+            Some(StringOrVec::Vec(v)) => normalize_vec(v),
         }
     }
 }
