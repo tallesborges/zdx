@@ -3,7 +3,7 @@
 //! Allows the agent to search the web for information using natural language.
 //! Requires `PARALLEL_API_KEY` environment variable.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use serde_json::{Value, json};
 
 use super::{ToolContext, ToolDefinition};
@@ -51,12 +51,43 @@ struct WebSearchInput {
     objective: Option<String>,
     #[serde(default, deserialize_with = "super::string_or_vec::deserialize")]
     search_queries: Option<Vec<String>>,
-    #[serde(default = "default_max_results")]
+    #[serde(
+        default = "default_max_results",
+        deserialize_with = "deserialize_max_results"
+    )]
     max_results: u32,
 }
 
 fn default_max_results() -> u32 {
     10
+}
+
+fn deserialize_max_results<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum IntOrString {
+        Int(u32),
+        String(String),
+        Null,
+    }
+
+    match Option::<IntOrString>::deserialize(deserializer)? {
+        Some(IntOrString::Int(value)) => Ok(value),
+        Some(IntOrString::String(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(default_max_results())
+            } else {
+                trimmed.parse::<u32>().map_err(|_parse| {
+                    de::Error::custom(format!("invalid number string for max_results: {raw}"))
+                })
+            }
+        }
+        Some(IntOrString::Null) | None => Ok(default_max_results()),
+    }
 }
 
 fn normalize_objective(objective: Option<&str>) -> Option<&str> {
@@ -354,6 +385,22 @@ mod tests {
     }
 
     #[test]
+    fn test_search_queries_accepts_json_array_string() {
+        let input = json!({
+            "objective": "test query",
+            "search_queries": "[\"kotlin-lsp neovim\", \"jetbrains kotlin-lsp\"]"
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(
+            parsed.search_queries,
+            Some(vec![
+                "kotlin-lsp neovim".to_string(),
+                "jetbrains kotlin-lsp".to_string()
+            ])
+        );
+    }
+
+    #[test]
     fn test_search_queries_accepts_array() {
         let input = json!({
             "objective": "test query",
@@ -400,6 +447,26 @@ mod tests {
             parsed.search_queries,
             Some(vec!["alpha".to_string(), "beta".to_string()])
         );
+    }
+
+    #[test]
+    fn test_max_results_accepts_string() {
+        let input = json!({
+            "objective": "test query",
+            "max_results": "5"
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.max_results, 5);
+    }
+
+    #[test]
+    fn test_max_results_blank_string_uses_default() {
+        let input = json!({
+            "objective": "test query",
+            "max_results": "   "
+        });
+        let parsed: WebSearchInput = serde_json::from_value(input).unwrap();
+        assert_eq!(parsed.max_results, 10);
     }
 
     #[test]
