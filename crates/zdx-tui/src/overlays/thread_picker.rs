@@ -11,9 +11,7 @@ use crate::effects::UiEffect;
 use crate::input::InputState;
 use crate::mutations::{InputMutation, StateMutation, TranscriptMutation};
 use crate::state::TuiState;
-use crate::thread::{
-    MAX_VISIBLE_THREADS, ThreadDisplayItem, flatten_refs_as_tree, render_thread_picker,
-};
+use crate::thread::{MAX_VISIBLE_THREADS, ThreadDisplayItem, render_thread_picker};
 use crate::transcript::HistoryCell;
 
 const COPIED_FEEDBACK_DURATION_MS: u128 = 300;
@@ -299,13 +297,19 @@ impl ThreadPickerState {
         }
     }
 
-    /// Returns the visible threads as a tree-flattened list for hierarchical display.
+    /// Returns the visible threads prepared for display in the history overlay.
     ///
-    /// Delegates to the shared tree utility. The returned items contain depth
-    /// information for rendering indentation.
+    /// Handoff threads are still marked, but the picker keeps the original list
+    /// order instead of reorganizing them into a parent/child tree.
     pub fn visible_tree_items(&self) -> Vec<ThreadDisplayItem<'_>> {
-        let visible = self.visible_threads();
-        flatten_refs_as_tree(&visible)
+        self.visible_threads()
+            .into_iter()
+            .map(|summary| ThreadDisplayItem {
+                summary,
+                depth: 0,
+                is_handoff: summary.handoff_from.is_some(),
+            })
+            .collect()
     }
 
     fn preview_selected_effects(&mut self) -> Vec<UiEffect> {
@@ -514,6 +518,47 @@ mod tests {
             ThreadPickerMode::Switch,
         );
         assert_eq!(state.original_cells.len(), 2);
+    }
+
+    #[test]
+    fn test_visible_tree_items_keep_handoffs_in_original_order() {
+        let current_root = std::path::Path::new(".")
+            .canonicalize()
+            .unwrap_or_else(|_| std::path::PathBuf::from("."))
+            .display()
+            .to_string();
+        let threads = vec![
+            ThreadSummary {
+                id: "thread-b".to_string(),
+                title: Some("Child".to_string()),
+                root_path: Some(current_root.clone()),
+                modified: None,
+                handoff_from: Some("thread-a".to_string()),
+            },
+            ThreadSummary {
+                id: "thread-a".to_string(),
+                title: Some("Parent".to_string()),
+                root_path: Some(current_root),
+                modified: None,
+                handoff_from: None,
+            },
+        ];
+        let (state, _) = ThreadPickerState::open(
+            threads,
+            vec![],
+            std::path::Path::new("."),
+            None,
+            ThreadPickerMode::Switch,
+        );
+
+        let items = state.visible_tree_items();
+        assert_eq!(items.len(), 2);
+        assert_eq!(items[0].summary.id, "thread-b");
+        assert_eq!(items[1].summary.id, "thread-a");
+        assert_eq!(items[0].depth, 0);
+        assert_eq!(items[1].depth, 0);
+        assert!(items[0].is_handoff);
+        assert!(!items[1].is_handoff);
     }
 
     #[test]
