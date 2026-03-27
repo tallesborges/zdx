@@ -29,7 +29,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 
 - `core/mod.rs`: core module exports
 - `core/events.rs`: agent event types for streaming
-- `core/context.rs`: project context loading (`AGENTS.md`, memory)
+- `core/context.rs`: project context loading (`AGENTS.md`/`CLAUDE.md`, memory)
 - `core/interrupt.rs`: signal handling
 - `core/agent.rs`: agent loop + event channels
 - `core/subagent.rs`: child `zdx exec` subagent runner

@@ -61,7 +61,7 @@ impl From<&ExecOptions> for AgentOptions {
 /// Implements tool loop - if the model requests tools, executes them and continues.
 /// Returns the complete response text.
 ///
-/// Logs effective context info (AGENTS.md paths, skills) at startup.
+/// Logs effective context info (project context files, skills) at startup.
 fn log_effective_context(effective: &zdx_core::core::context::EffectivePrompt) {
     if !effective.loaded_agents_paths.is_empty() {
         let paths_str: Vec<String> = effective
@@ -69,7 +69,7 @@ fn log_effective_context(effective: &zdx_core::core::context::EffectivePrompt) {
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        info!(paths = %paths_str.join(", "), "exec inlined AGENTS.md files");
+        info!(paths = %paths_str.join(", "), "exec inlined project context files");
     }
     if !effective.scoped_context_paths.is_empty() {
         let paths_str: Vec<String> = effective
@@ -77,7 +77,7 @@ fn log_effective_context(effective: &zdx_core::core::context::EffectivePrompt) {
             .iter()
             .map(|p| p.display().to_string())
             .collect();
-        info!(paths = %paths_str.join(", "), "exec scoped AGENTS.md files");
+        info!(paths = %paths_str.join(", "), "exec scoped project context files");
     }
     if !effective.loaded_skills.is_empty() {
         let names: Vec<String> = effective
@@ -135,7 +135,7 @@ pub async fn run_exec(
         info!(path = %config_path.display(), "exec config file");
     }
 
-    // Emit context info (AGENTS.md paths, skills)
+    // Emit context info (project context files, skills)
     if let Some(effective) = &effective {
         log_effective_context(effective);
     }
