@@ -79,7 +79,7 @@ ZDX solves this with a boring, reliable core:
 - `zdx` — interactive chat (TTY)
 - `zdx exec -p, --prompt <PROMPT> [--no-system-prompt]` — run one prompt non-interactively
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
-- `zdx mcp servers|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect and call configured MCP servers through the helper CLI
+- `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
 - `zdx automations list|validate|daemon|runs [NAME] [--date*] [--json]|run <NAME>`
 - `zdx threads list|show <ID>|resume [ID]|search [QUERY] [--date*] [--limit N] [--json]`
 - `zdx config init|path`
@@ -103,9 +103,11 @@ ZDX solves this with a boring, reliable core:
 
 ### `zdx mcp ...` (non-interactive helper, scriptable)
 
-- **stdout:** JSON only.
-  - `servers`, `tools`, and `schema` print structured inspection data.
+- **stdout:**
+  - `servers`, `tools`, and `schema` print structured JSON inspection data.
   - `call` prints the normal ZDX `ToolOutput` JSON envelope.
+  - `auth` and `logout` print human-readable status/instructions.
+- `servers` may report MCP server states such as `loaded`, `auth_required`, or `failed`.
 - **stderr:** CLI usage/runtime errors.
 
 ### `zdx` (interactive)
@@ -124,6 +126,7 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - Base dir: `$ZDX_HOME` (if set) else `~/.zdx`
 - Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
+- MCP OAuth cache: `<base>/mcp_oauth.json` (0600 perms)
 
 ### Format
 
@@ -166,7 +169,13 @@ Tools are intentionally few, stable, and machine-parseable.
       "args": ["mcpbridge"]
     },
     "figma": {
-      "url": "https://mcp.figma.com/mcp"
+      "url": "https://mcp.figma.com/mcp",
+      "oauth": {
+        "clientId": "your-oauth-client-id",
+        "redirectUri": "http://127.0.0.1:8787/callback",
+        "tokenEndpointAuthMethod": "none",
+        "scopes": ["mcp:connect"]
+      }
     }
   }
 }
@@ -175,12 +184,16 @@ Tools are intentionally few, stable, and machine-parseable.
 - Supported transports: `stdio` and streamable `http`.
 - Optional fields:
   - `stdio`: `env`
-  - `http`: `type` (defaults to `http` when `url` is present), `headers`
-- `zdx mcp servers|tools|schema|call` is the preferred way for skills and operators to inspect/call MCP servers.
+  - `http`: `type` (defaults to `http` when `url` is present), `headers`, `oauth`
+- `zdx mcp servers|auth|logout|tools|schema|call` is the preferred way for skills and operators to inspect/call MCP servers.
 - Discovered MCP tools still get stable, collision-safe internal names in the form `mcp__<server>__<tool>`, which are surfaced in helper metadata/output.
 - Discovery lifecycle for the shipped helper CLI: each `zdx mcp ...` invocation loads the current root's MCP workspace and prints diagnostics/status in JSON.
 - MCP tool execution through the helper CLI uses the same ZDX `ToolOutput` envelope as built-in tools.
 - MCP server failures are isolated per server. A broken or unreachable MCP server does not disable built-in tools or healthy MCP servers.
+- OAuth-protected HTTP MCP servers should surface `auth_required` status and auth metadata in `zdx mcp servers` instead of degrading to a generic load failure when auth requirements can be discovered.
+- OAuth-protected HTTP MCP servers may authenticate with cached bearer tokens from `<base>/mcp_oauth.json`.
+- `zdx mcp auth <SERVER>` performs OAuth discovery and login for HTTP MCP servers. It may use configured OAuth client settings from `.mcp.json` or dynamic client registration when the authorization server allows it.
+- `zdx mcp logout <SERVER>` removes cached OAuth credentials for that HTTP MCP server.
 - Timeout behavior:
   - connect: 10s
   - discovery (`tools/list`): 15s

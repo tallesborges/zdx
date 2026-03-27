@@ -13,11 +13,13 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 MCP support lives in `zdx-core/src/mcp.rs` as an internal engine. The primary product surface is the helper CLI (`zdx mcp ...`), not automatic model-visible tool exposure.
 
 - **Config source:** project-local `.mcp.json` using the standard `mcpServers` JSON shape.
-- **Workspace/runtime:** `load_workspace(root)` initializes configured servers, captures per-server status/diagnostics, lists tools, exposes schemas, and supports direct MCP `tools/call` execution.
-- **Helper CLI:** `zdx mcp servers|tools|schema|call` uses that workspace and emits structured JSON for skills/scripts.
+- **Workspace/runtime:** `load_workspace(root)` initializes configured servers, resolves cached HTTP MCP OAuth credentials, captures per-server status/diagnostics, lists tools, exposes schemas, and supports direct MCP `tools/call` execution.
+- **Helper CLI:** `zdx mcp servers|auth|logout|tools|schema|call` uses that workspace and emits structured JSON for inspection plus interactive auth/logout flows for OAuth-protected HTTP MCP servers.
+- **HTTP OAuth cache:** remote MCP OAuth credentials are stored separately from model-provider OAuth tokens in `<base>/mcp_oauth.json`.
 - **Naming:** discovered tools still get stable internal names like `mcp__xcode__build_app`, which the helper CLI can surface in structured output.
 - **Default agent surfaces:** `zdx exec`, the TUI, and the Telegram bot keep the built-in model-visible tool list by default; MCP catalogs are not dumped into the provider tool list automatically.
 - **Failure isolation:** each server is initialized independently; failed servers contribute diagnostics but do not prevent healthy MCP servers from loading.
+- **Auth discovery:** OAuth-protected HTTP MCP servers are classified as `auth_required` when ZDX can discover protected-resource/auth-server metadata, instead of surfacing only generic load failures.
 - **Lifecycle:** the helper CLI loads MCP state for the current invocation. Long-lived warm-session reuse for interactive surfaces is deferred until a dedicated session model is added.
 
 This keeps provider integration unchanged for normal agent turns: providers still see the built-in `ToolDefinition` list unless an explicit MCP augmentation path is used.

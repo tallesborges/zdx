@@ -326,6 +326,18 @@ enum McpCommands {
     /// List configured MCP servers and their load status
     #[command(alias = "list")]
     Servers,
+    /// Authenticate to an OAuth-protected HTTP MCP server
+    Auth {
+        /// MCP server name from `.mcp.json`
+        #[arg(value_name = "SERVER")]
+        server: String,
+    },
+    /// Clear cached OAuth credentials for an HTTP MCP server
+    Logout {
+        /// MCP server name from `.mcp.json`
+        #[arg(value_name = "SERVER")]
+        server: String,
+    },
     /// List tools exposed by one loaded MCP server
     Tools {
         /// MCP server name from `.mcp.json`
@@ -802,6 +814,8 @@ async fn dispatch_mcp(command: McpCommands, context: &DispatchContext<'_>) -> Re
     let root_path = resolve_root(context.root, context.worktree_id)?;
     match command {
         McpCommands::Servers => commands::mcp::servers(&root_path).await,
+        McpCommands::Auth { server } => commands::mcp::auth(&root_path, &server).await,
+        McpCommands::Logout { server } => commands::mcp::logout(&root_path, &server).await,
         McpCommands::Tools { server } => commands::mcp::tools(&root_path, &server).await,
         McpCommands::Schema { server, tool } => {
             commands::mcp::schema(&root_path, &server, &tool).await
