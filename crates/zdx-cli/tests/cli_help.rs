@@ -23,6 +23,8 @@ fn test_mcp_help_shows_subcommands() {
         .assert()
         .success()
         .stdout(predicate::str::contains("servers"))
+        .stdout(predicate::str::contains("auth"))
+        .stdout(predicate::str::contains("logout"))
         .stdout(predicate::str::contains("tools"))
         .stdout(predicate::str::contains("schema"))
         .stdout(predicate::str::contains("call"));

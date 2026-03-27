@@ -1,4 +1,7 @@
-use std::fs;
+use std::io::{Read, Write};
+use std::net::TcpListener;
+use std::time::{Duration, Instant};
+use std::{fs, thread};
 
 use assert_cmd::cargo::cargo_bin_cmd;
 use predicates::prelude::*;
@@ -195,4 +198,702 @@ fn test_mcp_call_rejects_invalid_json() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("parse --json input"));
+}
+
+#[test]
+fn test_mcp_servers_reports_auth_required_http_server() {
+    let root = tempdir().unwrap();
+    let (url, handle) = spawn_auth_required_mcp_server();
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .args(["--root", root.path().to_str().unwrap(), "mcp", "servers"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    handle.join().unwrap();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        parsed["servers"][0]["status"],
+        Value::String("auth_required".to_string())
+    );
+    assert_eq!(
+        parsed["diagnostics"][1]["kind"],
+        Value::String("server_auth_required".to_string())
+    );
+    assert_eq!(
+        parsed["servers"][0]["auth"]["scopes"][0],
+        Value::String("mcp:connect".to_string())
+    );
+}
+
+#[test]
+fn test_mcp_auth_reports_dcr_failure_with_guidance() {
+    let root = tempdir().unwrap();
+    let (url, handle) = spawn_dcr_forbidden_mcp_auth_server();
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_NO_BROWSER", "1")
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "auth",
+            "figma",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Dynamic client registration failed",
+        ))
+        .stderr(predicate::str::contains("mcpServers.figma.oauth"));
+
+    handle.join().unwrap();
+}
+
+#[test]
+fn test_mcp_tools_uses_cached_oauth_credentials_for_http_server() {
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let (url, handle) = spawn_authenticated_mcp_server("demo-access-token");
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    fs::write(
+        home.path().join("mcp_oauth.json"),
+        format!(
+            r#"{{"{url}":{{"type":"oauth","access":"demo-access-token","refresh":"demo-refresh-token","expires":9999999999999,"resource":"{url}","token_endpoint":"{url}/token","client_id":"client-123","redirect_uri":"http://127.0.0.1:8787/callback","token_endpoint_auth_method":"none","scopes":["mcp:connect"],"authorization_endpoint":"{url}/authorize","authorization_server":"{url}"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", home.path())
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "tools",
+            "figma",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    handle.join().unwrap();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["server"], Value::String("figma".to_string()));
+    assert_eq!(
+        parsed["tools"][0]["name"],
+        Value::String("whoami".to_string())
+    );
+}
+
+#[test]
+fn test_mcp_call_uses_cached_oauth_credentials_for_http_server() {
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let (url, handle) = spawn_authenticated_mcp_server("demo-access-token");
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    fs::write(
+        home.path().join("mcp_oauth.json"),
+        format!(
+            r#"{{"{url}":{{"type":"oauth","access":"demo-access-token","refresh":"demo-refresh-token","expires":9999999999999,"resource":"{url}","token_endpoint":"{url}/token","client_id":"client-123","redirect_uri":"http://127.0.0.1:8787/callback","token_endpoint_auth_method":"none","scopes":["mcp:connect"],"authorization_endpoint":"{url}/authorize","authorization_server":"{url}"}}}}"#
+        ),
+    )
+    .unwrap();
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", home.path())
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "call",
+            "figma",
+            "whoami",
+            "--json",
+            "{}",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    handle.join().unwrap();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(parsed["ok"], Value::Bool(true));
+    assert_eq!(
+        parsed["data"]["result"]["content"][0]["text"],
+        Value::String("authenticated".to_string())
+    );
+}
+
+#[test]
+fn test_mcp_tools_refreshes_expired_cached_oauth_credentials() {
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let (url, base_url, handle) =
+        spawn_refreshing_authenticated_mcp_server("fresh-access-token", "demo-refresh-token");
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    write_mcp_oauth_cache(
+        home.path(),
+        &url,
+        &format!("{base_url}/token"),
+        "stale-access-token",
+        0,
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", home.path())
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "tools",
+            "figma",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    handle.join().unwrap();
+
+    let parsed: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(
+        parsed["tools"][0]["name"],
+        Value::String("whoami".to_string())
+    );
+
+    let cache_contents = fs::read_to_string(home.path().join("mcp_oauth.json")).unwrap();
+    assert!(cache_contents.contains("fresh-access-token"));
+    assert!(!cache_contents.contains("stale-access-token"));
+}
+
+#[test]
+fn test_mcp_logout_clears_cached_oauth_credentials() {
+    let root = tempdir().unwrap();
+    let home = tempdir().unwrap();
+    let (url, handle) = spawn_dcr_forbidden_mcp_auth_server();
+
+    fs::write(
+        root.path().join(".mcp.json"),
+        format!(
+            r#"{{
+                "mcpServers": {{
+                    "figma": {{
+                        "url": "{url}"
+                    }}
+                }}
+            }}"#
+        ),
+    )
+    .unwrap();
+
+    write_mcp_oauth_cache(
+        home.path(),
+        &url,
+        &format!("{url}/token"),
+        "demo-access-token",
+        9_999_999_999_999,
+    );
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", home.path())
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "mcp",
+            "logout",
+            "figma",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Cleared cached MCP OAuth credentials",
+        ));
+
+    handle.join().unwrap();
+
+    let cache_contents = fs::read_to_string(home.path().join("mcp_oauth.json")).unwrap();
+    assert!(!cache_contents.contains("demo-access-token"));
+}
+
+fn spawn_auth_required_mcp_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://127.0.0.1:{}", addr.port());
+    let metadata_json = format!(
+        r#"{{"resource":"{base_url}/mcp","authorization_servers":["{base_url}/oauth"],"scopes_supported":["mcp:connect"],"resource_name":"Demo MCP","resource_documentation":"{base_url}/docs"}}"#
+    );
+    let challenge = format!(
+        "Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\",scope=\"mcp:connect\",authorization_uri=\"{base_url}/oauth\""
+    );
+
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let mut saw_request = false;
+        let mut idle_since = Instant::now();
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    saw_request = true;
+                    idle_since = Instant::now();
+
+                    let mut buffer = [0u8; 4096];
+                    let bytes = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..bytes]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+
+                    if path == "/.well-known/oauth-protected-resource" {
+                        let response = format!(
+                            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                            metadata_json.len(),
+                            metadata_json
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    } else {
+                        let body = "Unauthorized";
+                        let response = format!(
+                            "HTTP/1.1 401 Unauthorized\r\nContent-Type: text/plain\r\nWWW-Authenticate: {challenge}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                            body.len()
+                        );
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if saw_request && idle_since.elapsed() > Duration::from_millis(500) {
+                        break;
+                    }
+                    if !saw_request && idle_since.elapsed() > Duration::from_secs(5) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    (format!("{base_url}/mcp"), handle)
+}
+
+fn spawn_dcr_forbidden_mcp_auth_server() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://127.0.0.1:{}", addr.port());
+    let resource_metadata = format!(
+        r#"{{"resource":"{base_url}/mcp","authorization_servers":["{base_url}"],"scopes_supported":["mcp:connect"],"resource_name":"Demo MCP"}}"#
+    );
+    let auth_metadata = format!(
+        r#"{{"issuer":"{base_url}","authorization_endpoint":"{base_url}/authorize","token_endpoint":"{base_url}/token","registration_endpoint":"{base_url}/register","grant_types_supported":["authorization_code","refresh_token"],"response_types_supported":["code"],"code_challenge_methods_supported":["S256"],"scopes_supported":["mcp:connect"],"require_state_parameter":true}}"#
+    );
+    let challenge = format!(
+        "Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\",scope=\"mcp:connect\",authorization_uri=\"{base_url}/.well-known/oauth-authorization-server\""
+    );
+
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let mut saw_request = false;
+        let mut idle_since = Instant::now();
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    saw_request = true;
+                    idle_since = Instant::now();
+
+                    let mut buffer = [0u8; 4096];
+                    let bytes = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..bytes]);
+                    let path = request
+                        .lines()
+                        .next()
+                        .and_then(|line| line.split_whitespace().nth(1))
+                        .unwrap_or("/");
+
+                    let (status, content_type, body, extra_headers) = match path {
+                        "/.well-known/oauth-protected-resource" => (
+                            "200 OK",
+                            "application/json",
+                            resource_metadata.as_str(),
+                            String::new(),
+                        ),
+                        "/.well-known/oauth-authorization-server" => (
+                            "200 OK",
+                            "application/json",
+                            auth_metadata.as_str(),
+                            String::new(),
+                        ),
+                        "/register" => ("403 Forbidden", "text/plain", "Forbidden", String::new()),
+                        _ => (
+                            "401 Unauthorized",
+                            "text/plain",
+                            "Unauthorized",
+                            format!("WWW-Authenticate: {challenge}\r\n"),
+                        ),
+                    };
+
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{extra_headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if saw_request && idle_since.elapsed() > Duration::from_millis(500) {
+                        break;
+                    }
+                    if !saw_request && idle_since.elapsed() > Duration::from_secs(5) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    (format!("{base_url}/mcp"), handle)
+}
+
+fn spawn_authenticated_mcp_server(access_token: &str) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://127.0.0.1:{}", addr.port());
+    let resource_metadata = format!(
+        r#"{{"resource":"{base_url}/mcp","authorization_servers":["{base_url}"],"scopes_supported":["mcp:connect"],"resource_name":"Demo MCP"}}"#
+    );
+    let challenge = format!(
+        "Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\",scope=\"mcp:connect\",authorization_uri=\"{base_url}/.well-known/oauth-authorization-server\""
+    );
+    let access_token = access_token.to_string();
+
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let mut saw_request = false;
+        let mut idle_since = Instant::now();
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    saw_request = true;
+                    idle_since = Instant::now();
+
+                    let mut buffer = [0u8; 8192];
+                    let bytes = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..bytes]);
+                    let response = authenticated_mcp_server_response(
+                        &request,
+                        &resource_metadata,
+                        &challenge,
+                        &access_token,
+                    );
+
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if saw_request && idle_since.elapsed() > Duration::from_millis(500) {
+                        break;
+                    }
+                    if !saw_request && idle_since.elapsed() > Duration::from_secs(5) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    (format!("{base_url}/mcp"), handle)
+}
+
+fn spawn_refreshing_authenticated_mcp_server(
+    refreshed_access_token: &str,
+    refresh_token: &str,
+) -> (String, String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let base_url = format!("http://127.0.0.1:{}", addr.port());
+    let resource_metadata = format!(
+        r#"{{"resource":"{base_url}/mcp","authorization_servers":["{base_url}"],"scopes_supported":["mcp:connect"],"resource_name":"Demo MCP"}}"#
+    );
+    let challenge = format!(
+        "Bearer resource_metadata=\"{base_url}/.well-known/oauth-protected-resource\",scope=\"mcp:connect\",authorization_uri=\"{base_url}/.well-known/oauth-authorization-server\""
+    );
+    let refreshed_access_token = refreshed_access_token.to_string();
+    let refresh_token = refresh_token.to_string();
+
+    let handle = thread::spawn(move || {
+        listener.set_nonblocking(true).unwrap();
+        let mut saw_request = false;
+        let mut idle_since = Instant::now();
+
+        loop {
+            match listener.accept() {
+                Ok((mut stream, _)) => {
+                    saw_request = true;
+                    idle_since = Instant::now();
+
+                    let mut buffer = [0u8; 8192];
+                    let bytes = stream.read(&mut buffer).unwrap_or(0);
+                    let request = String::from_utf8_lossy(&buffer[..bytes]);
+                    let request_line = request.lines().next().unwrap_or_default().to_string();
+                    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+
+                    let response = if path == "/token" {
+                        http_response(
+                            "200 OK",
+                            "application/json",
+                            &serde_json::json!({
+                                "access_token": refreshed_access_token,
+                                "refresh_token": refresh_token,
+                                "expires_in": 3600,
+                            })
+                            .to_string(),
+                            None,
+                        )
+                    } else {
+                        authenticated_mcp_server_response(
+                            &request,
+                            &resource_metadata,
+                            &challenge,
+                            &refreshed_access_token,
+                        )
+                    };
+
+                    let _ = stream.write_all(response.as_bytes());
+                }
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if saw_request && idle_since.elapsed() > Duration::from_millis(500) {
+                        break;
+                    }
+                    if !saw_request && idle_since.elapsed() > Duration::from_secs(5) {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(25));
+                }
+                Err(_) => break,
+            }
+        }
+    });
+
+    (format!("{base_url}/mcp"), base_url, handle)
+}
+
+fn authenticated_mcp_server_response(
+    request: &str,
+    resource_metadata: &str,
+    challenge: &str,
+    access_token: &str,
+) -> String {
+    let request_line = request.lines().next().unwrap_or_default().to_string();
+    let path = request_line.split_whitespace().nth(1).unwrap_or("/");
+    let auth_header = request
+        .lines()
+        .find(|line| line.to_ascii_lowercase().starts_with("authorization:"))
+        .map(|line| line.split_once(':').unwrap().1.trim().to_string());
+
+    if path == "/.well-known/oauth-protected-resource" {
+        return http_response("200 OK", "application/json", resource_metadata, None);
+    }
+    if auth_header.as_deref() != Some(&format!("Bearer {access_token}")) {
+        return http_response(
+            "401 Unauthorized",
+            "text/plain",
+            "Unauthorized",
+            Some(&format!("WWW-Authenticate: {challenge}\r\n")),
+        );
+    }
+    if request_line.starts_with("GET ") {
+        return http_response(
+            "405 Method Not Allowed",
+            "text/plain",
+            "Method Not Allowed",
+            None,
+        );
+    }
+
+    authenticated_mcp_jsonrpc_response(request)
+}
+
+fn authenticated_mcp_jsonrpc_response(request: &str) -> String {
+    let body = request.split("\r\n\r\n").nth(1).unwrap_or("");
+    let json: Value = serde_json::from_str(body).unwrap_or_default();
+    let id = json.get("id").cloned().unwrap_or(Value::Null);
+    let method = json
+        .get("method")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
+
+    match method {
+        "initialize" => http_response(
+            "200 OK",
+            "application/json",
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {"tools": {}},
+                    "serverInfo": {"name": "demo-mcp", "version": "1.0.0"}
+                }
+            })
+            .to_string(),
+            None,
+        ),
+        "notifications/initialized" | "initialized" => {
+            "HTTP/1.1 202 Accepted\r\nConnection: close\r\n\r\n".to_string()
+        }
+        "tools/list" => http_response(
+            "200 OK",
+            "application/json",
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "tools": [{
+                        "name": "whoami",
+                        "description": "Show identity",
+                        "inputSchema": {"type": "object", "properties": {}, "additionalProperties": false}
+                    }]
+                }
+            })
+            .to_string(),
+            None,
+        ),
+        "tools/call" => http_response(
+            "200 OK",
+            "application/json",
+            &serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": {
+                    "content": [{"type": "text", "text": "authenticated"}],
+                    "isError": false
+                }
+            })
+            .to_string(),
+            None,
+        ),
+        _ => http_response(
+            "400 Bad Request",
+            "text/plain",
+            "Unsupported method",
+            None,
+        ),
+    }
+}
+
+fn http_response(
+    status: &str,
+    content_type: &str,
+    body: &str,
+    extra_headers: Option<&str>,
+) -> String {
+    format!(
+        "HTTP/1.1 {status}\r\nContent-Type: {content_type}\r\n{}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        extra_headers.unwrap_or(""),
+        body.len()
+    )
+}
+
+fn write_mcp_oauth_cache(
+    home: &std::path::Path,
+    resource: &str,
+    token_endpoint: &str,
+    access_token: &str,
+    expires: u64,
+) {
+    fs::write(
+        home.join("mcp_oauth.json"),
+        format!(
+            r#"{{"{resource}":{{"type":"oauth","access":"{access_token}","refresh":"demo-refresh-token","expires":{expires},"resource":"{resource}","token_endpoint":"{token_endpoint}","client_id":"client-123","redirect_uri":"http://127.0.0.1:8787/callback","token_endpoint_auth_method":"none","scopes":["mcp:connect"],"authorization_endpoint":"{resource}/authorize","authorization_server":"{resource}"}}}}"#
+        ),
+    )
+    .unwrap();
 }
