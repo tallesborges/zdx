@@ -105,7 +105,7 @@ Runtime-specific additive instruction layers. Treat each layer as authoritative 
 ## Environment
 Runtime facts for this session. Use env vars for paths; this block is reference context.
 <environment>
-Current directory: {{ cwd }}
+The current working directory is '{{cwd}}'
 Current date: {{ date }}
 
 The following runtime environment variables may be available and should be used when relevant:
