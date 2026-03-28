@@ -692,7 +692,7 @@ async fn run_turn_inner(
     loop {
         ensure_not_interrupted(None)?;
         let stream = request_stream(&setup.client, &messages, &setup.tools, system_prompt).await?;
-        let mut stream_state = consume_stream(stream, sender).await?;
+        let mut stream_state = consume_stream(stream, &messages, sender).await?;
 
         if stream_state.needs_tool_execution() {
             let stats =
@@ -1217,13 +1217,15 @@ async fn request_stream(
 
 async fn consume_stream(
     mut stream: ProviderStream,
+    prior_messages: &[ChatMessage],
     sender: &EventSender,
 ) -> TurnResult<StreamState> {
     let mut state = StreamState::new();
 
     loop {
-        let partial = (!state.turn.text.is_empty()).then(|| state.turn.text.clone());
-        ensure_not_interrupted(partial)?;
+        if interrupt::is_interrupted() {
+            return Err(interrupted_turn_from_stream(prior_messages, state.turn));
+        }
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
             Ok(Some(result)) => result.map_err(TurnError::Provider)?,
             Ok(None) => return Ok(state),
@@ -1539,6 +1541,70 @@ async fn finalize_non_tool_turn(
         })
         .await;
     Ok((final_text, messages.clone()))
+}
+
+fn interrupted_turn_from_stream(
+    prior_messages: &[ChatMessage],
+    turn: AssistantTurnBuilder,
+) -> TurnError {
+    let final_text = turn.text.clone();
+    let messages = build_interrupted_messages(prior_messages, turn);
+    TurnError::interrupted_with_completion(
+        (!final_text.is_empty()).then_some(final_text.clone()),
+        final_text,
+        messages,
+    )
+}
+
+fn build_interrupted_messages(
+    prior_messages: &[ChatMessage],
+    mut turn: AssistantTurnBuilder,
+) -> Vec<ChatMessage> {
+    let mut assistant_tools = Vec::with_capacity(turn.tool_uses.len());
+    let mut tool_results = Vec::with_capacity(turn.tool_uses.len());
+
+    for tu in turn.tool_uses.drain(..) {
+        match tu.clone().finalize() {
+            Ok(tool_use) => {
+                let interrupted_output = ToolOutput::canceled("Interrupted by user");
+                tool_results.push(ToolResult::from_output(
+                    tool_use.id.clone(),
+                    &interrupted_output,
+                ));
+                assistant_tools.push(tool_use);
+            }
+            Err(err) => {
+                assistant_tools.push(ToolUse {
+                    id: tu.id.clone(),
+                    name: tu.name.clone(),
+                    input: serde_json::json!({ "_raw_malformed": tu.input_json }),
+                });
+                let error_output = ToolOutput::failure(
+                    "invalid_json",
+                    format!("Failed to parse tool arguments: {err}"),
+                    Some(truncate_for_error(&tu.input_json, 500)),
+                );
+                tool_results.push(ToolResult::from_output(tu.id, &error_output));
+            }
+        }
+    }
+
+    let assistant_blocks = turn.into_blocks(assistant_tools);
+    let mut messages = prior_messages.to_vec();
+
+    if !assistant_blocks.is_empty() {
+        messages.push(ChatMessage {
+            role: "assistant".to_string(),
+            phase: Some("commentary".to_string()),
+            content: crate::providers::MessageContent::Blocks(assistant_blocks),
+        });
+    }
+
+    if !tool_results.is_empty() {
+        messages.push(ChatMessage::tool_results(tool_results));
+    }
+
+    messages
 }
 
 async fn emit_assistant_completed_if_present(sender: &EventSender, text: &str) {
@@ -1931,6 +1997,85 @@ mod tests {
             } if final_text == "partial" && event_messages == &messages
         ));
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn interrupted_stream_snapshot_preserves_partial_context_for_next_turn() {
+        use crate::providers::{ChatContentBlock, MessageContent};
+        use crate::tools::ToolResultContent;
+
+        let prior_messages = vec![ChatMessage::user("analyze the repo")];
+        let turn = AssistantTurnBuilder {
+            thinking_blocks: vec![ThinkingBuilder {
+                index: 0,
+                text: "Let me inspect the project first.".to_string(),
+                signature: String::new(),
+                signature_provider: None,
+                replay: Some(ReplayToken::Anthropic {
+                    signature: "sig123".to_string(),
+                }),
+                had_delta: true,
+            }],
+            text: "I found the provider loop.".to_string(),
+            tool_uses: vec![ToolUseBuilder {
+                index: 1,
+                id: "tool_1".to_string(),
+                name: "read".to_string(),
+                input_json: r#"{"path":"src/main.rs"}"#.to_string(),
+                input_preview_len: 0,
+            }],
+        };
+
+        let messages = build_interrupted_messages(&prior_messages, turn);
+
+        assert_eq!(messages.len(), 3, "messages: {messages:#?}");
+        assert_eq!(messages[0], prior_messages[0]);
+
+        assert!(matches!(
+            &messages[1],
+            ChatMessage {
+                role,
+                phase: Some(phase),
+                content: MessageContent::Blocks(blocks),
+            } if role == "assistant"
+                && phase == "commentary"
+                && blocks.iter().any(|block| matches!(
+                    block,
+                    ChatContentBlock::Reasoning(ReasoningBlock {
+                        text: Some(text),
+                        replay: Some(ReplayToken::Anthropic { signature }),
+                    }) if text == "Let me inspect the project first." && signature == "sig123"
+                ))
+                && blocks.iter().any(|block| matches!(
+                    block,
+                    ChatContentBlock::Text(text) if text == "I found the provider loop."
+                ))
+                && blocks.iter().any(|block| matches!(
+                    block,
+                    ChatContentBlock::ToolUse { id, name, input }
+                        if id == "tool_1"
+                            && name == "read"
+                            && input == &serde_json::json!({"path": "src/main.rs"})
+                ))
+        ));
+
+        assert!(matches!(
+            &messages[2],
+            ChatMessage {
+                role,
+                content: MessageContent::Blocks(blocks),
+                ..
+            } if role == "user"
+                && matches!(blocks.as_slice(), [ChatContentBlock::ToolResult(result)]
+                    if result.tool_use_id == "tool_1"
+                        && result.is_error
+                        && matches!(
+                            &result.content,
+                            ToolResultContent::Text(text)
+                                if text.contains("\"code\":\"canceled\"")
+                                    && text.contains("Interrupted by user")
+                        ))
+        ));
     }
 
     /// Verifies `ToolUseBuilder` finalization fails on invalid JSON.
