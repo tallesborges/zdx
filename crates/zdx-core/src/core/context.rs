@@ -1756,7 +1756,7 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("<environment>"));
-        assert!(prompt.contains("Current directory:"));
+        assert!(prompt.contains("The current working directory is '"));
         assert!(prompt.contains("Current date:"));
         assert!(prompt.contains("`ZDX_HOME`: ZDX runtime home/config directory."));
         assert!(prompt.contains(
