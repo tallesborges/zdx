@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use zdx_core::config::Config;
+use zdx_core::config::{Config, TextVerbosity};
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use zdx_core::core::events::AgentEvent;
@@ -152,6 +152,7 @@ pub(crate) fn spawn_agent_turn(
         root: root.to_path_buf(),
         tool_config: tool_config.clone(),
         surface: Some("telegram".to_string()),
+        text_verbosity: Some(TextVerbosity::Low),
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]

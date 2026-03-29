@@ -50,6 +50,7 @@ impl From<&ExecOptions> for AgentOptions {
             root: opts.root.clone(),
             tool_config: opts.tool_config.clone(),
             surface: Some("exec".to_string()),
+            text_verbosity: None,
         }
     }
 }

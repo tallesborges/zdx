@@ -3,12 +3,12 @@
 use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use crate::config::TextVerbosity;
 use crate::providers::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const RESPONSES_PATH: &str = "/responses";
-const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
 /// `OpenAI` API configuration.
 #[derive(Debug, Clone)]
@@ -18,6 +18,7 @@ pub struct OpenAIConfig {
     pub model: String,
     pub max_output_tokens: Option<u32>,
     pub reasoning_effort: Option<String>,
+    pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
 }
 
@@ -40,6 +41,7 @@ impl OpenAIConfig {
         config_base_url: Option<&str>,
         config_api_key: Option<&str>,
         reasoning_effort: Option<String>,
+        text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
     ) -> Result<Self> {
         let api_key = ProviderKind::OpenAI.resolve_api_key(config_api_key)?;
@@ -51,6 +53,7 @@ impl OpenAIConfig {
             model,
             max_output_tokens,
             reasoning_effort,
+            text_verbosity,
             prompt_cache_key,
         })
     }
@@ -88,7 +91,13 @@ impl OpenAIClient {
             reasoning_effort: self.config.reasoning_effort.clone(),
             reasoning_summary: None,
             instructions: None,
-            text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
+            text_verbosity: Some(
+                self.config
+                    .text_verbosity
+                    .unwrap_or_default()
+                    .as_str()
+                    .to_string(),
+            ),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
             stream_options: Some(StreamOptions {

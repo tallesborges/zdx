@@ -15,7 +15,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 
-use crate::config::{Config, ThinkingLevel};
+use crate::config::{Config, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
@@ -52,6 +52,8 @@ pub struct AgentOptions {
     pub tool_config: ToolConfig,
     /// Surface label for activity tracking (e.g., "chat", "exec", "telegram").
     pub surface: Option<String>,
+    /// Optional OpenAI Responses text verbosity override for this run.
+    pub text_verbosity: Option<TextVerbosity>,
 }
 
 /// Tool configuration for agent execution.
@@ -746,6 +748,7 @@ fn build_run_turn_setup(
 
     let client = build_provider_client(
         config,
+        options.text_verbosity,
         thread_id,
         &selection.model,
         provider,
@@ -773,6 +776,7 @@ fn build_run_turn_setup(
 
 fn build_provider_client(
     config: &Config,
+    text_verbosity: Option<TextVerbosity>,
     thread_id: Option<&str>,
     model: &str,
     provider: ProviderKind,
@@ -810,13 +814,20 @@ fn build_provider_client(
             ),
         ))),
         ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
-            OpenAICodexConfig::new(model.to_string(), max_tokens, reasoning_effort, cache_key),
+            OpenAICodexConfig::new(
+                model.to_string(),
+                max_tokens,
+                reasoning_effort,
+                text_verbosity,
+                cache_key,
+            ),
         ))),
         ProviderKind::OpenAI => build_openai_client(
             config,
             model,
             config.max_tokens,
             reasoning_effort,
+            text_verbosity,
             cache_key,
         ),
         ProviderKind::OpenRouter => {
@@ -888,6 +899,7 @@ fn build_openai_client(
     model: &str,
     max_tokens: Option<u32>,
     reasoning_effort: Option<String>,
+    text_verbosity: Option<TextVerbosity>,
     cache_key: Option<String>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::OpenAI(OpenAIClient::new(
@@ -897,6 +909,7 @@ fn build_openai_client(
             config.providers.openai.effective_base_url(),
             config.providers.openai.effective_api_key(),
             reasoning_effort,
+            text_verbosity,
             cache_key,
         )?,
     )))
