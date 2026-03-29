@@ -186,6 +186,7 @@ impl TuiState {
             root,
             tool_config: ToolConfig::default(),
             surface: Some("chat".to_string()),
+            text_verbosity: None,
         };
 
         // Cache display values at startup (avoids I/O during render)

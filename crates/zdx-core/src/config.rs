@@ -45,6 +45,27 @@ pub enum ThinkingLevel {
     XHigh,
 }
 
+/// Text verbosity for OpenAI Responses-compatible providers.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum TextVerbosity {
+    Low,
+    #[default]
+    Medium,
+    High,
+}
+
+impl TextVerbosity {
+    #[must_use]
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TextVerbosity::Low => "low",
+            TextVerbosity::Medium => "medium",
+            TextVerbosity::High => "high",
+        }
+    }
+}
+
 fn default_skill_repositories() -> Vec<String> {
     vec![
         "openai/skills/skills/.curated".to_string(),
@@ -1991,6 +2012,13 @@ max_tokens = 4096
         assert!(config.provider.is_none());
         assert!(config.model.is_none());
         assert!(config.language.is_none());
+    }
+
+    #[test]
+    fn test_telegram_config_defaults() {
+        let config = TelegramConfig::default();
+        assert_eq!(config.model, "claude-cli:claude-opus-4-6");
+        assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
     }
 
     /// `SubagentsConfig`: defaults are enabled with dynamic model list resolution.

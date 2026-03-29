@@ -135,6 +135,7 @@ impl ApiyiClient {
                     model: config.model,
                     max_output_tokens: config.max_tokens,
                     reasoning_effort: config.reasoning_effort,
+                    text_verbosity: None,
                     prompt_cache_key: config.cache_key,
                 }))
             }

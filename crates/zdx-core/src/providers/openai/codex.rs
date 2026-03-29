@@ -5,6 +5,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use reqwest::header::{HeaderMap, HeaderValue};
 
+use crate::config::TextVerbosity;
 use crate::prompts;
 use crate::providers::oauth::openai_codex as oauth_codex;
 use crate::providers::openai::responses::{ResponsesConfig, send_responses_stream};
@@ -12,7 +13,6 @@ use crate::providers::{ProviderKind, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const RESPONSES_PATH: &str = "/codex/responses";
-const DEFAULT_TEXT_VERBOSITY: &str = "medium";
 
 const HEADER_ACCOUNT_ID: &str = "chatgpt-account-id";
 const HEADER_ORIGINATOR: &str = "originator";
@@ -34,6 +34,7 @@ pub struct OpenAICodexConfig {
     #[allow(dead_code)]
     pub max_tokens: u32,
     pub reasoning_effort: Option<String>,
+    pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
 }
 
@@ -42,12 +43,14 @@ impl OpenAICodexConfig {
         model: String,
         max_tokens: u32,
         reasoning_effort: Option<String>,
+        text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
     ) -> Self {
         Self {
             model,
             max_tokens,
             reasoning_effort,
+            text_verbosity,
             prompt_cache_key,
         }
     }
@@ -142,7 +145,13 @@ impl OpenAICodexClient {
             reasoning_summary: supports_reasoning_summary(&self.config.model)
                 .then(|| "auto".to_string()),
             instructions,
-            text_verbosity: Some(DEFAULT_TEXT_VERBOSITY.to_string()),
+            text_verbosity: Some(
+                self.config
+                    .text_verbosity
+                    .unwrap_or_default()
+                    .as_str()
+                    .to_string(),
+            ),
             store: Some(false),
             include: Some(vec!["reasoning.encrypted_content".to_string()]),
             stream_options: None,
