@@ -95,6 +95,16 @@ fn test_automations_help_shows_subcommands() {
 }
 
 #[test]
+fn test_bot_help_shows_init_subcommand() {
+    cargo_bin_cmd!("zdx")
+        .args(["bot", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("init"))
+        .stdout(predicate::str::contains("--bot"));
+}
+
+#[test]
 fn test_daemon_help_shows_poll_interval() {
     cargo_bin_cmd!("zdx")
         .args(["automations", "daemon", "--help"])

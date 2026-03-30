@@ -67,6 +67,89 @@ fn test_config_help_shows_subcommands() {
 }
 
 #[test]
+fn test_bot_init_creates_named_bot_in_zdx_home() {
+    let zdx_home = tempdir().unwrap();
+    let root = tempdir().unwrap();
+    let bots_path = zdx_home.path().join("bots.toml");
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .args([
+            "--root",
+            root.path().to_str().unwrap(),
+            "bot",
+            "init",
+            "--name",
+            "zdx",
+            "--bot-token",
+            "123456:abc",
+            "--user-id",
+            "42",
+            "--chat-id",
+            "-1009876543210",
+            "--model",
+            "claude-cli:claude-sonnet-4-6",
+            "--thinking",
+            "high",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Saved bot 'zdx'"));
+
+    assert!(bots_path.exists());
+    let contents = fs::read_to_string(&bots_path).unwrap();
+    assert!(contents.contains("[bots.zdx]"));
+    assert!(contents.contains("bot_token = \"123456:abc\""));
+    assert!(contents.contains("allowlist_user_ids = [42]"));
+    assert!(contents.contains("allowlist_chat_ids = [-1009876543210]"));
+    assert!(contents.contains("thinking_level = \"high\""));
+    let parsed: toml::Value = toml::from_str(&contents).unwrap();
+    let canonical_root = root.path().canonicalize().unwrap().display().to_string();
+    assert_eq!(parsed["bots"]["zdx"]["root"].as_str(), Some(canonical_root.as_str()));
+}
+
+#[test]
+fn test_bot_command_fails_when_bot_name_is_missing() {
+    let zdx_home = tempdir().unwrap();
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["bot"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("bot name is required"));
+}
+
+#[test]
+fn test_bot_command_fails_when_named_bot_is_missing() {
+    let zdx_home = tempdir().unwrap();
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .args(["bot", "--bot", "missing"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("No bot named 'missing'"));
+}
+
+#[test]
+fn test_telegram_command_requires_bot_name() {
+    let zdx_home = tempdir().unwrap();
+
+    cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", zdx_home.path())
+        .args([
+            "telegram",
+            "create-topic",
+            "--chat-id",
+            "-100123",
+            "--name",
+            "Test Topic",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--bot <NAME>"));
+}
+
+#[test]
 fn test_automations_list_empty() {
     let dir = tempdir().unwrap();
 

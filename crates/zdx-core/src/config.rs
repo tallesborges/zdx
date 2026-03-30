@@ -2,11 +2,12 @@
 //!
 //! Loads configuration from ${`ZDX_HOME}/config.toml` with sensible defaults.
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
 /// Skill source toggles grouped by source/type.
@@ -174,6 +175,120 @@ impl Default for TelegramConfig {
             model: "claude-cli:claude-opus-4-6".to_string(),
             thinking_level: ThinkingLevel::Minimal,
         }
+    }
+}
+
+/// Stored configuration for one named Telegram bot in `$ZDX_HOME/bots.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NamedBotConfig {
+    /// Root directory where this bot should run.
+    pub root: String,
+    /// Bot token for Telegram API.
+    pub bot_token: String,
+    /// Allowlist of numeric Telegram user IDs.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowlist_user_ids: Vec<i64>,
+    /// Allowlist of numeric Telegram chat IDs (for groups/supergroups).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub allowlist_chat_ids: Vec<i64>,
+    /// Model override for this bot.
+    pub model: String,
+    /// Thinking level override for this bot.
+    pub thinking_level: ThinkingLevel,
+}
+
+impl NamedBotConfig {
+    /// Applies this named bot configuration onto the loaded global config.
+    pub fn apply_to(&self, config: &mut Config) {
+        config.telegram.bot_token = Some(self.bot_token.trim().to_string());
+        config.telegram.allowlist_user_ids = self.allowlist_user_ids.clone();
+        config.telegram.allowlist_chat_ids = self.allowlist_chat_ids.clone();
+        config.telegram.model = self.model.trim().to_string();
+        config.telegram.thinking_level = self.thinking_level;
+    }
+
+    #[must_use]
+    pub fn root_path(&self) -> PathBuf {
+        PathBuf::from(self.root.trim())
+    }
+}
+
+/// Global registry of named Telegram bots stored at `$ZDX_HOME/bots.toml`.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+pub struct BotsConfig {
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub bots: BTreeMap<String, NamedBotConfig>,
+}
+
+impl BotsConfig {
+    /// Loads the global bot registry from the default bots path.
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub fn load() -> Result<Self> {
+        Self::load_from(&paths::bots_config_path())
+    }
+
+    /// Loads the global bot registry from a specific path.
+    ///
+    /// # Errors
+    /// Returns an error if the file exists but cannot be read or parsed.
+    pub fn load_from(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            return Ok(Self::default());
+        }
+
+        let contents = fs::read_to_string(path)
+            .with_context(|| format!("Failed to read bot registry from {}", path.display()))?;
+        toml::from_str(&contents)
+            .with_context(|| format!("Failed to parse bot registry from {}", path.display()))
+    }
+
+    /// Saves the global bot registry to the default bots path.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be written.
+    pub fn save(&self) -> Result<()> {
+        self.save_to(&paths::bots_config_path())
+    }
+
+    /// Saves the global bot registry to a specific path.
+    ///
+    /// # Errors
+    /// Returns an error if the file cannot be written.
+    pub fn save_to(&self, path: &Path) -> Result<()> {
+        let body = toml::to_string_pretty(self).context("serialize bot registry")?;
+        let content = format!("# ZDX named Telegram bots\n# Created by `zdx bot init`.\n\n{body}");
+        Config::write_config(path, &content)
+    }
+
+    #[must_use]
+    pub fn get(&self, name: &str) -> Option<&NamedBotConfig> {
+        self.bots.get(name)
+    }
+
+    /// Returns a named bot or a user-facing error when it does not exist.
+    ///
+    /// # Errors
+    /// Returns an error if the named bot is missing.
+    pub fn get_required(&self, name: &str) -> Result<&NamedBotConfig> {
+        self.get_required_from(name, &paths::bots_config_path())
+    }
+
+    /// Returns a named bot or a user-facing error with an explicit registry path.
+    ///
+    /// # Errors
+    /// Returns an error if the named bot is missing.
+    pub fn get_required_from(&self, name: &str, path: &Path) -> Result<&NamedBotConfig> {
+        self.get(name).ok_or_else(|| {
+            anyhow::anyhow!(
+                "No bot named '{}' found in {}. Run `zdx bot init --name {}` first.",
+                name,
+                path.display(),
+                name
+            )
+        })
     }
 }
 
@@ -401,6 +516,11 @@ pub mod paths {
         zdx_home().join("config.toml")
     }
 
+    /// Returns the path to the named bot registry file.
+    pub fn bots_config_path() -> PathBuf {
+        zdx_home().join("bots.toml")
+    }
+
     /// Returns the path to the threads directory.
     pub fn threads_dir() -> PathBuf {
         zdx_home().join("threads")
@@ -590,6 +710,46 @@ impl Config {
     /// Returns an error if the operation fails.
     pub fn load() -> Result<Self> {
         Self::load_from(&paths::config_path())
+    }
+
+    /// Loads config for a named bot from the default config + bot registry paths.
+    ///
+    /// Returns the effective config plus the stored root path for that bot.
+    ///
+    /// # Errors
+    /// Returns an error if the config or bot registry cannot be loaded, or the bot is missing.
+    pub fn load_for_named_bot(name: &str) -> Result<(Self, PathBuf)> {
+        Self::load_for_named_bot_from(&paths::config_path(), &paths::bots_config_path(), name)
+    }
+
+    /// Loads config for a named bot from specific config + bot registry paths.
+    ///
+    /// Returns the effective config plus the stored root path for that bot.
+    ///
+    /// # Errors
+    /// Returns an error if the config or bot registry cannot be loaded, or the bot is missing.
+    pub fn load_for_named_bot_from(
+        config_path: &Path,
+        bots_path: &Path,
+        name: &str,
+    ) -> Result<(Self, PathBuf)> {
+        let mut config = Self::load_from(config_path)?;
+        let bots = BotsConfig::load_from(bots_path)?;
+        let bot = bots.get_required_from(name, bots_path)?;
+        bot.apply_to(&mut config);
+
+        if config.telegram.bot_token.is_none()
+            && config.telegram.allowlist_user_ids.is_empty()
+            && config.telegram.allowlist_chat_ids.is_empty()
+        {
+            bail!(
+                "Bot '{}' in {} is missing required bot settings.",
+                name,
+                bots_path.display()
+            );
+        }
+
+        Ok((config, bot.root_path()))
     }
 
     /// Loads configuration from a specific path.
@@ -2019,6 +2179,89 @@ max_tokens = 4096
         let config = TelegramConfig::default();
         assert_eq!(config.model, "claude-cli:claude-opus-4-6");
         assert_eq!(config.thinking_level, ThinkingLevel::Minimal);
+    }
+
+    #[test]
+    fn test_bots_config_roundtrip() {
+        let mut bots = BotsConfig::default();
+        bots.bots.insert(
+            "zdx".to_string(),
+            NamedBotConfig {
+                root: "/tmp/zdx".to_string(),
+                bot_token: "123:abc".to_string(),
+                allowlist_user_ids: vec![42],
+                allowlist_chat_ids: vec![-100123],
+                model: "claude-cli:claude-sonnet-4-6".to_string(),
+                thinking_level: ThinkingLevel::Low,
+            },
+        );
+
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("bots.toml");
+        bots.save_to(&path).unwrap();
+
+        let loaded = BotsConfig::load_from(&path).unwrap();
+        let bot = loaded.get_required("zdx").unwrap();
+        assert_eq!(bot.root, "/tmp/zdx");
+        assert_eq!(bot.bot_token, "123:abc");
+        assert_eq!(bot.allowlist_user_ids, vec![42]);
+        assert_eq!(bot.allowlist_chat_ids, vec![-100123]);
+        assert_eq!(bot.model, "claude-cli:claude-sonnet-4-6");
+        assert_eq!(bot.thinking_level, ThinkingLevel::Low);
+    }
+
+    #[test]
+    fn test_load_for_named_bot_applies_registry_overrides() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let bots_path = dir.path().join("bots.toml");
+
+        fs::write(
+            &config_path,
+            r#"[telegram]
+model = "claude-cli:claude-opus-4-6"
+thinking_level = "minimal"
+"#,
+        )
+        .unwrap();
+
+        let mut bots = BotsConfig::default();
+        bots.bots.insert(
+            "zdx".to_string(),
+            NamedBotConfig {
+                root: "/tmp/zdx".to_string(),
+                bot_token: "project-token".to_string(),
+                allowlist_user_ids: vec![42],
+                allowlist_chat_ids: vec![-100123],
+                model: "openai:gpt-5.4".to_string(),
+                thinking_level: ThinkingLevel::High,
+            },
+        );
+        bots.save_to(&bots_path).unwrap();
+
+        let (config, root) =
+            Config::load_for_named_bot_from(&config_path, &bots_path, "zdx").unwrap();
+        assert_eq!(root, PathBuf::from("/tmp/zdx"));
+        assert_eq!(config.telegram.bot_token.as_deref(), Some("project-token"));
+        assert_eq!(config.telegram.allowlist_user_ids, vec![42]);
+        assert_eq!(config.telegram.allowlist_chat_ids, vec![-100123]);
+        assert_eq!(config.telegram.model, "openai:gpt-5.4");
+        assert_eq!(config.telegram.thinking_level, ThinkingLevel::High);
+    }
+
+    #[test]
+    fn test_load_for_named_bot_errors_when_missing() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let bots_path = dir.path().join("bots.toml");
+
+        fs::write(&config_path, "model = \"claude-haiku-4-5\"\n").unwrap();
+
+        let error = Config::load_for_named_bot_from(&config_path, &bots_path, "missing")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("No bot named 'missing'"));
+        assert!(error.contains("bot init --name missing"));
     }
 
     /// `SubagentsConfig`: defaults are enabled with dynamic model list resolution.

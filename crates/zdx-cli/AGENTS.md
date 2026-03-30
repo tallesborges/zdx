@@ -7,6 +7,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/main.rs`: binary entrypoint
 - `src/cli/`: argument structs + command dispatch
 - `src/cli/commands/automations.rs`: automations commands (`list`, `validate`, `run`)
+- `src/cli/commands/bot.rs`: Telegram bot setup/init command handler (`zdx bot init`)
 - `src/cli/commands/daemon.rs`: scheduled automations daemon loop
 - `src/cli/commands/imagine.rs`: image generation command handler (`zdx imagine`)
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
