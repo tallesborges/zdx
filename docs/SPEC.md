@@ -77,6 +77,8 @@ ZDX solves this with a boring, reliable core:
 
 **Shipped commands (v0.1):**
 - `zdx` — interactive chat (TTY)
+- `zdx bot --bot <NAME>` — run a named Telegram bot from `$ZDX_HOME/bots.toml`
+- `zdx bot init --name <NAME> [--root PATH]` — create/update a named Telegram bot in `$ZDX_HOME/bots.toml`
 - `zdx exec -p, --prompt <PROMPT> [--no-system-prompt]` — run one prompt non-interactively
 - `zdx imagine -p, --prompt <PROMPT> [--out PATH] [--model MODEL] [--aspect RATIO] [--size SIZE]` — generate images with Gemini image models
 - `zdx mcp servers|auth <SERVER>|logout <SERVER>|tools <SERVER>|schema <SERVER> <TOOL>|call <SERVER> <TOOL> --json '{...}'` — inspect, authenticate, and call configured MCP servers through the helper CLI
@@ -127,6 +129,8 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 - Threads dir: `<base>/threads/`
 - OAuth cache: `<base>/oauth.json` (0600 perms)
 - MCP OAuth cache: `<base>/mcp_oauth.json` (0600 perms)
+- Named Telegram bot registry: `<base>/bots.toml`
+- `zdx bot --bot <NAME>` and `zdx telegram ... --bot <NAME>` resolve Telegram credentials/settings from that registry
 
 ### Format
 

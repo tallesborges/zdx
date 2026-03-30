@@ -49,7 +49,14 @@ pub async fn run() -> Result<()> {
 /// # Errors
 /// Returns an error if the operation fails.
 pub async fn run_with_root(root: PathBuf) -> Result<()> {
-    let mut config = Config::load().context("load zdx config")?;
+    let config = Config::load().context("load zdx config")?;
+    run_with_config_and_root(config, root).await
+}
+
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub async fn run_with_config_and_root(mut config: Config, root: PathBuf) -> Result<()> {
     // Apply telegram-specific model + thinking_level
     config.model.clone_from(&config.telegram.model);
     config.thinking_level = config.telegram.thinking_level;
