@@ -87,8 +87,7 @@ fn truncate_at_utf8_boundary(bytes: &[u8], max_bytes: usize) -> (String, bool, u
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Execute a shell command. Returns stdout, stderr, and exit code. \
-            Useful for running tools like rg (ripgrep), cargo test, etc."
+        description: "Execute a shell command when no dedicated tool exists. Prefer Read for file contents, Grep for text search, and Glob for file discovery instead of using cat, head, tail, less, find, or rg through the shell. Use Bash for builds, tests, git, and other CLI workflows without a first-class tool. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
             .to_string(),
         input_schema: json!({
             "type": "object",

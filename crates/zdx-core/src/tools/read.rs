@@ -56,7 +56,7 @@ const MAX_LINES: usize = 2000;
 
 /// Maximum bytes per page (secondary safety limit).
 /// Even within line-count constraints, a single page should not exceed 40KB
-/// to prevent context window bloat from files with many lines.
+/// to prevent context window bloat from files with many lines or huge blobs.
 const MAX_PAGE_BYTES: usize = 40 * 1024; // 40KB
 
 /// Maximum image file size (3.75MB).
@@ -73,21 +73,21 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Read".to_string(),
-        description: "Read the contents of a file. Returns the file content as text. Also supports reading image files (JPEG, PNG, GIF, WebP) for visual analysis.".to_string(),
+        description: "Read the contents of a file from disk. Prefer this over shell commands like cat, head, tail, less, or more for file reading. Always provide `path`. For large files or specific ranges, use `offset` (1-indexed) and `limit` to page through the file. Responses are capped to 2000 lines and ~40KB total, including protection against huge single lines (for example minified files or embedded base64). If the result is truncated, call Read again with a higher offset or use grep to locate relevant sections first. Returns structured metadata including `content`, `offset`, `lines_shown`, `total_lines`, `truncated`, `byte_limited`, and an optional `warning`. Also supports JPEG, PNG, GIF, and WebP images for visual analysis.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to read (relative to root directory; supports $VAR/${VAR} env vars)"
+                    "description": "Path to the file to read (relative to root directory; supports $VAR/${VAR} env vars). Always provide this field."
                 },
                 "offset": {
                     "type": "integer",
-                    "description": "Line number to start reading from (1-indexed, default: 1)"
+                    "description": "Line number to start reading from (1-indexed, default: 1). Use with `limit` to page through large files."
                 },
                 "limit": {
                     "type": "integer",
-                    "description": "Maximum number of lines to return (default: 2000)"
+                    "description": "Maximum number of lines to return (default: 2000). Use with `offset` when reading specific ranges or paging through a file."
                 }
             },
             "required": ["path"],
@@ -212,7 +212,7 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
 /// - Skips to `offset` line (1-indexed)
 /// - Returns at most `limit` lines
 /// - Enforces a secondary `MAX_PAGE_BYTES` (40KB) limit per page
-/// - Returns whole lines without per-line truncation
+/// - Truncates oversized lines to stay within the page byte budget
 /// - Always scans entire file for `total_lines` count
 fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let file = match File::open(path) {
@@ -226,6 +226,7 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     let mut accumulated_bytes: usize = 0;
     let mut byte_limited = false;
     let mut page_full = false;
+    let mut truncated_mid_line = false;
     let mut buffer = Vec::new();
     let start_line = offset.saturating_sub(1);
 
@@ -244,15 +245,28 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
             }
 
             let line = format_line(&buffer);
-            let line_bytes = line.len();
-            if accumulated_bytes + line_bytes > MAX_PAGE_BYTES && !collected_lines.is_empty() {
+            let remaining_bytes = MAX_PAGE_BYTES.saturating_sub(accumulated_bytes);
+            if remaining_bytes == 0 {
                 page_full = true;
                 byte_limited = true;
             } else {
-                accumulated_bytes += line_bytes;
-                collected_lines.push(line);
-                if accumulated_bytes >= MAX_PAGE_BYTES {
+                let truncated_line = truncate_to_byte_limit(&line, remaining_bytes);
+                let line_was_cut = truncated_line.len() < line.len();
+
+                if truncated_line.is_empty() {
                     page_full = true;
+                    byte_limited = true;
+                } else {
+                    accumulated_bytes += truncated_line.len();
+                    collected_lines.push(truncated_line);
+
+                    if line_was_cut {
+                        page_full = true;
+                        byte_limited = true;
+                        truncated_mid_line = true;
+                    } else if accumulated_bytes >= MAX_PAGE_BYTES {
+                        page_full = true;
+                    }
                 }
             }
         }
@@ -270,8 +284,68 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     data.insert("total_lines".to_string(), Value::from(total_lines));
     data.insert("truncated".to_string(), Value::from(truncated));
     data.insert("byte_limited".to_string(), Value::from(byte_limited));
+    if let Some(warning) = build_read_warning(
+        offset,
+        lines_shown,
+        total_lines,
+        truncated,
+        byte_limited,
+        truncated_mid_line,
+    ) {
+        data.insert("warning".to_string(), Value::String(warning));
+    }
 
     ToolOutput::success(Value::Object(data))
+}
+
+fn truncate_to_byte_limit(text: &str, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text.to_string();
+    }
+
+    let mut end = 0;
+    for (idx, ch) in text.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+
+    text[..end].to_string()
+}
+
+fn build_read_warning(
+    offset: usize,
+    lines_shown: usize,
+    total_lines: usize,
+    truncated: bool,
+    byte_limited: bool,
+    truncated_mid_line: bool,
+) -> Option<String> {
+    if !truncated {
+        return None;
+    }
+
+    if byte_limited {
+        let shown_end = offset.saturating_add(lines_shown.saturating_sub(1));
+        if truncated_mid_line {
+            return Some(
+                "Read output truncated at ~40KB and ended mid-line. This usually means the file contains very long lines, minified content, or embedded base64/data URLs. The returned content is only a prefix of the current line. Use grep to locate the relevant section or read a narrower range.".to_string(),
+            );
+        }
+
+        return Some(format!(
+            "Read output truncated at ~40KB after lines {offset}-{shown_end}. Use offset={} to continue, or use grep first to find the relevant section.",
+            offset + lines_shown
+        ));
+    }
+
+    Some(format!(
+        "Read output truncated after {lines_shown} lines (showing lines {offset}-{} of {total_lines}). Use offset={} to continue.",
+        offset.saturating_add(lines_shown.saturating_sub(1)),
+        offset + lines_shown
+    ))
 }
 
 fn read_next_line(
@@ -394,7 +468,7 @@ mod tests {
     fn test_read_huge_single_line() {
         let temp = TempDir::new().unwrap();
         let file_path = temp.path().join("huge_line.txt");
-        // Create a file with a 100KB single line and verify it is returned intact.
+        // Create a file with a 100KB single line and verify it is capped.
         let huge_line = "y".repeat(100 * 1024);
         fs::write(&file_path, &huge_line).unwrap();
 
@@ -404,12 +478,14 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
-        assert_eq!(data["truncated"], false);
-        assert_eq!(data["byte_limited"], false);
+        assert_eq!(data["truncated"], true);
+        assert_eq!(data["byte_limited"], true);
         assert_eq!(data["lines_shown"], 1);
         assert_eq!(data["total_lines"], 1);
         let content = data["content"].as_str().unwrap();
-        assert_eq!(content, huge_line);
+        assert_eq!(content.len(), MAX_PAGE_BYTES);
+        assert_eq!(content, &huge_line[..MAX_PAGE_BYTES]);
+        assert!(data["warning"].as_str().unwrap().contains("ended mid-line"));
     }
 
     #[test]
@@ -430,7 +506,15 @@ mod tests {
         assert_eq!(data["byte_limited"], true);
         assert_eq!(data["lines_shown"], 1);
         assert_eq!(data["total_lines"], 2);
-        assert_eq!(data["content"], format!("{huge_line}\n"));
+        let returned = data["content"].as_str().unwrap();
+        assert_eq!(returned.len(), MAX_PAGE_BYTES);
+        assert_eq!(returned, &huge_line[..MAX_PAGE_BYTES]);
+        assert!(
+            data["warning"]
+                .as_str()
+                .unwrap()
+                .contains("embedded base64")
+        );
     }
 
     #[test]
@@ -546,6 +630,7 @@ mod tests {
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "a\nb\n");
         assert_eq!(data["truncated"], true);
+        assert!(data["warning"].as_str().unwrap().contains("Use offset=3"));
 
         // Page 2: lines 3-4
         let input = json!({"path": "lines.txt", "offset": 3, "limit": 2});
@@ -553,6 +638,7 @@ mod tests {
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "c\nd\n");
         assert_eq!(data["truncated"], true);
+        assert!(data["warning"].as_str().unwrap().contains("Use offset=5"));
 
         // Page 3: lines 5-6
         let input = json!({"path": "lines.txt", "offset": 5, "limit": 2});
@@ -560,6 +646,7 @@ mod tests {
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "e\nf\n");
         assert_eq!(data["truncated"], false); // Last page
+        assert!(data.get("warning").is_none());
     }
 
     #[test]
@@ -586,6 +673,7 @@ mod tests {
         // 40KB / 200 bytes = 204 lines (last one puts us over)
         let lines_shown = data["lines_shown"].as_u64().unwrap();
         assert!((200..=210).contains(&lines_shown));
+        assert!(data["warning"].as_str().unwrap().contains("~40KB"));
     }
 
     #[test]
@@ -607,6 +695,12 @@ mod tests {
         assert_eq!(data["byte_limited"], false); // Line limit hit first
         assert_eq!(data["lines_shown"], 2000);
         assert_eq!(data["total_lines"], 3000);
+        assert!(
+            data["warning"]
+                .as_str()
+                .unwrap()
+                .contains("Use offset=2001")
+        );
     }
 
     #[test]
