@@ -30,6 +30,12 @@ const INTERNAL_CAP_PER_FILE: usize = MAX_MATCHES;
 /// Maximum file size to search (skip files larger than this).
 const MAX_FILE_SIZE: u64 = 4 * 1024 * 1024; // 4MB
 
+/// Maximum bytes of match/context text to return per line.
+const MAX_SNIPPET_BYTES: usize = 500;
+
+/// Maximum total bytes of textual grep payload to return.
+const MAX_OUTPUT_TEXT_BYTES: usize = 40 * 1024; // 40KB
+
 /// Maximum allowed value for `context_lines`.
 const MAX_CONTEXT_LINES: usize = 5;
 
@@ -37,9 +43,7 @@ const MAX_CONTEXT_LINES: usize = 5;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search the file system for text matching a regex pattern. \
-            Returns structured JSON results with file paths, line numbers, and matched text. \
-            Respects .gitignore by default."
+        description: "Search file contents for text matching a regex pattern. Prefer this over running rg or grep through Bash when you need to find text in files. Use `glob` to narrow file types and `path` to scope the search. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -158,6 +162,13 @@ struct Match {
     context_before: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     context_after: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct GrepOutputStats {
+    text_truncated: bool,
+    payload_truncated: bool,
+    skipped_large_files: usize,
 }
 
 /// Sanitize patterns that contain `${` (common in shell-like patterns from LLMs).
@@ -294,7 +305,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     let offset = input.offset.unwrap_or(0);
 
-    let per_file = collect_matches(
+    let (per_file, skipped_large_files) = collect_matches(
         &search_path,
         &matcher,
         &ctx.root,
@@ -306,15 +317,39 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
 
     // Apply offset then max_count.
     let after_offset: Vec<Match> = all_matches.into_iter().skip(offset).collect();
-    let truncated = truncated_by_cap || after_offset.len() > max_count;
+    let truncated_by_pagination = after_offset.len() > max_count;
     let selected: Vec<Match> = after_offset.into_iter().take(max_count).collect();
+    let (selected, output_stats) = cap_matches_for_output(selected, skipped_large_files);
     let total_matches = selected.len();
+    let truncated = truncated_by_cap
+        || truncated_by_pagination
+        || output_stats.text_truncated
+        || output_stats.payload_truncated
+        || output_stats.skipped_large_files > 0;
 
-    ToolOutput::success(json!({
-        "matches": selected,
-        "total_matches": total_matches,
-        "truncated": truncated,
-    }))
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "matches".to_string(),
+        serde_json::to_value(selected).unwrap_or(Value::Null),
+    );
+    data.insert("total_matches".to_string(), Value::from(total_matches));
+    data.insert("truncated".to_string(), Value::from(truncated));
+    if truncated && total_matches > 0 {
+        data.insert(
+            "next_offset".to_string(),
+            Value::from(offset + total_matches),
+        );
+    }
+    if let Some(warning) = build_grep_warning(
+        offset,
+        total_matches,
+        truncated_by_cap || truncated_by_pagination,
+        output_stats,
+    ) {
+        data.insert("warning".to_string(), Value::String(warning));
+    }
+
+    ToolOutput::success(Value::Object(data))
 }
 
 /// Collect matches grouped by file for round-robin selection.
@@ -347,7 +382,7 @@ fn execute_extract_unique(
     let has_captures = re.captures_len() > 1;
     let mut unique_values = BTreeSet::new();
 
-    let files = walk_files(search_path, root, glob_matcher);
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher);
 
     for path in &files {
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -374,23 +409,49 @@ fn execute_extract_unique(
     }
 
     let total_unique = unique_values.len();
-    let truncated = total_unique > max_count;
-    let values: Vec<String> = unique_values.into_iter().take(max_count).collect();
+    let (values, output_stats) =
+        cap_unique_values_for_output(unique_values, max_count, skipped_large_files);
+    let truncated = total_unique > values.len()
+        || output_stats.text_truncated
+        || output_stats.payload_truncated
+        || output_stats.skipped_large_files > 0;
+    let returned_unique = values.len();
 
-    ToolOutput::success(json!({
-        "values": values,
-        "total_unique": values.len(),
-        "truncated": truncated,
-    }))
+    let mut data = serde_json::Map::new();
+    data.insert(
+        "values".to_string(),
+        serde_json::to_value(values).unwrap_or(Value::Null),
+    );
+    data.insert("total_unique".to_string(), Value::from(returned_unique));
+    data.insert("truncated".to_string(), Value::from(truncated));
+    if let Some(warning) = build_extract_unique_warning(output_stats, total_unique) {
+        data.insert("warning".to_string(), Value::String(warning));
+    }
+
+    ToolOutput::success(Value::Object(data))
 }
 
 /// Walk the file tree and return paths to search, respecting glob filters and size limits.
-fn walk_files(search_path: &Path, root: &Path, glob_matcher: Option<&GlobMatcher>) -> Vec<PathBuf> {
+fn walk_files(
+    search_path: &Path,
+    root: &Path,
+    glob_matcher: Option<&GlobMatcher>,
+) -> (Vec<PathBuf>, usize) {
     if search_path.is_file() {
-        return vec![search_path.to_path_buf()];
+        let skipped = search_path
+            .metadata()
+            .ok()
+            .filter(|meta| meta.len() > MAX_FILE_SIZE)
+            .map_or(0, |_| 1);
+        return if skipped > 0 {
+            (Vec::new(), skipped)
+        } else {
+            (vec![search_path.to_path_buf()], 0)
+        };
     }
 
     let mut files = Vec::new();
+    let mut skipped_large_files = 0;
     let walker = WalkBuilder::new(search_path).build();
 
     for entry in walker {
@@ -410,13 +471,201 @@ fn walk_files(search_path: &Path, root: &Path, glob_matcher: Option<&GlobMatcher
         if let Ok(metadata) = entry.metadata()
             && metadata.len() > MAX_FILE_SIZE
         {
+            skipped_large_files += 1;
             continue;
         }
 
         files.push(entry.into_path());
     }
 
-    files
+    (files, skipped_large_files)
+}
+
+fn truncate_snippet(text: &str, max_bytes: usize) -> (String, bool) {
+    if text.len() <= max_bytes {
+        return (text.to_string(), false);
+    }
+
+    let mut end = 0;
+    for (idx, ch) in text.char_indices() {
+        let next = idx + ch.len_utf8();
+        if next > max_bytes {
+            break;
+        }
+        end = next;
+    }
+
+    (text[..end].to_string(), true)
+}
+
+fn truncate_match_for_output(m: Match) -> (Match, bool) {
+    let (text, text_truncated) = truncate_snippet(&m.text, MAX_SNIPPET_BYTES);
+    let mut any_truncated = text_truncated;
+
+    let context_before = m
+        .context_before
+        .into_iter()
+        .map(|line| {
+            let (line, truncated) = truncate_snippet(&line, MAX_SNIPPET_BYTES);
+            any_truncated |= truncated;
+            line
+        })
+        .collect();
+
+    let context_after = m
+        .context_after
+        .into_iter()
+        .map(|line| {
+            let (line, truncated) = truncate_snippet(&line, MAX_SNIPPET_BYTES);
+            any_truncated |= truncated;
+            line
+        })
+        .collect();
+
+    (
+        Match {
+            file: m.file,
+            line_number: m.line_number,
+            text,
+            context_before,
+            context_after,
+        },
+        any_truncated,
+    )
+}
+
+fn match_output_text_bytes(m: &Match) -> usize {
+    m.text.len()
+        + m.context_before.iter().map(String::len).sum::<usize>()
+        + m.context_after.iter().map(String::len).sum::<usize>()
+}
+
+fn cap_matches_for_output(
+    matches: Vec<Match>,
+    skipped_large_files: usize,
+) -> (Vec<Match>, GrepOutputStats) {
+    let mut stats = GrepOutputStats {
+        skipped_large_files,
+        ..GrepOutputStats::default()
+    };
+    let mut selected = Vec::new();
+    let mut used_bytes = 0;
+
+    for m in matches {
+        let (m, line_truncated) = truncate_match_for_output(m);
+        stats.text_truncated |= line_truncated;
+        let size = match_output_text_bytes(&m);
+        if used_bytes + size > MAX_OUTPUT_TEXT_BYTES {
+            stats.payload_truncated = true;
+            break;
+        }
+        used_bytes += size;
+        selected.push(m);
+    }
+
+    (selected, stats)
+}
+
+fn cap_unique_values_for_output(
+    unique_values: BTreeSet<String>,
+    max_count: usize,
+    skipped_large_files: usize,
+) -> (Vec<String>, GrepOutputStats) {
+    let mut stats = GrepOutputStats {
+        skipped_large_files,
+        ..GrepOutputStats::default()
+    };
+    let mut values = Vec::new();
+    let mut used_bytes = 0;
+
+    for value in unique_values {
+        let (value, truncated) = truncate_snippet(&value, MAX_SNIPPET_BYTES);
+        stats.text_truncated |= truncated;
+        if used_bytes + value.len() > MAX_OUTPUT_TEXT_BYTES {
+            stats.payload_truncated = true;
+            break;
+        }
+        used_bytes += value.len();
+        values.push(value);
+        if values.len() >= max_count {
+            break;
+        }
+    }
+
+    (values, stats)
+}
+
+fn build_grep_warning(
+    offset: usize,
+    returned: usize,
+    paginated_or_capped: bool,
+    stats: GrepOutputStats,
+) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if stats.skipped_large_files > 0 {
+        let noun = if stats.skipped_large_files == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        parts.push(format!(
+            "Skipped {} large {noun} above 4MB.",
+            stats.skipped_large_files
+        ));
+    }
+
+    if stats.text_truncated {
+        parts.push(
+            "Long match/context lines were truncated to 500 bytes each to avoid flooding the context window."
+                .to_string(),
+        );
+    }
+
+    if stats.payload_truncated {
+        let next_offset = offset + returned;
+        parts.push(format!(
+            "Grep output was capped at ~40KB. Narrow the search with path/glob/context_lines or continue with offset={next_offset}."
+        ));
+    } else if paginated_or_capped && returned > 0 {
+        let next_offset = offset + returned;
+        parts.push(format!(
+            "More matches are available. Continue with offset={next_offset} or reduce max_count/context_lines to focus the search."
+        ));
+    }
+
+    (!parts.is_empty()).then(|| parts.join(" "))
+}
+
+fn build_extract_unique_warning(stats: GrepOutputStats, total_unique: usize) -> Option<String> {
+    let mut parts = Vec::new();
+
+    if stats.skipped_large_files > 0 {
+        let noun = if stats.skipped_large_files == 1 {
+            "file"
+        } else {
+            "files"
+        };
+        parts.push(format!(
+            "Skipped {} large {noun} above 4MB.",
+            stats.skipped_large_files
+        ));
+    }
+
+    if stats.text_truncated {
+        parts.push(
+            "Some extracted values were truncated to 500 bytes each to avoid flooding the context window."
+                .to_string(),
+        );
+    }
+
+    if stats.payload_truncated {
+        parts.push(format!(
+            "Extracted values were capped at ~40KB. Narrow the pattern if you need all {total_unique} unique values."
+        ));
+    }
+
+    (!parts.is_empty()).then(|| parts.join(" "))
 }
 
 /// Collect matches grouped by file for round-robin selection.
@@ -426,11 +675,12 @@ fn collect_matches(
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     context_lines: usize,
-) -> Vec<Vec<Match>> {
+) -> (Vec<Vec<Match>>, usize) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher);
 
-    for path in walk_files(search_path, root, glob_matcher) {
+    for path in files {
         let mut file_matches = Vec::new();
         search_file(
             &path,
@@ -445,7 +695,7 @@ fn collect_matches(
         }
     }
 
-    per_file
+    (per_file, skipped_large_files)
 }
 
 /// Search a single file and append matches to the result vec.
@@ -701,7 +951,7 @@ mod tests {
     }
 
     #[test]
-    fn test_long_line_preserved() {
+    fn test_long_line_truncated_to_safe_snippet() {
         let temp = TempDir::new().unwrap();
         let long_line = format!("prefix {}\n", "x".repeat(1000));
         fs::write(temp.path().join("test.txt"), &long_line).unwrap();
@@ -712,8 +962,10 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().unwrap();
+        assert_eq!(data["truncated"], true);
         let text = data["matches"][0]["text"].as_str().unwrap();
-        assert_eq!(text, long_line.trim_end());
+        assert_eq!(text.len(), MAX_SNIPPET_BYTES);
+        assert!(data["warning"].as_str().unwrap().contains("500 bytes"));
     }
 
     #[test]
@@ -1166,6 +1418,51 @@ mod tests {
     }
 
     #[test]
+    fn test_huge_match_line_truncated_with_warning() {
+        let temp = TempDir::new().unwrap();
+        let huge_line = format!("match-{}", "x".repeat(100 * 1024));
+        fs::write(temp.path().join("huge.jsonl"), format!("{huge_line}\n")).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "match-"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+        assert_eq!(data["truncated"], true);
+        let text = data["matches"][0]["text"].as_str().unwrap();
+        assert_eq!(text.len(), MAX_SNIPPET_BYTES);
+        assert!(data["warning"].as_str().unwrap().contains("500 bytes"));
+    }
+
+    #[test]
+    fn test_large_file_skipped_with_warning() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("small.txt"), "match here\n").unwrap();
+        fs::write(
+            temp.path().join("large.txt"),
+            format!("{}match\n", "x".repeat((MAX_FILE_SIZE as usize) + 32)),
+        )
+        .unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "match"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+        assert_eq!(data["truncated"], true);
+        assert!(
+            data["warning"]
+                .as_str()
+                .unwrap()
+                .contains("Skipped 1 large file")
+        );
+    }
+
+    #[test]
     fn test_offset_beyond_results() {
         let temp = TempDir::new().unwrap();
         fs::write(temp.path().join("test.txt"), "match\n").unwrap();
@@ -1366,5 +1663,27 @@ mod tests {
             .map(|v| v.as_str().unwrap())
             .collect();
         assert_eq!(values, vec!["keep"]);
+    }
+
+    #[test]
+    fn test_extract_unique_long_value_truncated_with_warning() {
+        let temp = TempDir::new().unwrap();
+        let long_value = format!("tag-{}", "x".repeat(10 * 1024));
+        fs::write(temp.path().join("values.txt"), format!("{long_value}\n")).unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({
+            "pattern": r"(tag-[^\n]+)",
+            "extract_unique": true
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_unique"], 1);
+        assert_eq!(data["truncated"], true);
+        let value = data["values"][0].as_str().unwrap();
+        assert_eq!(value.len(), MAX_SNIPPET_BYTES);
+        assert!(data["warning"].as_str().unwrap().contains("500 bytes"));
     }
 }
