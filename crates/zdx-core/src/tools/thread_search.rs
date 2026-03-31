@@ -91,10 +91,6 @@ struct ThreadSearchInput {
     date_start: Option<String>,
     #[serde(default)]
     date_end: Option<String>,
-    #[serde(default)]
-    tool_name: Option<String>,
-    #[serde(default)]
-    tool_failed: bool,
     #[serde(default, deserialize_with = "deserialize_optional_usize")]
     limit: Option<usize>,
 }
@@ -142,8 +138,6 @@ pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         date,
         date_start,
         date_end,
-        tool_name: input.tool_name,
-        tool_failed: input.tool_failed,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT).max(1),
     };
 
@@ -192,8 +186,6 @@ mod tests {
         assert!(parsed.date.is_none());
         assert!(parsed.date_start.is_none());
         assert!(parsed.date_end.is_none());
-        assert!(parsed.tool_name.is_none());
-        assert!(!parsed.tool_failed);
         assert!(parsed.limit.is_none());
     }
 

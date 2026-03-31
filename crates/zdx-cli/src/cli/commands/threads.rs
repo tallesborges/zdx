@@ -34,8 +34,6 @@ pub struct SearchCommandOptions {
     pub date: Option<String>,
     pub date_start: Option<String>,
     pub date_end: Option<String>,
-    pub tool_name: Option<String>,
-    pub tool_failed: bool,
     pub limit: usize,
     pub json: bool,
 }
@@ -114,8 +112,6 @@ pub fn search(options: SearchCommandOptions) -> Result<()> {
         date,
         date_start,
         date_end,
-        tool_name: options.tool_name,
-        tool_failed: options.tool_failed,
         limit: options.limit.max(1),
     };
 
