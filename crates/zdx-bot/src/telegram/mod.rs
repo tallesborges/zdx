@@ -10,7 +10,7 @@ use image::{GenericImageView, ImageReader};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zdx_core::config::Config;
+use zdx_core::config::{Config, ResolvedTelegramRuntime};
 
 mod types;
 
@@ -31,37 +31,16 @@ impl TelegramSettings {
     /// # Errors
     /// Returns an error if the operation fails.
     pub fn from_config(config: &Config) -> Result<Self> {
-        let token = config
-            .telegram
-            .bot_token
-            .as_deref()
-            .map(str::trim)
-            .filter(|token| !token.is_empty())
-            .map(str::to_string)
-            .or_else(|| {
-                std::env::var("ZDX_TELEGRAM_BOT_TOKEN")
-                    .ok()
-                    .map(|token| token.trim().to_string())
-                    .filter(|token| !token.is_empty())
-            })
-            .unwrap_or_default();
-        if token.is_empty() {
-            bail!("telegram.bot_token or ZDX_TELEGRAM_BOT_TOKEN is required");
-        }
-
-        let allowlist_user_ids: HashSet<i64> =
-            config.telegram.allowlist_user_ids.iter().copied().collect();
-        if allowlist_user_ids.is_empty() {
-            bail!("telegram.allowlist_user_ids must contain at least one user ID");
-        }
-
-        let allowlist_chat_ids: HashSet<i64> =
-            config.telegram.allowlist_chat_ids.iter().copied().collect();
-
-        Ok(Self {
-            bot_token: token,
+        let ResolvedTelegramRuntime {
+            bot_token,
             allowlist_user_ids,
             allowlist_chat_ids,
+        } = config.resolve_telegram_runtime()?;
+
+        Ok(Self {
+            bot_token,
+            allowlist_user_ids: allowlist_user_ids.into_iter().collect::<HashSet<_>>(),
+            allowlist_chat_ids: allowlist_chat_ids.into_iter().collect::<HashSet<_>>(),
         })
     }
 }

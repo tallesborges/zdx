@@ -1073,6 +1073,8 @@ pub struct ThreadSearchOptions {
     pub date: Option<NaiveDate>,
     pub date_start: Option<NaiveDate>,
     pub date_end: Option<NaiveDate>,
+    pub tool_name: Option<String>,
+    pub tool_failed: bool,
     pub limit: usize,
 }
 
@@ -1083,6 +1085,8 @@ impl Default for ThreadSearchOptions {
             date: None,
             date_start: None,
             date_end: None,
+            tool_name: None,
+            tool_failed: false,
             limit: 20,
         }
     }

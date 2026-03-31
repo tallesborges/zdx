@@ -197,6 +197,37 @@ pub struct NamedBotConfig {
     pub thinking_level: ThinkingLevel,
 }
 
+#[derive(Debug, Clone)]
+pub struct ResolvedTelegramRuntime {
+    pub bot_token: String,
+    pub allowlist_user_ids: Vec<i64>,
+    pub allowlist_chat_ids: Vec<i64>,
+}
+
+pub const LEGACY_BOT_SERVICE_NAME: &str = "bot";
+
+#[must_use]
+pub fn named_bot_service_name(name: &str) -> String {
+    format!("bot-{name}")
+}
+
+#[must_use]
+pub fn named_bot_service_display_name(name: &str) -> String {
+    format!("bot:{name}")
+}
+
+#[must_use]
+pub fn parse_named_bot_service_name(service_name: &str) -> Option<&str> {
+    service_name
+        .strip_prefix("bot-")
+        .filter(|name| !name.is_empty())
+}
+
+fn normalize_non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_string())
+}
+
 impl NamedBotConfig {
     /// Applies this named bot configuration onto the loaded global config.
     pub fn apply_to(&self, config: &mut Config) {
@@ -205,6 +236,38 @@ impl NamedBotConfig {
         config.telegram.allowlist_chat_ids = self.allowlist_chat_ids.clone();
         config.telegram.model = self.model.trim().to_string();
         config.telegram.thinking_level = self.thinking_level;
+    }
+
+    /// Validates that this named bot can be used at runtime.
+    ///
+    /// # Errors
+    /// Returns an error when required bot fields are blank or missing.
+    pub fn validate_runtime(&self, name: &str, path: &Path) -> Result<()> {
+        if normalize_non_empty(&self.root).is_none() {
+            bail!(
+                "Bot '{}' in {} is missing a root path.",
+                name,
+                path.display()
+            );
+        }
+        if normalize_non_empty(&self.bot_token).is_none() {
+            bail!(
+                "Bot '{}' in {} is missing a bot token.",
+                name,
+                path.display()
+            );
+        }
+        if self.allowlist_user_ids.is_empty() {
+            bail!(
+                "Bot '{}' in {} must contain at least one allowlisted user ID.",
+                name,
+                path.display()
+            );
+        }
+        if normalize_non_empty(&self.model).is_none() {
+            bail!("Bot '{}' in {} is missing a model.", name, path.display());
+        }
+        Ok(())
     }
 
     #[must_use]
@@ -736,20 +799,49 @@ impl Config {
         let mut config = Self::load_from(config_path)?;
         let bots = BotsConfig::load_from(bots_path)?;
         let bot = bots.get_required_from(name, bots_path)?;
+        bot.validate_runtime(name, bots_path)?;
         bot.apply_to(&mut config);
 
-        if config.telegram.bot_token.is_none()
-            && config.telegram.allowlist_user_ids.is_empty()
-            && config.telegram.allowlist_chat_ids.is_empty()
-        {
-            bail!(
-                "Bot '{}' in {} is missing required bot settings.",
-                name,
-                bots_path.display()
-            );
-        }
+        let _resolved = config
+            .resolve_telegram_runtime()
+            .with_context(|| format!("resolve telegram runtime for bot '{name}'"))?;
 
         Ok((config, bot.root_path()))
+    }
+
+    /// Resolves Telegram runtime credentials/settings from config + environment.
+    ///
+    /// # Errors
+    /// Returns an error if the bot token or required allowlist is missing.
+    pub fn resolve_telegram_runtime(&self) -> Result<ResolvedTelegramRuntime> {
+        let bot_token = self
+            .telegram
+            .bot_token
+            .as_deref()
+            .and_then(normalize_non_empty)
+            .or_else(|| {
+                std::env::var("ZDX_TELEGRAM_BOT_TOKEN")
+                    .ok()
+                    .and_then(|token| normalize_non_empty(&token))
+            })
+            .or_else(|| {
+                std::env::var("TELEGRAM_BOT_TOKEN")
+                    .ok()
+                    .and_then(|token| normalize_non_empty(&token))
+            })
+            .ok_or_else(|| {
+                anyhow::anyhow!("telegram.bot_token or ZDX_TELEGRAM_BOT_TOKEN is required")
+            })?;
+
+        if self.telegram.allowlist_user_ids.is_empty() {
+            bail!("telegram.allowlist_user_ids must contain at least one user ID");
+        }
+
+        Ok(ResolvedTelegramRuntime {
+            bot_token,
+            allowlist_user_ids: self.telegram.allowlist_user_ids.clone(),
+            allowlist_chat_ids: self.telegram.allowlist_chat_ids.clone(),
+        })
     }
 
     /// Loads configuration from a specific path.
@@ -2211,6 +2303,15 @@ max_tokens = 4096
     }
 
     #[test]
+    fn test_named_bot_service_name_helpers() {
+        assert_eq!(named_bot_service_name("zdx"), "bot-zdx");
+        assert_eq!(named_bot_service_display_name("zdx"), "bot:zdx");
+        assert_eq!(parse_named_bot_service_name("bot-zdx"), Some("zdx"));
+        assert_eq!(parse_named_bot_service_name("daemon"), None);
+        assert_eq!(parse_named_bot_service_name("bot-"), None);
+    }
+
+    #[test]
     fn test_load_for_named_bot_applies_registry_overrides() {
         let dir = tempdir().unwrap();
         let config_path = dir.path().join("config.toml");
@@ -2262,6 +2363,62 @@ thinking_level = "minimal"
             .to_string();
         assert!(error.contains("No bot named 'missing'"));
         assert!(error.contains("bot init --name missing"));
+    }
+
+    #[test]
+    fn test_load_for_named_bot_errors_when_bot_token_is_blank() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let bots_path = dir.path().join("bots.toml");
+
+        fs::write(&config_path, "model = \"claude-haiku-4-5\"\n").unwrap();
+
+        let mut bots = BotsConfig::default();
+        bots.bots.insert(
+            "zdx".to_string(),
+            NamedBotConfig {
+                root: "/tmp/zdx".to_string(),
+                bot_token: "   ".to_string(),
+                allowlist_user_ids: vec![42],
+                allowlist_chat_ids: vec![],
+                model: "openai:gpt-5.4".to_string(),
+                thinking_level: ThinkingLevel::High,
+            },
+        );
+        bots.save_to(&bots_path).unwrap();
+
+        let error = Config::load_for_named_bot_from(&config_path, &bots_path, "zdx")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("missing a bot token"));
+    }
+
+    #[test]
+    fn test_load_for_named_bot_errors_when_allowlist_user_ids_missing() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let bots_path = dir.path().join("bots.toml");
+
+        fs::write(&config_path, "model = \"claude-haiku-4-5\"\n").unwrap();
+
+        let mut bots = BotsConfig::default();
+        bots.bots.insert(
+            "zdx".to_string(),
+            NamedBotConfig {
+                root: "/tmp/zdx".to_string(),
+                bot_token: "token".to_string(),
+                allowlist_user_ids: vec![],
+                allowlist_chat_ids: vec![],
+                model: "openai:gpt-5.4".to_string(),
+                thinking_level: ThinkingLevel::High,
+            },
+        );
+        bots.save_to(&bots_path).unwrap();
+
+        let error = Config::load_for_named_bot_from(&config_path, &bots_path, "zdx")
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("allowlisted user ID"));
     }
 
     /// `SubagentsConfig`: defaults are enabled with dynamic model list resolution.

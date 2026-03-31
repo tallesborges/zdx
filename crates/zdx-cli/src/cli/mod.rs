@@ -258,7 +258,7 @@ enum ThreadCommands {
         #[arg(long)]
         text: String,
     },
-    /// Search threads by date and/or query text
+    /// Search threads by date, query text, and tool activity
     Search {
         /// Optional query text to match in titles and thread content
         #[arg(value_name = "QUERY")]
@@ -275,6 +275,14 @@ enum ThreadCommands {
         /// Filter to threads active on/before this date (YYYY-MM-DD)
         #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
         date_end: Option<String>,
+
+        /// Filter to threads that used this exact tool name
+        #[arg(long = "tool-name", value_name = "NAME")]
+        tool_name: Option<String>,
+
+        /// Only return threads containing failed tool calls
+        #[arg(long = "tool-failed")]
+        tool_failed: bool,
 
         /// Maximum number of results to return
         #[arg(long, default_value_t = 20)]
@@ -809,7 +817,8 @@ async fn dispatch_bot(
         None => {
             let bot_name = bot_name.ok_or_else(|| anyhow::anyhow!("bot name is required (use `zdx bot --bot <NAME>` or `zdx bot init --name <NAME>`)"))?;
             let (config, root_path) = config::Config::load_for_named_bot(&bot_name)?;
-            zdx_bot::run_with_config_and_root(config, root_path).await
+            let service_name = config::named_bot_service_name(&bot_name);
+            zdx_bot::run_named_with_config_and_root(&service_name, config, root_path).await
         }
         Some(BotCommands::Init {
             name,
@@ -850,6 +859,8 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date,
             date_start,
             date_end,
+            tool_name,
+            tool_failed,
             limit,
             json,
         } => commands::threads::search(commands::threads::SearchCommandOptions {
@@ -857,6 +868,8 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date,
             date_start,
             date_end,
+            tool_name,
+            tool_failed,
             limit,
             json,
         }),
@@ -945,6 +958,10 @@ async fn dispatch_telegram(
     command: TelegramCommands,
     _context: &DispatchContext<'_>,
 ) -> Result<()> {
+    fn load_named_bot_runtime(bot: &str) -> Result<config::Config> {
+        config::Config::load_for_named_bot(bot).map(|(config, _root)| config)
+    }
+
     match command {
         TelegramCommands::CreateTopic {
             bot,
@@ -952,7 +969,7 @@ async fn dispatch_telegram(
             name,
             bot_token,
         } => {
-            let (config, _) = config::Config::load_for_named_bot(&bot)?;
+            let config = load_named_bot_runtime(&bot)?;
             commands::telegram::create_topic(&config, bot_token, chat_id, &name).await
         }
         TelegramCommands::SendMessage {
@@ -963,7 +980,7 @@ async fn dispatch_telegram(
             parse_mode,
             bot_token,
         } => {
-            let (config, _) = config::Config::load_for_named_bot(&bot)?;
+            let config = load_named_bot_runtime(&bot)?;
             commands::telegram::send_message(
                 &config,
                 bot_token,
@@ -982,7 +999,7 @@ async fn dispatch_telegram(
             message_thread_id,
             bot_token,
         } => {
-            let (config, _) = config::Config::load_for_named_bot(&bot)?;
+            let config = load_named_bot_runtime(&bot)?;
             commands::telegram::send_document(
                 &config,
                 bot_token,

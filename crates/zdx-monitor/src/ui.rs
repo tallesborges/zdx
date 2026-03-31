@@ -6,7 +6,11 @@ use crate::app::{MonitorApp, Section};
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(3), Constraint::Min(0)])
+        .constraints([
+            Constraint::Length(3),
+            Constraint::Min(0),
+            Constraint::Length(3),
+        ])
         .split(f.area());
 
     render_tabs(f, app, chunks[0]);
@@ -18,6 +22,8 @@ pub fn render(f: &mut Frame, app: &MonitorApp) {
         Section::Threads => render_threads(f, app, chunks[1]),
         Section::Automations => render_automations(f, app, chunks[1]),
     }
+
+    render_footer(f, app, chunks[2]);
 }
 
 fn render_tabs(f: &mut Frame, app: &MonitorApp, area: Rect) {
@@ -37,7 +43,8 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let items: Vec<ListItem> = app
         .services
         .iter()
-        .map(|s| {
+        .enumerate()
+        .map(|(i, s)| {
             let (icon, style) = if s.status == "running" {
                 ("●", Style::default().fg(Color::Green))
             } else {
@@ -48,11 +55,42 @@ fn render_services(f: &mut Frame, app: &MonitorApp, area: Rect) {
             } else {
                 format!(" {:<10} {icon} {:<10} {}", s.name, s.status, s.details)
             };
+            let style = if i == app.selected_index && app.active_section == Section::Services {
+                style.add_modifier(Modifier::REVERSED)
+            } else {
+                style
+            };
             ListItem::new(line).style(style)
         })
         .collect();
-    let list = List::new(items).block(Block::default().borders(Borders::ALL).title("Services"));
+    let list = List::new(items).block(
+        Block::default()
+            .borders(Borders::ALL)
+            .title("Services (Enter=toggle, r=restart)"),
+    );
     f.render_widget(list, area);
+}
+
+fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
+    let text = if !app.status_message.is_empty() && app.status_section == app.active_section {
+        app.status_message.clone()
+    } else {
+        footer_hint(app.active_section).to_string()
+    };
+    let footer = Paragraph::new(text)
+        .style(Style::default().fg(Color::DarkGray))
+        .block(Block::default().borders(Borders::ALL).title("Hints"));
+    f.render_widget(footer, area);
+}
+
+fn footer_hint(section: Section) -> &'static str {
+    match section {
+        Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab switch • q quit",
+        Section::ActiveAgents => "↑↓ navigate • Tab switch • q quit",
+        Section::Config => "Tab switch • q quit",
+        Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
+        Section::Automations => "↑↓ navigate • Tab switch • q quit",
+    }
 }
 
 fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {

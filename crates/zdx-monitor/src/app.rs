@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use std::{fs, io};
 
@@ -15,12 +17,15 @@ use crate::ui;
 
 pub struct MonitorApp {
     pub config: config::Config,
+    pub root: PathBuf,
     pub threads: Vec<ThreadInfo>,
     pub automations: Vec<AutomationInfo>,
     pub services: Vec<ServiceInfo>,
     pub active_agents: Vec<ActiveAgentInfo>,
     pub active_section: Section,
     pub selected_index: usize,
+    pub status_section: Section,
+    pub status_message: String,
     pub should_quit: bool,
 }
 
@@ -37,6 +42,7 @@ pub struct AutomationInfo {
 }
 
 pub struct ServiceInfo {
+    pub key: String,
     pub name: String,
     pub status: String,
     pub details: String,
@@ -91,11 +97,26 @@ impl Section {
 impl MonitorApp {
     fn item_count(&self) -> usize {
         match self.active_section {
-            Section::Services | Section::Config => 0,
+            Section::Services => self.services.len(),
+            Section::Config => 0,
             Section::ActiveAgents => self.active_agents.len(),
             Section::Threads => self.threads.len(),
             Section::Automations => self.automations.len(),
         }
+    }
+
+    fn clamp_selection(&mut self) {
+        let count = self.item_count();
+        if count == 0 {
+            self.selected_index = 0;
+        } else {
+            self.selected_index = self.selected_index.min(count - 1);
+        }
+    }
+
+    fn set_status(&mut self, message: impl Into<String>) {
+        self.status_section = self.active_section;
+        self.status_message = message.into();
     }
 }
 
@@ -105,20 +126,24 @@ impl MonitorApp {
 ///
 /// Returns an error if configuration cannot be loaded or terminal operations fail.
 pub fn run(root: &Path) -> Result<()> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let config = config::Config::load().context("load config")?;
     let threads = load_threads();
-    let automations = load_automations(root);
+    let automations = load_automations(&root);
     let services = load_services();
     let active_agents = load_active_agents();
 
     let mut app = MonitorApp {
         config,
+        root,
         threads,
         automations,
         services,
         active_agents,
         active_section: Section::Services,
         selected_index: 0,
+        status_section: Section::Services,
+        status_message: String::new(),
         should_quit: false,
     };
 
@@ -171,6 +196,31 @@ pub fn run(root: &Path) -> Result<()> {
                                 }
                                 child.wait()
                             });
+                        app.set_status(format!("Copied thread ID {}", t.id));
+                    }
+                }
+                KeyCode::Enter => {
+                    if app.active_section == Section::Services
+                        && let Some(service) = app.services.get(app.selected_index)
+                    {
+                        match toggle_service(service, &app.root) {
+                            Ok(message) => app.set_status(message),
+                            Err(err) => {
+                                app.set_status(format!("Failed to toggle {}: {err}", service.name))
+                            }
+                        }
+                    }
+                }
+                KeyCode::Char('r') => {
+                    if app.active_section == Section::Services
+                        && let Some(service) = app.services.get(app.selected_index)
+                    {
+                        match restart_service(service, &app.root) {
+                            Ok(message) => app.set_status(message),
+                            Err(err) => {
+                                app.set_status(format!("Failed to restart {}: {err}", service.name))
+                            }
+                        }
                     }
                 }
                 _ => {}
@@ -180,6 +230,7 @@ pub fn run(root: &Path) -> Result<()> {
         if last_tick.elapsed() >= tick_rate {
             app.services = load_services();
             app.active_agents = load_active_agents();
+            app.clamp_selection();
             last_tick = Instant::now();
         }
 
@@ -286,28 +337,146 @@ fn load_automations(root: &Path) -> Vec<AutomationInfo> {
 }
 
 fn load_services() -> Vec<ServiceInfo> {
-    let services = ["bot", "daemon"];
-    services
-        .iter()
-        .map(|name| match pidfile::status(name) {
-            pidfile::ServiceStatus::Running { pid, started } => {
-                let uptime = started
-                    .and_then(|s| s.elapsed().ok())
-                    .map(format_duration)
-                    .unwrap_or_default();
-                ServiceInfo {
-                    name: (*name).to_string(),
-                    status: "running".to_string(),
-                    details: format!("PID {pid} | up {uptime}"),
-                }
+    let mut service_names: BTreeSet<String> = BTreeSet::from(["daemon".to_string()]);
+    if let Ok(bots) = config::BotsConfig::load() {
+        for name in bots.bots.keys() {
+            service_names.insert(config::named_bot_service_name(name));
+        }
+    }
+    let run_dir = paths::zdx_home().join("run");
+    if let Ok(entries) = fs::read_dir(&run_dir) {
+        for entry in entries.filter_map(Result::ok) {
+            let path = entry.path();
+            if path.extension().and_then(|ext| ext.to_str()) != Some("pid") {
+                continue;
             }
-            pidfile::ServiceStatus::Stopped => ServiceInfo {
-                name: (*name).to_string(),
-                status: "stopped".to_string(),
-                details: String::new(),
-            },
+            let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            if stem == config::LEGACY_BOT_SERVICE_NAME
+                || config::parse_named_bot_service_name(stem).is_some()
+            {
+                service_names.insert(stem.to_string());
+            }
+        }
+    }
+
+    service_names
+        .into_iter()
+        .filter_map(|service_name| {
+            let display_name = if service_name == config::LEGACY_BOT_SERVICE_NAME {
+                config::LEGACY_BOT_SERVICE_NAME.to_string()
+            } else if let Some(name) = config::parse_named_bot_service_name(&service_name) {
+                config::named_bot_service_display_name(name)
+            } else {
+                service_name.clone()
+            };
+
+            match pidfile::status(&service_name) {
+                pidfile::ServiceStatus::Running { pid, started } => {
+                    let uptime = started
+                        .and_then(|s| s.elapsed().ok())
+                        .map(format_duration)
+                        .unwrap_or_default();
+                    Some(ServiceInfo {
+                        key: service_name.clone(),
+                        name: display_name,
+                        status: "running".to_string(),
+                        details: format!("PID {pid} | up {uptime}"),
+                    })
+                }
+                pidfile::ServiceStatus::Stopped if service_name == "daemon" => Some(ServiceInfo {
+                    key: service_name.clone(),
+                    name: display_name,
+                    status: "stopped".to_string(),
+                    details: String::new(),
+                }),
+                pidfile::ServiceStatus::Stopped
+                    if config::parse_named_bot_service_name(&service_name).is_some() =>
+                {
+                    Some(ServiceInfo {
+                        key: service_name.clone(),
+                        name: display_name,
+                        status: "stopped".to_string(),
+                        details: String::new(),
+                    })
+                }
+                pidfile::ServiceStatus::Stopped => None,
+            }
         })
         .collect()
+}
+
+fn start_service(service: &ServiceInfo, root: &Path) -> Result<String> {
+    if service.status == "running" {
+        return Ok(format!("{} is already running", service.name));
+    }
+
+    let exe = std::env::current_exe().context("resolve current executable")?;
+    let mut command = Command::new(exe);
+    command
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+    match service.key.as_str() {
+        "daemon" => {
+            command
+                .arg("--root")
+                .arg(root)
+                .arg("automations")
+                .arg("daemon");
+        }
+        key if config::parse_named_bot_service_name(key).is_some() => {
+            let name = config::parse_named_bot_service_name(key).unwrap_or_default();
+            command.arg("bot").arg("--bot").arg(name);
+        }
+        _ => anyhow::bail!("unsupported service '{}'", service.name),
+    }
+
+    let child = command
+        .spawn()
+        .with_context(|| format!("spawn {}", service.name))?;
+    Ok(format!("Started {} (PID {})", service.name, child.id()))
+}
+
+fn stop_service(service: &ServiceInfo) -> Result<String> {
+    match pidfile::terminate(&service.key)? {
+        Some(pid) => {
+            wait_for_service_state(&service.key, false, Duration::from_secs(3));
+            Ok(format!("Stopped {} (PID {})", service.name, pid))
+        }
+        None => Ok(format!("{} is already stopped", service.name)),
+    }
+}
+
+fn toggle_service(service: &ServiceInfo, root: &Path) -> Result<String> {
+    if service.status == "running" {
+        stop_service(service)
+    } else {
+        start_service(service, root)
+    }
+}
+
+fn restart_service(service: &ServiceInfo, root: &Path) -> Result<String> {
+    if service.status == "running" {
+        let _ = stop_service(service)?;
+    }
+    start_service(service, root).map(|message| format!("Restarted {} • {message}", service.name))
+}
+
+fn wait_for_service_state(name: &str, should_be_running: bool, timeout: Duration) {
+    let start = Instant::now();
+    while start.elapsed() < timeout {
+        let running = matches!(
+            pidfile::status(name),
+            pidfile::ServiceStatus::Running { .. }
+        );
+        if running == should_be_running {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 fn format_duration(d: std::time::Duration) -> String {

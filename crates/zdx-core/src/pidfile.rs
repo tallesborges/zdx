@@ -66,6 +66,22 @@ pub fn status(name: &str) -> ServiceStatus {
     }
 }
 
+/// Sends a graceful termination signal to a running named service.
+///
+/// Returns the PID when a running service was signaled, or `None` when stopped.
+///
+/// # Errors
+/// Returns an error if signaling fails.
+pub fn terminate(name: &str) -> Result<Option<u32>> {
+    match status(name) {
+        ServiceStatus::Running { pid, .. } => {
+            terminate_pid(pid).with_context(|| format!("terminate {name} (PID {pid})"))?;
+            Ok(Some(pid))
+        }
+        ServiceStatus::Stopped => Ok(None),
+    }
+}
+
 /// Status of a service.
 pub enum ServiceStatus {
     Running {
@@ -96,7 +112,22 @@ fn is_alive(pid: u32) -> bool {
     unsafe { libc::kill(pid as i32, 0) == 0 }
 }
 
+#[cfg(unix)]
+fn terminate_pid(pid: u32) -> Result<()> {
+    let rc = unsafe { libc::kill(pid as i32, libc::SIGTERM) };
+    if rc == 0 {
+        Ok(())
+    } else {
+        anyhow::bail!("failed to send SIGTERM")
+    }
+}
+
 #[cfg(not(unix))]
 fn is_alive(_pid: u32) -> bool {
     true
+}
+
+#[cfg(not(unix))]
+fn terminate_pid(_pid: u32) -> Result<()> {
+    anyhow::bail!("service termination is unsupported on this platform")
 }
