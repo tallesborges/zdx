@@ -284,6 +284,36 @@ enum ThreadCommands {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect tool calls captured inside saved threads
+    Tools {
+        /// Optional exact tool name filter
+        #[arg(value_name = "TOOL")]
+        tool: Option<String>,
+
+        /// Only return failed tool calls
+        #[arg(long)]
+        failed: bool,
+
+        /// Filter tool calls on this date (YYYY-MM-DD)
+        #[arg(long, value_name = "YYYY-MM-DD")]
+        date: Option<String>,
+
+        /// Filter tool calls on/after this date (YYYY-MM-DD)
+        #[arg(long = "date-start", value_name = "YYYY-MM-DD")]
+        date_start: Option<String>,
+
+        /// Filter tool calls on/before this date (YYYY-MM-DD)
+        #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
+        date_end: Option<String>,
+
+        /// Maximum number of results to return
+        #[arg(long, default_value_t = 20)]
+        limit: usize,
+
+        /// Output as JSON for automation/script usage
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(clap::Subcommand)]
@@ -855,6 +885,23 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             json,
         } => commands::threads::search(commands::threads::SearchCommandOptions {
             query,
+            date,
+            date_start,
+            date_end,
+            limit,
+            json,
+        }),
+        ThreadCommands::Tools {
+            tool,
+            failed,
+            date,
+            date_start,
+            date_end,
+            limit,
+            json,
+        } => commands::threads::tools(commands::threads::ToolsCommandOptions {
+            tool,
+            failed,
             date,
             date_start,
             date_end,

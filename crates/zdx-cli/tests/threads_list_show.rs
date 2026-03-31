@@ -66,6 +66,37 @@ fn create_thread_with_meta(
     fs::write(&thread_path, content).unwrap();
 }
 
+fn create_thread_with_raw_events(
+    temp_dir: &TempDir,
+    thread_id: &str,
+    title: Option<&str>,
+    events: &[serde_json::Value],
+) {
+    let threads_dir = temp_dir.path().join("threads");
+    fs::create_dir_all(&threads_dir).unwrap();
+
+    let thread_path = threads_dir.join(format!("{thread_id}.jsonl"));
+    let mut content = String::new();
+
+    let mut meta = json!({
+        "type": "meta",
+        "schema_version": 1,
+        "ts": "2024-01-01T00:00:00Z"
+    });
+    if let Some(t) = title {
+        meta["title"] = json!(t);
+    }
+    content.push_str(&serde_json::to_string(&meta).unwrap());
+    content.push('\n');
+
+    for event in events {
+        content.push_str(&serde_json::to_string(event).unwrap());
+        content.push('\n');
+    }
+
+    fs::write(&thread_path, content).unwrap();
+}
+
 #[test]
 fn test_threads_list_empty() {
     let temp_dir = TempDir::new().unwrap();
@@ -440,4 +471,195 @@ fn test_threads_search_json_output() {
     assert_eq!(first["thread_id"], json!("json-thread"));
     assert_eq!(first["title"], json!("Automation report thread"));
     assert!(first["preview"].as_str().is_some());
+}
+
+#[test]
+fn test_threads_tools_filters_by_name() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_raw_events(
+        &temp_dir,
+        "grep-thread",
+        Some("Grep investigation"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_grep",
+                "name": "grep",
+                "input": {"pattern": "thread_search", "path": "."},
+                "ts": "2026-02-12T12:00:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_grep",
+                "output": {"ok": true, "data": {"matches": []}},
+                "ok": true,
+                "ts": "2026-02-12T12:00:01Z"
+            }),
+        ],
+    );
+    create_thread_with_raw_events(
+        &temp_dir,
+        "read-thread",
+        Some("Read investigation"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_read",
+                "name": "read",
+                "input": {"path": "docs/SPEC.md"},
+                "ts": "2026-02-12T12:05:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_read",
+                "output": {"ok": true, "data": {"content": "..."}},
+                "ok": true,
+                "ts": "2026-02-12T12:05:01Z"
+            }),
+        ],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "tools", "grep"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("grep-thread"));
+    assert!(output_str.contains("Tool: grep (ok)"));
+    assert!(!output_str.contains("read-thread"));
+}
+
+#[test]
+fn test_threads_tools_filters_failed_calls() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_raw_events(
+        &temp_dir,
+        "failed-read-thread",
+        Some("Failed read"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_read_fail",
+                "name": "read",
+                "input": {"path": "missing.txt"},
+                "ts": "2026-02-12T13:00:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_read_fail",
+                "output": {
+                    "ok": false,
+                    "error": {"code": "not_found", "message": "File not found"}
+                },
+                "ok": false,
+                "ts": "2026-02-12T13:00:01Z"
+            }),
+        ],
+    );
+    create_thread_with_raw_events(
+        &temp_dir,
+        "successful-read-thread",
+        Some("Successful read"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_read_ok",
+                "name": "read",
+                "input": {"path": "docs/SPEC.md"},
+                "ts": "2026-02-12T13:05:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_read_ok",
+                "output": {"ok": true, "data": {"content": "ok"}},
+                "ok": true,
+                "ts": "2026-02-12T13:05:01Z"
+            }),
+        ],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "tools", "read", "--failed", "--json"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+    let results = parsed.as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["thread_id"], json!("failed-read-thread"));
+    assert_eq!(results[0]["tool_name"], json!("read"));
+    assert_eq!(results[0]["status"], json!("failed"));
+    assert_eq!(results[0]["error_code"], json!("not_found"));
+}
+
+#[test]
+fn test_threads_tools_filters_by_date() {
+    let temp_dir = TempDir::new().unwrap();
+
+    create_thread_with_raw_events(
+        &temp_dir,
+        "feb-thread",
+        Some("February tools"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_feb",
+                "name": "thread_search",
+                "input": {"query": "report"},
+                "ts": "2026-02-12T09:00:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_feb",
+                "output": {"ok": true, "data": []},
+                "ok": true,
+                "ts": "2026-02-12T09:00:01Z"
+            }),
+        ],
+    );
+    create_thread_with_raw_events(
+        &temp_dir,
+        "jan-thread",
+        Some("January tools"),
+        &[
+            json!({
+                "type": "tool_use",
+                "id": "toolu_jan",
+                "name": "thread_search",
+                "input": {"query": "setup"},
+                "ts": "2026-01-10T09:00:00Z"
+            }),
+            json!({
+                "type": "tool_result",
+                "tool_use_id": "toolu_jan",
+                "output": {"ok": true, "data": []},
+                "ok": true,
+                "ts": "2026-01-10T09:00:01Z"
+            }),
+        ],
+    );
+
+    let output = cargo_bin_cmd!("zdx")
+        .env("ZDX_HOME", temp_dir.path())
+        .args(["threads", "tools", "thread_search", "--date", "2026-02-12"])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+
+    let output_str = String::from_utf8_lossy(&output);
+    assert!(output_str.contains("feb-thread"));
+    assert!(!output_str.contains("jan-thread"));
 }

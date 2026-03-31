@@ -38,6 +38,18 @@ pub struct SearchCommandOptions {
     pub json: bool,
 }
 
+/// Input options for `zdx threads tools`.
+#[derive(Debug, Clone)]
+pub struct ToolsCommandOptions {
+    pub tool: Option<String>,
+    pub failed: bool,
+    pub date: Option<String>,
+    pub date_start: Option<String>,
+    pub date_end: Option<String>,
+    pub limit: usize,
+    pub json: bool,
+}
+
 pub fn list() -> Result<()> {
     let threads = thread_persistence::list_threads().context("list threads")?;
     if threads.is_empty() {
@@ -137,6 +149,59 @@ pub fn search(options: SearchCommandOptions) -> Result<()> {
         }
         if !result.preview.is_empty() {
             println!("  Preview: {}", result.preview);
+        }
+        println!();
+    }
+
+    Ok(())
+}
+
+pub fn tools(options: ToolsCommandOptions) -> Result<()> {
+    let date = parse_date_filter(options.date.as_deref(), "date")?;
+    let date_start = parse_date_filter(options.date_start.as_deref(), "date-start")?;
+    let date_end = parse_date_filter(options.date_end.as_deref(), "date-end")?;
+
+    if let (Some(start), Some(end)) = (date_start, date_end)
+        && start > end
+    {
+        anyhow::bail!("--date-start must be on or before --date-end");
+    }
+
+    let tool_options = thread_persistence::ThreadToolSearchOptions {
+        tool_name: options.tool,
+        failed_only: options.failed,
+        date,
+        date_start,
+        date_end,
+        limit: options.limit.max(1),
+    };
+
+    let results =
+        thread_persistence::search_thread_tools(&tool_options).context("search thread tools")?;
+
+    if options.json {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&results).context("serialize thread tool results")?
+        );
+        return Ok(());
+    }
+
+    if results.is_empty() {
+        println!("No tool calls found matching the criteria.");
+        return Ok(());
+    }
+
+    for result in results {
+        println!("[{}] {}", result.thread_id, result.display_title());
+        if let Some(tool_ts) = &result.tool_ts {
+            println!("  Time: {tool_ts}");
+        }
+        println!("  Tool: {} ({})", result.tool_name, result.status);
+        println!("  Args: {}", result.args_summary);
+        if let Some(error_message) = &result.error_message {
+            let error_code = result.error_code.as_deref().unwrap_or("error");
+            println!("  Error: {error_code} - {error_message}");
         }
         println!();
     }
