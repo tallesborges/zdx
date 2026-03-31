@@ -258,7 +258,7 @@ enum ThreadCommands {
         #[arg(long)]
         text: String,
     },
-    /// Search threads by date, query text, and tool activity
+    /// Search threads by date and/or query text
     Search {
         /// Optional query text to match in titles and thread content
         #[arg(value_name = "QUERY")]
@@ -275,14 +275,6 @@ enum ThreadCommands {
         /// Filter to threads active on/before this date (YYYY-MM-DD)
         #[arg(long = "date-end", value_name = "YYYY-MM-DD")]
         date_end: Option<String>,
-
-        /// Filter to threads that used this exact tool name
-        #[arg(long = "tool-name", value_name = "NAME")]
-        tool_name: Option<String>,
-
-        /// Only return threads containing failed tool calls
-        #[arg(long = "tool-failed")]
-        tool_failed: bool,
 
         /// Maximum number of results to return
         #[arg(long, default_value_t = 20)]
@@ -859,8 +851,6 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date,
             date_start,
             date_end,
-            tool_name,
-            tool_failed,
             limit,
             json,
         } => commands::threads::search(commands::threads::SearchCommandOptions {
@@ -868,8 +858,6 @@ async fn dispatch_threads(command: ThreadCommands, context: &DispatchContext<'_>
             date,
             date_start,
             date_end,
-            tool_name,
-            tool_failed,
             limit,
             json,
         }),
