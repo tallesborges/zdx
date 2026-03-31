@@ -105,7 +105,10 @@ fn test_bot_init_creates_named_bot_in_zdx_home() {
     assert!(contents.contains("thinking_level = \"high\""));
     let parsed: toml::Value = toml::from_str(&contents).unwrap();
     let canonical_root = root.path().canonicalize().unwrap().display().to_string();
-    assert_eq!(parsed["bots"]["zdx"]["root"].as_str(), Some(canonical_root.as_str()));
+    assert_eq!(
+        parsed["bots"]["zdx"]["root"].as_str(),
+        Some(canonical_root.as_str())
+    );
 }
 
 #[test]

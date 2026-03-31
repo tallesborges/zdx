@@ -56,12 +56,26 @@ pub async fn run_with_root(root: PathBuf) -> Result<()> {
 ///
 /// # Errors
 /// Returns an error if the operation fails.
-pub async fn run_with_config_and_root(mut config: Config, root: PathBuf) -> Result<()> {
+pub async fn run_with_config_and_root(config: Config, root: PathBuf) -> Result<()> {
+    run_named_with_config_and_root("bot", config, root).await
+}
+
+///
+/// # Errors
+/// Returns an error if the operation fails.
+pub async fn run_named_with_config_and_root(
+    service_name: &str,
+    mut config: Config,
+    root: PathBuf,
+) -> Result<()> {
     // Apply telegram-specific model + thinking_level
     config.model.clone_from(&config.telegram.model);
     config.thinking_level = config.telegram.thinking_level;
     let settings = TelegramSettings::from_config(&config)?;
-    let _pid_guard = zdx_core::pidfile::write("bot").context("write bot PID file")?;
+    zdx_core::pidfile::ensure_unique(service_name)
+        .with_context(|| format!("ensure unique PID for {service_name}"))?;
+    let _pid_guard = zdx_core::pidfile::write(service_name)
+        .with_context(|| format!("write {service_name} PID file"))?;
     let config_path = zdx_core::config::paths::config_path();
     if config_path.exists() {
         tracing::info!(path = %config_path.display(), "Config file");
