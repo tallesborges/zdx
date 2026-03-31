@@ -14,6 +14,7 @@
 //! { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
 //! ```
 
+use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::fs::{self, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
@@ -1107,7 +1108,63 @@ impl ThreadSearchResult {
     }
 }
 
+/// Options for searching tool calls across saved threads.
+#[derive(Debug, Clone)]
+pub struct ThreadToolSearchOptions {
+    pub tool_name: Option<String>,
+    pub failed_only: bool,
+    pub date: Option<NaiveDate>,
+    pub date_start: Option<NaiveDate>,
+    pub date_end: Option<NaiveDate>,
+    pub limit: usize,
+}
+
+impl Default for ThreadToolSearchOptions {
+    fn default() -> Self {
+        Self {
+            tool_name: None,
+            failed_only: false,
+            date: None,
+            date_start: None,
+            date_end: None,
+            limit: 20,
+        }
+    }
+}
+
+/// A tool call found in saved threads.
+#[derive(Debug, Clone, Serialize)]
+pub struct ThreadToolMatch {
+    pub thread_id: String,
+    pub title: Option<String>,
+    pub tool_use_id: String,
+    pub tool_name: String,
+    pub tool_ts: Option<String>,
+    pub status: String,
+    pub args_summary: String,
+    pub error_code: Option<String>,
+    pub error_message: Option<String>,
+}
+
+impl ThreadToolMatch {
+    /// Returns a display-friendly title (or short ID fallback).
+    pub fn display_title(&self) -> String {
+        self.title
+            .clone()
+            .unwrap_or_else(|| short_thread_id(&self.thread_id))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PendingToolUse {
+    tool_use_id: String,
+    tool_name: String,
+    tool_ts: String,
+    args_summary: String,
+}
+
 const SEARCH_PREVIEW_MAX_BYTES: usize = 200;
+const TOOL_ARGS_SUMMARY_MAX_BYTES: usize = 160;
 
 /// Searches threads by optional query and/or date filters.
 ///
@@ -1194,8 +1251,188 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
     Ok(results)
 }
 
+/// Searches tool calls across saved threads.
+///
+/// Results are ordered by tool-call timestamp descending.
+///
+/// # Errors
+/// Returns an error if thread listing fails.
+pub fn search_thread_tools(options: &ThreadToolSearchOptions) -> Result<Vec<ThreadToolMatch>> {
+    let limit = options.limit.max(1);
+    let normalized_tool = options
+        .tool_name
+        .as_deref()
+        .map(str::trim)
+        .filter(|name| !name.is_empty())
+        .map(str::to_ascii_lowercase);
+
+    let mut matches = Vec::new();
+
+    for summary in list_threads()? {
+        let events = load_thread_events(&summary.id).unwrap_or_default();
+        let mut pending: HashMap<String, PendingToolUse> = HashMap::new();
+
+        for event in events {
+            match event {
+                ThreadEvent::ToolUse {
+                    id,
+                    name,
+                    input,
+                    ts,
+                } => {
+                    if !matches_tool_name_filter(&name, normalized_tool.as_deref()) {
+                        continue;
+                    }
+                    if !matches_tool_date_filters(Some(&ts), options) {
+                        continue;
+                    }
+
+                    pending.insert(
+                        id.clone(),
+                        PendingToolUse {
+                            tool_use_id: id,
+                            tool_name: name,
+                            tool_ts: ts,
+                            args_summary: summarize_tool_args(&input),
+                        },
+                    );
+                }
+                ThreadEvent::ToolResult {
+                    tool_use_id,
+                    output,
+                    ok,
+                    ..
+                } => {
+                    let Some(tool_use) = pending.remove(&tool_use_id) else {
+                        continue;
+                    };
+                    if options.failed_only && ok {
+                        continue;
+                    }
+
+                    let (error_code, error_message) = extract_tool_error(&output);
+                    matches.push(ThreadToolMatch {
+                        thread_id: summary.id.clone(),
+                        title: summary.title.clone(),
+                        tool_use_id: tool_use.tool_use_id,
+                        tool_name: tool_use.tool_name,
+                        tool_ts: Some(tool_use.tool_ts),
+                        status: if ok {
+                            "ok".to_string()
+                        } else {
+                            "failed".to_string()
+                        },
+                        args_summary: tool_use.args_summary,
+                        error_code,
+                        error_message,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        if !options.failed_only {
+            for tool_use in pending.into_values() {
+                matches.push(ThreadToolMatch {
+                    thread_id: summary.id.clone(),
+                    title: summary.title.clone(),
+                    tool_use_id: tool_use.tool_use_id,
+                    tool_name: tool_use.tool_name,
+                    tool_ts: Some(tool_use.tool_ts),
+                    status: "pending".to_string(),
+                    args_summary: tool_use.args_summary,
+                    error_code: None,
+                    error_message: None,
+                });
+            }
+        }
+    }
+
+    matches.sort_by(|a, b| b.tool_ts.cmp(&a.tool_ts));
+    if matches.len() > limit {
+        matches.truncate(limit);
+    }
+
+    Ok(matches)
+}
+
 fn has_date_filters(options: &ThreadSearchOptions) -> bool {
     options.date.is_some() || options.date_start.is_some() || options.date_end.is_some()
+}
+
+fn has_tool_date_filters(options: &ThreadToolSearchOptions) -> bool {
+    options.date.is_some() || options.date_start.is_some() || options.date_end.is_some()
+}
+
+fn matches_tool_name_filter(tool_name: &str, expected: Option<&str>) -> bool {
+    expected.is_none_or(|expected| tool_name.eq_ignore_ascii_case(expected))
+}
+
+fn matches_tool_date_filters(raw_ts: Option<&str>, options: &ThreadToolSearchOptions) -> bool {
+    if !has_tool_date_filters(options) {
+        return true;
+    }
+
+    let Some(raw_ts) = raw_ts else {
+        return false;
+    };
+
+    let Ok(activity_at) = DateTime::parse_from_rfc3339(raw_ts) else {
+        return false;
+    };
+    let activity_date = activity_at.with_timezone(&Utc).date_naive();
+
+    if let Some(date) = options.date
+        && activity_date != date
+    {
+        return false;
+    }
+    if let Some(start) = options.date_start
+        && activity_date < start
+    {
+        return false;
+    }
+    if let Some(end) = options.date_end
+        && activity_date > end
+    {
+        return false;
+    }
+
+    true
+}
+
+fn summarize_tool_args(input: &Value) -> String {
+    if let Some(command) = input.get("command").and_then(Value::as_str) {
+        return truncate_with_ellipsis(command, TOOL_ARGS_SUMMARY_MAX_BYTES);
+    }
+
+    let compact = serde_json::to_string(input).unwrap_or_default();
+    if compact.is_empty() {
+        "{}".to_string()
+    } else {
+        truncate_with_ellipsis(&compact, TOOL_ARGS_SUMMARY_MAX_BYTES)
+    }
+}
+
+fn truncate_with_ellipsis(value: &str, max_bytes: usize) -> String {
+    if value.len() > max_bytes {
+        format!("{}...", truncate_str(value, max_bytes))
+    } else {
+        value.to_string()
+    }
+}
+
+fn extract_tool_error(output: &Value) -> (Option<String>, Option<String>) {
+    let error = output.get("error");
+    let code = error
+        .and_then(|err| err.get("code"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    let message = error
+        .and_then(|err| err.get("message"))
+        .and_then(Value::as_str)
+        .map(ToOwned::to_owned);
+    (code, message)
 }
 
 /// Returns the latest RFC-3339 timestamp found across all events in a thread.

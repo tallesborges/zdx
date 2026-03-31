@@ -79,7 +79,18 @@ fn test_threads_help_shows_subcommands() {
         .stdout(predicate::str::contains("list"))
         .stdout(predicate::str::contains("show"))
         .stdout(predicate::str::contains("resume"))
-        .stdout(predicate::str::contains("search"));
+        .stdout(predicate::str::contains("search"))
+        .stdout(predicate::str::contains("tools"));
+}
+
+#[test]
+fn test_threads_tools_help_shows_flags() {
+    cargo_bin_cmd!("zdx")
+        .args(["threads", "tools", "--help"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("--failed"))
+        .stdout(predicate::str::contains("--json"));
 }
 
 #[test]
