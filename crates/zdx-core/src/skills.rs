@@ -1,17 +1,34 @@
 //! Skills discovery and parsing.
 
 use std::collections::HashSet;
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 use std::{fmt, fs};
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 use crate::config::{SkillSourceToggles, paths};
+
+const BUNDLED_SKILLS_DIR_NAME: &str = "bundled-skills";
+const BUNDLED_SKILLS_STAMP_FILE: &str = ".bundled-skills.sha256";
+
+static MATERIALIZED_BUNDLED_SKILLS_DIR: OnceLock<PathBuf> = OnceLock::new();
+static MATERIALIZED_BUNDLED_SKILLS_LOCK: Mutex<()> = Mutex::new(());
+
+struct BundledSkillAsset {
+    relative_path: &'static str,
+    content: &'static str,
+    executable: bool,
+}
 
 /// Skill source location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SkillSource {
+    BuiltIn,
     ZdxUser,
     ZdxProject,
     CodexUser,
@@ -30,6 +47,7 @@ impl fmt::Display for SkillSource {
 impl SkillSource {
     pub fn as_str(&self) -> &'static str {
         match self {
+            SkillSource::BuiltIn => "builtin",
             SkillSource::ZdxUser => "zdx-user",
             SkillSource::ZdxProject => "zdx-project",
             SkillSource::CodexUser => "codex-user",
@@ -39,6 +57,241 @@ impl SkillSource {
             SkillSource::AgentsProject => "agents-project",
         }
     }
+}
+
+#[must_use]
+pub fn bundled_skills_dir() -> PathBuf {
+    paths::zdx_home().join(BUNDLED_SKILLS_DIR_NAME)
+}
+
+/// Ensures bundled skills are materialized under `$ZDX_HOME/bundled-skills`.
+///
+/// Copies the embedded skill assets only when the embedded manifest hash changes
+/// or when a required materialized file is missing.
+///
+/// # Errors
+/// Returns an error if the materialized bundled skill directory cannot be created.
+pub fn ensure_bundled_skills_materialized() -> Result<PathBuf, std::io::Error> {
+    let _guard = MATERIALIZED_BUNDLED_SKILLS_LOCK
+        .lock()
+        .expect("bundled skill materialization lock poisoned");
+    let expected_hash = bundled_skills_manifest_hash();
+    if let Some(path) = MATERIALIZED_BUNDLED_SKILLS_DIR.get()
+        && bundled_skills_are_current(path, &expected_hash)
+    {
+        return Ok(path.clone());
+    }
+
+    let root = materialize_bundled_skills_into(&paths::zdx_home())?;
+    let _ = MATERIALIZED_BUNDLED_SKILLS_DIR.set(root.clone());
+    Ok(root)
+}
+
+#[must_use]
+pub fn skill_access_path(skill: &Skill) -> String {
+    match skill.source {
+        SkillSource::BuiltIn => bundled_skill_relative_path_from_path(&skill.file_path)
+            .map(|relative| bundled_skill_access_path(&relative))
+            .unwrap_or_else(|| skill.file_path.display().to_string()),
+        _ => skill.file_path.display().to_string(),
+    }
+}
+
+/// Returns the readable contents of a skill from the filesystem.
+///
+/// # Errors
+/// Returns an error if the skill content cannot be read.
+pub fn read_skill_content(skill: &Skill) -> Result<String, std::io::Error> {
+    fs::read_to_string(&skill.file_path)
+}
+
+fn bundled_skill_access_path(relative_path: &str) -> String {
+    format!("${{ZDX_HOME}}/{BUNDLED_SKILLS_DIR_NAME}/{relative_path}")
+}
+
+fn normalized_relative_path(path: &Path) -> Option<String> {
+    let mut parts = Vec::new();
+    for component in path.components() {
+        match component {
+            std::path::Component::Normal(part) => parts.push(part.to_str()?.to_string()),
+            _ => return None,
+        }
+    }
+
+    (!parts.is_empty()).then(|| parts.join("/"))
+}
+
+fn bundled_skill_relative_path_from_path(path: &Path) -> Option<String> {
+    let bundled_root = bundled_skills_dir();
+    path.strip_prefix(&bundled_root)
+        .ok()
+        .and_then(normalized_relative_path)
+        .or_else(|| {
+            bundled_root
+                .canonicalize()
+                .ok()
+                .and_then(|canonical_root| path.strip_prefix(canonical_root).ok())
+                .and_then(normalized_relative_path)
+        })
+}
+
+fn bundled_skills_manifest_hash() -> String {
+    let mut hasher = Sha256::new();
+    for asset in bundled_skill_assets() {
+        hasher.update(asset.relative_path.as_bytes());
+        hasher.update([0]);
+        hasher.update([u8::from(asset.executable)]);
+        hasher.update([0]);
+        hasher.update(asset.content.as_bytes());
+        hasher.update([0xff]);
+    }
+    format!("{:x}", hasher.finalize())
+}
+
+fn bundled_skills_are_current(root: &Path, expected_hash: &str) -> bool {
+    let stamp_path = root.join(BUNDLED_SKILLS_STAMP_FILE);
+    let Ok(existing_hash) = fs::read_to_string(&stamp_path) else {
+        return false;
+    };
+    if existing_hash.trim() != expected_hash {
+        return false;
+    }
+
+    bundled_skill_assets().iter().all(|asset| {
+        let path = root.join(asset.relative_path);
+        let Ok(metadata) = fs::metadata(&path) else {
+            return false;
+        };
+        if !metadata.is_file() {
+            return false;
+        }
+
+        #[cfg(unix)]
+        if asset.executable && metadata.permissions().mode() & 0o111 == 0 {
+            return false;
+        }
+
+        true
+    })
+}
+
+fn materialize_bundled_skills_into(zdx_home: &Path) -> Result<PathBuf, std::io::Error> {
+    let root = zdx_home.join(BUNDLED_SKILLS_DIR_NAME);
+    let expected_hash = bundled_skills_manifest_hash();
+    if bundled_skills_are_current(&root, &expected_hash) {
+        return Ok(root);
+    }
+
+    fs::create_dir_all(zdx_home)?;
+    match fs::symlink_metadata(&root) {
+        Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(&root)?,
+        Ok(_) => fs::remove_file(&root)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error),
+    }
+
+    fs::create_dir_all(&root)?;
+    for asset in bundled_skill_assets() {
+        let path = root.join(asset.relative_path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(&path, asset.content)?;
+        set_bundled_skill_permissions(asset, &path)?;
+    }
+
+    fs::write(
+        root.join(BUNDLED_SKILLS_STAMP_FILE),
+        format!("{expected_hash}\n"),
+    )?;
+    Ok(root)
+}
+
+#[cfg(unix)]
+fn set_bundled_skill_permissions(
+    asset: &BundledSkillAsset,
+    path: &Path,
+) -> Result<(), std::io::Error> {
+    if !asset.executable {
+        return Ok(());
+    }
+
+    let mut permissions = fs::metadata(path)?.permissions();
+    permissions.set_mode(0o755);
+    fs::set_permissions(path, permissions)
+}
+
+#[cfg(not(unix))]
+fn set_bundled_skill_permissions(
+    _asset: &BundledSkillAsset,
+    _path: &Path,
+) -> Result<(), std::io::Error> {
+    Ok(())
+}
+
+fn bundled_skill_assets() -> &'static [BundledSkillAsset] {
+    &[
+        BundledSkillAsset {
+            relative_path: "deepwiki-cli/SKILL.md",
+            content: include_str!("../bundled_skills/deepwiki-cli/SKILL.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "memory/SKILL.md",
+            content: include_str!("../bundled_skills/memory/SKILL.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "thread-tools/SKILL.md",
+            content: include_str!("../bundled_skills/thread-tools/SKILL.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "imagine/SKILL.md",
+            content: include_str!("../bundled_skills/imagine/SKILL.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "imagine/references/prompt-templates.md",
+            content: include_str!("../bundled_skills/imagine/references/prompt-templates.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/SKILL.md",
+            content: include_str!("../bundled_skills/skill-creator/SKILL.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/LICENSE.txt",
+            content: include_str!("../bundled_skills/skill-creator/LICENSE.txt"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/references/output-patterns.md",
+            content: include_str!("../bundled_skills/skill-creator/references/output-patterns.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/references/workflows.md",
+            content: include_str!("../bundled_skills/skill-creator/references/workflows.md"),
+            executable: false,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/scripts/init_skill.py",
+            content: include_str!("../bundled_skills/skill-creator/scripts/init_skill.py"),
+            executable: true,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/scripts/package_skill.py",
+            content: include_str!("../bundled_skills/skill-creator/scripts/package_skill.py"),
+            executable: true,
+        },
+        BundledSkillAsset {
+            relative_path: "skill-creator/scripts/quick_validate.py",
+            content: include_str!("../bundled_skills/skill-creator/scripts/quick_validate.py"),
+            executable: true,
+        },
+    ]
 }
 
 /// Discovered skill metadata.
@@ -300,15 +553,58 @@ fn load_skills_from_sources_with_filters(
         );
     }
 
+    load_bundled_skills(&mut state);
+
     LoadSkillsResult {
         skills: state.skills,
         warnings: state.warnings,
     }
 }
 
+fn load_bundled_skills(state: &mut LoadState) {
+    let materialized_root = match ensure_bundled_skills_materialized() {
+        Ok(root) => root,
+        Err(error) => {
+            let bundled_root = bundled_skills_dir();
+            state.warn(
+                &bundled_root,
+                format!(
+                    "Failed to materialize bundled skills under {}: {error}; built-in bundled skills will be unavailable",
+                    bundled_root.display()
+                ),
+            );
+            return;
+        }
+    };
+
+    for asset in bundled_skill_assets()
+        .iter()
+        .filter(|asset| asset.relative_path.ends_with("/SKILL.md"))
+    {
+        load_skill_file(
+            &materialized_root.join(asset.relative_path),
+            SkillSource::BuiltIn,
+            state,
+        );
+    }
+}
+
 #[cfg(test)]
 fn load_skills_from_sources(sources: Vec<SkillSourceSpec>) -> LoadSkillsResult {
-    load_skills_from_sources_with_filters(sources, SkillFilters::default(), Vec::new())
+    let mut state = LoadState::new(SkillFilters::default(), Vec::new());
+    for source in sources {
+        load_skills_from_dir_with_format(
+            &source.base_dir,
+            source.source,
+            source.format,
+            &mut state,
+        );
+    }
+
+    LoadSkillsResult {
+        skills: state.skills,
+        warnings: state.warnings,
+    }
 }
 
 fn load_skills_from_dir_with_format(
@@ -677,6 +973,97 @@ mod tests {
         assert_eq!(skill.name, "demo-skill");
         assert_eq!(skill.description, "A demo skill.");
         assert_eq!(skill.source, SkillSource::ZdxUser);
+    }
+
+    #[test]
+    fn test_bundled_skill_access_path_uses_env_var() {
+        assert_eq!(
+            bundled_skill_access_path("memory/SKILL.md"),
+            "${ZDX_HOME}/bundled-skills/memory/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn test_materialize_bundled_skills_writes_expected_assets() {
+        let root = ensure_bundled_skills_materialized().unwrap();
+
+        assert!(root.ends_with(BUNDLED_SKILLS_DIR_NAME));
+        assert!(root.join("memory").join("SKILL.md").is_file());
+        assert!(
+            root.join("skill-creator")
+                .join("scripts")
+                .join("init_skill.py")
+                .is_file()
+        );
+        assert_eq!(
+            fs::read_to_string(root.join(BUNDLED_SKILLS_STAMP_FILE))
+                .unwrap()
+                .trim(),
+            bundled_skills_manifest_hash()
+        );
+    }
+
+    #[test]
+    fn test_materialize_bundled_skills_restores_missing_asset() {
+        let root = ensure_bundled_skills_materialized().unwrap();
+        let script_path = root
+            .join("skill-creator")
+            .join("scripts")
+            .join("quick_validate.py");
+
+        fs::remove_file(&script_path).unwrap();
+        let rematerialized_root = ensure_bundled_skills_materialized().unwrap();
+
+        assert_eq!(rematerialized_root, root);
+        assert!(script_path.is_file());
+    }
+
+    #[test]
+    fn test_skill_access_path_uses_bundled_env_var_path() {
+        let root = ensure_bundled_skills_materialized().unwrap();
+        let skill = Skill {
+            name: "memory".to_string(),
+            description: "Memory helper".to_string(),
+            file_path: root.join("memory").join("SKILL.md"),
+            base_dir: root.join("memory"),
+            source: SkillSource::BuiltIn,
+        };
+
+        assert_eq!(
+            skill_access_path(&skill),
+            "${ZDX_HOME}/bundled-skills/memory/SKILL.md"
+        );
+    }
+
+    #[test]
+    fn test_read_skill_content_supports_bundled_skill() {
+        let root = ensure_bundled_skills_materialized().unwrap();
+        let skill = Skill {
+            name: "memory".to_string(),
+            description: "Memory helper".to_string(),
+            file_path: root.join("memory").join("SKILL.md"),
+            base_dir: root.join("memory"),
+            source: SkillSource::BuiltIn,
+        };
+
+        let content = read_skill_content(&skill).unwrap();
+        assert!(content.contains("# Memory"));
+    }
+
+    #[test]
+    fn test_load_skills_includes_bundled_fallbacks() {
+        let options = LoadSkillsOptions::new(std::env::current_dir().unwrap());
+        let result = load_skills(&options);
+        let names: Vec<&str> = result
+            .skills
+            .iter()
+            .map(|skill| skill.name.as_str())
+            .collect();
+
+        assert!(names.contains(&"memory"));
+        assert!(names.contains(&"deepwiki-cli"));
+        assert!(names.contains(&"thread-tools"));
+        assert!(names.contains(&"imagine"));
     }
 
     #[test]

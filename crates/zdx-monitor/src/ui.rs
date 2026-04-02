@@ -86,10 +86,9 @@ fn render_footer(f: &mut Frame, app: &MonitorApp, area: Rect) {
 fn footer_hint(section: Section) -> &'static str {
     match section {
         Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab switch • q quit",
-        Section::ActiveAgents => "↑↓ navigate • Tab switch • q quit",
+        Section::ActiveAgents | Section::Automations => "↑↓ navigate • Tab switch • q quit",
         Section::Config => "Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
-        Section::Automations => "↑↓ navigate • Tab switch • q quit",
     }
 }
 

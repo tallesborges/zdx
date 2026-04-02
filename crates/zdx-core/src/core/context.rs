@@ -19,10 +19,10 @@ use serde::Serialize;
 
 use crate::config::{Config, paths};
 use crate::providers::{ProviderKind, resolve_provider};
-use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills};
+use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills, skill_access_path};
 use crate::{prompts, subagents};
 
-/// Sets `ZDX_ARTIFACT_DIR` and `ZDX_THREAD_ID` as process environment variables.
+/// Sets runtime `ZDX_*` environment variables for paths and session context.
 ///
 /// These are visible to all child processes (bash tool, subagents) automatically.
 /// Must be called once at startup, before any concurrent work begins.
@@ -34,6 +34,7 @@ use crate::{prompts, subagents};
 pub fn set_runtime_env(config: &Config, thread_id: Option<&str>) {
     let zdx_home = paths::zdx_home();
     let artifact_dir = paths::artifact_dir_for_thread(thread_id);
+    let _ = crate::skills::ensure_bundled_skills_materialized();
     let memory_notes = config.memory.effective_notes_path();
     let memory_daily = config.memory.effective_daily_path();
     // SAFETY: Called once at startup before any concurrent work.
@@ -143,6 +144,20 @@ struct PromptTemplateSkill {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LoadedSkillContent {
+    pub name: String,
+    pub description: String,
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct StandalonePromptSkillContext {
+    pub available_skills: Vec<Skill>,
+    pub auto_loaded_skill_contents: Vec<LoadedSkillContent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 struct PromptTemplateCapability {
     name: String,
     title: String,
@@ -170,6 +185,8 @@ struct PromptTemplateVars {
     instruction_layers: Vec<String>,
     memory_suggestions: bool,
     skills_list: Vec<PromptTemplateSkill>,
+    available_skills: Vec<PromptTemplateSkill>,
+    auto_loaded_skill_contents: Vec<LoadedSkillContent>,
     scoped_context: Vec<PromptTemplateScopedContext>,
     specialized_capabilities: Vec<PromptTemplateCapability>,
     cwd: String,
@@ -267,13 +284,13 @@ fn build_prompt_template_vars(
         .trim()
         .to_string();
     let memory_index = sections.memory_index.unwrap_or_default().trim().to_string();
-    let skills_list = sections
+    let skills_list: Vec<PromptTemplateSkill> = sections
         .skills_list
         .iter()
         .map(|skill| PromptTemplateSkill {
             name: skill.name.clone(),
             description: skill.description.clone(),
-            path: skill.file_path.display().to_string(),
+            path: skill_access_path(skill),
         })
         .collect();
     let scoped_context = sections
@@ -317,7 +334,9 @@ fn build_prompt_template_vars(
         memory_index,
         instruction_layers: Vec::new(),
         memory_suggestions: sections.memory_suggestions,
+        available_skills: skills_list.clone(),
         skills_list,
+        auto_loaded_skill_contents: Vec::new(),
         scoped_context,
         specialized_capabilities: sections.specialized_capabilities.to_vec(),
         cwd: root.display().to_string(),
@@ -405,6 +424,7 @@ pub fn render_standalone_prompt_template(
     template: &str,
     memory_suggestions: bool,
     inclusion: PromptContextInclusion,
+    skill_context: &StandalonePromptSkillContext,
 ) -> Result<String> {
     let sections_result = load_prompt_context_sections(root, config);
     let inline_project_context = if inclusion.project_context {
@@ -440,6 +460,19 @@ pub fn render_standalone_prompt_template(
             specialized_capabilities: &specialized_capabilities,
         },
     );
+
+    let mut vars = vars;
+    vars.available_skills = skill_context
+        .available_skills
+        .iter()
+        .map(|skill| PromptTemplateSkill {
+            name: skill.name.clone(),
+            description: skill.description.clone(),
+            path: skill_access_path(skill),
+        })
+        .collect();
+    vars.auto_loaded_skill_contents
+        .clone_from(&skill_context.auto_loaded_skill_contents);
 
     render_prompt_template(template.trim(), &vars)
         .map_err(|error| anyhow::anyhow!(error))?

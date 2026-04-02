@@ -120,39 +120,122 @@ impl MonitorApp {
     }
 }
 
+fn build_app(root: &Path) -> Result<MonitorApp> {
+    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
+    let config = config::Config::load().context("load config")?;
+
+    Ok(MonitorApp {
+        config,
+        root: root.clone(),
+        threads: load_threads(),
+        automations: load_automations(&root),
+        services: load_services(),
+        active_agents: load_active_agents(),
+        active_section: Section::Services,
+        selected_index: 0,
+        status_section: Section::Services,
+        status_message: String::new(),
+        should_quit: false,
+    })
+}
+
+fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
+    terminal::enable_raw_mode().context("enable raw mode")?;
+    let mut stdout = io::stdout();
+    execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
+    let backend = CrosstermBackend::new(stdout);
+    Terminal::new(backend).context("create terminal")
+}
+
+fn restore_terminal(terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> Result<()> {
+    terminal::disable_raw_mode().context("disable raw mode")?;
+    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leave alternate screen")?;
+    terminal.show_cursor().context("show cursor")
+}
+
+fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
+    match key {
+        KeyCode::Char('q') => app.should_quit = true,
+        KeyCode::Tab => {
+            app.active_section = app.active_section.next();
+            app.selected_index = 0;
+        }
+        KeyCode::Char('j') | KeyCode::Down => {
+            let count = app.item_count();
+            if count > 0 {
+                app.selected_index = (app.selected_index + 1).min(count - 1);
+            }
+        }
+        KeyCode::Char('k') | KeyCode::Up => {
+            if app.selected_index > 0 {
+                app.selected_index -= 1;
+            }
+        }
+        KeyCode::Char('y') => copy_selected_thread_id(app),
+        KeyCode::Enter => toggle_selected_service(app),
+        KeyCode::Char('r') => restart_selected_service(app),
+        _ => {}
+    }
+}
+
+fn copy_selected_thread_id(app: &mut MonitorApp) {
+    if app.active_section == Section::Threads
+        && let Some(t) = app.threads.get(app.selected_index)
+    {
+        let _ = std::process::Command::new("pbcopy")
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .and_then(|mut child| {
+                use std::io::Write;
+                if let Some(ref mut stdin) = child.stdin {
+                    stdin.write_all(t.id.as_bytes())?;
+                }
+                child.wait()
+            });
+        app.set_status(format!("Copied thread ID {}", t.id));
+    }
+}
+
+fn toggle_selected_service(app: &mut MonitorApp) {
+    if app.active_section == Section::Services
+        && let Some(service) = app.services.get(app.selected_index)
+    {
+        match toggle_service(service, &app.root) {
+            Ok(message) => app.set_status(message),
+            Err(err) => {
+                app.set_status(format!("Failed to toggle {}: {err}", service.name));
+            }
+        }
+    }
+}
+
+fn restart_selected_service(app: &mut MonitorApp) {
+    if app.active_section == Section::Services
+        && let Some(service) = app.services.get(app.selected_index)
+    {
+        match restart_service(service, &app.root) {
+            Ok(message) => app.set_status(message),
+            Err(err) => {
+                app.set_status(format!("Failed to restart {}: {err}", service.name));
+            }
+        }
+    }
+}
+
+fn refresh_app(app: &mut MonitorApp) {
+    app.services = load_services();
+    app.active_agents = load_active_agents();
+    app.clamp_selection();
+}
+
 /// Run the monitor dashboard.
 ///
 /// # Errors
 ///
 /// Returns an error if configuration cannot be loaded or terminal operations fail.
 pub fn run(root: &Path) -> Result<()> {
-    let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let config = config::Config::load().context("load config")?;
-    let threads = load_threads();
-    let automations = load_automations(&root);
-    let services = load_services();
-    let active_agents = load_active_agents();
-
-    let mut app = MonitorApp {
-        config,
-        root,
-        threads,
-        automations,
-        services,
-        active_agents,
-        active_section: Section::Services,
-        selected_index: 0,
-        status_section: Section::Services,
-        status_message: String::new(),
-        should_quit: false,
-    };
-
-    // Setup terminal
-    terminal::enable_raw_mode().context("enable raw mode")?;
-    let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen).context("enter alternate screen")?;
-    let backend = CrosstermBackend::new(stdout);
-    let mut terminal = Terminal::new(backend).context("create terminal")?;
+    let mut app = build_app(root)?;
+    let mut terminal = setup_terminal()?;
 
     let tick_rate = Duration::from_secs(1);
     let mut last_tick = Instant::now();
@@ -165,72 +248,11 @@ pub fn run(root: &Path) -> Result<()> {
             && let Event::Key(key) = event::read().context("read event")?
             && key.kind == KeyEventKind::Press
         {
-            match key.code {
-                KeyCode::Char('q') => app.should_quit = true,
-                KeyCode::Tab => {
-                    app.active_section = app.active_section.next();
-                    app.selected_index = 0;
-                }
-                KeyCode::Char('j') | KeyCode::Down => {
-                    let count = app.item_count();
-                    if count > 0 {
-                        app.selected_index = (app.selected_index + 1).min(count - 1);
-                    }
-                }
-                KeyCode::Char('k') | KeyCode::Up => {
-                    if app.selected_index > 0 {
-                        app.selected_index -= 1;
-                    }
-                }
-                KeyCode::Char('y') => {
-                    if app.active_section == Section::Threads
-                        && let Some(t) = app.threads.get(app.selected_index)
-                    {
-                        let _ = std::process::Command::new("pbcopy")
-                            .stdin(std::process::Stdio::piped())
-                            .spawn()
-                            .and_then(|mut child| {
-                                use std::io::Write;
-                                if let Some(ref mut stdin) = child.stdin {
-                                    stdin.write_all(t.id.as_bytes())?;
-                                }
-                                child.wait()
-                            });
-                        app.set_status(format!("Copied thread ID {}", t.id));
-                    }
-                }
-                KeyCode::Enter => {
-                    if app.active_section == Section::Services
-                        && let Some(service) = app.services.get(app.selected_index)
-                    {
-                        match toggle_service(service, &app.root) {
-                            Ok(message) => app.set_status(message),
-                            Err(err) => {
-                                app.set_status(format!("Failed to toggle {}: {err}", service.name))
-                            }
-                        }
-                    }
-                }
-                KeyCode::Char('r') => {
-                    if app.active_section == Section::Services
-                        && let Some(service) = app.services.get(app.selected_index)
-                    {
-                        match restart_service(service, &app.root) {
-                            Ok(message) => app.set_status(message),
-                            Err(err) => {
-                                app.set_status(format!("Failed to restart {}: {err}", service.name))
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
+            handle_key_event(&mut app, key.code);
         }
 
         if last_tick.elapsed() >= tick_rate {
-            app.services = load_services();
-            app.active_agents = load_active_agents();
-            app.clamp_selection();
+            refresh_app(&mut app);
             last_tick = Instant::now();
         }
 
@@ -239,12 +261,7 @@ pub fn run(root: &Path) -> Result<()> {
         }
     }
 
-    // Restore terminal
-    terminal::disable_raw_mode().context("disable raw mode")?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen).context("leave alternate screen")?;
-    terminal.show_cursor().context("show cursor")?;
-
-    Ok(())
+    restore_terminal(&mut terminal)
 }
 
 fn load_threads() -> Vec<ThreadInfo> {

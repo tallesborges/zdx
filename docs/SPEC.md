@@ -220,6 +220,7 @@ Error:
 - Tool results are deterministic and correspond to the correct `tool_use_id`.
 - Relative paths resolve against `--root` (default `.`).
 - `--root` is a working directory context, not a security boundary (YOLO).
+- Built-in `todo_write` tracks a flat per-thread task list for multi-step work and keeps at most one active `in_progress` task while unfinished work remains.
 
 ---
 
@@ -301,7 +302,9 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
 - When a named subagent is selected, its body is rendered with the same prompt-template syntax/vars as the main prompt pipeline, then used as the child run's system prompt directly; it does not inherit the default ZDX prompt/context pipeline unless that text is written into the subagent body.
-- Built-in subagents currently include `oracle` as a deep reasoning standalone subagent.
+- Named subagents may declare `skills:` (allowed on-demand skills) and `auto_loaded_skills:` (skills whose `SKILL.md` contents are injected directly into the subagent prompt). Auto-loaded skills should be treated as already in context for that run.
+- Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
+- Built-in subagents currently include `explorer` as a unified local/external search specialist and `oracle` as a deep reasoning standalone subagent.
 
 ### Models registry
 
@@ -352,9 +355,10 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ### Discovery & sources
 
+- **Bundled skills:** ZDX includes built-in bundled skill fallbacks (currently `deepwiki-cli`, `memory`, `thread-tools`, `imagine`, and `skill-creator`) shipped inside the crate under `crates/zdx-core/bundled_skills/` and materialized on demand under `$ZDX_HOME/bundled-skills/`. ZDX rewrites that directory only when the embedded bundled-skill manifest changes or when a required materialized file is missing.
 - **Recursive sources:** `~/.zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
 - **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
-- **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project (first wins on name collision).
+- **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project → built-in (first wins on name collision, so user/project skills override bundled fallbacks).
 
 ### Validation & warnings
 
@@ -366,7 +370,8 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 ### Prompt integration
 
 - Skill metadata is appended to the system prompt as an `<available_skills>` XML block.
-- Each skill includes `name`, `description`, `path` (absolute), and `source`.
+- Each skill includes `name`, `description`, and `path`.
+- Bundled skills use `${ZDX_HOME}/bundled-skills/...` prompt paths, so the same path works in `read`, `bash`, subagents, and relative bundled references.
 
 ### Filtering
 

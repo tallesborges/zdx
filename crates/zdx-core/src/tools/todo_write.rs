@@ -1,0 +1,552 @@
+//! Todo write tool for structured task tracking.
+
+use std::env;
+
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+
+use super::{ToolContext, ToolDefinition};
+use crate::core::events::ToolOutput;
+use crate::core::thread_persistence::{self as tp, ThreadEvent};
+
+/// Returns the tool definition for the `todo_write` tool.
+pub fn definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "Todo_Write".to_string(),
+        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send an `ops` array of mutations such as `replace`, `add`, `update`, and `remove`. Prefer updating tasks immediately as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one task `in_progress`.".to_string(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {
+                "ops": {
+                    "type": "array",
+                    "description": "Ordered todo-list mutations to apply.",
+                    "minItems": 1,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "op": {
+                                "type": "string",
+                                "enum": ["replace", "add", "update", "remove"],
+                                "description": "Mutation kind to apply."
+                            },
+                            "tasks": {
+                                "type": "array",
+                                "description": "Full replacement task list for `replace`.",
+                                "items": {
+                                    "type": "object",
+                                    "properties": {
+                                        "content": { "type": "string", "description": "Short task label." },
+                                        "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "abandoned"] },
+                                        "details": { "type": "string", "description": "Optional temporary task context for this thread, such as paths, constraints, or next checks." }
+                                    },
+                                    "required": ["content"]
+                                }
+                            },
+                            "id": { "type": "string", "description": "Task ID, e.g. task-2, used by `update` and `remove`." },
+                            "content": { "type": "string", "description": "Task label for `add`, or updated label for `update`." },
+                            "status": { "type": "string", "enum": ["pending", "in_progress", "completed", "abandoned"] },
+                            "details": { "type": "string", "description": "Optional temporary task context for this thread, such as paths, constraints, or next checks." }
+                        },
+                        "required": ["op"]
+                    }
+                }
+            },
+            "required": ["ops"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+enum TodoStatus {
+    Pending,
+    InProgress,
+    Completed,
+    Abandoned,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct TodoItem {
+    id: String,
+    content: String,
+    status: TodoStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TodoInput {
+    ops: Vec<TodoOp>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+enum TodoOp {
+    Replace {
+        tasks: Vec<InputTask>,
+    },
+    Add {
+        content: String,
+        status: Option<TodoStatus>,
+        details: Option<String>,
+    },
+    Update {
+        id: String,
+        content: Option<String>,
+        status: Option<TodoStatus>,
+        details: Option<String>,
+    },
+    Remove {
+        id: String,
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct InputTask {
+    content: String,
+    status: Option<TodoStatus>,
+    details: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct TodoState {
+    tasks: Vec<TodoItem>,
+    next_id: usize,
+}
+
+#[derive(Debug, Serialize, PartialEq, Eq)]
+struct TodoCounts {
+    total: usize,
+    pending: usize,
+    in_progress: usize,
+    completed: usize,
+    abandoned: usize,
+}
+
+/// Executes the todo-write tool and returns a structured envelope.
+pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
+    let input: TodoInput = match serde_json::from_value(input.clone()) {
+        Ok(i) => i,
+        Err(e) => {
+            return ToolOutput::failure(
+                "invalid_input",
+                "Invalid input for todo_write tool",
+                Some(format!("Parse error: {e}")),
+            );
+        }
+    };
+
+    if input.ops.is_empty() {
+        return ToolOutput::failure("invalid_input", "ops cannot be empty", None);
+    }
+
+    let previous = load_current_state().unwrap_or_default();
+    let updated = match apply_ops(&previous, &input.ops) {
+        Ok(state) => state,
+        Err(message) => return ToolOutput::failure("invalid_input", message, None),
+    };
+
+    ToolOutput::success(json!({
+        "tasks": updated.tasks,
+        "counts": counts(&updated.tasks),
+        "summary": summary(&updated.tasks)
+    }))
+}
+
+fn load_current_state() -> Option<TodoState> {
+    let thread_id = current_thread_id()?;
+    let events = tp::load_thread_events(&thread_id).ok()?;
+    extract_latest_state(&events)
+}
+
+fn current_thread_id() -> Option<String> {
+    let thread_id = env::var("ZDX_THREAD_ID").ok()?;
+    let trimmed = thread_id.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+fn extract_latest_state(events: &[ThreadEvent]) -> Option<TodoState> {
+    let mut todo_tool_use_ids = std::collections::HashSet::new();
+    let mut latest = None;
+
+    for event in events {
+        match event {
+            ThreadEvent::ToolUse { id, name, .. } if is_todo_tool(name) => {
+                todo_tool_use_ids.insert(id.clone());
+            }
+            ThreadEvent::ToolResult {
+                tool_use_id,
+                output,
+                ok,
+                ..
+            } if *ok && todo_tool_use_ids.contains(tool_use_id) => {
+                if let Some(state) = state_from_tool_output(output) {
+                    latest = Some(state);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    latest
+}
+
+fn is_todo_tool(name: &str) -> bool {
+    name.to_ascii_lowercase().replace('-', "_") == "todo_write"
+}
+
+fn state_from_tool_output(output: &Value) -> Option<TodoState> {
+    let output: ToolOutput = serde_json::from_value(output.clone()).ok()?;
+    let data = output.data()?;
+    let tasks: Vec<TodoItem> = serde_json::from_value(data.get("tasks")?.clone()).ok()?;
+    Some(TodoState {
+        next_id: next_task_id(&tasks),
+        tasks,
+    })
+}
+
+fn apply_ops(previous: &TodoState, ops: &[TodoOp]) -> Result<TodoState, String> {
+    let mut next = previous.clone();
+
+    for op in ops {
+        match op {
+            TodoOp::Replace { tasks } => {
+                next.tasks.clear();
+                next.next_id = 1;
+                for task in tasks {
+                    let content = task.content.trim();
+                    if content.is_empty() {
+                        return Err("replace tasks cannot contain empty content".to_string());
+                    }
+                    next.tasks.push(TodoItem {
+                        id: format!("task-{}", next.next_id),
+                        content: content.to_string(),
+                        status: task.status.clone().unwrap_or(TodoStatus::Pending),
+                        details: normalize_optional_string(task.details.clone()),
+                    });
+                    next.next_id += 1;
+                }
+            }
+            TodoOp::Add {
+                content,
+                status,
+                details,
+            } => {
+                let content = content.trim();
+                if content.is_empty() {
+                    return Err("add requires non-empty content".to_string());
+                }
+                next.tasks.push(TodoItem {
+                    id: format!("task-{}", next.next_id),
+                    content: content.to_string(),
+                    status: status.clone().unwrap_or(TodoStatus::Pending),
+                    details: normalize_optional_string(details.clone()),
+                });
+                next.next_id += 1;
+            }
+            TodoOp::Update {
+                id,
+                content,
+                status,
+                details,
+            } => {
+                let task = next
+                    .tasks
+                    .iter_mut()
+                    .find(|task| task.id == *id)
+                    .ok_or_else(|| format!("Task '{id}' not found"))?;
+
+                if let Some(content) = content {
+                    let content = content.trim();
+                    if content.is_empty() {
+                        return Err(format!("Task '{id}' cannot have empty content"));
+                    }
+                    task.content = content.to_string();
+                }
+                if let Some(status) = status {
+                    task.status = status.clone();
+                }
+                if details.is_some() {
+                    task.details = normalize_optional_string(details.clone());
+                }
+            }
+            TodoOp::Remove { id } => {
+                let original_len = next.tasks.len();
+                next.tasks.retain(|task| task.id != *id);
+                if next.tasks.len() == original_len {
+                    return Err(format!("Task '{id}' not found"));
+                }
+            }
+        }
+    }
+
+    normalize_in_progress(&mut next.tasks);
+    next.next_id = next_task_id(&next.tasks);
+    Ok(next)
+}
+
+fn normalize_optional_string(value: Option<String>) -> Option<String> {
+    value
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn normalize_in_progress(tasks: &mut [TodoItem]) {
+    let mut first_in_progress = None;
+    let mut has_pending = false;
+
+    for (idx, task) in tasks.iter_mut().enumerate() {
+        match task.status {
+            TodoStatus::InProgress => {
+                if first_in_progress.is_none() {
+                    first_in_progress = Some(idx);
+                } else {
+                    task.status = TodoStatus::Pending;
+                    has_pending = true;
+                }
+            }
+            TodoStatus::Pending => has_pending = true,
+            TodoStatus::Completed | TodoStatus::Abandoned => {}
+        }
+    }
+
+    if first_in_progress.is_some() {
+        return;
+    }
+
+    if !has_pending {
+        return;
+    }
+
+    if let Some(task) = tasks
+        .iter_mut()
+        .find(|task| matches!(task.status, TodoStatus::Pending))
+    {
+        task.status = TodoStatus::InProgress;
+    }
+}
+
+fn next_task_id(tasks: &[TodoItem]) -> usize {
+    tasks
+        .iter()
+        .filter_map(|task| task.id.strip_prefix("task-"))
+        .filter_map(|suffix| suffix.parse::<usize>().ok())
+        .max()
+        .unwrap_or(0)
+        + 1
+}
+
+fn counts(tasks: &[TodoItem]) -> TodoCounts {
+    let mut counts = TodoCounts {
+        total: tasks.len(),
+        pending: 0,
+        in_progress: 0,
+        completed: 0,
+        abandoned: 0,
+    };
+
+    for task in tasks {
+        match task.status {
+            TodoStatus::Pending => counts.pending += 1,
+            TodoStatus::InProgress => counts.in_progress += 1,
+            TodoStatus::Completed => counts.completed += 1,
+            TodoStatus::Abandoned => counts.abandoned += 1,
+        }
+    }
+
+    counts
+}
+
+fn summary(tasks: &[TodoItem]) -> String {
+    let active = tasks
+        .iter()
+        .find(|task| matches!(task.status, TodoStatus::InProgress))
+        .map(|task| format!("Active: {} ({})", task.id, task.content));
+    let remaining = tasks
+        .iter()
+        .filter(|task| matches!(task.status, TodoStatus::Pending | TodoStatus::InProgress))
+        .count();
+
+    match active {
+        Some(active) => format!("{active}. Remaining tasks: {remaining}."),
+        None if tasks.is_empty() => "No tasks tracked.".to_string(),
+        None => format!("No active task. Remaining tasks: {remaining}."),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    #[test]
+    fn test_replace_promotes_first_pending_task() {
+        let previous = TodoState::default();
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Replace {
+                tasks: vec![
+                    InputTask {
+                        content: "Inspect codebase".to_string(),
+                        status: Some(TodoStatus::Pending),
+                        details: None,
+                    },
+                    InputTask {
+                        content: "Implement fix".to_string(),
+                        status: Some(TodoStatus::Pending),
+                        details: None,
+                    },
+                ],
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(next.tasks.len(), 2);
+        assert_eq!(next.tasks[0].id, "task-1");
+        assert!(matches!(next.tasks[0].status, TodoStatus::InProgress));
+        assert!(matches!(next.tasks[1].status, TodoStatus::Pending));
+    }
+
+    #[test]
+    fn test_update_completion_promotes_next_pending_task() {
+        let previous = TodoState {
+            tasks: vec![
+                TodoItem {
+                    id: "task-1".to_string(),
+                    content: "Inspect codebase".to_string(),
+                    status: TodoStatus::InProgress,
+                    details: None,
+                },
+                TodoItem {
+                    id: "task-2".to_string(),
+                    content: "Implement fix".to_string(),
+                    status: TodoStatus::Pending,
+                    details: None,
+                },
+            ],
+            next_id: 3,
+        };
+
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Update {
+                id: "task-1".to_string(),
+                content: None,
+                status: Some(TodoStatus::Completed),
+                details: None,
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(next.tasks[0].status, TodoStatus::Completed));
+        assert!(matches!(next.tasks[1].status, TodoStatus::InProgress));
+    }
+
+    #[test]
+    fn test_multiple_in_progress_tasks_are_normalized() {
+        let previous = TodoState::default();
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Replace {
+                tasks: vec![
+                    InputTask {
+                        content: "Inspect codebase".to_string(),
+                        status: Some(TodoStatus::InProgress),
+                        details: None,
+                    },
+                    InputTask {
+                        content: "Implement fix".to_string(),
+                        status: Some(TodoStatus::InProgress),
+                        details: None,
+                    },
+                ],
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(next.tasks[0].status, TodoStatus::InProgress));
+        assert!(matches!(next.tasks[1].status, TodoStatus::Pending));
+    }
+
+    #[test]
+    fn test_extract_latest_state_from_thread_events() {
+        let output = ToolOutput::success(json!({
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "content": "Inspect codebase",
+                    "status": "completed"
+                },
+                {
+                    "id": "task-2",
+                    "content": "Implement fix",
+                    "status": "in_progress"
+                }
+            ],
+            "counts": {
+                "total": 2,
+                "pending": 0,
+                "in_progress": 1,
+                "completed": 1,
+                "abandoned": 0
+            },
+            "summary": "Active: task-2 (Implement fix). Remaining tasks: 1."
+        }));
+        let events = vec![
+            ThreadEvent::tool_use("tool-1", "read", json!({"path": "src/lib.rs"})),
+            ThreadEvent::tool_result(
+                "tool-1",
+                json!({"ok": true, "data": {"path": "src/lib.rs"}}),
+                true,
+            ),
+            ThreadEvent::tool_use("tool-2", "todo_write", json!({"ops": []})),
+            ThreadEvent::tool_result("tool-2", serde_json::to_value(output).unwrap(), true),
+        ];
+
+        let state = extract_latest_state(&events).unwrap();
+        assert_eq!(state.tasks.len(), 2);
+        assert_eq!(state.tasks[1].id, "task-2");
+        assert!(matches!(state.tasks[1].status, TodoStatus::InProgress));
+    }
+
+    #[test]
+    fn test_execute_rejects_empty_ops() {
+        let output = execute(
+            &json!({"ops": []}),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+        assert!(!output.is_ok());
+        let (code, message, _) = output.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "ops cannot be empty");
+    }
+
+    #[test]
+    fn test_summary_for_empty_tasks() {
+        assert_eq!(summary(&[]), "No tasks tracked.");
+    }
+
+    #[test]
+    fn test_completed_only_list_has_no_active_task() {
+        let previous = TodoState::default();
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Replace {
+                tasks: vec![InputTask {
+                    content: "Done".to_string(),
+                    status: Some(TodoStatus::Completed),
+                    details: None,
+                }],
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(next.tasks[0].status, TodoStatus::Completed));
+    }
+}

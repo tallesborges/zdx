@@ -52,7 +52,7 @@ pub struct AgentOptions {
     pub tool_config: ToolConfig,
     /// Surface label for activity tracking (e.g., "chat", "exec", "telegram").
     pub surface: Option<String>,
-    /// Optional OpenAI Responses text verbosity override for this run.
+    /// Optional `OpenAI` Responses text verbosity override for this run.
     pub text_verbosity: Option<TextVerbosity>,
 }
 
@@ -748,13 +748,15 @@ fn build_run_turn_setup(
 
     let client = build_provider_client(
         config,
-        options.text_verbosity,
-        thread_id,
-        &selection.model,
-        provider,
-        max_tokens,
-        thinking_level,
-        model_output_limit,
+        ProviderBuildOptions {
+            text_verbosity: options.text_verbosity,
+            thread_id,
+            model: &selection.model,
+            provider,
+            max_tokens,
+            thinking_level,
+            model_output_limit,
+        },
     )?;
     let tool_ctx = ToolContext::new(
         options.root.canonicalize().unwrap_or(options.root.clone()),
@@ -774,39 +776,45 @@ fn build_run_turn_setup(
     })
 }
 
-fn build_provider_client(
-    config: &Config,
+#[derive(Clone, Copy)]
+struct ProviderBuildOptions<'a> {
     text_verbosity: Option<TextVerbosity>,
-    thread_id: Option<&str>,
-    model: &str,
+    thread_id: Option<&'a str>,
+    model: &'a str,
     provider: ProviderKind,
     max_tokens: u32,
     thinking_level: ThinkingLevel,
     model_output_limit: Option<u32>,
-) -> Result<ProviderClient> {
-    let cache_key = thread_id.map(std::string::ToString::to_string);
-    let thinking_enabled = thinking_level.is_enabled();
-    let reasoning_effort = map_thinking_to_reasoning(thinking_level);
-    let thinking_budget_tokens = thinking_level
-        .compute_reasoning_budget(max_tokens, model_output_limit)
-        .unwrap_or(0);
-    let thinking_effort = map_thinking_to_anthropic_effort(thinking_level);
-    let gemini_thinking =
-        thinking_enabled.then(|| GeminiThinkingConfig::from_thinking_level(thinking_level, model));
+}
 
-    match provider {
+fn build_provider_client(
+    config: &Config,
+    options: ProviderBuildOptions<'_>,
+) -> Result<ProviderClient> {
+    let cache_key = options.thread_id.map(std::string::ToString::to_string);
+    let thinking_enabled = options.thinking_level.is_enabled();
+    let reasoning_effort = map_thinking_to_reasoning(options.thinking_level);
+    let thinking_budget_tokens = options
+        .thinking_level
+        .compute_reasoning_budget(options.max_tokens, options.model_output_limit)
+        .unwrap_or(0);
+    let thinking_effort = map_thinking_to_anthropic_effort(options.thinking_level);
+    let gemini_thinking = thinking_enabled
+        .then(|| GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model));
+
+    match options.provider {
         ProviderKind::Anthropic => build_anthropic_client(
             config,
-            model,
-            max_tokens,
+            options.model,
+            options.max_tokens,
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
         ),
         ProviderKind::ClaudeCli => Ok(ProviderClient::ClaudeCli(ClaudeCliClient::new(
             ClaudeCliConfig::new(
-                model.to_string(),
-                max_tokens,
+                options.model.to_string(),
+                options.max_tokens,
                 config.providers.claude_cli.effective_base_url(),
                 thinking_enabled,
                 thinking_budget_tokens,
@@ -815,42 +823,54 @@ fn build_provider_client(
         ))),
         ProviderKind::OpenAICodex => Ok(ProviderClient::OpenAICodex(OpenAICodexClient::new(
             OpenAICodexConfig::new(
-                model.to_string(),
-                max_tokens,
+                options.model.to_string(),
+                options.max_tokens,
                 reasoning_effort,
-                text_verbosity,
+                options.text_verbosity,
                 cache_key,
             ),
         ))),
         ProviderKind::OpenAI => build_openai_client(
             config,
-            model,
+            options.model,
             config.max_tokens,
             reasoning_effort,
-            text_verbosity,
+            options.text_verbosity,
             cache_key,
         ),
         ProviderKind::OpenRouter => {
-            build_openrouter_client(config, model, reasoning_effort, cache_key)
+            build_openrouter_client(config, options.model, reasoning_effort, cache_key)
         }
-        ProviderKind::Xiomi => build_xiaomi_client(config, model, thinking_enabled),
-        ProviderKind::Mistral => build_mistral_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Moonshot => build_moonshot_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Stepfun => build_stepfun_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Minimax => build_minimax_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Zai => build_zai_client(config, model, cache_key, thinking_enabled),
-        ProviderKind::Xai => build_xai_client(config, model, cache_key, thinking_enabled),
+        ProviderKind::Xiomi => build_xiaomi_client(config, options.model, thinking_enabled),
+        ProviderKind::Mistral => {
+            build_mistral_client(config, options.model, cache_key, thinking_enabled)
+        }
+        ProviderKind::Moonshot => {
+            build_moonshot_client(config, options.model, cache_key, thinking_enabled)
+        }
+        ProviderKind::Stepfun => {
+            build_stepfun_client(config, options.model, cache_key, thinking_enabled)
+        }
+        ProviderKind::Minimax => {
+            build_minimax_client(config, options.model, cache_key, thinking_enabled)
+        }
+        ProviderKind::Zai => build_zai_client(config, options.model, cache_key, thinking_enabled),
+        ProviderKind::Xai => build_xai_client(config, options.model, cache_key, thinking_enabled),
         ProviderKind::Gemini => {
-            build_gemini_client(config, model, config.max_tokens, gemini_thinking)
+            build_gemini_client(config, options.model, config.max_tokens, gemini_thinking)
         }
         ProviderKind::GeminiCli => Ok(ProviderClient::GeminiCli(GeminiCliClient::new(
-            GeminiCliConfig::new(model.to_string(), config.max_tokens, gemini_thinking),
+            GeminiCliConfig::new(
+                options.model.to_string(),
+                config.max_tokens,
+                gemini_thinking,
+            ),
         ))),
         ProviderKind::Zen => build_zen_client(
             config,
-            model,
+            options.model,
             config.max_tokens,
-            max_tokens,
+            options.max_tokens,
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,
@@ -860,9 +880,9 @@ fn build_provider_client(
         ),
         ProviderKind::Apiyi => build_apiyi_client(
             config,
-            model,
+            options.model,
             config.max_tokens,
-            max_tokens,
+            options.max_tokens,
             thinking_enabled,
             thinking_budget_tokens,
             thinking_effort,

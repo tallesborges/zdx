@@ -1,6 +1,6 @@
 //! Named subagent discovery and parsing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -8,9 +8,13 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 use crate::config::{ThinkingLevel, paths};
-use crate::core::context::PromptContextInclusion;
+use crate::core::context::{
+    LoadedSkillContent, PromptContextInclusion, StandalonePromptSkillContext,
+};
+use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, skill_access_path};
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
+pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
@@ -117,6 +121,8 @@ pub struct SubagentDefinition {
     pub model: Option<String>,
     pub thinking_level: Option<ThinkingLevel>,
     pub tools: Option<Vec<String>>,
+    pub skills: Option<Vec<String>>,
+    pub auto_loaded_skills: Option<Vec<String>>,
     /// Standalone prompt body used as the child subagent system prompt.
     pub prompt_body: String,
 }
@@ -136,6 +142,8 @@ struct SubagentFrontmatter {
     model: Option<String>,
     thinking_level: Option<ThinkingLevel>,
     tools: Option<Vec<String>>,
+    skills: Option<Vec<String>>,
+    auto_loaded_skills: Option<Vec<String>>,
 }
 
 /// Discovers built-in, global, and project subagents.
@@ -217,6 +225,7 @@ pub fn capability_catalog(
 
     if delegation_enabled {
         capabilities.push(task_capability());
+        capabilities.push(explorer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
 
@@ -230,6 +239,7 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
 
     if delegation_enabled {
         capabilities.push(task_capability());
+        capabilities.push(fallback_explorer_capability());
         capabilities.push(fallback_oracle_capability());
     }
 
@@ -263,6 +273,11 @@ pub fn render_prompt(
     model: &str,
     inclusion: PromptContextInclusion,
 ) -> Result<String> {
+    let mut inclusion = inclusion;
+    inclusion.skills = false;
+
+    let subagent_skills = resolve_subagent_skills(config, root, definition)?;
+
     crate::core::context::render_standalone_prompt_template(
         config,
         root,
@@ -270,8 +285,95 @@ pub fn render_prompt(
         &definition.prompt_body,
         false,
         inclusion,
+        &StandalonePromptSkillContext {
+            available_skills: subagent_skills.allowed,
+            auto_loaded_skill_contents: subagent_skills.auto_loaded,
+        },
     )
     .with_context(|| format!("render subagent '{}'", definition.name))
+}
+
+#[derive(Debug, Default)]
+struct ResolvedSubagentSkills {
+    allowed: Vec<Skill>,
+    auto_loaded: Vec<LoadedSkillContent>,
+}
+
+fn resolve_subagent_skills(
+    config: &crate::config::Config,
+    root: &Path,
+    definition: &SubagentDefinition,
+) -> Result<ResolvedSubagentSkills> {
+    let allowed_names = definition
+        .skills
+        .clone()
+        .or_else(|| definition.auto_loaded_skills.clone())
+        .unwrap_or_default();
+    let auto_loaded_names = definition.auto_loaded_skills.clone().unwrap_or_default();
+
+    if allowed_names.is_empty() && auto_loaded_names.is_empty() {
+        return Ok(ResolvedSubagentSkills::default());
+    }
+
+    let mut options = LoadSkillsOptions::new(root);
+    options.sources = config.skills.sources.clone();
+
+    let loaded = load_skills(&options);
+    let mut by_name = BTreeMap::new();
+    for skill in loaded.skills {
+        by_name.insert(skill.name.clone(), skill);
+    }
+
+    let allowed = resolve_named_skills(&by_name, &allowed_names, definition, "skills")?;
+    let auto_loaded_skills = resolve_named_skills(
+        &by_name,
+        &auto_loaded_names,
+        definition,
+        "auto_loaded_skills",
+    )?;
+    let auto_loaded = load_auto_loaded_skill_contents(&auto_loaded_skills)?;
+
+    Ok(ResolvedSubagentSkills {
+        allowed,
+        auto_loaded,
+    })
+}
+
+fn resolve_named_skills(
+    available: &BTreeMap<String, Skill>,
+    names: &[String],
+    definition: &SubagentDefinition,
+    field_name: &str,
+) -> Result<Vec<Skill>> {
+    names
+        .iter()
+        .map(|name| {
+            available.get(name).cloned().ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Subagent '{}' references unknown skill '{}' in {}",
+                    definition.name,
+                    name,
+                    field_name
+                )
+            })
+        })
+        .collect()
+}
+
+fn load_auto_loaded_skill_contents(skills: &[Skill]) -> Result<Vec<LoadedSkillContent>> {
+    skills
+        .iter()
+        .map(|skill| {
+            let content = read_skill_content(skill)
+                .with_context(|| format!("read auto-loaded skill {}", skill.file_path.display()))?;
+            Ok(LoadedSkillContent {
+                name: skill.name.clone(),
+                description: skill.description.clone(),
+                path: skill_access_path(skill),
+                content: content.trim().to_string(),
+            })
+        })
+        .collect()
 }
 
 fn collect_markdown_files(
@@ -305,10 +407,16 @@ fn collect_markdown_files(
 
 fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    [(
-        manifest_dir.join("subagents").join("oracle.md"),
-        include_str!("../subagents/oracle.md"),
-    )]
+    [
+        (
+            manifest_dir.join("subagents").join("explorer.md"),
+            include_str!("../subagents/explorer.md"),
+        ),
+        (
+            manifest_dir.join("subagents").join("oracle.md"),
+            include_str!("../subagents/oracle.md"),
+        ),
+    ]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
     .collect()
@@ -333,6 +441,31 @@ fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
             subagent: definition.name,
         },
     })
+}
+
+fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, EXPLORER_SUBAGENT_NAME)?;
+    Ok(CapabilityDescriptor {
+        name: definition.name.clone(),
+        title: "Explorer".to_string(),
+        description: definition.description,
+        kind: CapabilityKind::Subagent {
+            subagent: definition.name,
+        },
+    })
+}
+
+fn fallback_explorer_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: EXPLORER_SUBAGENT_NAME.to_string(),
+        title: "Explorer".to_string(),
+        description:
+            "Use for investigation tasks that are primarily search and reading: current repo, thread history, local dependencies, or external repos/docs — not for implementation work."
+                .to_string(),
+        kind: CapabilityKind::Subagent {
+            subagent: EXPLORER_SUBAGENT_NAME.to_string(),
+        },
+    }
 }
 
 fn fallback_oracle_capability() -> CapabilityDescriptor {
@@ -376,6 +509,10 @@ fn parse_subagent_content(
         .ok_or_else(|| anyhow::anyhow!("description is required"))?;
     let model = normalize_optional_string(frontmatter.model, "model")?;
     let tools = normalize_tools(frontmatter.tools)?;
+    let skills = normalize_named_items(frontmatter.skills, "skills")?;
+    let auto_loaded_skills =
+        normalize_named_items(frontmatter.auto_loaded_skills, "auto_loaded_skills")?;
+    validate_auto_loaded_skills(skills.as_deref(), auto_loaded_skills.as_deref())?;
 
     let prompt_body = body.trim().to_string();
 
@@ -387,6 +524,8 @@ fn parse_subagent_content(
         model,
         thinking_level: frontmatter.thinking_level,
         tools,
+        skills,
+        auto_loaded_skills,
         prompt_body,
     })
 }
@@ -437,6 +576,60 @@ fn normalize_tools(value: Option<Vec<String>>) -> Result<Option<Vec<String>>> {
         }
         None => Ok(None),
     }
+}
+
+fn normalize_named_items(value: Option<Vec<String>>, field: &str) -> Result<Option<Vec<String>>> {
+    match value {
+        Some(raw) => {
+            let mut values = Vec::with_capacity(raw.len());
+            let mut seen = BTreeSet::new();
+            for item in raw {
+                let trimmed = item.trim();
+                if trimmed.is_empty() {
+                    bail!("{field} cannot contain empty names");
+                }
+                if seen.insert(trimmed.to_string()) {
+                    values.push(trimmed.to_string());
+                }
+            }
+            if values.is_empty() {
+                bail!("{field} cannot be empty when provided");
+            }
+            Ok(Some(values))
+        }
+        None => Ok(None),
+    }
+}
+
+fn validate_auto_loaded_skills(
+    skills: Option<&[String]>,
+    auto_loaded_skills: Option<&[String]>,
+) -> Result<()> {
+    let Some(auto_loaded_skills) = auto_loaded_skills else {
+        return Ok(());
+    };
+    let Some(skills) = skills else {
+        return Ok(());
+    };
+
+    let allowed: BTreeSet<&String> = skills.iter().collect();
+    let invalid: Vec<&String> = auto_loaded_skills
+        .iter()
+        .filter(|name| !allowed.contains(*name))
+        .collect();
+
+    if invalid.is_empty() {
+        return Ok(());
+    }
+
+    bail!(
+        "auto_loaded_skills must be a subset of skills; unexpected values: {}",
+        invalid
+            .into_iter()
+            .map(String::as_str)
+            .collect::<Vec<_>>()
+            .join(", ")
+    )
 }
 
 fn validate_tool_names(tools: &[String]) -> Result<()> {
@@ -499,6 +692,7 @@ mod tests {
     fn discover_includes_built_ins() {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
+        assert!(all.iter().any(|s| s.name == "explorer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -547,6 +741,44 @@ mod tests {
             Some(vec!["read".to_string(), "grep".to_string()])
         );
         assert_eq!(definition.prompt_body, "Search prompt");
+    }
+
+    #[test]
+    fn parse_subagent_accepts_skills_and_auto_loaded_skills() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("research.md");
+        fs::write(
+            &file,
+            "---\ndescription: Research helper\nskills:\n  - deepwiki-cli\n  - memory\nauto_loaded_skills:\n  - deepwiki-cli\n---\nPrompt",
+        )
+        .unwrap();
+
+        let definition = parse_subagent_file(&file, SubagentSource::User).unwrap();
+        assert_eq!(
+            definition.skills,
+            Some(vec!["deepwiki-cli".to_string(), "memory".to_string()])
+        );
+        assert_eq!(
+            definition.auto_loaded_skills,
+            Some(vec!["deepwiki-cli".to_string()])
+        );
+    }
+
+    #[test]
+    fn parse_subagent_rejects_auto_loaded_skills_outside_allowed_skills() {
+        let dir = tempdir().unwrap();
+        let file = dir.path().join("research.md");
+        fs::write(
+            &file,
+            "---\ndescription: Research helper\nskills:\n  - memory\nauto_loaded_skills:\n  - deepwiki-cli\n---\nPrompt",
+        )
+        .unwrap();
+
+        let err = parse_subagent_file(&file, SubagentSource::User).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("auto_loaded_skills must be a subset of skills")
+        );
     }
 
     #[test]
@@ -616,7 +848,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "oracle"]
+            vec!["task", "explorer", "oracle"]
         );
     }
 
@@ -633,12 +865,22 @@ mod tests {
             model: None,
             thinking_level: None,
             tools: None,
+            skills: None,
+            auto_loaded_skills: None,
             prompt_body: "{% if project_context %}{{ project_context }}{% endif %}\n{{ cwd }}"
                 .to_string(),
         };
 
+        let mut config = crate::config::Config::default();
+        config.skills.sources.zdx_user = false;
+        config.skills.sources.codex_user = false;
+        config.skills.sources.claude_user = false;
+        config.skills.sources.claude_project = false;
+        config.skills.sources.agents_user = false;
+        config.skills.sources.agents_project = false;
+
         let rendered = render_prompt(
-            &crate::config::Config::default(),
+            &config,
             root.path(),
             &definition,
             "anthropic:claude-opus-4-6",
@@ -648,5 +890,47 @@ mod tests {
 
         assert!(rendered.contains("Project note"));
         assert!(rendered.contains(&root.path().display().to_string()));
+    }
+
+    #[test]
+    fn render_prompt_includes_available_and_auto_loaded_skills() {
+        let root = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.skills.sources.zdx_user = false;
+        config.skills.sources.codex_user = false;
+        config.skills.sources.claude_user = false;
+        config.skills.sources.claude_project = false;
+        config.skills.sources.agents_user = false;
+        config.skills.sources.agents_project = false;
+
+        let definition = SubagentDefinition {
+            name: "explorer".to_string(),
+            description: "Explorer".to_string(),
+            path: root.path().join("explorer.md"),
+            source: SubagentSource::User,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["read".to_string()]),
+            skills: Some(vec!["deepwiki-cli".to_string(), "memory".to_string()]),
+            auto_loaded_skills: Some(vec!["deepwiki-cli".to_string()]),
+            prompt_body: "{% if available_skills %}## Available Skills\n{% for skill in available_skills %}- {{ skill.name }} => {{ skill.path }}\n{% endfor %}{% endif %}\n{% if auto_loaded_skill_contents %}## Auto-loaded Skills\n{% for skill in auto_loaded_skill_contents %}Path: {{ skill.path }}\n{{ skill.content }}\n{% endfor %}{% endif %}".to_string(),
+        };
+
+        let rendered = render_prompt(
+            &config,
+            root.path(),
+            &definition,
+            "anthropic:claude-opus-4-6",
+            PromptContextInclusion::default(),
+        )
+        .unwrap();
+
+        assert!(rendered.contains("## Available Skills"));
+        assert!(rendered.contains("deepwiki-cli"));
+        assert!(rendered.contains("memory"));
+        assert!(rendered.contains("## Auto-loaded Skills"));
+        assert!(rendered.contains("${ZDX_HOME}/bundled-skills/deepwiki-cli/SKILL.md"));
+        assert!(rendered.contains("# DeepWiki"));
+        assert!(!rendered.contains("# Memory\nUse this skill for memory-related tasks."));
     }
 }

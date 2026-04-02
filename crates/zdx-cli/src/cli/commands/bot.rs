@@ -18,21 +18,18 @@ pub struct BotInitOptions {
 
 pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()> {
     let name = match options.name {
-        Some(name) => require_non_empty("bot name", name)?,
+        Some(name) => require_non_empty("bot name", &name)?,
         None => prompt_required("Bot name")?,
     };
     let root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
 
     let mut bots = BotsConfig::load().context("load bot registry")?;
     if bots.get(&name).is_some() && !options.force {
-        bail!(
-            "bot '{}' already exists in the bot registry (use --force to overwrite)",
-            name
-        );
+        bail!("bot '{name}' already exists in the bot registry (use --force to overwrite)");
     }
 
     let bot_token = match options.bot_token {
-        Some(token) => require_non_empty("bot token", token)?,
+        Some(token) => require_non_empty("bot token", &token)?,
         None => prompt_required("Bot token")?,
     };
 
@@ -49,7 +46,7 @@ pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()>
 
     let default_model = config.telegram.model.trim();
     let model = match options.model {
-        Some(model) => require_non_empty("model", model)?,
+        Some(model) => require_non_empty("model", &model)?,
         None => prompt_with_default("Model", default_model)?,
     };
 
@@ -76,7 +73,7 @@ pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()>
         name,
         zdx_core::config::paths::bots_config_path().display()
     );
-    println!("Run `zdx bot --bot {}` to start it.", name);
+    println!("Run `zdx bot --bot {name}` to start it.");
     Ok(())
 }
 
@@ -105,10 +102,10 @@ fn prompt_i64_with_default(label: &str, default: Option<i64>) -> Result<i64> {
         let default_string = default.map(|v| v.to_string());
         let value = prompt(label, default_string.as_deref())?;
         let trimmed = value.trim();
-        if trimmed.is_empty() {
-            if let Some(default) = default {
-                return Ok(default);
-            }
+        if trimmed.is_empty()
+            && let Some(default) = default
+        {
+            return Ok(default);
         }
         match trimmed.parse::<i64>() {
             Ok(parsed) => return Ok(parsed),
@@ -142,7 +139,7 @@ fn prompt(label: &str, default: Option<&str>) -> Result<String> {
     Ok(buffer)
 }
 
-fn require_non_empty(label: &str, value: String) -> Result<String> {
+fn require_non_empty(label: &str, value: &str) -> Result<String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         bail!("{label} must not be empty");

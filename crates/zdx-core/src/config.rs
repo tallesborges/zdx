@@ -46,7 +46,7 @@ pub enum ThinkingLevel {
     XHigh,
 }
 
-/// Text verbosity for OpenAI Responses-compatible providers.
+/// Text verbosity for `OpenAI` Responses-compatible providers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum TextVerbosity {
@@ -232,8 +232,14 @@ impl NamedBotConfig {
     /// Applies this named bot configuration onto the loaded global config.
     pub fn apply_to(&self, config: &mut Config) {
         config.telegram.bot_token = Some(self.bot_token.trim().to_string());
-        config.telegram.allowlist_user_ids = self.allowlist_user_ids.clone();
-        config.telegram.allowlist_chat_ids = self.allowlist_chat_ids.clone();
+        config
+            .telegram
+            .allowlist_user_ids
+            .clone_from(&self.allowlist_user_ids);
+        config
+            .telegram
+            .allowlist_chat_ids
+            .clone_from(&self.allowlist_chat_ids);
         config.telegram.model = self.model.trim().to_string();
         config.telegram.thinking_level = self.thinking_level;
     }
@@ -1352,6 +1358,8 @@ fn default_openai_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
+            "gpt-5.4-nano".to_string(),
             "gpt-5.3-codex".to_string(),
             "gpt-5.3-codex-spark".to_string(),
             "gpt-5.2-codex".to_string(),
@@ -1366,6 +1374,7 @@ fn default_openai_codex_provider() -> ProviderConfig {
         enabled: Some(true),
         models: vec![
             "gpt-5.4".to_string(),
+            "gpt-5.4-mini".to_string(),
             "gpt-5.3-codex".to_string(),
             "gpt-5.3-codex-spark".to_string(),
             "gpt-5.2-codex".to_string(),
@@ -2282,7 +2291,7 @@ max_tokens = 4096
                 root: "/tmp/zdx".to_string(),
                 bot_token: "123:abc".to_string(),
                 allowlist_user_ids: vec![42],
-                allowlist_chat_ids: vec![-100123],
+                allowlist_chat_ids: vec![-100_123],
                 model: "claude-cli:claude-sonnet-4-6".to_string(),
                 thinking_level: ThinkingLevel::Low,
             },
@@ -2297,7 +2306,7 @@ max_tokens = 4096
         assert_eq!(bot.root, "/tmp/zdx");
         assert_eq!(bot.bot_token, "123:abc");
         assert_eq!(bot.allowlist_user_ids, vec![42]);
-        assert_eq!(bot.allowlist_chat_ids, vec![-100123]);
+        assert_eq!(bot.allowlist_chat_ids, vec![-100_123]);
         assert_eq!(bot.model, "claude-cli:claude-sonnet-4-6");
         assert_eq!(bot.thinking_level, ThinkingLevel::Low);
     }
@@ -2333,7 +2342,7 @@ thinking_level = "minimal"
                 root: "/tmp/zdx".to_string(),
                 bot_token: "project-token".to_string(),
                 allowlist_user_ids: vec![42],
-                allowlist_chat_ids: vec![-100123],
+                allowlist_chat_ids: vec![-100_123],
                 model: "openai:gpt-5.4".to_string(),
                 thinking_level: ThinkingLevel::High,
             },
@@ -2345,7 +2354,7 @@ thinking_level = "minimal"
         assert_eq!(root, PathBuf::from("/tmp/zdx"));
         assert_eq!(config.telegram.bot_token.as_deref(), Some("project-token"));
         assert_eq!(config.telegram.allowlist_user_ids, vec![42]);
-        assert_eq!(config.telegram.allowlist_chat_ids, vec![-100123]);
+        assert_eq!(config.telegram.allowlist_chat_ids, vec![-100_123]);
         assert_eq!(config.telegram.model, "openai:gpt-5.4");
         assert_eq!(config.telegram.thinking_level, ThinkingLevel::High);
     }
