@@ -23,7 +23,8 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
-- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`oracle`)
+- `bundled_skills/*/`: built-in bundled skill fallbacks embedded in the binary, materialized under `$ZDX_HOME/bundled-skills/`, and exposed via `${ZDX_HOME}/bundled-skills/...` in prompts/tools
+- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`explorer`, `oracle`)
 
 ### Core runtime (`src/core/`)
 
@@ -47,6 +48,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `tools/grep.rs`: native grep tool (structured regex search using ripgrep internals)
 - `tools/read_thread.rs`: read saved thread transcript tool
 - `tools/subagent.rs`: invoke_subagent tool
+- `tools/todo_write.rs`: structured todo/task tracking tool
 - `tools/thread_search.rs`: thread discovery tool
 - `tools/web_search.rs`: web search tool
 

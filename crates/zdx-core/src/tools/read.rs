@@ -217,10 +217,20 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
 fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> ToolOutput {
     let file = match File::open(path) {
         Ok(f) => f,
-        Err(e) => return read_text_error(path, &e),
+        Err(e) => return read_text_error(Some(path), &e),
     };
 
     let mut reader = BufReader::new(file);
+    read_text_from_reader(display_path, Some(path), &mut reader, offset, limit)
+}
+
+fn read_text_from_reader<R: BufRead>(
+    display_path: &str,
+    resolved_path: Option<&Path>,
+    reader: &mut R,
+    offset: usize,
+    limit: usize,
+) -> ToolOutput {
     let mut collected_lines: Vec<String> = Vec::with_capacity(limit.min(1000));
     let mut total_lines: usize = 0;
     let mut accumulated_bytes: usize = 0;
@@ -231,7 +241,7 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     let start_line = offset.saturating_sub(1);
 
     loop {
-        match read_next_line(&mut reader, &mut buffer, path) {
+        match read_next_line(reader, &mut buffer, resolved_path) {
             Ok(None) => break,
             Ok(Some(())) => {}
             Err(output) => return output,
@@ -277,7 +287,7 @@ fn read_text(display_path: &str, path: &Path, offset: usize, limit: usize) -> To
     let content = collected_lines.concat();
 
     let mut data = serde_json::Map::new();
-    insert_path_fields(&mut data, display_path, Some(path));
+    insert_path_fields(&mut data, display_path, resolved_path);
     data.insert("content".to_string(), Value::String(content));
     data.insert("offset".to_string(), Value::from(offset));
     data.insert("lines_shown".to_string(), Value::from(lines_shown));
@@ -349,9 +359,9 @@ fn build_read_warning(
 }
 
 fn read_next_line(
-    reader: &mut BufReader<File>,
+    reader: &mut impl BufRead,
     buffer: &mut Vec<u8>,
-    path: &Path,
+    path: Option<&Path>,
 ) -> Result<Option<()>, ToolOutput> {
     buffer.clear();
     let bytes_read = reader
@@ -368,10 +378,14 @@ fn format_line(buffer: &[u8]) -> String {
     String::from_utf8_lossy(buffer).into_owned()
 }
 
-fn read_text_error(path: &Path, e: &std::io::Error) -> ToolOutput {
+fn read_text_error(path: Option<&Path>, e: &std::io::Error) -> ToolOutput {
+    let label = path.map_or_else(
+        || "content".to_string(),
+        |path| format!("file '{}'", path.display()),
+    );
     ToolOutput::failure(
         "read_error",
-        format!("Failed to read file '{}'", path.display()),
+        format!("Failed to read {label}"),
         Some(format!("OS error: {e}")),
     )
 }
@@ -462,6 +476,33 @@ mod tests {
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "external content");
+    }
+
+    #[test]
+    fn test_read_bundled_skill_via_env_var_path() {
+        let bundled_root = crate::skills::ensure_bundled_skills_materialized().unwrap();
+        unsafe {
+            std::env::set_var("ZDX_HOME", bundled_root.parent().unwrap().as_os_str());
+        }
+
+        let ctx = ToolContext::new(std::env::current_dir().unwrap(), None);
+        let input = json!({"path": "${ZDX_HOME}/bundled-skills/memory/SKILL.md"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().expect("should have data");
+        assert_eq!(data["path"], "${ZDX_HOME}/bundled-skills/memory/SKILL.md");
+        assert_eq!(
+            data["resolved_path"],
+            bundled_root
+                .join("memory")
+                .join("SKILL.md")
+                .canonicalize()
+                .unwrap()
+                .display()
+                .to_string()
+        );
+        assert!(data["content"].as_str().unwrap().contains("# Memory"));
     }
 
     #[test]

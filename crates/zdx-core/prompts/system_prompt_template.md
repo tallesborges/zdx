@@ -62,6 +62,10 @@ These are user-defined base instructions. Treat them as authoritative for this r
 - MUST verify each completed step before moving on (for example compile check, test, or read-back).
 - If a failure invalidates the current plan, MUST stop and present a revised plan instead of improvising.
 
+## Task Tracking
+- SHOULD use `todo_write` for tasks with 3+ meaningful steps, multiple requested changes, or work where visible progress helps avoid missed requirements.
+- When a todo list exists and unfinished work remains, SHOULD keep exactly one task `in_progress` and update task status immediately as work advances.
+
 ## Execution Style
 - MUST optimize for correctness and repo conventions.
 - MUST avoid speculative refactors or cleanup unless the task requires them.

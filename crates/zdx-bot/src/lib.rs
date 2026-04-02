@@ -42,7 +42,7 @@ pub const EXIT_REBUILD: i32 = 42;
 /// Returns an error if the operation fails.
 pub async fn run() -> Result<()> {
     let root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    run_with_root(root).await
+    Box::pin(run_with_root(root)).await
 }
 
 ///
@@ -50,7 +50,7 @@ pub async fn run() -> Result<()> {
 /// Returns an error if the operation fails.
 pub async fn run_with_root(root: PathBuf) -> Result<()> {
     let config = Config::load().context("load zdx config")?;
-    run_with_config_and_root(config, root).await
+    Box::pin(run_with_config_and_root(config, root)).await
 }
 
 ///

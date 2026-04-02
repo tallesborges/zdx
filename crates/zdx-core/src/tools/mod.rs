@@ -13,6 +13,7 @@ pub mod read;
 pub mod read_thread;
 pub mod subagent;
 pub mod thread_search;
+pub mod todo_write;
 pub mod web_search;
 pub mod write;
 
@@ -461,6 +462,7 @@ impl ToolSet {
                 "invoke_subagent",
                 "read",
                 "read_thread",
+                "todo_write",
                 "thread_search",
                 "web_search",
                 "write",
@@ -474,6 +476,7 @@ impl ToolSet {
                 "invoke_subagent",
                 "read",
                 "read_thread",
+                "todo_write",
                 "thread_search",
                 "web_search",
             ],
@@ -491,6 +494,7 @@ pub fn toolset_tool_names(set: ToolSet) -> Vec<String> {
 /// Async tool handler function.
 pub type ToolFuture = Pin<Box<dyn Future<Output = ToolOutput> + Send>>;
 pub type ToolHandler = Arc<dyn Fn(&Value, &ToolContext) -> ToolFuture + Send + Sync>;
+type ToolExecutor = fn(Value, ToolContext) -> ToolFuture;
 
 /// Tool registry (definitions + executors).
 #[derive(Clone, Default)]
@@ -526,6 +530,13 @@ impl ToolRegistry {
     pub fn with_tool(mut self, definition: ToolDefinition, handler: ToolHandler) -> Self {
         self.register(definition, handler);
         self
+    }
+
+    fn register_builtin_tool(&mut self, definition: ToolDefinition, executor: ToolExecutor) {
+        self.register(
+            definition,
+            Arc::new(move |input, ctx| executor(input.clone(), ctx.clone())),
+        );
     }
 
     pub fn register(&mut self, definition: ToolDefinition, handler: ToolHandler) {
@@ -618,114 +629,72 @@ impl ToolRegistry {
     }
 
     fn register_builtin_tools(&mut self) {
-        self.register(
-            bash::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { bash::execute(&input, &ctx, ctx.timeout).await })
-            }),
-        );
-
-        self.register(
-            apply_patch::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_apply_patch(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            edit::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_edit(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            read::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_read(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            read_thread::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { read_thread::execute(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            thread_search::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_thread_search(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            subagent::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { subagent::execute(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            write::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_write(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            web_search::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { web_search::execute(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            fetch_webpage::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { fetch_webpage::execute(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            grep::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_grep(&input, &ctx).await })
-            }),
-        );
-
-        self.register(
-            glob::definition(),
-            Arc::new(|input, ctx| {
-                let input = input.clone();
-                let ctx = ctx.clone();
-                Box::pin(async move { execute_glob(&input, &ctx).await })
-            }),
-        );
+        self.register_builtin_tool(bash::definition(), bash_handler);
+        self.register_builtin_tool(apply_patch::definition(), apply_patch_handler);
+        self.register_builtin_tool(edit::definition(), edit_handler);
+        self.register_builtin_tool(read::definition(), read_handler);
+        self.register_builtin_tool(read_thread::definition(), read_thread_handler);
+        self.register_builtin_tool(todo_write::definition(), todo_write_handler);
+        self.register_builtin_tool(thread_search::definition(), thread_search_handler);
+        self.register_builtin_tool(subagent::definition(), subagent_handler);
+        self.register_builtin_tool(write::definition(), write_handler);
+        self.register_builtin_tool(web_search::definition(), web_search_handler);
+        self.register_builtin_tool(fetch_webpage::definition(), fetch_webpage_handler);
+        self.register_builtin_tool(grep::definition(), grep_handler);
+        self.register_builtin_tool(glob::definition(), glob_handler);
     }
+}
+
+fn bash_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { bash::execute(&input, &ctx, ctx.timeout).await })
+}
+
+fn apply_patch_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_apply_patch(&input, &ctx).await })
+}
+
+fn edit_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_edit(&input, &ctx).await })
+}
+
+fn read_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_read(&input, &ctx).await })
+}
+
+fn read_thread_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { read_thread::execute(&input, &ctx).await })
+}
+
+fn todo_write_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_todo_write(&input, &ctx).await })
+}
+
+fn thread_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_thread_search(&input, &ctx).await })
+}
+
+fn subagent_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { subagent::execute(&input, &ctx).await })
+}
+
+fn write_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_write(&input, &ctx).await })
+}
+
+fn web_search_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { web_search::execute(&input, &ctx).await })
+}
+
+fn fetch_webpage_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { fetch_webpage::execute(&input, &ctx).await })
+}
+
+fn grep_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_grep(&input, &ctx).await })
+}
+
+fn glob_handler(input: Value, ctx: ToolContext) -> ToolFuture {
+    Box::pin(async move { execute_glob(&input, &ctx).await })
 }
 
 fn unknown_tool_output<S>(
@@ -829,6 +798,15 @@ async fn execute_thread_search(input: &Value, ctx: &ToolContext) -> ToolOutput {
         let input = input.clone();
         let ctx = ctx.clone();
         move || thread_search::execute(&input, &ctx)
+    })
+    .await
+}
+
+async fn execute_todo_write(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_blocking(ctx.timeout, {
+        let input = input.clone();
+        let ctx = ctx.clone();
+        move || todo_write::execute(&input, &ctx)
     })
     .await
 }
@@ -1001,6 +979,7 @@ mod tests {
         assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"todo_write".to_string()));
         assert!(names.contains(&"thread_search".to_string()));
         assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
@@ -1019,6 +998,7 @@ mod tests {
         assert!(names.contains(&"invoke_subagent".to_string()));
         assert!(names.contains(&"read".to_string()));
         assert!(names.contains(&"read_thread".to_string()));
+        assert!(names.contains(&"todo_write".to_string()));
         assert!(names.contains(&"thread_search".to_string()));
         assert!(names.contains(&"web_search".to_string()));
         assert!(names.contains(&"write".to_string()));
