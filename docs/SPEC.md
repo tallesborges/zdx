@@ -337,6 +337,7 @@ ZDX composes project/user context in this order before skills/subagents sections
 ### Contracts
 
 - At each directory scope, ZDX loads `AGENTS.md` if present; otherwise it loads `CLAUDE.md`.
+- Relative file references mentioned inside an `AGENTS.md`/`CLAUDE.md` block resolve from that context file's directory, not from the session cwd/root, unless the file explicitly says otherwise.
 - Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
 - `MEMORY.md` content is capped at 16 KiB with truncation warning.
