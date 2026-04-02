@@ -1798,6 +1798,9 @@ mod tests {
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("<project-context>"));
+        assert!(prompt.contains(
+            "If an `AGENTS.md` or `CLAUDE.md` block mentions a relative file path, resolve it from the directory containing that context file"
+        ));
         assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains("Task (`task`)"));

@@ -122,6 +122,8 @@ The following runtime environment variables may be available and should be used 
 <project-context>
 `AGENTS.md` files define project-local rules. If a directory does not contain `AGENTS.md`, use `CLAUDE.md` instead. Deeper files override higher ones.
 **MUST** follow these rules when making changes in their scope.
+- If an `AGENTS.md` or `CLAUDE.md` block mentions a relative file path, resolve it from the directory containing that context file, not from the current working directory, unless that file explicitly says otherwise.
+- Inline project-context blocks are grouped by source file path (`## /path/to/AGENTS.md`); treat each heading as the base directory for relative references in that block.
 {% if project_context %}
 {{ project_context }}
 {% endif %}
