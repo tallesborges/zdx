@@ -5,9 +5,7 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/tallesborges/zdx)
 [![Built With Ratatui](https://ratatui.rs/built-with-ratatui/badge.svg)](https://ratatui.rs/)
 
-Zdx is a coding agent built in Rust. I made it mainly to avoid using multiple CLIs and to have customization freedom, so I try to add the best features from them into a single CLI.
-
-I added the Telegram bot so I can control it while away from the computer. I don't have plans to add providers other than Telegram.
+Zdx is a coding agent built in Rust. I made it to have customization freedom and also for learnig purpose.
 
 ![Zdx demo](docs/assets/demo.gif)
 
@@ -60,25 +58,7 @@ zdx bot
 
 ## Features
 
-- **Providers**: Anthropic, Gemini, OpenAI, OpenRouter, Mistral, Moonshot, MiMo, StepFun
-- **Interactive TUI** with streaming markdown, syntax highlighting, and tables
-- **Exec mode** for scripts and automation
-- **Extended thinking** + token usage with pricing
-- **Command palette**, **file picker** (`@`), **bash commands** (`$cmd`)
-- **Session persistence** + timeline + thread switching
-- **Project context** via `AGENTS.md` + **skills** via `SKILL.md`
-- **Telegram bot** — interact via Telegram (`zdx bot`)
-
-## Provider support
-
-- **Anthropic**: API key + OAuth (Claude CLI, subscription)
-- **Gemini**: API key + OAuth (Gemini CLI, subscription)
-- **OpenAI**: API key + OAuth (Codex, subscription)
-- **OpenRouter**: API key
-- **Mistral**: API key
-- **Moonshot (Kimi)**: API key
-- **MiMo (Xiaomi)**: API key
-- **StepFun**: API key
+- Just the ones I like
 
 ## Inspiration
 
@@ -88,7 +68,7 @@ This project was inspired by several excellent tools in the agentic coding space
 - [codex](https://github.com/openai/codex) — OpenAI's open-source terminal-based agentic coding assistant
 - [AMP](https://ampcode.com/) — Great UX inspiration for agentic coding workflows
 - [opencode](https://github.com/sst/opencode) — Open-source AI coding agent with TUI, desktop app, and VS Code extension
-
+- oh-my-pi
 ## License
 
 MIT
