@@ -58,7 +58,7 @@ zdx bot
 
 ## Features
 
-- Just the ones I like
+- Just the ones I use
 
 ## Inspiration
 
