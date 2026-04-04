@@ -249,7 +249,7 @@ fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
 }
 
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Best for large or splittable tasks to preserve current context. Provide a focused prompt. Avoid using for trivial tasks you can solve directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Best for complex multi-step work, output-heavy subtasks, or independent parallel implementation slices that would clutter the main context. Prefer doing the work directly when it is small enough to complete without delegation. Provide a focused prompt with the goal, relevant context, constraints, and how success should be verified. Avoid using it for trivial reads, searches, or edits you can do directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents

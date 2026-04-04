@@ -14,7 +14,8 @@ use crate::core::context::{
 use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, skill_access_path};
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
-pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
+pub const FINDER_SUBAGENT_NAME: &str = "finder";
+pub const LIBRARIAN_SUBAGENT_NAME: &str = "librarian";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
@@ -43,7 +44,7 @@ impl BuiltinAlias {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Task => {
-                "Delegate a focused task to a child ZDX run using the default base prompt and current project context."
+                "Delegate an independent sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices, and prefer direct execution when the work is small enough to do yourself."
             }
         }
     }
@@ -225,7 +226,8 @@ pub fn capability_catalog(
 
     if delegation_enabled {
         capabilities.push(task_capability());
-        capabilities.push(explorer_capability(root)?);
+        capabilities.push(finder_capability(root)?);
+        capabilities.push(librarian_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
 
@@ -239,7 +241,8 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
 
     if delegation_enabled {
         capabilities.push(task_capability());
-        capabilities.push(fallback_explorer_capability());
+        capabilities.push(fallback_finder_capability());
+        capabilities.push(fallback_librarian_capability());
         capabilities.push(fallback_oracle_capability());
     }
 
@@ -409,8 +412,12 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     [
         (
-            manifest_dir.join("subagents").join("explorer.md"),
-            include_str!("../subagents/explorer.md"),
+            manifest_dir.join("subagents").join("finder.md"),
+            include_str!("../subagents/finder.md"),
+        ),
+        (
+            manifest_dir.join("subagents").join("librarian.md"),
+            include_str!("../subagents/librarian.md"),
         ),
         (
             manifest_dir.join("subagents").join("oracle.md"),
@@ -443,11 +450,11 @@ fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
-    let definition = load_by_name(root, EXPLORER_SUBAGENT_NAME)?;
+fn finder_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, FINDER_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
         name: definition.name.clone(),
-        title: "Explorer".to_string(),
+        title: "Finder".to_string(),
         description: definition.description,
         kind: CapabilityKind::Subagent {
             subagent: definition.name,
@@ -455,15 +462,40 @@ fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn fallback_explorer_capability() -> CapabilityDescriptor {
+fn librarian_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, LIBRARIAN_SUBAGENT_NAME)?;
+    Ok(CapabilityDescriptor {
+        name: definition.name.clone(),
+        title: "Librarian".to_string(),
+        description: definition.description,
+        kind: CapabilityKind::Subagent {
+            subagent: definition.name,
+        },
+    })
+}
+
+fn fallback_finder_capability() -> CapabilityDescriptor {
     CapabilityDescriptor {
-        name: EXPLORER_SUBAGENT_NAME.to_string(),
-        title: "Explorer".to_string(),
+        name: FINDER_SUBAGENT_NAME.to_string(),
+        title: "Finder".to_string(),
         description:
-            "Use for investigation tasks that are primarily search and reading: current repo, thread history, local dependencies, or external repos/docs — not for implementation work."
+            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history."
                 .to_string(),
         kind: CapabilityKind::Subagent {
-            subagent: EXPLORER_SUBAGENT_NAME.to_string(),
+            subagent: FINDER_SUBAGENT_NAME.to_string(),
+        },
+    }
+}
+
+fn fallback_librarian_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: LIBRARIAN_SUBAGENT_NAME.to_string(),
+        title: "Librarian".to_string(),
+        description:
+            "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers."
+                .to_string(),
+        kind: CapabilityKind::Subagent {
+            subagent: LIBRARIAN_SUBAGENT_NAME.to_string(),
         },
     }
 }
@@ -473,7 +505,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Deep reasoning and synthesis specialist for ambiguous or high-stakes delegated tasks."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
@@ -692,7 +724,8 @@ mod tests {
     fn discover_includes_built_ins() {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
-        assert!(all.iter().any(|s| s.name == "explorer"));
+        assert!(all.iter().any(|s| s.name == "finder"));
+        assert!(all.iter().any(|s| s.name == "librarian"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -848,7 +881,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "explorer", "oracle"]
+            vec!["task", "finder", "librarian", "oracle"]
         );
     }
 
@@ -904,9 +937,9 @@ mod tests {
         config.skills.sources.agents_project = false;
 
         let definition = SubagentDefinition {
-            name: "explorer".to_string(),
-            description: "Explorer".to_string(),
-            path: root.path().join("explorer.md"),
+            name: "librarian".to_string(),
+            description: "Librarian".to_string(),
+            path: root.path().join("librarian.md"),
             source: SubagentSource::User,
             model: None,
             thinking_level: None,
