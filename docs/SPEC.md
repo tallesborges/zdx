@@ -301,10 +301,15 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Named subagents are markdown files with YAML frontmatter plus a standalone prompt body.
 - Discovery order/override precedence: built-in → `~/.zdx/subagents/` → project `.zdx/subagents/` (later sources override earlier by name).
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
+- Reserved runtime alias `task` explicitly selects that same default delegated-worker behavior using the normal base prompt + context pipeline.
+- The `task` alias is intended for complex multi-step, output-heavy, or independently parallelizable delegated work; direct execution should stay the default for small tasks.
 - When a named subagent is selected, its body is rendered with the same prompt-template syntax/vars as the main prompt pipeline, then used as the child run's system prompt directly; it does not inherit the default ZDX prompt/context pipeline unless that text is written into the subagent body.
 - Named subagents may declare `skills:` (allowed on-demand skills) and `auto_loaded_skills:` (skills whose `SKILL.md` contents are injected directly into the subagent prompt). Auto-loaded skills should be treated as already in context for that run.
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
-- Built-in subagents currently include `explorer` as a unified local/external search specialist and `oracle` as a deep reasoning standalone subagent.
+- Built-in subagents currently include:
+  - `finder`: a read-only local discovery specialist for complex multi-step search across the current workspace, broader machine-local filesystem paths, and saved thread history.
+  - `librarian`: a read-only remote-research specialist for GitHub/Bitbucket repositories, external references, cross-repo architecture, and detailed explanatory answers.
+  - `oracle`: a read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Its output is advisory and should be independently validated by the parent agent.
 
 ### Models registry
 
