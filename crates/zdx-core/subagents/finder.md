@@ -1,7 +1,7 @@
 ---
 name: finder
 description: "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history."
-model: openai-codex:gpt-5.4-mini
+model: gemini:gemini-3-flash-preview
 thinking_level: high
 tools:
   - read

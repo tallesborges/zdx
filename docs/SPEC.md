@@ -309,6 +309,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Built-in subagents currently include:
   - `finder`: a read-only local discovery specialist for complex multi-step search across the current workspace, broader machine-local filesystem paths, and saved thread history.
   - `librarian`: a read-only remote-research specialist for GitHub/Bitbucket repositories, external references, cross-repo architecture, and detailed explanatory answers.
+  - `designer`: a UI/UX specialist for implementing and reviewing product surfaces, with a focus on accessibility, visual consistency, interaction states, and minimal polished UI changes.
   - `oracle`: a read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Its output is advisory and should be independently validated by the parent agent.
 
 ### Models registry
