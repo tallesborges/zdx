@@ -303,6 +303,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - `invoke_subagent` accepts `subagent: <name>`. When omitted, it uses the default/base system prompt behavior.
 - Reserved runtime alias `task` explicitly selects that same default delegated-worker behavior using the normal base prompt + context pipeline.
 - The `task` alias is intended for complex multi-step, output-heavy, or independently parallelizable delegated work; direct execution should stay the default for small tasks.
+- Delegated child runs should be prompted self-sufficiently: the parent should include the goal, relevant context, constraints/non-goals, expected output, and verification when relevant rather than assuming the child inherits its implicit reasoning state.
 - When a named subagent is selected, its body is rendered with the same prompt-template syntax/vars as the main prompt pipeline, then used as the child run's system prompt directly; it does not inherit the default ZDX prompt/context pipeline unless that text is written into the subagent body.
 - Named subagents may declare `skills:` (allowed on-demand skills) and `auto_loaded_skills:` (skills whose `SKILL.md` contents are injected directly into the subagent prompt). Auto-loaded skills should be treated as already in context for that run.
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.

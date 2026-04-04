@@ -28,7 +28,7 @@ pub fn definition_with_subagents(subagents: &[SubagentSummary]) -> ToolDefinitio
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "Task instructions for the delegated subagent. Be specific about expected output."
+                    "description": "Self-contained instructions for the delegated subagent. Include the goal, relevant context, constraints/non-goals, expected output, and verification when useful. The child does not share your full parent reasoning/history."
                 },
                 "subagent": {
                     "type": "string",
@@ -244,12 +244,12 @@ fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "Optional named subagent or reserved runtime alias. Use `task` for the default delegated ZDX behavior with the base prompt + context. Valid values: {valid}. Skill names are invalid unless they are also listed here."
+        "Optional named subagent or reserved runtime alias. Choose the most specialized available subagent when one clearly fits. Use `task` for the default delegated ZDX behavior with the base prompt + context when no named specialist fits and delegation is still worthwhile. Valid values: {valid}. Skill names are invalid unless they are also listed here."
     )
 }
 
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Best for complex multi-step work, output-heavy subtasks, or independent parallel implementation slices that would clutter the main context. Prefer doing the work directly when it is small enough to complete without delegation. Provide a focused prompt with the goal, relevant context, constraints, and how success should be verified. Avoid using it for trivial reads, searches, or edits you can do directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Best for complex multi-step work, output-heavy subtasks, or independent parallel implementation slices that would clutter the main context. Prefer doing the work directly when it is small enough to complete without delegation. Child runs do not share your full parent reasoning or implicit context, so every important decision, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, expected output, and how success should be verified. Avoid using it for trivial reads, searches, or edits you can do directly. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents
@@ -395,6 +395,8 @@ mod tests {
         assert!(desc.contains("coder (Coding helper)"));
         assert!(desc.contains("researcher (Research helper)"));
         assert!(desc.contains("`task`"));
+        assert!(desc.contains("do not share your full parent reasoning"));
+        assert!(desc.contains("acceptance criterion"));
         assert!(desc.contains("Skill names are invalid"));
     }
 
@@ -406,6 +408,7 @@ mod tests {
         }]);
 
         assert!(description.contains("Valid values: `task`, `oracle`"));
+        assert!(description.contains("most specialized available subagent"));
         assert!(description.contains("Skill names are invalid"));
     }
 
