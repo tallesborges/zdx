@@ -24,7 +24,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
 - `bundled_skills/*/`: built-in bundled skill fallbacks embedded in the binary, materialized under `$ZDX_HOME/bundled-skills/`, and exposed via `${ZDX_HOME}/bundled-skills/...` in prompts/tools
-- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`finder`, `librarian`, `oracle`)
+- `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`finder`, `librarian`, `designer`, `oracle`)
 
 ### Core runtime (`src/core/`)
 

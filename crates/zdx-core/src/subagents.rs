@@ -16,6 +16,7 @@ use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, s
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const FINDER_SUBAGENT_NAME: &str = "finder";
 pub const LIBRARIAN_SUBAGENT_NAME: &str = "librarian";
+pub const DESIGNER_SUBAGENT_NAME: &str = "designer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
@@ -228,6 +229,7 @@ pub fn capability_catalog(
         capabilities.push(task_capability());
         capabilities.push(finder_capability(root)?);
         capabilities.push(librarian_capability(root)?);
+        capabilities.push(designer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
 
@@ -243,6 +245,7 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
         capabilities.push(task_capability());
         capabilities.push(fallback_finder_capability());
         capabilities.push(fallback_librarian_capability());
+        capabilities.push(fallback_designer_capability());
         capabilities.push(fallback_oracle_capability());
     }
 
@@ -420,6 +423,10 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             include_str!("../subagents/librarian.md"),
         ),
         (
+            manifest_dir.join("subagents").join("designer.md"),
+            include_str!("../subagents/designer.md"),
+        ),
+        (
             manifest_dir.join("subagents").join("oracle.md"),
             include_str!("../subagents/oracle.md"),
         ),
@@ -474,6 +481,18 @@ fn librarian_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
+fn designer_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, DESIGNER_SUBAGENT_NAME)?;
+    Ok(CapabilityDescriptor {
+        name: definition.name.clone(),
+        title: "Designer".to_string(),
+        description: definition.description,
+        kind: CapabilityKind::Subagent {
+            subagent: definition.name,
+        },
+    })
+}
+
 fn fallback_finder_capability() -> CapabilityDescriptor {
     CapabilityDescriptor {
         name: FINDER_SUBAGENT_NAME.to_string(),
@@ -496,6 +515,19 @@ fn fallback_librarian_capability() -> CapabilityDescriptor {
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: LIBRARIAN_SUBAGENT_NAME.to_string(),
+        },
+    }
+}
+
+fn fallback_designer_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: DESIGNER_SUBAGENT_NAME.to_string(),
+        title: "Designer".to_string(),
+        description:
+            "Use for UI/UX implementation, design review, accessibility refinement, and visual polish in existing product surfaces."
+                .to_string(),
+        kind: CapabilityKind::Subagent {
+            subagent: DESIGNER_SUBAGENT_NAME.to_string(),
         },
     }
 }
@@ -726,6 +758,7 @@ mod tests {
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "finder"));
         assert!(all.iter().any(|s| s.name == "librarian"));
+        assert!(all.iter().any(|s| s.name == "designer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -881,7 +914,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "finder", "librarian", "oracle"]
+            vec!["task", "finder", "librarian", "designer", "oracle"]
         );
     }
 
