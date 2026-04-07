@@ -5,6 +5,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 ## Where things are
 
 - `src/lib.rs`: core crate exports
+- `build.rs`: generates the bundled skill asset manifest from `bundled_skills/`
 - `src/audio/mod.rs`: shared audio module exports
 - `src/audio/transcribe.rs`: shared audio transcription helpers (OpenAI/Mistral)
 - `src/agent_activity.rs`: active-run registry (ephemeral marker files for agent turns)
@@ -23,7 +24,7 @@ Scope: core runtime, providers, tools, prompt/context assembly, and shared confi
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
 - `default_config.toml`: default configuration template
 - `default_models.toml`: default model registry fallback
-- `bundled_skills/*/`: built-in bundled skill fallbacks embedded in the binary, materialized under `$ZDX_HOME/bundled-skills/`, and exposed via `${ZDX_HOME}/bundled-skills/...` in prompts/tools
+- `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree into the binary, then `src/skills.rs` materializes the bundle under `$ZDX_HOME/bundled-skills/` and exposes it via `${ZDX_HOME}/bundled-skills/...` in prompts/tools
 - `subagents/*.md`: built-in standalone subagent prompts embedded in the binary (`finder`, `librarian`, `designer`, `oracle`)
 
 ### Core runtime (`src/core/`)

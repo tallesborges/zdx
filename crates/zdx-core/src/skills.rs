@@ -1,8 +1,6 @@
 //! Skills discovery and parsing.
 
 use std::collections::HashSet;
-#[cfg(unix)]
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::{fmt, fs};
@@ -18,12 +16,14 @@ const BUNDLED_SKILLS_STAMP_FILE: &str = ".bundled-skills.sha256";
 
 static MATERIALIZED_BUNDLED_SKILLS_DIR: OnceLock<PathBuf> = OnceLock::new();
 static MATERIALIZED_BUNDLED_SKILLS_LOCK: Mutex<()> = Mutex::new(());
+static BUNDLED_SKILLS_MANIFEST_HASH: OnceLock<String> = OnceLock::new();
 
 struct BundledSkillAsset {
     relative_path: &'static str,
-    content: &'static str,
-    executable: bool,
+    bytes: &'static [u8],
 }
+
+include!(concat!(env!("OUT_DIR"), "/bundled_skills_manifest.rs"));
 
 /// Skill source location.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -66,23 +66,23 @@ pub fn bundled_skills_dir() -> PathBuf {
 
 /// Ensures bundled skills are materialized under `$ZDX_HOME/bundled-skills`.
 ///
-/// Copies the embedded skill assets only when the embedded manifest hash changes
-/// or when a required materialized file is missing.
+/// Copies the embedded skill assets only when the materialized bundle stamp is
+/// missing or differs from the embedded manifest hash.
 ///
 /// # Errors
 /// Returns an error if the materialized bundled skill directory cannot be created.
+///
+/// # Panics
+/// Panics if the bundled skill materialization lock is poisoned.
 pub fn ensure_bundled_skills_materialized() -> Result<PathBuf, std::io::Error> {
     let _guard = MATERIALIZED_BUNDLED_SKILLS_LOCK
         .lock()
         .expect("bundled skill materialization lock poisoned");
-    let expected_hash = bundled_skills_manifest_hash();
-    if let Some(path) = MATERIALIZED_BUNDLED_SKILLS_DIR.get()
-        && bundled_skills_are_current(path, &expected_hash)
-    {
+    if let Some(path) = MATERIALIZED_BUNDLED_SKILLS_DIR.get() {
         return Ok(path.clone());
     }
 
-    let root = materialize_bundled_skills_into(&paths::zdx_home())?;
+    let root = materialize_bundled_skills_into(&paths::zdx_home(), bundled_skills_manifest_hash())?;
     let _ = MATERIALIZED_BUNDLED_SKILLS_DIR.set(root.clone());
     Ok(root)
 }
@@ -91,8 +91,10 @@ pub fn ensure_bundled_skills_materialized() -> Result<PathBuf, std::io::Error> {
 pub fn skill_access_path(skill: &Skill) -> String {
     match skill.source {
         SkillSource::BuiltIn => bundled_skill_relative_path_from_path(&skill.file_path)
-            .map(|relative| bundled_skill_access_path(&relative))
-            .unwrap_or_else(|| skill.file_path.display().to_string()),
+            .map_or_else(
+                || skill.file_path.display().to_string(),
+                |relative| bundled_skill_access_path(&relative),
+            ),
         _ => skill.file_path.display().to_string(),
     }
 }
@@ -122,7 +124,10 @@ fn normalized_relative_path(path: &Path) -> Option<String> {
 }
 
 fn bundled_skill_relative_path_from_path(path: &Path) -> Option<String> {
-    let bundled_root = bundled_skills_dir();
+    let bundled_root = MATERIALIZED_BUNDLED_SKILLS_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(bundled_skills_dir);
     path.strip_prefix(&bundled_root)
         .ok()
         .and_then(normalized_relative_path)
@@ -135,17 +140,19 @@ fn bundled_skill_relative_path_from_path(path: &Path) -> Option<String> {
         })
 }
 
-fn bundled_skills_manifest_hash() -> String {
-    let mut hasher = Sha256::new();
-    for asset in bundled_skill_assets() {
-        hasher.update(asset.relative_path.as_bytes());
-        hasher.update([0]);
-        hasher.update([u8::from(asset.executable)]);
-        hasher.update([0]);
-        hasher.update(asset.content.as_bytes());
-        hasher.update([0xff]);
-    }
-    format!("{:x}", hasher.finalize())
+fn bundled_skills_manifest_hash() -> &'static str {
+    BUNDLED_SKILLS_MANIFEST_HASH
+        .get_or_init(|| {
+            let mut hasher = Sha256::new();
+            for asset in bundled_skill_assets() {
+                hasher.update(asset.relative_path.as_bytes());
+                hasher.update([0]);
+                hasher.update(asset.bytes);
+                hasher.update([0xff]);
+            }
+            format!("{:x}", hasher.finalize())
+        })
+        .as_str()
 }
 
 fn bundled_skills_are_current(root: &Path, expected_hash: &str) -> bool {
@@ -153,32 +160,15 @@ fn bundled_skills_are_current(root: &Path, expected_hash: &str) -> bool {
     let Ok(existing_hash) = fs::read_to_string(&stamp_path) else {
         return false;
     };
-    if existing_hash.trim() != expected_hash {
-        return false;
-    }
-
-    bundled_skill_assets().iter().all(|asset| {
-        let path = root.join(asset.relative_path);
-        let Ok(metadata) = fs::metadata(&path) else {
-            return false;
-        };
-        if !metadata.is_file() {
-            return false;
-        }
-
-        #[cfg(unix)]
-        if asset.executable && metadata.permissions().mode() & 0o111 == 0 {
-            return false;
-        }
-
-        true
-    })
+    existing_hash.trim() == expected_hash
 }
 
-fn materialize_bundled_skills_into(zdx_home: &Path) -> Result<PathBuf, std::io::Error> {
+fn materialize_bundled_skills_into(
+    zdx_home: &Path,
+    expected_hash: &str,
+) -> Result<PathBuf, std::io::Error> {
     let root = zdx_home.join(BUNDLED_SKILLS_DIR_NAME);
-    let expected_hash = bundled_skills_manifest_hash();
-    if bundled_skills_are_current(&root, &expected_hash) {
+    if bundled_skills_are_current(&root, expected_hash) {
         return Ok(root);
     }
 
@@ -196,8 +186,7 @@ fn materialize_bundled_skills_into(zdx_home: &Path) -> Result<PathBuf, std::io::
         if let Some(parent) = path.parent() {
             fs::create_dir_all(parent)?;
         }
-        fs::write(&path, asset.content)?;
-        set_bundled_skill_permissions(asset, &path)?;
+        fs::write(&path, asset.bytes)?;
     }
 
     fs::write(
@@ -207,91 +196,8 @@ fn materialize_bundled_skills_into(zdx_home: &Path) -> Result<PathBuf, std::io::
     Ok(root)
 }
 
-#[cfg(unix)]
-fn set_bundled_skill_permissions(
-    asset: &BundledSkillAsset,
-    path: &Path,
-) -> Result<(), std::io::Error> {
-    if !asset.executable {
-        return Ok(());
-    }
-
-    let mut permissions = fs::metadata(path)?.permissions();
-    permissions.set_mode(0o755);
-    fs::set_permissions(path, permissions)
-}
-
-#[cfg(not(unix))]
-fn set_bundled_skill_permissions(
-    _asset: &BundledSkillAsset,
-    _path: &Path,
-) -> Result<(), std::io::Error> {
-    Ok(())
-}
-
 fn bundled_skill_assets() -> &'static [BundledSkillAsset] {
-    &[
-        BundledSkillAsset {
-            relative_path: "deepwiki-cli/SKILL.md",
-            content: include_str!("../bundled_skills/deepwiki-cli/SKILL.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "memory/SKILL.md",
-            content: include_str!("../bundled_skills/memory/SKILL.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "thread-tools/SKILL.md",
-            content: include_str!("../bundled_skills/thread-tools/SKILL.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "imagine/SKILL.md",
-            content: include_str!("../bundled_skills/imagine/SKILL.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "imagine/references/prompt-templates.md",
-            content: include_str!("../bundled_skills/imagine/references/prompt-templates.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/SKILL.md",
-            content: include_str!("../bundled_skills/skill-creator/SKILL.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/LICENSE.txt",
-            content: include_str!("../bundled_skills/skill-creator/LICENSE.txt"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/references/output-patterns.md",
-            content: include_str!("../bundled_skills/skill-creator/references/output-patterns.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/references/workflows.md",
-            content: include_str!("../bundled_skills/skill-creator/references/workflows.md"),
-            executable: false,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/scripts/init_skill.py",
-            content: include_str!("../bundled_skills/skill-creator/scripts/init_skill.py"),
-            executable: true,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/scripts/package_skill.py",
-            content: include_str!("../bundled_skills/skill-creator/scripts/package_skill.py"),
-            executable: true,
-        },
-        BundledSkillAsset {
-            relative_path: "skill-creator/scripts/quick_validate.py",
-            content: include_str!("../bundled_skills/skill-creator/scripts/quick_validate.py"),
-            executable: true,
-        },
-    ]
+    BUNDLED_SKILL_ASSETS
 }
 
 /// Discovered skill metadata.
@@ -985,7 +891,9 @@ mod tests {
 
     #[test]
     fn test_materialize_bundled_skills_writes_expected_assets() {
-        let root = ensure_bundled_skills_materialized().unwrap();
+        let dir = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
 
         assert!(root.ends_with(BUNDLED_SKILLS_DIR_NAME));
         assert!(root.join("memory").join("SKILL.md").is_file());
@@ -1004,15 +912,38 @@ mod tests {
     }
 
     #[test]
-    fn test_materialize_bundled_skills_restores_missing_asset() {
-        let root = ensure_bundled_skills_materialized().unwrap();
+    fn test_materialize_bundled_skills_does_not_check_individual_files() {
+        let dir = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
         let script_path = root
             .join("skill-creator")
             .join("scripts")
             .join("quick_validate.py");
 
         fs::remove_file(&script_path).unwrap();
-        let rematerialized_root = ensure_bundled_skills_materialized().unwrap();
+        let rematerialized_root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
+
+        assert_eq!(rematerialized_root, root);
+        assert!(!script_path.exists());
+    }
+
+    #[test]
+    fn test_materialize_bundled_skills_rewrites_when_stamp_changes() {
+        let dir = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
+        let script_path = root
+            .join("skill-creator")
+            .join("scripts")
+            .join("quick_validate.py");
+
+        fs::remove_file(&script_path).unwrap();
+        fs::write(root.join(BUNDLED_SKILLS_STAMP_FILE), "stale\n").unwrap();
+
+        let rematerialized_root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
 
         assert_eq!(rematerialized_root, root);
         assert!(script_path.is_file());
