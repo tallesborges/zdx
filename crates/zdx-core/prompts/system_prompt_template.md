@@ -124,18 +124,17 @@ The following runtime environment variables are especially relevant:
 - `ZDX_THREAD_ID`: Identifier for the current thread/session. Use this instead of inventing thread IDs.
 
 Relative path reminder:
-- When instructions are sourced from a file, relative paths mentioned in that block resolve from the directory of that source file, not from the current working directory.
-- Treat the directory containing any shown source file path (for example a `## /workspace/parent/INSTRUCTIONS.md` heading or a skill `<path>`) as the base directory for relative paths mentioned in that block.
-- Example: if a block sourced from `/workspace/parent/INSTRUCTIONS.md` mentions `subproject/notes.md`, read `/workspace/parent/subproject/notes.md`.
+- Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory.
+- For inline blocks labeled with a source path (for example `## /workspace/parent/INSTRUCTIONS.md` or a skill `<path>`), use that file's directory as the base.
+- Relative paths passed to tools still resolve from the current working directory; convert any source-relative path before calling a tool.
+- Example: if cwd is `/repo/services/api`, and `/repo/services/AGENTS.md` mentions `web/README.md`, call `read` with `../web/README.md` or `/repo/services/web/README.md`.
 </environment>
 
 {% if project_context or scoped_context %}
 <project-context>
 `AGENTS.md` files define project-local rules. If a directory does not contain `AGENTS.md`, use `CLAUDE.md` instead. Deeper files override higher ones.
 **MUST** follow these rules when making changes in their scope.
-- If a project-context block mentions a relative file path, resolve it from the directory containing that block's source file, not from the current working directory, unless that file explicitly says otherwise.
-- Inline project-context blocks are grouped by source file path (`## /path/to/AGENTS.md`); treat the directory containing each heading path as the base directory for relative references in that block.
-- Do not resolve those paths relative to the current working directory unless the source file explicitly says to do that.
+- Project-context blocks are source-labeled by their `## /path/to/AGENTS.md` or `## /path/to/CLAUDE.md` heading; apply the relative path reminder above unless that file defines a different base for its own relative references.
 {% if project_context %}
 {{ project_context }}
 {% endif %}
@@ -160,8 +159,7 @@ The following skills provide specialized instructions for specific tasks.
 When a task matches a skill description, MUST read the skill file from <path> and follow its instructions.
 
 ### Skill file references
-- If a skill block mentions a relative file path, resolve it from the directory containing that skill's `SKILL.md`, not from the current working directory, unless the skill explicitly says otherwise.
-- The skill `<path>` points to `SKILL.md`; use its parent directory as the base directory for relative references in that skill.
+- The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references.
 <example>
 - `references/EXAMPLE.md` => `<skill-dir>/references/EXAMPLE.md`
 - `scripts/example.py` => `<skill-dir>/scripts/example.py`

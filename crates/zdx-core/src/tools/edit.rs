@@ -20,7 +20,7 @@ pub fn definition() -> ToolDefinition {
             "properties": {
                 "path": {
                     "type": "string",
-                    "description": "Path to the file to edit (relative to root directory; supports $VAR/${VAR} env vars)"
+                    "description": "Path to the file to edit. Relative paths resolve from the current working directory; if the path came from a sourced instruction file, resolve it from that file's directory first, then pass the converted path. Supports $VAR/${VAR} env vars."
                 },
                 "old": {
                     "type": "string",
