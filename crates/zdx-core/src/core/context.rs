@@ -1636,7 +1636,10 @@ mod tests {
             "For any memory-related task, the first step is to read the `memory` skill `SKILL.md`."
         ));
         assert!(rendered.contains(
-            "For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context."
+            "For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context, unless a connected live system is the more likely source of truth."
+        ));
+        assert!(rendered.contains(
+            "If the answer is more likely to live in a connected live system, SHOULD use the corresponding skill instead of memory"
         ));
         assert!(rendered.contains("### Saving memory"));
         assert!(
@@ -1652,6 +1655,12 @@ mod tests {
                 .contains("Keep full detail in notes and the memory index as a concise index.")
         );
         assert!(rendered.contains("<memory_index>"));
+        assert!(rendered.contains(
+            "Treat skill guidance as task-specific instructions."
+        ));
+        assert!(rendered.contains(
+            "If a skill block mentions a relative file path, resolve it from the directory containing that skill's `SKILL.md`, not from the current working directory, unless the skill explicitly says otherwise."
+        ));
         assert!(rendered.contains(
             "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
         ));
@@ -1788,20 +1797,62 @@ mod tests {
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
+        assert!(prompt.contains(
+            "When prompt sections conflict, follow this order: higher-priority runtime instructions outside this template, then runtime instruction layers, then in-scope project-context rules, then matched skill guidance, then user-defined base instructions, then defaults."
+        ));
+        assert!(prompt.contains(
+            "These are user-defined base instructions. Treat them as baseline instructions for this run unless higher-priority guidance in this prompt overrides them."
+        ));
+        assert!(prompt.contains(
+            "MUST use a short plan when the task spans 3+ files or involves a dependent sequence of changes. Keep it concise and only as detailed as needed. Otherwise, no plan."
+        ));
+        assert!(prompt.contains("for example `cargo` or git)."));
+        assert!(!prompt.contains("for example `rg`, `cargo`, or git)."));
         assert!(prompt.contains("<environment>"));
+        assert!(prompt.contains(
+            "Runtime facts for this session. Use the listed env vars for special runtime locations when relevant; otherwise resolve ordinary workspace paths from the current working directory. This block provides runtime facts and path-resolution guidance."
+        ));
         assert!(prompt.contains("The current working directory is '"));
         assert!(prompt.contains("Current date:"));
+        assert!(prompt.contains(
+            "The following runtime environment variables are especially relevant:"
+        ));
         assert!(prompt.contains("`ZDX_HOME`: ZDX runtime home/config directory."));
         assert!(prompt.contains(
             "`ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread."
         ));
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
+        assert!(prompt.contains(
+            "When instructions are sourced from a file, relative paths mentioned in that block resolve from the directory of that source file, not from the current working directory."
+        ));
+        assert!(prompt.contains(
+            "Treat the directory containing any shown source file path (for example a `## /workspace/parent/INSTRUCTIONS.md` heading or a skill `<path>`) as the base directory for relative paths mentioned in that block."
+        ));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("<project-context>"));
         assert!(prompt.contains(
-            "If an `AGENTS.md` or `CLAUDE.md` block mentions a relative file path, resolve it from the directory containing that context file"
+            "If a project-context block mentions a relative file path, resolve it from the directory containing that block's source file"
+        ));
+        assert!(prompt.contains(
+            "Inline project-context blocks are grouped by source file path (`## /path/to/AGENTS.md`); treat the directory containing each heading path as the base directory for relative references in that block."
+        ));
+        assert!(prompt.contains(
+            "Do not resolve those paths relative to the current working directory unless the source file explicitly says to do that."
+        ));
+        assert!(prompt.contains(
+            "Example: if a block sourced from `/workspace/parent/INSTRUCTIONS.md` mentions `subproject/notes.md`, read `/workspace/parent/subproject/notes.md`."
         ));
         assert!(prompt.contains("Agent note"));
+        assert!(prompt.contains("Treat skill guidance as task-specific instructions."));
+        assert!(prompt.contains(
+            "Skills provide task-specific guidance, but they MUST NOT override higher-priority runtime instructions or in-scope project-context rules."
+        ));
+        assert!(prompt.contains(
+            "If a skill block mentions a relative file path, resolve it from the directory containing that skill's `SKILL.md`, not from the current working directory, unless the skill explicitly says otherwise."
+        ));
+        assert!(prompt.contains(
+            "The skill `<path>` points to `SKILL.md`; use its parent directory as the base directory for relative references in that skill."
+        ));
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
@@ -1835,6 +1886,9 @@ mod tests {
 
         assert!(prompt.contains("nested/CLAUDE.md"));
         assert!(!prompt.contains("nested/AGENTS.md"));
+        assert!(prompt.contains(
+            "The following discovered scoped `AGENTS.md`/`CLAUDE.md` files apply to subdirectories."
+        ));
     }
 
     #[test]
