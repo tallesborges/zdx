@@ -20,13 +20,13 @@ pub use types::{Hunk, ParseError, UpdateFileChunk};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Apply_Patch".to_string(),
-        description: "Apply a file-oriented patch. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Paths embedded in the patch support $VAR/${VAR} env vars. Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
+        description: "Apply a file-oriented patch. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Paths support $VAR/${VAR} env vars. Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "patch": {
                     "type": "string",
-                    "description": "Patch text in the Codex apply_patch format. Embedded file paths in Add/Delete/Update/Move sections support $VAR/${VAR} env vars."
+                    "description": "Patch text in the Codex apply_patch format. Embedded relative file paths resolve from the current working directory; if a path came from a sourced instruction file, resolve it from that file's directory first, then use the converted path in the patch. Supports $VAR/${VAR} env vars."
                 }
             },
             "required": ["patch"],

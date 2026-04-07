@@ -1659,7 +1659,7 @@ mod tests {
             "Treat skill guidance as task-specific instructions."
         ));
         assert!(rendered.contains(
-            "If a skill block mentions a relative file path, resolve it from the directory containing that skill's `SKILL.md`, not from the current working directory, unless the skill explicitly says otherwise."
+            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references."
         ));
         assert!(rendered.contains(
             "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
@@ -1823,24 +1823,21 @@ mod tests {
         ));
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
         assert!(prompt.contains(
-            "When instructions are sourced from a file, relative paths mentioned in that block resolve from the directory of that source file, not from the current working directory."
+            "Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory."
         ));
         assert!(prompt.contains(
-            "Treat the directory containing any shown source file path (for example a `## /workspace/parent/INSTRUCTIONS.md` heading or a skill `<path>`) as the base directory for relative paths mentioned in that block."
+            "For inline blocks labeled with a source path (for example `## /workspace/parent/INSTRUCTIONS.md` or a skill `<path>`), use that file's directory as the base."
+        ));
+        assert!(prompt.contains(
+            "Relative paths passed to tools still resolve from the current working directory; convert any source-relative path before calling a tool."
         ));
         assert!(prompt.contains("Base prompt"));
         assert!(prompt.contains("<project-context>"));
         assert!(prompt.contains(
-            "If a project-context block mentions a relative file path, resolve it from the directory containing that block's source file"
+            "Project-context blocks are source-labeled by their `## /path/to/AGENTS.md` or `## /path/to/CLAUDE.md` heading; apply the relative path reminder above unless that file defines a different base for its own relative references."
         ));
         assert!(prompt.contains(
-            "Inline project-context blocks are grouped by source file path (`## /path/to/AGENTS.md`); treat the directory containing each heading path as the base directory for relative references in that block."
-        ));
-        assert!(prompt.contains(
-            "Do not resolve those paths relative to the current working directory unless the source file explicitly says to do that."
-        ));
-        assert!(prompt.contains(
-            "Example: if a block sourced from `/workspace/parent/INSTRUCTIONS.md` mentions `subproject/notes.md`, read `/workspace/parent/subproject/notes.md`."
+            "Example: if cwd is `/repo/services/api`, and `/repo/services/AGENTS.md` mentions `web/README.md`, call `read` with `../web/README.md` or `/repo/services/web/README.md`."
         ));
         assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Treat skill guidance as task-specific instructions."));
@@ -1848,10 +1845,7 @@ mod tests {
             "Skills provide task-specific guidance, but they MUST NOT override higher-priority runtime instructions or in-scope project-context rules."
         ));
         assert!(prompt.contains(
-            "If a skill block mentions a relative file path, resolve it from the directory containing that skill's `SKILL.md`, not from the current working directory, unless the skill explicitly says otherwise."
-        ));
-        assert!(prompt.contains(
-            "The skill `<path>` points to `SKILL.md`; use its parent directory as the base directory for relative references in that skill."
+            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references."
         ));
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains("Task (`task`)"));

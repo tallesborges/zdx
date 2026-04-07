@@ -32,7 +32,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "path": {
                     "type": "string",
-                    "description": "Directory to search in (defaults to project root; supports $VAR/${VAR} env vars)"
+                    "description": "Directory to search in. Relative paths resolve from the current working directory. Defaults to the current working directory. Supports $VAR/${VAR} env vars."
                 }
             },
             "required": ["pattern"],
