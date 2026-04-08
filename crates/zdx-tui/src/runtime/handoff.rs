@@ -35,10 +35,10 @@ fn build_handoff_prompt(thread_content: &str, goal: &str) -> String {
 /// Loads and validates thread content for handoff.
 fn load_thread_content(thread_id: &str) -> Result<String, String> {
     let events = thread_persistence::load_thread_events(thread_id)
-        .map_err(|e| format!("Handoff failed: Could not load thread: {e}"))?;
+        .map_err(|e| format!("Could not load thread: {e}"))?;
 
     if events.is_empty() {
-        return Err(format!("Handoff failed: Thread '{thread_id}' is empty"));
+        return Err(format!("Thread '{thread_id}' is empty"));
     }
 
     Ok(thread_persistence::format_transcript(&events))
@@ -67,7 +67,7 @@ async fn run_subagent(
 
     run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel))
         .await
-        .map_err(|err| format!("Handoff generation failed: {err}"))
+        .map_err(|err| format!("{err:#}"))
 }
 
 /// Executes a handoff submit: creates a new thread with handoff source.
