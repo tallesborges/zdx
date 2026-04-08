@@ -34,19 +34,17 @@ read_thread_model = "gemini:gemini-2.5-flash-lite"
 # zdx always renders a MiniJinja system prompt template.
 # If this file is unset (default), zdx uses the built-in system prompt template.
 # MiniJinja syntax supported: {{ var }}, {% if %}, {% for %}
-# Useful vars: invocation_term, invocation_term_plural,
-# is_openai_codex, base_prompt, project_context,
+# Useful vars: is_openai_codex, base_prompt, project_context,
 # skills_list, subagents_config, cwd, date
 [prompt_template]
 # file = "prompts/system_prompt_template.md"
 
 # Memory system configuration
-# Paths for memory notes, daily notes, and the memory index file.
-# All paths support ~ for home directory expansion.
+# Root directory for memory storage.
+# ZDX derives notes, calendar, and index paths under this root.
+# Supports ~ for home directory expansion.
 [memory]
-# notes_path = "~/SecondBrain/Notes"    # default: $ZDX_HOME/memory/notes
-# daily_path = "~/SecondBrain/Calendar"  # default: $ZDX_HOME/memory/calendar
-# index_file = "~/.zdx/MEMORY.md"       # default: $ZDX_HOME/MEMORY.md
+# root = "~/SecondBrain"  # default: $ZDX_HOME/memory
 
 # Shared audio transcription configuration
 # Used by TUI/CLI voice transcription and as the default for integrations.
