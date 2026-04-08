@@ -10,7 +10,7 @@
 //! printing directly. The caller (renderer) decides how to display them.
 
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 use anyhow::Result;
 use chrono::Utc;
@@ -662,6 +662,7 @@ pub fn discover_scoped_context(root: &Path) -> Vec<ScopedContextFile> {
 /// Unreadable files generate a warning but don't fail.
 /// Large files are truncated with a warning.
 pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
+    let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
     let paths = collect_existing_context_paths(root);
     let mut loaded_paths: Vec<PathBuf> = Vec::new();
     let mut sections: Vec<String> = Vec::new();
@@ -687,8 +688,12 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
                 let trimmed = content.trim();
 
                 if !trimmed.is_empty() {
-                    let suffix = if was_truncated { " [truncated]" } else { "" };
-                    sections.push(format!("## {}{}\n\n{}", path.display(), suffix, trimmed));
+                    sections.push(format_inline_context_section(
+                        &canonical_root,
+                        &path,
+                        trimmed,
+                        was_truncated,
+                    ));
                     loaded_paths.push(path);
                 }
             }
@@ -708,6 +713,62 @@ pub fn load_all_agents_files(root: &Path) -> Option<LoadedContext> {
         loaded_paths,
         warnings,
     })
+}
+
+fn format_inline_context_section(
+    root: &Path,
+    path: &Path,
+    content: &str,
+    was_truncated: bool,
+) -> String {
+    let suffix = if was_truncated { " [truncated]" } else { "" };
+    let source_dir = path.parent().unwrap_or(path);
+    let from_cwd = relative_path(root, source_dir).unwrap_or_else(|| source_dir.to_path_buf());
+
+    format!(
+        "## {}{}\n\nSource dir: {}\nTool-call path from current working directory: {}\n\n{}",
+        path.display(),
+        suffix,
+        source_dir.display(),
+        from_cwd.display(),
+        content
+    )
+}
+
+fn relative_path(from: &Path, to: &Path) -> Option<PathBuf> {
+    let from_components: Vec<_> = from.components().collect();
+    let to_components: Vec<_> = to.components().collect();
+
+    match (from_components.first(), to_components.first()) {
+        (Some(Component::Prefix(a)), Some(Component::Prefix(b))) if a != b => return None,
+        (Some(Component::Prefix(_)), _) | (_, Some(Component::Prefix(_))) => return None,
+        _ => {}
+    }
+
+    let mut shared = 0;
+    while shared < from_components.len()
+        && shared < to_components.len()
+        && from_components[shared] == to_components[shared]
+    {
+        shared += 1;
+    }
+
+    let mut result = PathBuf::new();
+    for component in &from_components[shared..] {
+        match component {
+            Component::Normal(_) | Component::ParentDir => result.push(".."),
+            Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
+        }
+    }
+    for component in &to_components[shared..] {
+        result.push(component.as_os_str());
+    }
+
+    if result.as_os_str().is_empty() {
+        result.push(".");
+    }
+
+    Some(result)
 }
 
 /// Loads the memory index file from the configured location.
@@ -1158,7 +1219,19 @@ mod tests {
 
         let loaded = result.unwrap();
         assert!(loaded.content.contains("Single file content"));
+        assert!(loaded.content.contains("Source dir:"));
+        assert!(loaded
+            .content
+            .contains("Tool-call path from current working directory: ."));
         assert!(!loaded.loaded_paths.is_empty());
+    }
+
+    #[test]
+    fn test_relative_path_computes_parent_segments() {
+        let from = Path::new("/repo/apps/mobile-host");
+        let to = Path::new("/repo");
+
+        assert_eq!(relative_path(from, to), Some(PathBuf::from("../..")));
     }
 
     #[test]
@@ -1839,6 +1912,8 @@ mod tests {
         assert!(prompt.contains(
             "Example: if cwd is `/repo/services/api`, and `/repo/services/AGENTS.md` mentions `web/README.md`, call `read` with `../web/README.md` or `/repo/services/web/README.md`."
         ));
+        assert!(prompt.contains("Source dir:"));
+        assert!(prompt.contains("Tool-call path from current working directory:"));
         assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Treat skill guidance as task-specific instructions."));
         assert!(prompt.contains(
