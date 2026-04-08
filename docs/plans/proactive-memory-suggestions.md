@@ -1,4 +1,5 @@
 # Goals
+- Historical note: the current runtime memory contract is `[memory].root` with NotePlan-style `Notes/`, `Calendar/`, and `Notes/MEMORY.md`. Older wording below may reference earlier layouts.
 - In TUI and Telegram sessions, the agent proactively suggests saving noteworthy info to the user's second brain (NotePlan)
 - Existing "remember X" → immediate save behavior stays unchanged
 - Exec mode, automations, and subagent runs remain suggestion-free
@@ -26,8 +27,8 @@
 # Foundations / Already shipped (✅)
 
 ## Memory system (MEMORY.md + NotePlan)
-- What exists: `MEMORY.md` loaded from `$ZDX_HOME`, rendered into system prompt via `memory_index` template var. Second-brain skill for read/write.
-- ✅ Demo: Check system prompt in TUI — `<memory>` block appears with index content
+- What exists: `MEMORY.md` loaded from the configured memory root (`Notes/MEMORY.md` by default), rendered into the system prompt via `memory_index` template var. `memory` skill for read/write guidance.
+- ✅ Demo: Check system prompt in TUI — `<memory_contract>` / `<memory_index>` blocks appear with index content
 - Gaps: None
 
 ## System prompt template rendering
@@ -92,8 +93,8 @@
 - **Risks / failure modes**:
   - Overly strict guidance can under-capture useful durable info; tune during dogfooding
 
-## Slice 5: Align second-brain skill instructions with index policy
-- **Goal**: Make second-brain skill enforce the same compaction policy used by the system prompt
+## Slice 5: Align memory skill instructions with index policy
+- **Goal**: Make the `memory` skill enforce the same compaction policy used by the system prompt
 - **Scope checklist**:
   - [x] Update `second-brain` skill instructions to explicitly treat `MEMORY.md` as an index
   - [x] Document note-first flow: write full detail to note, then selectively update index pointer

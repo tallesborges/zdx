@@ -9,17 +9,18 @@ A markdown-based memory system following [NotePlan conventions](https://noteplan
 
 ## Paths
 
-- **Notes root:** `$ZDX_MEMORY_NOTES_DIR`
-- **Daily notes:** `$ZDX_MEMORY_DAILY_DIR`
-- **Memory index:** `$ZDX_HOME/MEMORY.md`
+- **Memory root:** `$ZDX_MEMORY_ROOT`
+- **Notes root:** `$ZDX_MEMORY_ROOT/Notes`
+- **Daily notes:** `$ZDX_MEMORY_ROOT/Calendar`
+- **Memory index:** `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`
 
 There is no dedicated `memory` tool. Use the normal file tools with these paths.
 
-Use these env vars directly in tool arguments. Example patterns:
+Use the memory root env var directly in tool arguments. Example patterns:
 
-- `read path:"$ZDX_HOME/MEMORY.md"`
-- `grep path:"$ZDX_MEMORY_NOTES_DIR" glob:"*.md" pattern:"..."`
-- `grep path:"$ZDX_MEMORY_DAILY_DIR" glob:"*.md" pattern:"..."`
+- `read path:"$ZDX_MEMORY_ROOT/Notes/MEMORY.md"`
+- `grep path:"$ZDX_MEMORY_ROOT/Notes" glob:"*.md" pattern:"..."`
+- `grep path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"..."`
 
 Default to ignoring `@Archive/` and `@Trash/` unless the user asks.
 
@@ -182,7 +183,7 @@ NotePlan supports period-based notes in the daily/calendar path. All live in the
 
 **Before creating a note, ALWAYS verify the target folder exists:**
 ```bash
-ls "$ZDX_MEMORY_NOTES_DIR/10-19 Life Admin/" | grep "15.41"
+ls "$ZDX_MEMORY_ROOT/Notes/10-19 Life Admin/" | grep "15.41"
 ```
 
 Use this outline when filing in `10-19 Life Admin`. Group labels below are for readability; the bullet items are the actual folder names. Items with a leading `■` are section markers only—do not create notes inside them.
@@ -419,30 +420,30 @@ Tasks are plain-text lines in markdown files.
 
 ### List notes
 
-- Use the `glob` tool with `*.md` patterns scoped to `$ZDX_MEMORY_NOTES_DIR`.
+- Use the `glob` tool with `*.md` patterns scoped to `$ZDX_MEMORY_ROOT/Notes`.
 - Keep output minimal and scoped to the request (top-level folders, counts, or specific paths).
 
 Example:
 
 ```
-glob pattern="*.md" path="$ZDX_MEMORY_NOTES_DIR"
+glob pattern="*.md" path="$ZDX_MEMORY_ROOT/Notes"
 ```
 
 ### Search
 
-- Use the `grep` tool with a regex pattern, scoped to `$ZDX_MEMORY_NOTES_DIR` and/or `$ZDX_MEMORY_DAILY_DIR`.
+- Use the `grep` tool with a regex pattern, scoped to `$ZDX_MEMORY_ROOT/Notes` and/or `$ZDX_MEMORY_ROOT/Calendar`.
 - For terms on the same line, use a regex like `term1.*term2|term2.*term1`.
 - For terms anywhere in a file, use `grep` to find candidates, then open the file to confirm context.
 - **Search both notes and daily paths:** Many entries (especially links, quick notes, brainstorms) live in daily notes. Always search both directories unless the user specifies one. Run two `grep` calls in parallel (one per path).
-- Treat `$ZDX_MEMORY_NOTES_DIR` and `$ZDX_MEMORY_DAILY_DIR` as the source of truth for memory paths.
+- Treat `$ZDX_MEMORY_ROOT` as the source of truth for memory paths. Derive notes as `$ZDX_MEMORY_ROOT/Notes`, daily notes as `$ZDX_MEMORY_ROOT/Calendar`, and the index as `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`.
 - Discover files under those roots with `glob`/`grep` before `read`/`edit`; do not invent alternate absolute paths.
 - If a memory path fails, inspect/search those configured roots rather than retrying with a different guessed location.
 
 Example:
 
 ```
-grep pattern="alice|cpf" path="$ZDX_MEMORY_NOTES_DIR" case_insensitive=true glob="*.md"
-grep pattern="alice|cpf" path="$ZDX_MEMORY_DAILY_DIR" case_insensitive=true glob="*.md"
+grep pattern="alice|cpf" path="$ZDX_MEMORY_ROOT/Notes" case_insensitive=true glob="*.md"
+grep pattern="alice|cpf" path="$ZDX_MEMORY_ROOT/Calendar" case_insensitive=true glob="*.md"
 ```
 
 ### Search by tags
@@ -460,14 +461,14 @@ grep pattern="alice|cpf" path="$ZDX_MEMORY_DAILY_DIR" case_insensitive=true glob
 - To search by tag:
 
 ```
-grep pattern="#ai-reference" path="$ZDX_MEMORY_NOTES_DIR" glob="*.md"
-grep pattern="#ai-reference" path="$ZDX_MEMORY_DAILY_DIR" glob="*.md"
+grep pattern="#ai-reference" path="$ZDX_MEMORY_ROOT/Notes" glob="*.md"
+grep pattern="#ai-reference" path="$ZDX_MEMORY_ROOT/Calendar" glob="*.md"
 ```
 
 - To list all unique tags, use `grep` with `extract_unique`:
 
 ```
-grep pattern="(?:^|\s)#([a-zA-Z][a-zA-Z0-9_-]*)" path="$ZDX_MEMORY_NOTES_DIR" glob="*.md" extract_unique=true
+grep pattern="(?:^|\s)#([a-zA-Z][a-zA-Z0-9_-]*)" path="$ZDX_MEMORY_ROOT/Notes" glob="*.md" extract_unique=true
 ```
 - When saving links/references, apply relevant tags from the known list above.
 
