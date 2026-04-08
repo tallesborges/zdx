@@ -41,7 +41,7 @@ use crate::providers::{
     ReasoningBlock, ReplayToken, StreamEvent, resolve_provider,
 };
 use crate::subagents;
-use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet};
+use crate::tools::{ToolContext, ToolDefinition, ToolRegistry, ToolResult, ToolSet, todo_write};
 
 /// Options for agent execution.
 #[derive(Debug, Clone)]
@@ -1754,15 +1754,45 @@ async fn execute_tools_async(
     let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
     let mut completed: HashSet<usize> = HashSet::new();
+    let mut current_todo_state: Option<todo_write::TodoState> = None;
 
-    // Emit ToolStarted sequentially, then spawn tasks
-    for (i, tu) in tool_uses.iter().enumerate() {
+    let is_enabled_tool = |name: &str| {
+        let name_lower = name.to_ascii_lowercase();
+        enabled_tools
+            .iter()
+            .any(|tool| tool.to_ascii_lowercase() == name_lower)
+    };
+
+    // Emit ToolStarted sequentially to preserve UI order.
+    for tu in tool_uses.iter() {
         sender
             .send_important(AgentEvent::ToolStarted {
                 id: tu.id.clone(),
                 name: tu.name.clone(),
             })
             .await;
+    }
+
+    // Execute todo_write calls in order so later calls in the same turn can see
+    // earlier mutations without waiting for thread persistence. Spawn everything
+    // else concurrently as before.
+    for (i, tu) in tool_uses.iter().enumerate() {
+        if todo_write::is_todo_tool_name(&tu.name) && is_enabled_tool(&tu.name) {
+            let output = todo_write::execute_with_state(&tu.input, current_todo_state.as_ref());
+            if let Some(state) = todo_write::state_from_output(&output) {
+                current_todo_state = Some(state);
+            }
+            let result = ToolResult::from_output(tu.id.clone(), &output);
+            completed.insert(i);
+            sender
+                .send_important(AgentEvent::ToolCompleted {
+                    id: tu.id.clone(),
+                    result: output.clone(),
+                })
+                .await;
+            results[i] = Some((output, result));
+            continue;
+        }
 
         // Clone for 'static requirement
         let tu = tu.clone();
@@ -1852,9 +1882,40 @@ async fn execute_tools_async(
 /// Builds assistant content blocks from accumulated thinking, reasoning, text, and tool uses.
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
+    use std::sync::{Mutex, OnceLock};
+
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        key: &'static str,
+        value: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                value: std::env::var_os(key),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.value {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
 
     /// Verifies agent emits `ToolStarted` and `ToolCompleted` events (SPEC §7).
     #[tokio::test]
@@ -1902,6 +1963,72 @@ mod tests {
         assert!(
             matches!(&received[1], AgentEvent::ToolCompleted { id, result }
             if id == "tool1" && result.is_ok())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_execute_tools_carries_todo_state_within_turn() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::capture("ZDX_THREAD_ID");
+        unsafe { std::env::set_var("ZDX_THREAD_ID", "") };
+
+        let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        let enabled_tools: HashSet<String> = vec!["Todo_Write".to_string()].into_iter().collect();
+        let tool_uses = vec![
+            ToolUse {
+                id: "tool1".to_string(),
+                name: "todo_write".to_string(),
+                input: serde_json::json!({
+                    "ops": [
+                        {"op": "add", "content": "Inspect codebase", "status": "in_progress"}
+                    ]
+                }),
+            },
+            ToolUse {
+                id: "tool2".to_string(),
+                name: "todo_write".to_string(),
+                input: serde_json::json!({
+                    "ops": [
+                        {"op": "update", "id": "task-1", "status": "completed"},
+                        {"op": "add", "content": "Ship fix"}
+                    ]
+                }),
+            },
+        ];
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+        let tool_registry = ToolRegistry::builtins();
+
+        let results =
+            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender, &tool_registry).await;
+
+        assert_eq!(results.len(), 2);
+        assert!(!results[0].is_error);
+        assert!(!results[1].is_error);
+
+        let second = results[1]
+            .content
+            .as_text()
+            .and_then(|text| serde_json::from_str::<serde_json::Value>(text).ok())
+            .expect("todo_write result should be valid JSON text");
+
+        let tasks = second
+            .get("data")
+            .and_then(|data| data.get("tasks"))
+            .and_then(|tasks| tasks.as_array())
+            .expect("todo_write should return tasks array");
+
+        assert_eq!(tasks.len(), 2);
+        assert_eq!(tasks[0].get("id").and_then(|id| id.as_str()), Some("task-1"));
+        assert_eq!(
+            tasks[0].get("status").and_then(|status| status.as_str()),
+            Some("completed")
+        );
+        assert_eq!(tasks[1].get("id").and_then(|id| id.as_str()), Some("task-2"));
+        assert_eq!(
+            tasks[1].get("status").and_then(|status| status.as_str()),
+            Some("in_progress")
         );
     }
 

@@ -109,10 +109,19 @@ struct InputTask {
     details: Option<String>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-struct TodoState {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TodoState {
     tasks: Vec<TodoItem>,
     next_id: usize,
+}
+
+impl Default for TodoState {
+    fn default() -> Self {
+        Self {
+            tasks: Vec::new(),
+            next_id: 1,
+        }
+    }
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -126,6 +135,10 @@ struct TodoCounts {
 
 /// Executes the todo-write tool and returns a structured envelope.
 pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
+    execute_with_state(input, None)
+}
+
+pub(crate) fn execute_with_state(input: &Value, previous: Option<&TodoState>) -> ToolOutput {
     let input: TodoInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -141,7 +154,7 @@ pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         return ToolOutput::failure("invalid_input", "ops cannot be empty", None);
     }
 
-    let previous = load_current_state().unwrap_or_default();
+    let previous = previous.cloned().or_else(load_current_state).unwrap_or_default();
     let updated = match apply_ops(&previous, &input.ops) {
         Ok(state) => state,
         Err(message) => return ToolOutput::failure("invalid_input", message, None),
@@ -200,6 +213,10 @@ fn is_todo_tool(name: &str) -> bool {
     name.to_ascii_lowercase().replace('-', "_") == "todo_write"
 }
 
+pub(crate) fn is_todo_tool_name(name: &str) -> bool {
+    is_todo_tool(name)
+}
+
 fn state_from_tool_output(output: &Value) -> Option<TodoState> {
     let output: ToolOutput = serde_json::from_value(output.clone()).ok()?;
     let data = output.data()?;
@@ -208,6 +225,11 @@ fn state_from_tool_output(output: &Value) -> Option<TodoState> {
         next_id: next_task_id(&tasks),
         tasks,
     })
+}
+
+pub(crate) fn state_from_output(output: &ToolOutput) -> Option<TodoState> {
+    let output_value = serde_json::to_value(output).ok()?;
+    state_from_tool_output(&output_value)
 }
 
 fn apply_ops(previous: &TodoState, ops: &[TodoOp]) -> Result<TodoState, String> {
@@ -414,6 +436,52 @@ mod tests {
     }
 
     #[test]
+    fn test_add_from_empty_starts_at_task_1() {
+        let previous = TodoState::default();
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Add {
+                content: "Inspect codebase".to_string(),
+                status: None,
+                details: None,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(next.tasks.len(), 1);
+        assert_eq!(next.tasks[0].id, "task-1");
+        assert!(matches!(next.tasks[0].status, TodoStatus::InProgress));
+        assert_eq!(next.next_id, 2);
+    }
+
+    #[test]
+    fn test_add_then_update_first_task_uses_task_1() {
+        let previous = TodoState::default();
+        let next = apply_ops(
+            &previous,
+            &[TodoOp::Add {
+                content: "Inspect codebase".to_string(),
+                status: None,
+                details: None,
+            }],
+        )
+        .unwrap();
+
+        let updated = apply_ops(
+            &next,
+            &[TodoOp::Update {
+                id: "task-1".to_string(),
+                content: None,
+                status: Some(TodoStatus::Completed),
+                details: None,
+            }],
+        )
+        .unwrap();
+
+        assert!(matches!(updated.tasks[0].status, TodoStatus::Completed));
+    }
+
+    #[test]
     fn test_update_completion_promotes_next_pending_task() {
         let previous = TodoState {
             tasks: vec![
@@ -513,6 +581,64 @@ mod tests {
         assert_eq!(state.tasks.len(), 2);
         assert_eq!(state.tasks[1].id, "task-2");
         assert!(matches!(state.tasks[1].status, TodoStatus::InProgress));
+    }
+
+    #[test]
+    fn test_recovered_state_supports_follow_up_update_and_add() {
+        let output = ToolOutput::success(json!({
+            "tasks": [
+                {
+                    "id": "task-1",
+                    "content": "Inspect codebase",
+                    "status": "completed"
+                },
+                {
+                    "id": "task-2",
+                    "content": "Implement fix",
+                    "status": "in_progress"
+                }
+            ],
+            "counts": {
+                "total": 2,
+                "pending": 0,
+                "in_progress": 1,
+                "completed": 1,
+                "abandoned": 0
+            },
+            "summary": "Active: task-2 (Implement fix). Remaining tasks: 1."
+        }));
+        let events = vec![
+            ThreadEvent::tool_use("tool-2", "todo_write", json!({"ops": []})),
+            ThreadEvent::tool_result("tool-2", serde_json::to_value(output).unwrap(), true),
+        ];
+
+        let recovered = extract_latest_state(&events).unwrap();
+        assert_eq!(recovered.next_id, 3);
+
+        let next = apply_ops(
+            &recovered,
+            &[
+                TodoOp::Update {
+                    id: "task-2".to_string(),
+                    content: None,
+                    status: Some(TodoStatus::Completed),
+                    details: None,
+                },
+                TodoOp::Add {
+                    content: "Ship fix".to_string(),
+                    status: None,
+                    details: None,
+                },
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(next.tasks.len(), 3);
+        assert!(matches!(next.tasks[1].status, TodoStatus::Completed));
+        assert_eq!(next.tasks[2].id, "task-3");
+        assert_eq!(next.tasks[2].content, "Ship fix");
+        assert!(matches!(next.tasks[2].status, TodoStatus::InProgress));
+        assert_eq!(next.next_id, 4);
     }
 
     #[test]
