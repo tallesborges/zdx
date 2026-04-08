@@ -1137,13 +1137,48 @@ pub fn build_effective_system_prompt_with_paths_and_instruction_layers(
 
 #[cfg(test)]
 mod tests {
+    use std::ffi::OsString;
     use std::fs;
+    use std::sync::{Mutex, OnceLock};
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::config::SkillSourceToggles;
     use crate::skills::SkillSource;
+
+    fn env_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
+    }
+
+    struct EnvVarGuard {
+        saved: Vec<(&'static str, Option<OsString>)>,
+    }
+
+    impl EnvVarGuard {
+        fn capture(keys: &[&'static str]) -> Self {
+            Self {
+                saved: keys
+                    .iter()
+                    .map(|key| (*key, std::env::var_os(key)))
+                    .collect(),
+            }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            for (key, value) in &self.saved {
+                unsafe {
+                    match value {
+                        Some(value) => std::env::set_var(key, value),
+                        None => std::env::remove_var(key),
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
@@ -1445,6 +1480,87 @@ mod tests {
                 .any(|warning| warning.message.contains("Truncated"))
         );
         assert!(loaded.content.len() <= MAX_MEMORY_FILE_SIZE);
+    }
+
+    #[test]
+    fn test_set_runtime_env_exports_memory_root() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::capture(&[
+            "ZDX_HOME",
+            "ZDX_ARTIFACT_DIR",
+            "ZDX_THREAD_ID",
+            "ZDX_MEMORY_ROOT",
+        ]);
+
+        let memory_root = tempdir().unwrap();
+        let mut config = crate::config::Config::default();
+        config.memory.root = Some(memory_root.path().display().to_string());
+
+        set_runtime_env(&config, Some("thread-123"));
+
+        assert_eq!(
+            std::env::var_os("ZDX_MEMORY_ROOT"),
+            Some(memory_root.path().as_os_str().to_os_string())
+        );
+    }
+
+    #[test]
+    fn test_set_runtime_env_exports_default_memory_root_when_unset() {
+        let _lock = env_lock().lock().unwrap();
+        let _guard = EnvVarGuard::capture(&[
+            "ZDX_HOME",
+            "ZDX_ARTIFACT_DIR",
+            "ZDX_THREAD_ID",
+            "ZDX_MEMORY_ROOT",
+        ]);
+
+        let zdx_home = tempdir().unwrap();
+        unsafe {
+            std::env::set_var("ZDX_HOME", zdx_home.path());
+        }
+
+        let config = crate::config::Config::default();
+        set_runtime_env(&config, None);
+
+        assert_eq!(
+            std::env::var_os("ZDX_MEMORY_ROOT"),
+            Some(zdx_home.path().join("memory").as_os_str().to_os_string())
+        );
+    }
+
+    #[test]
+    fn test_effective_prompt_loads_memory_index_from_configured_root() {
+        let project_root = tempdir().unwrap();
+        let memory_root = tempdir().unwrap();
+        fs::create_dir_all(memory_root.path().join("Notes")).unwrap();
+        fs::write(
+            memory_root.path().join("Notes").join(MEMORY_INDEX_FILE_NAME),
+            "Loaded from configured memory root",
+        )
+        .unwrap();
+
+        let mut config = crate::config::Config {
+            system_prompt: Some("Base prompt".to_string()),
+            ..Default::default()
+        };
+        config.memory.root = Some(memory_root.path().display().to_string());
+        config.subagents.enabled = false;
+        config.skills.sources = SkillSourceToggles {
+            zdx_user: false,
+            zdx_project: false,
+            codex_user: false,
+            claude_user: false,
+            claude_project: false,
+            agents_user: false,
+            agents_project: false,
+        };
+
+        let effective =
+            build_effective_system_prompt_with_paths(&config, project_root.path(), false).unwrap();
+        let prompt = effective.prompt.unwrap_or_default();
+
+        assert!(prompt.contains("Loaded from configured memory root"));
+        assert!(prompt.contains("<memory_index>"));
     }
 
     #[test]
@@ -1879,6 +1995,9 @@ mod tests {
             "`ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread."
         ));
         assert!(prompt.contains("`ZDX_THREAD_ID`: Identifier for the current thread/session."));
+        assert!(prompt.contains(
+            "`ZDX_MEMORY_ROOT`: Root directory for memory storage. Derive `Notes/`, `Calendar/`, and `Notes/MEMORY.md` paths under this root."
+        ));
         assert!(prompt.contains(
             "Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory."
         ));

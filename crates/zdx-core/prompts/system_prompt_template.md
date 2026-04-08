@@ -122,6 +122,7 @@ The following runtime environment variables are especially relevant:
 - `ZDX_HOME`: ZDX runtime home/config directory.
 - `ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread. Use this instead of guessing artifact output paths.
 - `ZDX_THREAD_ID`: Identifier for the current thread/session. Use this instead of inventing thread IDs.
+- `ZDX_MEMORY_ROOT`: Root directory for memory storage. Derive `Notes/`, `Calendar/`, and `Notes/MEMORY.md` paths under this root.
 
 Relative path reminder:
 - Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory.

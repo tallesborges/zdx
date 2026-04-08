@@ -3,10 +3,13 @@
 The original plan below used `MEMORY.md` + `memories/*.md` files as the memory backend.
 This has been replaced with a simpler approach:
 
+**Current runtime contract:** use `[memory].root`, derive `Notes/`, `Calendar/`, and `Notes/MEMORY.md`, and use the bundled `memory` skill for instructions.
+The preserved plan below is historical reference only and contains stale pre-pivot details.
+
 - **`MEMORY.md`** remains as a micro-index in the system prompt (core facts + pointers).
 - **NotePlan** is the single detailed memory backend (second brain).
 - **No `memories/` folders** — all detailed facts live in NotePlan notes.
-- **"Remember X"** → agent writes to the appropriate NotePlan note via `noteplan-notes` skill.
+- **"Remember X"** → agent writes to the appropriate NotePlan note via the `memory` skill.
 - **Project-scoped `.zdx/MEMORY.md`** removed — NotePlan handles project memories too.
 - **Automation (future)** → will mine threads + NotePlan to auto-evolve the MEMORY.md index.
 

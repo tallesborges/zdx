@@ -41,8 +41,8 @@ read_thread_model = "gemini:gemini-2.5-flash-lite"
 
 # Memory system configuration
 # Root directory for memory storage.
-# ZDX derives notes, calendar, and index paths under this root.
-# Supports ~ for home directory expansion.
+# ZDX derives NotePlan-style `Notes/`, `Calendar/`, and `Notes/MEMORY.md` paths under this root.
+# Use an absolute path or `~/...`.
 [memory]
 # root = "~/SecondBrain"  # default: $ZDX_HOME/memory
 

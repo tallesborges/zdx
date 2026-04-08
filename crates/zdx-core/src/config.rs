@@ -228,6 +228,40 @@ fn normalize_non_empty(value: &str) -> Option<String> {
     (!trimmed.is_empty()).then(|| trimmed.to_string())
 }
 
+fn deserialize_optional_non_empty_string<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<String>::deserialize(deserializer)?;
+    match value {
+        Some(value) => normalize_non_empty(&value)
+            .map(Some)
+            .ok_or_else(|| serde::de::Error::custom("value must not be blank")),
+        None => Ok(None),
+    }
+}
+
+fn deserialize_memory_root<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = deserialize_optional_non_empty_string(deserializer)?;
+    if let Some(value) = &value {
+        let path = Path::new(value);
+        let uses_tilde = value == "~" || value.starts_with("~/");
+        if !uses_tilde && !path.is_absolute() {
+            return Err(serde::de::Error::custom(
+                "value must be an absolute path or use ~/",
+            ));
+        }
+    }
+    Ok(value)
+}
+
 impl NamedBotConfig {
     /// Applies this named bot configuration onto the loaded global config.
     pub fn apply_to(&self, config: &mut Config) {
@@ -640,49 +674,42 @@ pub struct TranscriptionConfig {
 
 /// Memory system configuration.
 ///
-/// Configures where memory notes, daily notes, and the memory index are stored.
+/// Configures the root directory for memory storage.
+/// ZDX derives notes, calendar, and index paths under this root.
 /// Defaults to `$ZDX_HOME/memory/` when unconfigured.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
+#[serde(default, deny_unknown_fields)]
 pub struct MemoryConfig {
-    /// Root directory for memory notes.
+    /// Root directory for memory storage.
     /// Supports `~` for home directory expansion.
-    /// Default: `$ZDX_HOME/memory/notes`
-    pub notes_path: Option<String>,
-
-    /// Directory for daily notes (calendar).
-    /// Supports `~` for home directory expansion.
-    /// Default: `$ZDX_HOME/memory/calendar`
-    pub daily_path: Option<String>,
-
-    /// Path to the memory index file.
-    /// Supports `~` for home directory expansion.
-    /// Default: `$ZDX_HOME/MEMORY.md`
-    pub index_file: Option<String>,
+    /// Must not be blank when provided.
+    /// Must be an absolute path or use `~/...`.
+    /// Default: `$ZDX_HOME/memory`
+    #[serde(default, deserialize_with = "deserialize_memory_root")]
+    pub root: Option<String>,
 }
 
 impl MemoryConfig {
-    /// Returns the effective notes path, expanding `~` and falling back to default.
-    pub fn effective_notes_path(&self) -> std::path::PathBuf {
-        self.notes_path.as_deref().map_or_else(
-            || paths::zdx_home().join("memory").join("notes"),
-            expand_tilde,
-        )
-    }
-
-    /// Returns the effective daily notes path, expanding `~` and falling back to default.
-    pub fn effective_daily_path(&self) -> std::path::PathBuf {
-        self.daily_path.as_deref().map_or_else(
-            || paths::zdx_home().join("memory").join("calendar"),
-            expand_tilde,
-        )
-    }
-
-    /// Returns the effective memory index file path, expanding `~` and falling back to default.
-    pub fn effective_index_file(&self) -> std::path::PathBuf {
-        self.index_file
+    /// Returns the effective memory root path, expanding `~` and falling back to default.
+    pub fn effective_root_path(&self) -> std::path::PathBuf {
+        self.root
             .as_deref()
-            .map_or_else(|| paths::zdx_home().join("MEMORY.md"), expand_tilde)
+            .map_or_else(|| paths::zdx_home().join("memory"), expand_tilde)
+    }
+
+    /// Returns the effective notes path derived from the memory root.
+    pub fn effective_notes_path(&self) -> std::path::PathBuf {
+        self.effective_root_path().join("Notes")
+    }
+
+    /// Returns the effective daily notes path derived from the memory root.
+    pub fn effective_daily_path(&self) -> std::path::PathBuf {
+        self.effective_root_path().join("Calendar")
+    }
+
+    /// Returns the effective memory index file path derived from the memory root.
+    pub fn effective_index_file(&self) -> std::path::PathBuf {
+        self.effective_notes_path().join("MEMORY.md")
     }
 }
 
@@ -751,7 +778,7 @@ pub struct Config {
     #[serde(default)]
     pub prompt_template: PromptTemplateConfig,
 
-    /// Memory system configuration (notes, daily notes, index file paths)
+    /// Memory system configuration (root directory with derived notes/calendar/index paths)
     #[serde(default)]
     pub memory: MemoryConfig,
 
@@ -1633,6 +1660,116 @@ language = "pt"
         assert_eq!(config.transcription.provider.as_deref(), Some("openai"));
         assert_eq!(config.transcription.model.as_deref(), Some("whisper-1"));
         assert_eq!(config.transcription.language.as_deref(), Some("pt"));
+    }
+
+    #[test]
+    fn test_memory_root_loads_and_derives_paths() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+        let memory_root = dir.path().join("memory-root");
+
+        fs::write(
+            &config_path,
+            format!(
+                "[memory]\nroot = {:?}\n",
+                memory_root.to_string_lossy().to_string()
+            ),
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.memory.effective_root_path(), memory_root);
+        assert_eq!(
+            config.memory.effective_notes_path(),
+            dir.path().join("memory-root").join("Notes")
+        );
+        assert_eq!(
+            config.memory.effective_daily_path(),
+            dir.path().join("memory-root").join("Calendar")
+        );
+        assert_eq!(
+            config.memory.effective_index_file(),
+            dir.path().join("memory-root").join("Notes").join("MEMORY.md")
+        );
+    }
+
+    #[test]
+    fn test_memory_root_expands_tilde_and_trims_whitespace() {
+        let Some(home) = paths::home_dir() else {
+            return;
+        };
+
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(&config_path, "[memory]\nroot = \"  ~/SecondBrain  \"\n").unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(config.memory.effective_root_path(), home.join("SecondBrain"));
+        assert_eq!(
+            config.memory.effective_index_file(),
+            home.join("SecondBrain").join("Notes").join("MEMORY.md")
+        );
+    }
+
+    #[test]
+    fn test_legacy_memory_fields_are_rejected() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            "[memory]\nnotes_path = \"/tmp/notes\"\ndaily_path = \"/tmp/calendar\"\nindex_file = \"/tmp/MEMORY.md\"\n",
+        )
+        .unwrap();
+
+        let error = Config::load_from(&config_path).unwrap_err();
+        let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+
+        assert!(
+            chain
+                .iter()
+                .any(|message| message.contains("unknown field") && message.contains("notes_path")),
+            "expected unknown-field error in chain, got: {chain:?}"
+        );
+    }
+
+    #[test]
+    fn test_blank_memory_root_is_rejected() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        for root in ["", "   "] {
+            fs::write(&config_path, format!("[memory]\nroot = {:?}\n", root)).unwrap();
+
+            let error = Config::load_from(&config_path).unwrap_err();
+            let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+
+            assert!(
+                chain.iter().any(|message| message.contains("must not be blank")),
+                "expected blank-value error in chain for root={root:?}, got: {chain:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_relative_memory_root_is_rejected() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        for root in ["SecondBrain", "./SecondBrain", "../SecondBrain"] {
+            fs::write(&config_path, format!("[memory]\nroot = {:?}\n", root)).unwrap();
+
+            let error = Config::load_from(&config_path).unwrap_err();
+            let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
+
+            assert!(
+                chain
+                    .iter()
+                    .any(|message| message.contains("absolute path or use ~/")),
+                "expected relative-path error in chain for root={root:?}, got: {chain:?}"
+            );
+        }
     }
 
     #[test]

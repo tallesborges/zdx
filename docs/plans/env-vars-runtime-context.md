@@ -127,11 +127,11 @@
 
 # Polish phases (after MVP)
 
-## Phase 1: Memory paths as env vars
-- Evaluate exposing `ZDX_MEMORY_NOTES_PATH` and `ZDX_MEMORY_DAILY_PATH` as env vars too
-- Would simplify memory skill instructions
-- ✅ Check-in demo: memory skill uses `$ZDX_MEMORY_NOTES_PATH` in commands
+## Phase 1: Memory root as env var
+- Expose `ZDX_MEMORY_ROOT` as the canonical memory env var
+- Memory skill derives `Notes/`, `Calendar/`, and `Notes/MEMORY.md` under that root
+- ✅ Check-in demo: memory skill uses `$ZDX_MEMORY_ROOT/...` in commands
 
 # Later / Deferred
-- **Remove `memory_notes_path`/`memory_daily_path` from template vars** — wait until memory skill is updated to use env vars. Trigger: when memory paths are also exposed as env vars.
+- **Keep a single memory env** — do not reintroduce separate notes/daily env vars unless a real use case appears.
 - **`ZDX_CWD` env var** — not needed; `cwd` is standard and model can use `pwd`. Trigger: if a skill explicitly needs it.

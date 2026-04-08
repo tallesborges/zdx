@@ -256,7 +256,7 @@ These are the canonical source of truth for paths and session context — skills
 
 ### System prompt `<environment>` block
 
-The `<environment>` block in the system prompt contains only non-path metadata that the model needs for reasoning without running commands (current directory, date). Paths are not duplicated in the prompt — the model uses `$ZDX_*` env vars directly in bash commands.
+The `<environment>` block in the system prompt contains current-session metadata (for example current directory and date) plus a short list of high-signal runtime env vars the model may need without running commands (for example `ZDX_MEMORY_ROOT`). It does not enumerate every derived path; the model uses `$ZDX_*` env vars directly in bash commands.
 
 ### Subagent inheritance
 
@@ -322,23 +322,22 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 
 ## 13) Project Context + Memory (`AGENTS.md`, `CLAUDE.md`, `MEMORY.md`)
 
-ZDX composes project/user context in this order before skills/subagents sections:
+ZDX loads project/user context inputs in this order before template rendering:
 
 1. Base/system prompt from config (`system_prompt` / `system_prompt_file`)
 2. Hierarchical project context: prefer `AGENTS.md`, fall back to `CLAUDE.md` per directory (global + user + project ancestry)
-3. Optional memory index from configured path (default: `$ZDX_HOME/MEMORY.md`)
+3. Optional memory index from the configured memory root (default: `$ZDX_HOME/memory/Notes/MEMORY.md`)
 
 ### Memory configuration
 
 ```toml
 [memory]
-# notes_path = "~/SecondBrain/Notes"    # default: $ZDX_HOME/memory/notes
-# daily_path = "~/SecondBrain/Calendar"  # default: $ZDX_HOME/memory/calendar
-# index_file = "~/.zdx/MEMORY.md"       # default: $ZDX_HOME/MEMORY.md
+# root = "~/SecondBrain"  # default: $ZDX_HOME/memory
 ```
 
-- All paths support `~` expansion.
-- Defaults place memory under `$ZDX_HOME/memory/` (notes + calendar subdirs) with the index at `$ZDX_HOME/MEMORY.md`.
+- The configured memory root supports `~` expansion.
+- `memory.root` must be an absolute path or use `~/...`; other relative values are rejected.
+- Defaults place memory under `$ZDX_HOME/memory/`, with notes in `Notes/`, calendar notes in `Calendar/`, and the index at `Notes/MEMORY.md`.
 - The `memory` skill provides full guidelines for working with memory notes (NotePlan-compatible conventions).
 
 ### Contracts
@@ -348,8 +347,9 @@ ZDX composes project/user context in this order before skills/subagents sections
 - Memory is optional. Missing `MEMORY.md` does not fail startup and does not inject memory blocks.
 - `MEMORY.md` load failures are warnings (non-fatal).
 - `MEMORY.md` content is capped at 16 KiB with truncation warning.
-- Only `MEMORY.md` index content is injected. Detailed memory lives in the configured notes/daily paths and is accessed on-demand via the `memory` skill.
-- Built-in template emits a `## Memory` section (with `<memory>` block and configured paths) only when memory index content is present.
+- Only `MEMORY.md` index content is injected. Detailed memory lives under the configured memory root (`Notes/` + `Calendar/`) and is accessed on-demand via the `memory` skill.
+- Runtime exposes the configured memory root to tools/skills via `ZDX_MEMORY_ROOT`.
+- Built-in template emits a `## Memory` section (with `<memory_contract>` and `<memory_index>` blocks) only when memory index content is present.
 - Proactive memory-save suggestion instructions are surface-gated: enabled for TUI and Telegram sessions, disabled for exec mode, automations, and subagent runs.
 - Explicit `remember X` still means immediate save regardless of proactive suggestion mode.
 - When proactive suggestions are enabled, memory instructions are note-first: save full detail in memory notes, and only promote durable/reusable items into `MEMORY.md`.
