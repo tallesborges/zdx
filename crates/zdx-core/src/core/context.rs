@@ -35,16 +35,14 @@ pub fn set_runtime_env(config: &Config, thread_id: Option<&str>) {
     let zdx_home = paths::zdx_home();
     let artifact_dir = paths::artifact_dir_for_thread(thread_id);
     let _ = crate::skills::ensure_bundled_skills_materialized();
-    let memory_notes = config.memory.effective_notes_path();
-    let memory_daily = config.memory.effective_daily_path();
+    let memory_root = config.memory.effective_root_path();
     // SAFETY: Called once at startup before any concurrent work.
     // Same pattern as ZDX_DEBUG_TRACE in cli/mod.rs.
     unsafe {
         std::env::set_var("ZDX_HOME", zdx_home.as_os_str());
         std::env::set_var("ZDX_ARTIFACT_DIR", artifact_dir.as_os_str());
         std::env::set_var("ZDX_THREAD_ID", thread_id.unwrap_or(""));
-        std::env::set_var("ZDX_MEMORY_NOTES_DIR", memory_notes.as_os_str());
-        std::env::set_var("ZDX_MEMORY_DAILY_DIR", memory_daily.as_os_str());
+        std::env::set_var("ZDX_MEMORY_ROOT", memory_root.as_os_str());
     }
 }
 
@@ -176,8 +174,6 @@ struct PromptTemplateScopedContext {
 struct PromptTemplateVars {
     identity_prompt: String,
     provider: String,
-    invocation_term: String,
-    invocation_term_plural: String,
     is_openai_codex: bool,
     base_prompt: String,
     project_context: String,
@@ -318,16 +314,6 @@ fn build_prompt_template_vars(
     PromptTemplateVars {
         identity_prompt: prompts::identity_prompt().to_string(),
         provider,
-        invocation_term: if is_openai_codex {
-            "function".to_string()
-        } else {
-            "tool".to_string()
-        },
-        invocation_term_plural: if is_openai_codex {
-            "functions".to_string()
-        } else {
-            "tools".to_string()
-        },
         is_openai_codex,
         base_prompt,
         project_context,
@@ -1755,7 +1741,7 @@ mod tests {
     }
 
     #[test]
-    fn test_prompt_template_vars_provider_terms() {
+    fn test_prompt_template_vars_provider_flags() {
         let anthropic = build_prompt_template_vars(
             Path::new("/tmp"),
             "anthropic:claude-opus-4-6",
@@ -1771,7 +1757,6 @@ mod tests {
         );
 
         assert_eq!(anthropic.provider, "anthropic");
-        assert_eq!(anthropic.invocation_term, "tool");
         assert!(!anthropic.is_openai_codex);
 
         let codex = build_prompt_template_vars(
@@ -1789,7 +1774,6 @@ mod tests {
         );
 
         assert_eq!(codex.provider, "openai-codex");
-        assert_eq!(codex.invocation_term, "function");
         assert!(codex.is_openai_codex);
     }
 
