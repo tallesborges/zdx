@@ -338,6 +338,7 @@ ZDX loads project/user context inputs in this order before template rendering:
 - The configured memory root supports `~` expansion.
 - `memory.root` must be an absolute path or use `~/...`; other relative values are rejected.
 - Defaults place memory under `$ZDX_HOME/memory/`, with notes in `Notes/`, calendar notes in `Calendar/`, and the index at `Notes/MEMORY.md`.
+- The configured memory root is a container directory. Notes should live under `Notes/` or `Calendar/`; tools/skills should not create ad-hoc markdown files directly under the root.
 - The `memory` skill provides full guidelines for working with memory notes (NotePlan-compatible conventions).
 
 ### Contracts
