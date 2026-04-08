@@ -87,8 +87,17 @@ enum Commands {
     /// Executes a command with a prompt
     Exec {
         /// The prompt to send to the agent
-        #[arg(short, long)]
-        prompt: String,
+        #[arg(
+            short,
+            long,
+            conflicts_with = "prompt_file",
+            required_unless_present = "prompt_file"
+        )]
+        prompt: Option<String>,
+
+        /// Internal: read the prompt from a file and use it as the run prompt.
+        #[arg(long = "prompt-file", hide = true, conflicts_with = "prompt")]
+        prompt_file: Option<PathBuf>,
 
         /// Comma-separated list of event types to emit
         #[arg(long, value_name = "EVENTS")]
@@ -100,7 +109,7 @@ enum Commands {
 
         /// Internal: read this already-rendered system prompt file and use it as the final prompt for the run.
         #[arg(long = "effective-system-prompt-file", hide = true)]
-        effective_system_prompt_file: Option<String>,
+        effective_system_prompt_file: Option<PathBuf>,
 
         /// Override the model from config
         #[arg(short, long)]
@@ -666,9 +675,10 @@ struct DispatchContext<'a> {
 }
 
 struct ExecCommandInput {
-    prompt: String,
+    prompt: Option<String>,
+    prompt_file: Option<PathBuf>,
     filter: Option<String>,
-    effective_system_prompt_file: Option<String>,
+    effective_system_prompt_file: Option<PathBuf>,
     model: Option<String>,
     thinking: Option<String>,
     tools: Option<String>,
@@ -685,22 +695,38 @@ struct ImagineCommandInput {
     source: Vec<String>,
 }
 
+fn read_exec_input_file(path: &std::path::Path, description: &str) -> Result<String> {
+    std::fs::read_to_string(path).with_context(|| format!("read {description} {}", path.display()))
+}
+
+fn resolve_exec_prompt(
+    prompt: Option<String>,
+    prompt_file: Option<&std::path::Path>,
+) -> Result<String> {
+    match (prompt, prompt_file) {
+        (Some(prompt), None) => Ok(prompt),
+        (None, Some(path)) => read_exec_input_file(path, "prompt file"),
+        (Some(_), Some(_)) => anyhow::bail!(
+            "exec prompt must be provided either via --prompt or --prompt-file, not both"
+        ),
+        (None, None) => anyhow::bail!("exec prompt is required"),
+    }
+}
+
 async fn run_exec_command(context: &DispatchContext<'_>, input: ExecCommandInput) -> Result<()> {
     let thread_opts: ThreadPersistenceOptions = context.thread_args.into();
     let root_path = resolve_root(context.root, context.worktree_id)?;
     let root_string = root_path.to_string_lossy().to_string();
+    let prompt = resolve_exec_prompt(input.prompt, input.prompt_file.as_deref())?;
     let effective_system_prompt = input
         .effective_system_prompt_file
         .as_deref()
-        .map(|path| {
-            std::fs::read_to_string(path)
-                .with_context(|| format!("read effective system prompt file {path}"))
-        })
+        .map(|path| read_exec_input_file(path, "effective system prompt file"))
         .transpose()?;
     commands::exec::run(commands::exec::ExecRunOptions {
         root: &root_string,
         thread_opts: &thread_opts,
-        prompt: &input.prompt,
+        prompt: &prompt,
         config: context.config,
         model_override: input.model.as_deref(),
         effective_system_prompt_override: effective_system_prompt.as_deref(),
@@ -737,6 +763,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
         Commands::Bot { command, bot } => dispatch_bot(bot, command, context).await,
         Commands::Exec {
             prompt,
+            prompt_file,
             filter,
             no_system_prompt,
             effective_system_prompt_file,
@@ -749,6 +776,7 @@ async fn dispatch_command(command: Commands, context: &DispatchContext<'_>) -> R
                 context,
                 ExecCommandInput {
                     prompt,
+                    prompt_file,
                     filter,
                     effective_system_prompt_file,
                     model,
@@ -1098,5 +1126,62 @@ fn logout_provider(provider: AuthProvider) -> Result<()> {
         AuthProvider::ClaudeCli => commands::auth::logout_claude_cli(),
         AuthProvider::OpenaiCodex => commands::auth::logout_openai_codex(),
         AuthProvider::GeminiCli => commands::auth::logout_gemini_cli(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    use clap::Parser;
+
+    use super::*;
+
+    #[test]
+    fn exec_accepts_prompt_file_without_prompt() {
+        let cli = Cli::try_parse_from(["zdx", "exec", "--prompt-file", "/tmp/prompt.txt"])
+            .expect("prompt-file should satisfy exec prompt requirement");
+
+        match cli.command.expect("subcommand should parse") {
+            Commands::Exec {
+                prompt,
+                prompt_file,
+                ..
+            } => {
+                assert_eq!(prompt, None);
+                assert_eq!(prompt_file, Some(PathBuf::from("/tmp/prompt.txt")));
+            }
+            _ => panic!("expected exec command"),
+        }
+    }
+
+    #[test]
+    fn exec_requires_prompt_or_prompt_file() {
+        let message = match Cli::try_parse_from(["zdx", "exec"]) {
+            Ok(_) => panic!("exec should require input"),
+            Err(err) => err.to_string(),
+        };
+
+        assert!(message.contains("--prompt"));
+    }
+
+    #[test]
+    fn resolve_exec_prompt_reads_prompt_file() {
+        let unique = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("clock should be after unix epoch")
+            .as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "zdx-cli-prompt-file-test-{}-{unique}.txt",
+            std::process::id()
+        ));
+        fs::write(&path, "prompt from file\n").expect("test should write prompt file");
+
+        let resolved =
+            resolve_exec_prompt(None, Some(path.as_path())).expect("prompt file should load");
+        assert_eq!(resolved, "prompt from file\n");
+
+        let _ = fs::remove_file(path);
     }
 }

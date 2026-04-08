@@ -4,12 +4,13 @@
 //! capture response text only.
 
 use std::ffi::OsString;
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::io::Write;
+use std::path::Path;
 use std::process::Stdio;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail, ensure};
+use tempfile::{Builder, TempPath};
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
 
@@ -38,18 +39,12 @@ pub struct ExecSubagentOptions {
 
 #[derive(Debug)]
 struct TempPromptFile {
-    path: PathBuf,
+    path: TempPath,
 }
 
 impl TempPromptFile {
     fn as_path(&self) -> &Path {
         &self.path
-    }
-}
-
-impl Drop for TempPromptFile {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -82,6 +77,7 @@ pub async fn run_exec_subagent_with_cancel(
     ensure!(!prompt.is_empty(), "Subagent prompt cannot be empty");
 
     let exe = std::env::current_exe().context("Failed to get executable path")?;
+    let prompt_file = write_prompt_file(prompt)?;
     let effective_system_prompt_file = options
         .system_prompt
         .as_deref()
@@ -91,7 +87,7 @@ pub async fn run_exec_subagent_with_cancel(
         .transpose()?;
     let args = build_exec_args(
         root,
-        prompt,
+        prompt_file.as_path(),
         options,
         effective_system_prompt_file
             .as_ref()
@@ -106,7 +102,9 @@ pub async fn run_exec_subagent_with_cancel(
         .stderr(Stdio::piped())
         .kill_on_drop(true);
 
-    let child = command.spawn().context("Failed to spawn subagent")?;
+    let child = command
+        .spawn()
+        .map_err(|err| anyhow::anyhow!("Failed to spawn subagent: {err}"))?;
 
     let wait_future = child.wait_with_output();
     let output = match (cancel, options.timeout) {
@@ -138,7 +136,7 @@ pub async fn run_exec_subagent_with_cancel(
 
 fn build_exec_args(
     root: &Path,
-    prompt: &str,
+    prompt_file: &Path,
     options: &ExecSubagentOptions,
     effective_system_prompt_file: Option<&Path>,
 ) -> Vec<OsString> {
@@ -147,8 +145,8 @@ fn build_exec_args(
     args.extend([
         OsString::from("--no-thread"),
         OsString::from("exec"),
-        OsString::from("-p"),
-        OsString::from(prompt),
+        OsString::from("--prompt-file"),
+        prompt_file.as_os_str().to_os_string(),
     ]);
 
     if options.no_tools {
@@ -199,17 +197,25 @@ fn normalize_optional(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|s| !s.is_empty())
 }
 
+fn write_prompt_file(prompt: &str) -> Result<TempPromptFile> {
+    write_temp_text_file("zdx-subagent-prompt", prompt)
+}
+
 fn write_effective_system_prompt_file(system_prompt: &str) -> Result<TempPromptFile> {
-    let unique = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .context("system clock before unix epoch")?
-        .as_nanos();
-    let path = std::env::temp_dir().join(format!(
-        "zdx-effective-system-prompt-{}-{unique}.md",
-        std::process::id()
-    ));
-    fs::write(&path, system_prompt)
-        .with_context(|| format!("write effective system prompt file {}", path.display()))?;
+    write_temp_text_file("zdx-effective-system-prompt", system_prompt)
+}
+
+fn write_temp_text_file(prefix: &str, contents: &str) -> Result<TempPromptFile> {
+    let mut file = Builder::new()
+        .prefix(prefix)
+        .suffix(".md")
+        .tempfile()
+        .context("create temp text file")?;
+    file.write_all(contents.as_bytes())
+        .with_context(|| format!("write temp text file {}", file.path().display()))?;
+    file.flush()
+        .with_context(|| format!("flush temp text file {}", file.path().display()))?;
+    let path = file.into_temp_path();
     Ok(TempPromptFile { path })
 }
 
@@ -295,7 +301,7 @@ mod tests {
     fn build_exec_args_includes_required_flags() {
         let args = build_exec_args(
             Path::new("/tmp/project"),
-            "do work",
+            Path::new("/tmp/subagent-prompt.md"),
             &ExecSubagentOptions::default(),
             None,
         );
@@ -311,18 +317,19 @@ mod tests {
                 "/tmp/project",
                 "--no-thread",
                 "exec",
-                "-p",
-                "do work"
+                "--prompt-file",
+                "/tmp/subagent-prompt.md"
             ]
         );
     }
 
     #[test]
     fn build_exec_args_includes_optional_flags() {
-        let prompt_file = Path::new("/tmp/effective-system-prompt.md");
+        let prompt_file = Path::new("/tmp/subagent-prompt.md");
+        let system_prompt_file = Path::new("/tmp/effective-system-prompt.md");
         let args = build_exec_args(
             Path::new("/tmp/project"),
-            "task",
+            prompt_file,
             &ExecSubagentOptions {
                 model: Some("openai:gpt-5.2".to_string()),
                 system_prompt: Some("You are a focused assistant".to_string()),
@@ -333,7 +340,7 @@ mod tests {
                 event_filter: Some(vec!["turn_finished".to_string()]),
                 timeout: None,
             },
-            Some(prompt_file),
+            Some(system_prompt_file),
         );
         let args: Vec<String> = args
             .iter()
@@ -347,8 +354,8 @@ mod tests {
                 "/tmp/project",
                 "--no-thread",
                 "exec",
-                "-p",
-                "task",
+                "--prompt-file",
+                "/tmp/subagent-prompt.md",
                 "--no-system-prompt",
                 "--tools",
                 "read,glob",
@@ -400,7 +407,18 @@ mod tests {
     #[test]
     fn temp_prompt_file_is_removed_on_drop() {
         let file = write_effective_system_prompt_file("prompt body").unwrap();
-        let path = file.path.clone();
+        let path = file.as_path().to_path_buf();
+        assert!(path.exists());
+
+        drop(file);
+
+        assert!(!path.exists());
+    }
+
+    #[test]
+    fn prompt_file_is_removed_on_drop() {
+        let file = write_prompt_file("prompt body").unwrap();
+        let path = file.as_path().to_path_buf();
         assert!(path.exists());
 
         drop(file);
