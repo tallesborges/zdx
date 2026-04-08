@@ -992,6 +992,7 @@ mod tests {
             .collect();
 
         assert!(names.contains(&"memory"));
+        assert!(names.contains(&"deep-research"));
         assert!(names.contains(&"deepwiki-cli"));
         assert!(names.contains(&"thread-tools"));
         assert!(names.contains(&"imagine"));
