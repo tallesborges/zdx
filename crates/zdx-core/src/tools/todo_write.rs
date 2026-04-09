@@ -1,7 +1,5 @@
 //! Todo write tool for structured task tracking.
 
-use std::env;
-
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
@@ -134,11 +132,15 @@ struct TodoCounts {
 }
 
 /// Executes the todo-write tool and returns a structured envelope.
-pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
-    execute_with_state(input, None)
+pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
+    execute_with_state(input, None, ctx.current_thread_id.as_deref())
 }
 
-pub(crate) fn execute_with_state(input: &Value, previous: Option<&TodoState>) -> ToolOutput {
+pub(crate) fn execute_with_state(
+    input: &Value,
+    previous: Option<&TodoState>,
+    current_thread_id: Option<&str>,
+) -> ToolOutput {
     let input: TodoInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -154,7 +156,10 @@ pub(crate) fn execute_with_state(input: &Value, previous: Option<&TodoState>) ->
         return ToolOutput::failure("invalid_input", "ops cannot be empty", None);
     }
 
-    let previous = previous.cloned().or_else(load_current_state).unwrap_or_default();
+    let previous = previous
+        .cloned()
+        .or_else(|| load_current_state(current_thread_id))
+        .unwrap_or_default();
     let updated = match apply_ops(&previous, &input.ops) {
         Ok(state) => state,
         Err(message) => return ToolOutput::failure("invalid_input", message, None),
@@ -167,20 +172,12 @@ pub(crate) fn execute_with_state(input: &Value, previous: Option<&TodoState>) ->
     }))
 }
 
-fn load_current_state() -> Option<TodoState> {
-    let thread_id = current_thread_id()?;
-    let events = tp::load_thread_events(&thread_id).ok()?;
+fn load_current_state(origin_thread_id: Option<&str>) -> Option<TodoState> {
+    let thread_id = origin_thread_id
+        .map(str::trim)
+        .filter(|thread_id| !thread_id.is_empty())?;
+    let events = tp::load_thread_events(thread_id).ok()?;
     extract_latest_state(&events)
-}
-
-fn current_thread_id() -> Option<String> {
-    let thread_id = env::var("ZDX_THREAD_ID").ok()?;
-    let trimmed = thread_id.trim();
-    if trimmed.is_empty() {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
 }
 
 fn extract_latest_state(events: &[ThreadEvent]) -> Option<TodoState> {

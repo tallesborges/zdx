@@ -483,6 +483,10 @@ fn load_bundled_skills(state: &mut LoadState) {
         }
     };
 
+    load_bundled_skills_from_root(&materialized_root, state);
+}
+
+fn load_bundled_skills_from_root(materialized_root: &Path, state: &mut LoadState) {
     for asset in bundled_skill_assets()
         .iter()
         .filter(|asset| asset.relative_path.ends_with("/SKILL.md"))
@@ -983,19 +987,43 @@ mod tests {
 
     #[test]
     fn test_load_skills_includes_bundled_fallbacks() {
-        let options = LoadSkillsOptions::new(std::env::current_dir().unwrap());
-        let result = load_skills(&options);
-        let names: Vec<&str> = result
+        let dir = tempdir().unwrap();
+        let root =
+            materialize_bundled_skills_into(dir.path(), bundled_skills_manifest_hash()).unwrap();
+        let mut state = LoadState::new(SkillFilters::default(), Vec::new());
+        load_bundled_skills_from_root(&root, &mut state);
+        let names: Vec<&str> = state
             .skills
             .iter()
             .map(|skill| skill.name.as_str())
             .collect();
+        let warnings: Vec<&str> = state
+            .warnings
+            .iter()
+            .map(|warning| warning.message.as_str())
+            .collect();
 
-        assert!(names.contains(&"memory"));
-        assert!(names.contains(&"deep-research"));
-        assert!(names.contains(&"deepwiki-cli"));
-        assert!(names.contains(&"thread-tools"));
-        assert!(names.contains(&"imagine"));
+        assert!(root.join("memory").join("SKILL.md").is_file());
+        assert!(
+            names.contains(&"memory"),
+            "names={names:?}, warnings={warnings:?}"
+        );
+        assert!(
+            names.contains(&"deep-research"),
+            "names={names:?}, warnings={warnings:?}"
+        );
+        assert!(
+            names.contains(&"deepwiki-cli"),
+            "names={names:?}, warnings={warnings:?}"
+        );
+        assert!(
+            names.contains(&"thread-tools"),
+            "names={names:?}, warnings={warnings:?}"
+        );
+        assert!(
+            names.contains(&"imagine"),
+            "names={names:?}, warnings={warnings:?}"
+        );
     }
 
     #[test]

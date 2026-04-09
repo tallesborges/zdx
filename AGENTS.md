@@ -75,6 +75,7 @@ All common tasks are available via `just` (see `justfile`). Run `just` to list a
 - Add tests only to protect a user-visible contract or a real regression.
 - Prefer integration tests in `crates/zdx-cli/tests/` over unit tests for CLI/output/persistence behavior.
 - Avoid mutating process-global env vars in-process; set env on spawned CLI commands instead.
+- When a unit test seems to need an `env_lock`/`EnvVarGuard` pattern, prefer refactoring the code under test to accept explicit inputs or expose a pure helper instead of serializing env mutation in tests. Only test process-global env mutation directly when that behavior is itself the thing being verified.
 
 ## Docs
 

@@ -762,6 +762,7 @@ fn build_run_turn_setup(
         options.root.canonicalize().unwrap_or(options.root.clone()),
         config.tool_timeout(),
     )
+    .with_current_thread_id(thread_id)
     .with_config(config);
     let tool_registry = options.tool_config.registry.clone();
     let tools = resolve_tools(config, options, provider, &tool_registry);
@@ -1763,34 +1764,32 @@ async fn execute_tools_async(
             .any(|tool| tool.to_ascii_lowercase() == name_lower)
     };
 
-    // Emit ToolStarted sequentially to preserve UI order.
-    for tu in tool_uses.iter() {
-        sender
-            .send_important(AgentEvent::ToolStarted {
-                id: tu.id.clone(),
-                name: tu.name.clone(),
-            })
-            .await;
-    }
+    emit_tool_started_events(tool_uses, sender).await;
 
     // Execute todo_write calls in order so later calls in the same turn can see
     // earlier mutations without waiting for thread persistence. Spawn everything
     // else concurrently as before.
     for (i, tu) in tool_uses.iter().enumerate() {
         if todo_write::is_todo_tool_name(&tu.name) && is_enabled_tool(&tu.name) {
-            let output = todo_write::execute_with_state(&tu.input, current_todo_state.as_ref());
+            let output = todo_write::execute_with_state(
+                &tu.input,
+                current_todo_state.as_ref(),
+                ctx.current_thread_id.as_deref(),
+            );
             if let Some(state) = todo_write::state_from_output(&output) {
                 current_todo_state = Some(state);
             }
             let result = ToolResult::from_output(tu.id.clone(), &output);
-            completed.insert(i);
-            sender
-                .send_important(AgentEvent::ToolCompleted {
-                    id: tu.id.clone(),
-                    result: output.clone(),
-                })
-                .await;
-            results[i] = Some((output, result));
+            record_tool_completion(
+                sender,
+                &mut completed,
+                &mut results,
+                i,
+                tu.id.clone(),
+                output,
+                result,
+            )
+            .await;
             continue;
         }
 
@@ -1813,51 +1812,29 @@ async fn execute_tools_async(
         tokio::select! {
             biased;
             () = interrupt::wait_for_interrupt() => {
-                // Abort all remaining tasks
-                join_set.abort_all();
-
-                // Drain any already-completed tasks to avoid missing results
-                while let Some(task_result) = join_set.try_join_next() {
-                    if let Ok((idx, id, output, result)) = task_result
-                        && !completed.contains(&idx)
-                    {
-                        completed.insert(idx);
-                        sender.send_important(AgentEvent::ToolCompleted {
-                            id,
-                            result: output.clone(),
-                        })
-                        .await;
-                        results[idx] = Some((output, result));
-                    }
-                }
-
-                // Emit abort for incomplete tools
-                for (i, tu) in tool_uses.iter().enumerate() {
-                    if !completed.contains(&i) {
-                        let abort_output = ToolOutput::canceled("Interrupted by user");
-                        sender.send_important(AgentEvent::ToolCompleted {
-                            id: tu.id.clone(),
-                            result: abort_output.clone(),
-                        })
-                        .await;
-                        results[i] = Some((
-                            abort_output.clone(),
-                            ToolResult::from_output(tu.id.clone(), &abort_output),
-                        ));
-                    }
-                }
+                handle_tool_interrupt(
+                    &mut join_set,
+                    &mut completed,
+                    &mut results,
+                    tool_uses,
+                    sender,
+                )
+                .await;
                 break;
             }
             task_result = join_set.join_next() => {
                 match task_result {
                     Some(Ok((idx, id, output, result))) => {
-                        completed.insert(idx);
-                        sender.send_important(AgentEvent::ToolCompleted {
+                        record_tool_completion(
+                            sender,
+                            &mut completed,
+                            &mut results,
+                            idx,
                             id,
-                            result: output.clone(),
-                        })
+                            output,
+                            result,
+                        )
                         .await;
-                        results[idx] = Some((output, result));
                     }
                     Some(Err(e)) => {
                         // JoinError: panic or cancellation
@@ -1879,43 +1856,77 @@ async fn execute_tools_async(
         .collect()
 }
 
+async fn emit_tool_started_events(tool_uses: &[ToolUse], sender: &EventSender) {
+    for tu in tool_uses {
+        sender
+            .send_important(AgentEvent::ToolStarted {
+                id: tu.id.clone(),
+                name: tu.name.clone(),
+            })
+            .await;
+    }
+}
+
+async fn record_tool_completion(
+    sender: &EventSender,
+    completed: &mut HashSet<usize>,
+    results: &mut [Option<(ToolOutput, ToolResult)>],
+    idx: usize,
+    id: String,
+    output: ToolOutput,
+    result: ToolResult,
+) {
+    completed.insert(idx);
+    sender
+        .send_important(AgentEvent::ToolCompleted {
+            id,
+            result: output.clone(),
+        })
+        .await;
+    results[idx] = Some((output, result));
+}
+
+async fn handle_tool_interrupt(
+    join_set: &mut JoinSet<(usize, String, ToolOutput, ToolResult)>,
+    completed: &mut HashSet<usize>,
+    results: &mut [Option<(ToolOutput, ToolResult)>],
+    tool_uses: &[ToolUse],
+    sender: &EventSender,
+) {
+    join_set.abort_all();
+
+    while let Some(task_result) = join_set.try_join_next() {
+        if let Ok((idx, id, output, result)) = task_result
+            && !completed.contains(&idx)
+        {
+            record_tool_completion(sender, completed, results, idx, id, output, result).await;
+        }
+    }
+
+    for (i, tu) in tool_uses.iter().enumerate() {
+        if !completed.contains(&i) {
+            let abort_output = ToolOutput::canceled("Interrupted by user");
+            let abort_result = ToolResult::from_output(tu.id.clone(), &abort_output);
+            record_tool_completion(
+                sender,
+                completed,
+                results,
+                i,
+                tu.id.clone(),
+                abort_output,
+                abort_result,
+            )
+            .await;
+        }
+    }
+}
+
 /// Builds assistant content blocks from accumulated thinking, reasoning, text, and tool uses.
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
-    use std::sync::{Mutex, OnceLock};
-
     use tokio::time::{Duration, timeout};
 
     use super::*;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        key: &'static str,
-        value: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn capture(key: &'static str) -> Self {
-            Self {
-                key,
-                value: std::env::var_os(key),
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match &self.value {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
-    }
 
     /// Verifies agent emits `ToolStarted` and `ToolCompleted` events (SPEC §7).
     #[tokio::test]
@@ -1968,10 +1979,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_tools_carries_todo_state_within_turn() {
-        let _lock = env_lock().lock().unwrap();
-        let _guard = EnvVarGuard::capture("ZDX_THREAD_ID");
-        unsafe { std::env::set_var("ZDX_THREAD_ID", "") };
-
         let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
         let enabled_tools: HashSet<String> = vec!["Todo_Write".to_string()].into_iter().collect();
         let tool_uses = vec![
@@ -2020,12 +2027,18 @@ mod tests {
             .expect("todo_write should return tasks array");
 
         assert_eq!(tasks.len(), 2);
-        assert_eq!(tasks[0].get("id").and_then(|id| id.as_str()), Some("task-1"));
+        assert_eq!(
+            tasks[0].get("id").and_then(|id| id.as_str()),
+            Some("task-1")
+        );
         assert_eq!(
             tasks[0].get("status").and_then(|status| status.as_str()),
             Some("completed")
         );
-        assert_eq!(tasks[1].get("id").and_then(|id| id.as_str()), Some("task-2"));
+        assert_eq!(
+            tasks[1].get("id").and_then(|id| id.as_str()),
+            Some("task-2")
+        );
         assert_eq!(
             tasks[1].get("status").and_then(|status| status.as_str()),
             Some("in_progress")

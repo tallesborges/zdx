@@ -748,9 +748,21 @@ fn split_frontmatter(content: &str) -> Result<(String, String)> {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use tempfile::tempdir;
 
     use super::*;
+
+    fn write_project_skill(root: &Path, name: &str, description: &str, body: &str) {
+        let skill_dir = root.join(".zdx").join("skills").join(name);
+        fs::create_dir_all(&skill_dir).unwrap();
+        fs::write(
+            skill_dir.join("SKILL.md"),
+            format!("---\nname: {name}\ndescription: {description}\n---\n\n{body}\n"),
+        )
+        .unwrap();
+    }
 
     #[test]
     fn discover_includes_built_ins() {
@@ -961,8 +973,22 @@ mod tests {
     #[test]
     fn render_prompt_includes_available_and_auto_loaded_skills() {
         let root = tempdir().unwrap();
+        write_project_skill(
+            root.path(),
+            "deepwiki-cli",
+            "Use DeepWiki CLI to inspect repositories.",
+            "# DeepWiki",
+        );
+        write_project_skill(
+            root.path(),
+            "memory",
+            "Use for memory-related tasks.",
+            "# Memory\nUse this skill for memory-related tasks.",
+        );
+
         let mut config = crate::config::Config::default();
         config.skills.sources.zdx_user = false;
+        config.skills.sources.zdx_project = true;
         config.skills.sources.codex_user = false;
         config.skills.sources.claude_user = false;
         config.skills.sources.claude_project = false;
@@ -995,7 +1021,18 @@ mod tests {
         assert!(rendered.contains("deepwiki-cli"));
         assert!(rendered.contains("memory"));
         assert!(rendered.contains("## Auto-loaded Skills"));
-        assert!(rendered.contains("${ZDX_HOME}/bundled-skills/deepwiki-cli/SKILL.md"));
+        assert!(
+            rendered.contains(
+                &root
+                    .path()
+                    .join(".zdx")
+                    .join("skills")
+                    .join("deepwiki-cli")
+                    .join("SKILL.md")
+                    .display()
+                    .to_string()
+            )
+        );
         assert!(rendered.contains("# DeepWiki"));
         assert!(!rendered.contains("# Memory\nUse this skill for memory-related tasks."));
     }

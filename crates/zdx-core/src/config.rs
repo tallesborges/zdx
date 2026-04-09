@@ -243,9 +243,7 @@ where
     }
 }
 
-fn deserialize_memory_root<'de, D>(
-    deserializer: D,
-) -> std::result::Result<Option<String>, D::Error>
+fn deserialize_memory_root<'de, D>(deserializer: D) -> std::result::Result<Option<String>, D::Error>
 where
     D: serde::Deserializer<'de>,
 {
@@ -690,11 +688,17 @@ pub struct MemoryConfig {
 }
 
 impl MemoryConfig {
-    /// Returns the effective memory root path, expanding `~` and falling back to default.
-    pub fn effective_root_path(&self) -> std::path::PathBuf {
+    /// Returns the effective memory root path using an explicit `ZDX_HOME`
+    /// fallback instead of reading process-global environment.
+    pub(crate) fn effective_root_path_with_zdx_home(&self, zdx_home: &Path) -> PathBuf {
         self.root
             .as_deref()
-            .map_or_else(|| paths::zdx_home().join("memory"), expand_tilde)
+            .map_or_else(|| zdx_home.join("memory"), expand_tilde)
+    }
+
+    /// Returns the effective memory root path, expanding `~` and falling back to default.
+    pub fn effective_root_path(&self) -> std::path::PathBuf {
+        self.effective_root_path_with_zdx_home(&paths::zdx_home())
     }
 
     /// Returns the effective notes path derived from the memory root.
@@ -1689,7 +1693,10 @@ language = "pt"
         );
         assert_eq!(
             config.memory.effective_index_file(),
-            dir.path().join("memory-root").join("Notes").join("MEMORY.md")
+            dir.path()
+                .join("memory-root")
+                .join("Notes")
+                .join("MEMORY.md")
         );
     }
 
@@ -1705,7 +1712,10 @@ language = "pt"
         fs::write(&config_path, "[memory]\nroot = \"  ~/SecondBrain  \"\n").unwrap();
 
         let config = Config::load_from(&config_path).unwrap();
-        assert_eq!(config.memory.effective_root_path(), home.join("SecondBrain"));
+        assert_eq!(
+            config.memory.effective_root_path(),
+            home.join("SecondBrain")
+        );
         assert_eq!(
             config.memory.effective_index_file(),
             home.join("SecondBrain").join("Notes").join("MEMORY.md")
@@ -1740,13 +1750,15 @@ language = "pt"
         let config_path = dir.path().join("config.toml");
 
         for root in ["", "   "] {
-            fs::write(&config_path, format!("[memory]\nroot = {:?}\n", root)).unwrap();
+            fs::write(&config_path, format!("[memory]\nroot = {root:?}\n")).unwrap();
 
             let error = Config::load_from(&config_path).unwrap_err();
             let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();
 
             assert!(
-                chain.iter().any(|message| message.contains("must not be blank")),
+                chain
+                    .iter()
+                    .any(|message| message.contains("must not be blank")),
                 "expected blank-value error in chain for root={root:?}, got: {chain:?}"
             );
         }
@@ -1758,7 +1770,7 @@ language = "pt"
         let config_path = dir.path().join("config.toml");
 
         for root in ["SecondBrain", "./SecondBrain", "../SecondBrain"] {
-            fs::write(&config_path, format!("[memory]\nroot = {:?}\n", root)).unwrap();
+            fs::write(&config_path, format!("[memory]\nroot = {root:?}\n")).unwrap();
 
             let error = Config::load_from(&config_path).unwrap_err();
             let chain = error.chain().map(ToString::to_string).collect::<Vec<_>>();

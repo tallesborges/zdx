@@ -22,6 +22,44 @@ use crate::providers::{ProviderKind, resolve_provider};
 use crate::skills::{LoadSkillsOptions, LoadSkillsResult, Skill, load_skills, skill_access_path};
 use crate::{prompts, subagents};
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RuntimeEnvVars {
+    zdx_home: PathBuf,
+    artifact_dir: PathBuf,
+    thread_id: String,
+    memory_root: PathBuf,
+}
+
+fn artifact_dir_for_thread_with_zdx_home(zdx_home: &Path, thread_id: Option<&str>) -> PathBuf {
+    let root = zdx_home.join("artifacts");
+    match thread_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(id) => root.join("threads").join(id),
+        None => root.join("scratch"),
+    }
+}
+
+fn build_runtime_env_vars(config: &Config, thread_id: Option<&str>) -> RuntimeEnvVars {
+    let zdx_home = paths::zdx_home();
+    build_runtime_env_vars_with_zdx_home(config, thread_id, &zdx_home)
+}
+
+fn build_runtime_env_vars_with_zdx_home(
+    config: &Config,
+    thread_id: Option<&str>,
+    zdx_home: &Path,
+) -> RuntimeEnvVars {
+    RuntimeEnvVars {
+        zdx_home: zdx_home.to_path_buf(),
+        artifact_dir: artifact_dir_for_thread_with_zdx_home(zdx_home, thread_id),
+        thread_id: thread_id
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .unwrap_or_default()
+            .to_string(),
+        memory_root: config.memory.effective_root_path_with_zdx_home(zdx_home),
+    }
+}
+
 /// Sets runtime `ZDX_*` environment variables for paths and session context.
 ///
 /// These are visible to all child processes (bash tool, subagents) automatically.
@@ -32,17 +70,15 @@ use crate::{prompts, subagents};
 /// Same pattern as `ZDX_DEBUG_TRACE` in `cli/mod.rs`. Acceptable because it's called
 /// once at startup before concurrent work.
 pub fn set_runtime_env(config: &Config, thread_id: Option<&str>) {
-    let zdx_home = paths::zdx_home();
-    let artifact_dir = paths::artifact_dir_for_thread(thread_id);
+    let runtime_env = build_runtime_env_vars(config, thread_id);
     let _ = crate::skills::ensure_bundled_skills_materialized();
-    let memory_root = config.memory.effective_root_path();
     // SAFETY: Called once at startup before any concurrent work.
     // Same pattern as ZDX_DEBUG_TRACE in cli/mod.rs.
     unsafe {
-        std::env::set_var("ZDX_HOME", zdx_home.as_os_str());
-        std::env::set_var("ZDX_ARTIFACT_DIR", artifact_dir.as_os_str());
-        std::env::set_var("ZDX_THREAD_ID", thread_id.unwrap_or(""));
-        std::env::set_var("ZDX_MEMORY_ROOT", memory_root.as_os_str());
+        std::env::set_var("ZDX_HOME", runtime_env.zdx_home.as_os_str());
+        std::env::set_var("ZDX_ARTIFACT_DIR", runtime_env.artifact_dir.as_os_str());
+        std::env::set_var("ZDX_THREAD_ID", &runtime_env.thread_id);
+        std::env::set_var("ZDX_MEMORY_ROOT", runtime_env.memory_root.as_os_str());
     }
 }
 
@@ -1137,48 +1173,13 @@ pub fn build_effective_system_prompt_with_paths_and_instruction_layers(
 
 #[cfg(test)]
 mod tests {
-    use std::ffi::OsString;
     use std::fs;
-    use std::sync::{Mutex, OnceLock};
 
     use tempfile::tempdir;
 
     use super::*;
     use crate::config::SkillSourceToggles;
     use crate::skills::SkillSource;
-
-    fn env_lock() -> &'static Mutex<()> {
-        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-        LOCK.get_or_init(|| Mutex::new(()))
-    }
-
-    struct EnvVarGuard {
-        saved: Vec<(&'static str, Option<OsString>)>,
-    }
-
-    impl EnvVarGuard {
-        fn capture(keys: &[&'static str]) -> Self {
-            Self {
-                saved: keys
-                    .iter()
-                    .map(|key| (*key, std::env::var_os(key)))
-                    .collect(),
-            }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            for (key, value) in &self.saved {
-                unsafe {
-                    match value {
-                        Some(value) => std::env::set_var(key, value),
-                        None => std::env::remove_var(key),
-                    }
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_collect_agents_paths_includes_zdx_home() {
@@ -1241,9 +1242,11 @@ mod tests {
         let loaded = result.unwrap();
         assert!(loaded.content.contains("Single file content"));
         assert!(loaded.content.contains("Source dir:"));
-        assert!(loaded
-            .content
-            .contains("Tool-call path from current working directory: ."));
+        assert!(
+            loaded
+                .content
+                .contains("Tool-call path from current working directory: .")
+        );
         assert!(!loaded.loaded_paths.is_empty());
     }
 
@@ -1483,48 +1486,44 @@ mod tests {
     }
 
     #[test]
-    fn test_set_runtime_env_exports_memory_root() {
-        let _lock = env_lock().lock().unwrap();
-        let _guard = EnvVarGuard::capture(&[
-            "ZDX_HOME",
-            "ZDX_ARTIFACT_DIR",
-            "ZDX_THREAD_ID",
-            "ZDX_MEMORY_ROOT",
-        ]);
-
+    fn test_build_runtime_env_vars_uses_configured_memory_root() {
+        let zdx_home = tempdir().unwrap();
         let memory_root = tempdir().unwrap();
         let mut config = crate::config::Config::default();
         config.memory.root = Some(memory_root.path().display().to_string());
 
-        set_runtime_env(&config, Some("thread-123"));
+        let runtime_env =
+            build_runtime_env_vars_with_zdx_home(&config, Some("thread-123"), zdx_home.path());
 
         assert_eq!(
-            std::env::var_os("ZDX_MEMORY_ROOT"),
-            Some(memory_root.path().as_os_str().to_os_string())
+            runtime_env,
+            RuntimeEnvVars {
+                zdx_home: zdx_home.path().to_path_buf(),
+                artifact_dir: zdx_home
+                    .path()
+                    .join("artifacts")
+                    .join("threads")
+                    .join("thread-123"),
+                thread_id: "thread-123".to_string(),
+                memory_root: memory_root.path().to_path_buf(),
+            }
         );
     }
 
     #[test]
-    fn test_set_runtime_env_exports_default_memory_root_when_unset() {
-        let _lock = env_lock().lock().unwrap();
-        let _guard = EnvVarGuard::capture(&[
-            "ZDX_HOME",
-            "ZDX_ARTIFACT_DIR",
-            "ZDX_THREAD_ID",
-            "ZDX_MEMORY_ROOT",
-        ]);
-
+    fn test_build_runtime_env_vars_uses_default_memory_root_when_unset() {
         let zdx_home = tempdir().unwrap();
-        unsafe {
-            std::env::set_var("ZDX_HOME", zdx_home.path());
-        }
-
         let config = crate::config::Config::default();
-        set_runtime_env(&config, None);
+        let runtime_env = build_runtime_env_vars_with_zdx_home(&config, None, zdx_home.path());
 
         assert_eq!(
-            std::env::var_os("ZDX_MEMORY_ROOT"),
-            Some(zdx_home.path().join("memory").as_os_str().to_os_string())
+            runtime_env,
+            RuntimeEnvVars {
+                zdx_home: zdx_home.path().to_path_buf(),
+                artifact_dir: zdx_home.path().join("artifacts").join("scratch"),
+                thread_id: String::new(),
+                memory_root: zdx_home.path().join("memory"),
+            }
         );
     }
 
@@ -1534,7 +1533,10 @@ mod tests {
         let memory_root = tempdir().unwrap();
         fs::create_dir_all(memory_root.path().join("Notes")).unwrap();
         fs::write(
-            memory_root.path().join("Notes").join(MEMORY_INDEX_FILE_NAME),
+            memory_root
+                .path()
+                .join("Notes")
+                .join(MEMORY_INDEX_FILE_NAME),
             "Loaded from configured memory root",
         )
         .unwrap();
@@ -1830,9 +1832,7 @@ mod tests {
                 .contains("Keep full detail in notes and the memory index as a concise index.")
         );
         assert!(rendered.contains("<memory_index>"));
-        assert!(rendered.contains(
-            "Treat skill guidance as task-specific instructions."
-        ));
+        assert!(rendered.contains("Treat skill guidance as task-specific instructions."));
         assert!(rendered.contains(
             "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references."
         ));
@@ -1987,9 +1987,9 @@ mod tests {
         ));
         assert!(prompt.contains("The current working directory is '"));
         assert!(prompt.contains("Current date:"));
-        assert!(prompt.contains(
-            "The following runtime environment variables are especially relevant:"
-        ));
+        assert!(
+            prompt.contains("The following runtime environment variables are especially relevant:")
+        );
         assert!(prompt.contains("`ZDX_HOME`: ZDX runtime home/config directory."));
         assert!(prompt.contains(
             "`ZDX_ARTIFACT_DIR`: Directory for artifacts generated for the current run/thread."

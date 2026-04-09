@@ -395,6 +395,9 @@ pub struct ToolContext {
     /// Root directory for file operations.
     pub root: PathBuf,
 
+    /// Current persisted thread id for this run, when available.
+    pub current_thread_id: Option<String>,
+
     /// Optional timeout for tool execution.
     pub timeout: Option<Duration>,
 
@@ -421,6 +424,7 @@ impl ToolContext {
     pub fn new(root: PathBuf, timeout: Option<Duration>) -> Self {
         Self {
             root,
+            current_thread_id: None,
             timeout,
             model: None,
             read_thread_model: None,
@@ -439,6 +443,15 @@ impl ToolContext {
         self.thinking_level = Some(config.thinking_level);
         self.subagents_enabled = config.subagents.enabled;
         self.subagent_available_models = config.subagent_available_models();
+        self
+    }
+
+    #[must_use]
+    pub fn with_current_thread_id(mut self, thread_id: Option<&str>) -> Self {
+        self.current_thread_id = thread_id
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
         self
     }
 }
