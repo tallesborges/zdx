@@ -1,6 +1,6 @@
 ---
 name: memory
-description: Use for memory-related tasks: when the user mentions notes, memory, saved information, or asks factual questions that may already be documented in their notes.
+description: "Use for memory-related tasks: when the user mentions notes, memory, saved information, or asks factual questions that may already be documented in their notes."
 ---
 
 # Memory

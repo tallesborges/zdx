@@ -6,10 +6,11 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition};
+use super::{ToolContext, ToolDefinition, ToolSet, toolset_tool_names};
 use crate::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
 use crate::core::events::ToolOutput;
 use crate::core::subagent::{ExecSubagentOptions, run_exec_subagent};
+use crate::providers::{ProviderKind, resolve_provider};
 use crate::subagents::{self, RuntimeSubagentSelection, SubagentSummary};
 
 /// Returns the tool definition for the `invoke_subagent` tool.
@@ -62,7 +63,6 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Ok(value) => value,
         Err(err) => return err,
     };
-
     let config = ctx.config.clone().unwrap_or_default();
     let selection = match resolve_subagent_selection(&ctx.root, input.subagent.clone()) {
         Ok(selection) => selection,
@@ -78,6 +78,11 @@ pub async fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Ok(model) => model,
         Err(err) => return err,
     };
+    let prompt = build_delegated_prompt(
+        &prompt,
+        child_has_read_thread_access(definition, &config, &model),
+        ctx.current_thread_id.as_deref(),
+    );
 
     let system_prompt = match build_system_prompt(&config, &ctx.root, definition, &model) {
         Ok(prompt) => prompt,
@@ -115,6 +120,65 @@ fn parse_input(input: &Value) -> Result<(SubagentInput, String), ToolOutput> {
     }
 
     Ok((input, prompt))
+}
+
+fn build_delegated_prompt(
+    prompt: &str,
+    can_consult_origin_thread: bool,
+    origin_thread_id: Option<&str>,
+) -> String {
+    if !can_consult_origin_thread {
+        return prompt.to_string();
+    }
+
+    match origin_thread_id.map(str::trim).filter(|id| !id.is_empty()) {
+        Some(thread_id) => format!(
+            "This task was delegated from thread {thread_id}. If important context is missing or ambiguous, consult that thread before making assumptions.\n\n{prompt}"
+        ),
+        None => prompt.to_string(),
+    }
+}
+
+fn child_has_read_thread_access(
+    definition: Option<&subagents::SubagentDefinition>,
+    config: &crate::config::Config,
+    model: &str,
+) -> bool {
+    effective_child_tool_names(definition, config, model)
+        .into_iter()
+        .any(|tool| tool.eq_ignore_ascii_case("read_thread"))
+}
+
+fn effective_child_tool_names(
+    definition: Option<&subagents::SubagentDefinition>,
+    config: &crate::config::Config,
+    model: &str,
+) -> Vec<String> {
+    if let Some(tools) = definition.and_then(|definition| definition.tools.clone()) {
+        return tools;
+    }
+
+    let provider = resolve_provider(model).kind;
+    let provider_config = config.providers.get(provider);
+    if provider_config.tools.is_some() {
+        let all_tool_names = crate::tools::all_tool_names();
+        let all_tool_names_refs: Vec<&str> = all_tool_names
+            .iter()
+            .map(std::string::String::as_str)
+            .collect();
+        return provider_config
+            .filter_tools(&all_tool_names_refs)
+            .into_iter()
+            .map(str::to_string)
+            .collect();
+    }
+
+    let tool_set = if matches!(provider, ProviderKind::OpenAI | ProviderKind::OpenAICodex) {
+        ToolSet::OpenAICodex
+    } else {
+        ToolSet::Default
+    };
+    toolset_tool_names(tool_set)
 }
 
 fn resolve_subagent_selection(
@@ -266,6 +330,7 @@ fn build_description(subagents: &[SubagentSummary]) -> String {
 }
 
 fn validate_model_supported(model: &str, ctx: &ToolContext) -> Option<ToolOutput> {
+    let requested = canonical_model_id(model);
     let available: Vec<String> = ctx
         .subagent_available_models
         .iter()
@@ -273,10 +338,14 @@ fn validate_model_supported(model: &str, ctx: &ToolContext) -> Option<ToolOutput
         .filter(|value| !value.is_empty())
         .map(str::to_string)
         .collect();
-
-    let allowed = available
+    let canonical_available: Vec<String> = available
         .iter()
-        .any(|available| available.eq_ignore_ascii_case(model));
+        .map(|value| canonical_model_id(value))
+        .collect();
+
+    let allowed = canonical_available
+        .iter()
+        .any(|available| available.eq_ignore_ascii_case(&requested));
     if allowed {
         return None;
     }
@@ -295,9 +364,83 @@ fn validate_model_supported(model: &str, ctx: &ToolContext) -> Option<ToolOutput
     ))
 }
 
+fn canonical_model_id(model: &str) -> String {
+    let selection = resolve_provider(model);
+    format!("{}:{}", selection.kind.id(), selection.model)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_build_delegated_prompt_without_thread_id_returns_original_prompt() {
+        assert_eq!(
+            build_delegated_prompt("diagnose this", true, None),
+            "diagnose this"
+        );
+    }
+
+    #[test]
+    fn test_build_delegated_prompt_without_read_thread_access_returns_original_prompt() {
+        assert_eq!(
+            build_delegated_prompt("diagnose this", false, Some("thread-123")),
+            "diagnose this"
+        );
+    }
+
+    #[test]
+    fn test_build_delegated_prompt_with_thread_id_prefixes_prompt() {
+        let prompt = build_delegated_prompt("diagnose this", true, Some("thread-123"));
+        assert!(prompt.starts_with(
+            "This task was delegated from thread thread-123. If important context is missing or ambiguous, consult that thread before making assumptions."
+        ));
+        assert!(prompt.ends_with("\n\ndiagnose this"));
+    }
+
+    #[test]
+    fn test_child_has_read_thread_access_for_explicit_subagent_tools() {
+        let definition = subagents::SubagentDefinition {
+            name: "oracle".to_string(),
+            description: "desc".to_string(),
+            path: std::path::PathBuf::from("oracle.md"),
+            source: subagents::SubagentSource::BuiltIn,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["read".to_string(), "read_thread".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        };
+
+        assert!(child_has_read_thread_access(
+            Some(&definition),
+            &crate::config::Config::default(),
+            "anthropic:claude-sonnet-4-5"
+        ));
+    }
+
+    #[test]
+    fn test_child_has_read_thread_access_for_explicit_subagent_tools_without_read_thread() {
+        let definition = subagents::SubagentDefinition {
+            name: "designer".to_string(),
+            description: "desc".to_string(),
+            path: std::path::PathBuf::from("designer.md"),
+            source: subagents::SubagentSource::BuiltIn,
+            model: None,
+            thinking_level: None,
+            tools: Some(vec!["read".to_string(), "glob".to_string()]),
+            skills: None,
+            auto_loaded_skills: None,
+            prompt_body: "body".to_string(),
+        };
+
+        assert!(!child_has_read_thread_access(
+            Some(&definition),
+            &crate::config::Config::default(),
+            "anthropic:claude-sonnet-4-5"
+        ));
+    }
 
     #[test]
     fn test_definition_schema() {
@@ -371,6 +514,14 @@ mod tests {
 
         assert!(validate_model_supported("codex:gpt-5.3-codex", &ctx).is_none());
         assert!(validate_model_supported("openai:gpt-5.2", &ctx).is_some());
+    }
+
+    #[test]
+    fn test_validate_model_supported_accepts_provider_alias_equivalence() {
+        let mut ctx = ToolContext::new(std::path::PathBuf::from("."), None);
+        ctx.subagent_available_models = vec!["openai-codex:gpt-5.3-codex".to_string()];
+
+        assert!(validate_model_supported("codex:gpt-5.3-codex", &ctx).is_none());
     }
 
     #[test]
