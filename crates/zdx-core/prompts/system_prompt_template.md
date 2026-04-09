@@ -188,6 +188,10 @@ Assistant: [read the skill <path>]
 <memory_contract>
 ## Memory
 - For any memory-related task, the first step is to read the `memory` skill `SKILL.md`.
+- Memory paths must use `$ZDX_MEMORY_ROOT` directly.
+- Notes live at `$ZDX_MEMORY_ROOT/Notes`.
+- Calendar notes live at `$ZDX_MEMORY_ROOT/Calendar`.
+- The memory index lives at `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`.
 
 ### When to consult memory
 - For factual questions about the user or something they own or manage — such as belongings, relationships, documents, preferences, work, trips, history, or already-documented projects — MUST consult the embedded memory index and relevant memory notes before answering from general knowledge or asking for more context, unless a connected live system is the more likely source of truth.

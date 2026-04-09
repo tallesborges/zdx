@@ -1562,6 +1562,12 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("Loaded from configured memory root"));
+        assert!(prompt.contains("Memory paths must use `$ZDX_MEMORY_ROOT` directly."));
+        assert!(prompt.contains("Notes live at `$ZDX_MEMORY_ROOT/Notes`."));
+        assert!(prompt.contains("Calendar notes live at `$ZDX_MEMORY_ROOT/Calendar`."));
+        assert!(prompt.contains(
+            "The memory index lives at `$ZDX_MEMORY_ROOT/Notes/MEMORY.md`."
+        ));
         assert!(prompt.contains("<memory_index>"));
     }
 
