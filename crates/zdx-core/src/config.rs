@@ -1560,6 +1560,8 @@ pub struct ProviderConfig {
     pub api_key: Option<String>,
     /// Optional API base URL (for proxies).
     pub base_url: Option<String>,
+    /// Optional text verbosity for OpenAI Responses-compatible providers.
+    pub text_verbosity: Option<TextVerbosity>,
     /// Whether this provider is enabled for `zdx models update`.
     pub enabled: Option<bool>,
     /// Desired models for `zdx models update` (supports '*' wildcard).
@@ -1584,6 +1586,12 @@ impl ProviderConfig {
             .as_deref()
             .map(str::trim)
             .filter(|s| !s.is_empty())
+    }
+
+    /// Returns the effective text verbosity if configured.
+    #[must_use]
+    pub fn effective_text_verbosity(&self) -> Option<TextVerbosity> {
+        self.text_verbosity
     }
 
     /// Filters a list of tool names based on this provider's tool configuration.
@@ -2162,6 +2170,33 @@ max_tokens = 2048
 
         let config = Config::load_from(&config_path).unwrap();
         assert_eq!(config.thinking_level, ThinkingLevel::Off);
+    }
+
+    #[test]
+    fn test_openai_provider_text_verbosity_loads_from_file() {
+        let dir = tempdir().unwrap();
+        let config_path = dir.path().join("config.toml");
+
+        fs::write(
+            &config_path,
+            r#"[providers.openai]
+text_verbosity = "high"
+
+[providers.openai_codex]
+text_verbosity = "low"
+"#,
+        )
+        .unwrap();
+
+        let config = Config::load_from(&config_path).unwrap();
+        assert_eq!(
+            config.providers.openai.effective_text_verbosity(),
+            Some(TextVerbosity::High)
+        );
+        assert_eq!(
+            config.providers.openai_codex.effective_text_verbosity(),
+            Some(TextVerbosity::Low)
+        );
     }
 
     /// `save_thinking_level`: creates new config file with template if it doesn't exist.

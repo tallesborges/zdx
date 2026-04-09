@@ -827,7 +827,10 @@ fn build_provider_client(
                 options.model.to_string(),
                 options.max_tokens,
                 reasoning_effort,
-                options.text_verbosity,
+                resolve_text_verbosity(
+                    options.text_verbosity,
+                    config.providers.openai_codex.effective_text_verbosity(),
+                ),
                 cache_key,
             ),
         ))),
@@ -930,10 +933,20 @@ fn build_openai_client(
             config.providers.openai.effective_base_url(),
             config.providers.openai.effective_api_key(),
             reasoning_effort,
-            text_verbosity,
+            resolve_text_verbosity(
+                text_verbosity,
+                config.providers.openai.effective_text_verbosity(),
+            ),
             cache_key,
         )?,
     )))
+}
+
+fn resolve_text_verbosity(
+    runtime_override: Option<TextVerbosity>,
+    provider_default: Option<TextVerbosity>,
+) -> Option<TextVerbosity> {
+    runtime_override.or(provider_default)
 }
 
 fn build_openrouter_client(
@@ -1927,6 +1940,30 @@ mod tests {
     use tokio::time::{Duration, timeout};
 
     use super::*;
+
+    #[test]
+    fn openai_runtime_text_verbosity_overrides_provider_config() {
+        assert_eq!(
+            resolve_text_verbosity(Some(TextVerbosity::Low), Some(TextVerbosity::High)),
+            Some(TextVerbosity::Low)
+        );
+    }
+
+    #[test]
+    fn openai_codex_runtime_text_verbosity_overrides_provider_config() {
+        assert_eq!(
+            resolve_text_verbosity(Some(TextVerbosity::Low), Some(TextVerbosity::High)),
+            Some(TextVerbosity::Low)
+        );
+    }
+
+    #[test]
+    fn provider_text_verbosity_is_used_when_runtime_override_is_absent() {
+        assert_eq!(
+            resolve_text_verbosity(None, Some(TextVerbosity::High)),
+            Some(TextVerbosity::High)
+        );
+    }
 
     /// Verifies agent emits `ToolStarted` and `ToolCompleted` events (SPEC §7).
     #[tokio::test]

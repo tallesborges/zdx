@@ -128,3 +128,26 @@ fn build_headers(api_key: &str) -> HeaderMap {
     );
     headers
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn openai_config_defaults_text_verbosity_to_medium_when_unset() {
+        let config = OpenAIConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://api.openai.com/v1".to_string(),
+            model: "gpt-5.4".to_string(),
+            max_output_tokens: None,
+            reasoning_effort: None,
+            text_verbosity: None,
+            prompt_cache_key: None,
+        };
+
+        assert_eq!(
+            config.text_verbosity.unwrap_or_default().as_str(),
+            TextVerbosity::Medium.as_str()
+        );
+    }
+}

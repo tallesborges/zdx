@@ -207,7 +207,7 @@ fn build_headers(account_id: &str, access_token: &str, session_id: Option<&str>)
 #[cfg(test)]
 mod tests {
     use super::{effective_codex_instructions, supports_reasoning_summary};
-    use crate::prompts;
+    use crate::{config::TextVerbosity, prompts};
 
     #[test]
     fn spark_model_disables_reasoning_summary() {
@@ -236,6 +236,22 @@ mod tests {
         assert_eq!(
             effective_codex_instructions(Some(" custom system ")).as_deref(),
             Some("custom system")
+        );
+    }
+
+    #[test]
+    fn codex_config_defaults_text_verbosity_to_medium_when_unset() {
+        let config = super::OpenAICodexConfig::new(
+            "gpt-5.4".to_string(),
+            4096,
+            None,
+            None,
+            None,
+        );
+
+        assert_eq!(
+            config.text_verbosity.unwrap_or_default().as_str(),
+            TextVerbosity::Medium.as_str()
         );
     }
 }
