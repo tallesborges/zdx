@@ -54,6 +54,21 @@ pub fn handle_agent_event(
             transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
             vec![]
         }
+        AgentEvent::ProviderRetry {
+            message,
+            attempt,
+            max_retries,
+            delay_ms,
+            ..
+        } => {
+            // Non-fatal retry notice: render as a plain system cell so users
+            // see the backoff without an "Error:" prefix.
+            let delay_secs = *delay_ms as f64 / 1000.0;
+            transcript.push_cell(HistoryCell::system(format!(
+                "⟳ Provider error, retrying in {delay_secs:.1}s (attempt {attempt}/{max_retries}): {message}"
+            )));
+            vec![]
+        }
         AgentEvent::ToolRequested { id, name, input } => {
             let tool_cell = HistoryCell::tool_running(id, name, input.clone());
             let cell_id = tool_cell.id();
