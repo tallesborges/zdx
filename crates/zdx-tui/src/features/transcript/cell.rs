@@ -43,7 +43,10 @@ fn extract_u64(value: &Value) -> Option<u64> {
 fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
     match name {
         "write" => input.get("content")?.as_str(),
-        "edit" => input.get("new_string").or_else(|| input.get("new"))?.as_str(),
+        "edit" => input
+            .get("new_string")
+            .or_else(|| input.get("new"))?
+            .as_str(),
         _ => None,
     }
 }
@@ -442,8 +445,12 @@ fn summarize_apply_patch_output(data: &Value) -> Option<String> {
 fn summarize_write_edit_output(data: &Value) -> Option<String> {
     let mut lines = Vec::new();
 
-    if let Some(path) = data.get("path").and_then(Value::as_str) {
-        lines.push(format!("path: {path}"));
+    if let Some(file_path) = data
+        .get("file_path")
+        .or_else(|| data.get("path"))
+        .and_then(Value::as_str)
+    {
+        lines.push(format!("file_path: {file_path}"));
     }
     if let Some(bytes) = data.get("bytes").and_then(Value::as_u64) {
         lines.push(format!("bytes: {bytes}"));
@@ -473,7 +480,10 @@ fn summarize_image_output(data: &Value) -> Option<String> {
         .and_then(Value::as_str)
         .unwrap_or("image");
     let bytes = data.get("bytes").and_then(Value::as_u64);
-    let path = data.get("path").and_then(Value::as_str);
+    let path = data
+        .get("file_path")
+        .or_else(|| data.get("path"))
+        .and_then(Value::as_str);
 
     let mut line = format!("image: {mime}");
     if let Some(bytes) = bytes {
@@ -2152,9 +2162,34 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_failure() {
+    fn test_tool_success_summary_uses_new_file_path_output_fields() {
         let mut cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({ "file_path": "test.txt" }));
+            HistoryCell::tool_running("123", "write", serde_json::json!({"file_path": "test.txt"}));
+        cell.set_tool_result(ToolOutput::success(serde_json::json!({
+            "file_path": "test.txt",
+            "resolved_file_path": "/tmp/test.txt",
+            "bytes": 9,
+            "created": true
+        })));
+
+        let all_text: String = cell
+            .display_lines(100, 0)
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .collect();
+
+        assert!(all_text.contains("file_path: test.txt"));
+        assert!(all_text.contains("bytes: 9"));
+        assert!(all_text.contains("created: true"));
+    }
+
+    #[test]
+    fn test_tool_failure() {
+        let mut cell = HistoryCell::tool_running(
+            "123",
+            "read",
+            serde_json::json!({ "file_path": "test.txt" }),
+        );
         cell.set_tool_result(ToolOutput::failure("not_found", "File not found", None));
 
         let lines = cell.display_lines(80, 0);

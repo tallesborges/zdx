@@ -7,7 +7,7 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_existing_path};
+use super::{ToolContext, ToolDefinition, insert_file_path_fields, resolve_existing_path};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the edit tool.
@@ -68,6 +68,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             );
         }
     };
+
+    if input.file_path.trim().is_empty() {
+        return ToolOutput::failure("invalid_input", "file_path cannot be empty", None);
+    }
 
     // Validate input
     if input.old_string.is_empty() {
@@ -138,7 +142,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     match fs::write(file_path, &new_content) {
         Ok(()) => {
             let mut data = serde_json::Map::new();
-            insert_path_fields(&mut data, &resolved.path, Some(file_path));
+            insert_file_path_fields(&mut data, &resolved.path, Some(file_path));
             data.insert("replacements".to_string(), Value::from(count));
             ToolOutput::success(Value::Object(data))
         }
@@ -298,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn test_edit_preserves_requested_path_and_reports_resolved_path() {
+    fn test_edit_preserves_requested_path_and_reports_resolved_file_path() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
         let file_path = temp.path().join("test.txt");
@@ -312,11 +316,24 @@ mod tests {
         assert!(result.is_ok());
 
         let data = result.data().expect("should have data");
-        assert_eq!(data["path"], "subdir/../test.txt");
+        assert_eq!(data["file_path"], "subdir/../test.txt");
         assert_eq!(
-            data["resolved_path"],
+            data["resolved_file_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
+    }
+
+    #[test]
+    fn test_edit_rejects_empty_file_path() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        let input = json!({"file_path": "   ", "old_string": "a", "new_string": "b"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let payload = serde_json::to_value(result).unwrap();
+        assert_eq!(payload["error"]["code"], "invalid_input");
+        assert_eq!(payload["error"]["message"], "file_path cannot be empty");
     }
 
     #[test]

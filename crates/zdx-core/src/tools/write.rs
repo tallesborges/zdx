@@ -7,7 +7,7 @@ use std::fs;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_input_path};
+use super::{ToolContext, ToolDefinition, insert_file_path_fields, resolve_input_path};
 use crate::core::events::ToolOutput;
 
 /// Returns the tool definition for the write tool.
@@ -85,7 +85,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         Ok(()) => {
             let resolved_path = file_path.canonicalize().ok();
             let mut data = serde_json::Map::new();
-            insert_path_fields(&mut data, display_path, resolved_path.as_deref());
+            insert_file_path_fields(&mut data, display_path, resolved_path.as_deref());
             data.insert("bytes".to_string(), Value::from(bytes));
             data.insert("created".to_string(), Value::from(created));
             ToolOutput::success(Value::Object(data))
@@ -216,7 +216,7 @@ mod tests {
     }
 
     #[test]
-    fn test_write_preserves_requested_path_and_reports_resolved_path() {
+    fn test_write_preserves_requested_path_and_reports_resolved_file_path() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
 
@@ -228,9 +228,9 @@ mod tests {
 
         let data = result.data().expect("should have data");
         let file_path = temp.path().join("written.txt");
-        assert_eq!(data["path"], "subdir/../written.txt");
+        assert_eq!(data["file_path"], "subdir/../written.txt");
         assert_eq!(
-            data["resolved_path"],
+            data["resolved_file_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
     }

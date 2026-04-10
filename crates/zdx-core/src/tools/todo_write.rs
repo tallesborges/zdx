@@ -567,7 +567,7 @@ mod tests {
             ThreadEvent::tool_use("tool-1", "read", json!({"path": "src/lib.rs"})),
             ThreadEvent::tool_result(
                 "tool-1",
-                json!({"ok": true, "data": {"path": "src/lib.rs"}}),
+                json!({"ok": true, "data": {"file_path": "src/lib.rs"}}),
                 true,
             ),
             ThreadEvent::tool_use("tool-2", "todo_write", json!({"ops": []})),
