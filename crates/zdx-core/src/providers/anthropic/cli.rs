@@ -3,8 +3,9 @@
 use anyhow::{Context, Result};
 
 use super::shared::{
-    build_api_messages_with_cache_control, build_system_blocks, build_thinking_and_output_config,
-    build_tool_defs, send_streaming_request, should_enable_interleaved_thinking_beta,
+    build_api_messages_with_cache_control, build_beta_header, build_system_blocks,
+    build_thinking_and_output_config, build_tool_defs, send_streaming_request,
+    should_enable_interleaved_thinking_beta,
 };
 use super::types::{EffortLevel, StreamingMessagesRequest};
 use crate::providers::oauth::claude_cli as oauth_claude_cli;
@@ -110,11 +111,7 @@ impl ClaudeCliClient {
             &self.config.model,
             self.config.thinking_enabled,
         );
-        let beta_header = if include_interleaved_beta {
-            format!("{BETA_HEADER},interleaved-thinking-2025-05-14")
-        } else {
-            BETA_HEADER.to_string()
-        };
+        let beta_header = build_beta_header(&[BETA_HEADER], include_interleaved_beta);
 
         let url = format!("{}/v1/messages?beta=true", self.config.base_url);
 

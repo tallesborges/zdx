@@ -3,8 +3,9 @@
 use anyhow::Result;
 
 use super::shared::{
-    build_api_messages_with_cache_control, build_system_blocks, build_thinking_and_output_config,
-    build_tool_defs, send_streaming_request, should_enable_interleaved_thinking_beta,
+    build_api_messages_with_cache_control, build_beta_header, build_system_blocks,
+    build_thinking_and_output_config, build_tool_defs, send_streaming_request,
+    should_enable_interleaved_thinking_beta,
 };
 use super::types::{EffortLevel, StreamingMessagesRequest};
 use crate::providers::ProviderKind;
@@ -12,7 +13,6 @@ use crate::providers::shared::{ChatMessage, ProviderStream};
 use crate::tools::ToolDefinition;
 
 const API_VERSION: &str = "2023-06-01";
-const INTERLEAVED_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 
 /// Configuration for the Anthropic client.
 #[derive(Debug, Clone)]
@@ -134,6 +134,7 @@ impl AnthropicClient {
             &self.config.model,
             self.config.thinking_enabled,
         );
+        let beta_header = build_beta_header(&[], include_interleaved_beta);
 
         let url = format!("{}/v1/messages", self.config.base_url);
 
@@ -142,11 +143,7 @@ impl AnthropicClient {
                 .header("anthropic-version", API_VERSION)
                 .header("x-api-key", &self.config.api_key);
 
-            if include_interleaved_beta {
-                builder.header("anthropic-beta", INTERLEAVED_BETA_HEADER)
-            } else {
-                builder
-            }
+            builder.header("anthropic-beta", beta_header)
         })
         .await
     }
