@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.4.0](https://github.com/tallesborges/zdx/compare/v0.3.0...v0.4.0) (2026-04-10)
+
+
+### Features
+
+* add active agent run tracking with monitor dashboard ([39640dc](https://github.com/tallesborges/zdx/commit/39640dc1c7b3be4e9f73f88b48cb10eca4d812af))
+* add bundled skills, explorer subagent, and todo tracking ([3a4a2ee](https://github.com/tallesborges/zdx/commit/3a4a2eea7eb4cd0a91cd136ed56560c8fb56716e))
+* **agent:** surface transient provider retries in the transcript ([7da4d29](https://github.com/tallesborges/zdx/commit/7da4d29338c3613e3bd40a975b3b7f3d7892eb2a))
+* **artifacts:** update skills, automations, and imagine command to use artifact_dir ([b7d543d](https://github.com/tallesborges/zdx/commit/b7d543dec4c4ee32ab74fa53a20e3154d01ba75f))
+* **cli:** add 512px image size option for imagine command ([8da943d](https://github.com/tallesborges/zdx/commit/8da943d3a0e8d93090215ec2a7d94a982cea8296))
+* **cli:** add exec event filtering and compatibility fixes ([7a280f2](https://github.com/tallesborges/zdx/commit/7a280f2332b15aecb89244c54bc0f741dcea6ab7))
+* **cli:** add zdx imagine command for Gemini image generation ([#32](https://github.com/tallesborges/zdx/issues/32)) ([a4f4dbd](https://github.com/tallesborges/zdx/commit/a4f4dbddfc0bbc12d7e91ac8046de7cd0a77018e))
+* **cli:** store telegram bots in zdx home ([9d97a10](https://github.com/tallesborges/zdx/commit/9d97a107f953bb88e78446084facf8540fa339ee))
+* **core:** add thread-scoped artifact directory resolution ([99789e3](https://github.com/tallesborges/zdx/commit/99789e30665b4a4423d814123a3674ad826bbce9))
+* **core:** expose runtime context as ZDX_* environment variables ([f432317](https://github.com/tallesborges/zdx/commit/f43231784d2d2e7220912d597600be15cdef754e))
+* **exec:** add --no-system-prompt support ([c908a2d](https://github.com/tallesborges/zdx/commit/c908a2d8724a3fb4bf081528bff851b373487618))
+* **imagine:** add image editing support with --source flag ([c7f3071](https://github.com/tallesborges/zdx/commit/c7f3071abea77ee878798b74d5a5e60f44839451))
+* **imagine:** default output to $ZDX_HOME/artifacts/ ([3fdbc90](https://github.com/tallesborges/zdx/commit/3fdbc90454ac4faea9c958a7a1074251e9d78ab1))
+* **mcp:** add helper CLI and deepwiki config ([6c0f59d](https://github.com/tallesborges/zdx/commit/6c0f59ded859dee99019ff9bd0a90e3125ed96c0))
+* **mcp:** add oauth auth flow for remote servers ([81825ac](https://github.com/tallesborges/zdx/commit/81825acbe0bb91687198dec0c7e0f5228b0d84e3))
+* **models:** detect reasoning from OpenRouter supported_parameters ([e282c07](https://github.com/tallesborges/zdx/commit/e282c0712ca939128ecdd8a5872f45a680751852))
+* **monitor:** control named bot services ([fa1ae31](https://github.com/tallesborges/zdx/commit/fa1ae3112aa20f202d47c7c208d6fbedff297923))
+* structured tracing + zdx-monitor TUI dashboard ([#34](https://github.com/tallesborges/zdx/issues/34)) ([f0061f1](https://github.com/tallesborges/zdx/commit/f0061f1350e40776ef10ffc22faaa945bb666d0d))
+* **threads:** add tool-call inspection command ([a4388a6](https://github.com/tallesborges/zdx/commit/a4388a6eeb33755932103a28e243e3a2a379a75a))
+* **tui:** add /pwd, /open, /worktree-remove commands ([816d4b7](https://github.com/tallesborges/zdx/commit/816d4b754be1dc4df47b4bdd93309e4ac310a1e1))
+* **zdx-core:** support CLAUDE.md context fallback ([d7610b3](https://github.com/tallesborges/zdx/commit/d7610b32eeb4ad58ae234a8345db31b798da48ac))
+
+
+### Bug Fixes
+
+* **bash:** close stdin for non-interactive commands ([e473253](https://github.com/tallesborges/zdx/commit/e473253a17e9f25c2ec8d9e4ed5185d99a82e36e))
+* **bot:** force low verbosity for Telegram OpenAI replies ([042e93b](https://github.com/tallesborges/zdx/commit/042e93ba136bf3949643d976a0619eef70b53e55))
+* **cli:** remove tool filters from thread search ([ec6b791](https://github.com/tallesborges/zdx/commit/ec6b7910bd4fa73deda6e6952da22a2f1fffb006))
+* **daemon:** prevent duplicate daemon processes ([9e73a9f](https://github.com/tallesborges/zdx/commit/9e73a9f9e4b5a0e98181c25dc80bddcb840c5843))
+* **models:** remove deprecated gemini-3-pro-preview defaults ([2d51b8b](https://github.com/tallesborges/zdx/commit/2d51b8bcb7106332461e77f06e300325d37d23cd))
+* **openai:** preserve responses phases and reasoning replay ([#38](https://github.com/tallesborges/zdx/issues/38)) ([5ab0b25](https://github.com/tallesborges/zdx/commit/5ab0b2584b82516acde9b714242616e1582416e3))
+* **providers:** rename mimo provider to xiomi ([c6e7ef1](https://github.com/tallesborges/zdx/commit/c6e7ef17d63fce8b8d0e6324d27e9ed3d2daa645))
+* **subagent:** avoid argv limits for large prompts ([e2bedde](https://github.com/tallesborges/zdx/commit/e2beddef6fe3dad1ceabbe64ddd77f7f4feb7b54))
+* **surfaces:** split output rules by interface ([158126b](https://github.com/tallesborges/zdx/commit/158126b4013dffe8382354823f06a79c49ad81f7))
+* **turns:** unify terminal turn events ([64c9763](https://github.com/tallesborges/zdx/commit/64c97632458b9641bb826e34cc57d42a240ae5be))
+* **zdx-core:** align file tool params with claude naming ([b109538](https://github.com/tallesborges/zdx/commit/b109538d13134d11ca2f52b158b75f63f19ea82c))
+
 ## [0.3.0](https://github.com/tallesborges/zdx/compare/v0.2.0...v0.3.0) (2026-02-22)
 
 
