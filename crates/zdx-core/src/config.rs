@@ -1530,6 +1530,7 @@ fn default_zai_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "glm-5.1".to_string(),
             "glm-5-turbo".to_string(),
             "glm-5".to_string(),
             "glm-4.7".to_string(),
