@@ -1740,10 +1740,12 @@ mod tests {
 
 #[cfg(test)]
 mod type_filter_tests {
-    use super::*;
-    use serde_json::json;
     use std::fs;
+
+    use serde_json::json;
     use tempfile::TempDir;
+
+    use super::*;
 
     fn make_ctx(dir: &TempDir) -> ToolContext {
         ToolContext::new(dir.path().to_path_buf(), None)

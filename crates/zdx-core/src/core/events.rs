@@ -73,6 +73,26 @@ pub enum AgentEvent {
         details: Option<String>,
     },
 
+    /// A transient provider failure was hit and the agent is backing off
+    /// before retrying the request. Non-fatal: the turn continues if the
+    /// retry eventually succeeds. Emitted once per attempt, immediately
+    /// before the sleep.
+    ProviderRetry {
+        /// Provider error category carried from the failed attempt.
+        kind: ErrorKind,
+        /// One-line human-readable summary of the provider error.
+        message: String,
+        /// Optional raw error body/details from the provider.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<String>,
+        /// 1-indexed retry attempt about to be performed.
+        attempt: u32,
+        /// Total number of retry attempts that will be performed.
+        max_retries: u32,
+        /// Backoff delay before this attempt (milliseconds).
+        delay_ms: u64,
+    },
+
     /// Turn reached a terminal state with the latest text and message snapshot.
     TurnFinished {
         /// Terminal status for the turn.
@@ -449,5 +469,67 @@ mod tests {
         let parsed: ToolOutput = serde_json::from_str(&json_str).unwrap();
 
         assert!(matches!(parsed, ToolOutput::Failure { .. }));
+    }
+
+    #[test]
+    fn test_provider_retry_event_roundtrip() {
+        // Locks in the wire contract used by `zdx exec` JSON streaming and
+        // any future subagent JSON consumer.
+        let event = AgentEvent::ProviderRetry {
+            kind: ErrorKind::HttpStatus,
+            message: "HTTP 429: rate limited".to_string(),
+            details: Some("retry-after: 2".to_string()),
+            attempt: 2,
+            max_retries: 3,
+            delay_ms: 4000,
+        };
+
+        let json_str = serde_json::to_string(&event).unwrap();
+        assert!(
+            json_str.contains(r#""type":"provider_retry""#),
+            "expected snake_case tag, got: {json_str}"
+        );
+        assert!(json_str.contains(r#""attempt":2"#));
+        assert!(json_str.contains(r#""max_retries":3"#));
+        assert!(json_str.contains(r#""delay_ms":4000"#));
+        assert!(json_str.contains(r#""kind":"http_status""#));
+
+        let parsed: AgentEvent = serde_json::from_str(&json_str).unwrap();
+        match parsed {
+            AgentEvent::ProviderRetry {
+                kind,
+                message,
+                details,
+                attempt,
+                max_retries,
+                delay_ms,
+            } => {
+                assert_eq!(kind, ErrorKind::HttpStatus);
+                assert_eq!(message, "HTTP 429: rate limited");
+                assert_eq!(details, Some("retry-after: 2".to_string()));
+                assert_eq!(attempt, 2);
+                assert_eq!(max_retries, 3);
+                assert_eq!(delay_ms, 4000);
+            }
+            other => panic!("expected ProviderRetry, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_provider_retry_event_omits_none_details() {
+        let event = AgentEvent::ProviderRetry {
+            kind: ErrorKind::Timeout,
+            message: "connection timed out".to_string(),
+            details: None,
+            attempt: 1,
+            max_retries: 3,
+            delay_ms: 2000,
+        };
+
+        let json_str = serde_json::to_string(&event).unwrap();
+        assert!(
+            !json_str.contains(r#""details""#),
+            "details: None should be skipped, got: {json_str}"
+        );
     }
 }

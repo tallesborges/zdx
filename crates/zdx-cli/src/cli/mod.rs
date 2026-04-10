@@ -562,6 +562,23 @@ enum WorktreeCommands {
     },
 }
 
+/// Returns true when the command will enter an alternate-screen TUI,
+/// so tracing stderr output must be suppressed to avoid painting over
+/// the rendered UI. Keep this in sync with dispatch paths that call into
+/// the runtime terminal setup in `zdx-tui`.
+fn cli_enters_alt_screen(cli: &Cli) -> bool {
+    match &cli.command {
+        // `zdx` with no subcommand → interactive chat TUI
+        None => true,
+        Some(Commands::Monitor) => true,
+        // `zdx threads resume [ID]` → interactive chat TUI with history
+        Some(Commands::Threads {
+            command: ThreadCommands::Resume { .. },
+        }) => true,
+        _ => false,
+    }
+}
+
 pub fn run() -> Result<()> {
     let cli = Cli::parse();
 
@@ -574,9 +591,12 @@ pub fn run() -> Result<()> {
 
     interrupt::init();
 
-    // Initialize tracing (file + stderr logging)
+    // Initialize tracing. Disable the stderr layer when we're about to take
+    // over the terminal with an alternate-screen TUI (chat, monitor, or
+    // `threads resume`), so warn-level logs don't bleed onto the rendered UI.
+    let is_tui = cli_enters_alt_screen(&cli);
     let _tracing_guards =
-        zdx_core::tracing_init::init(&zdx_core::tracing_init::TracingOptions::default());
+        zdx_core::tracing_init::init(&zdx_core::tracing_init::TracingOptions { stderr: !is_tui });
 
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;

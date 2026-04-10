@@ -740,52 +740,51 @@ async fn run_turn_inner(
         let stream =
             match request_stream(&setup.client, &messages, &setup.tools, system_prompt).await {
                 Ok(stream) => stream,
-                Err(TurnError::Provider(ref err)) if err.is_retryable() => {
-                    let mut last_err_msg = err.message.clone();
-                    let mut found_stream = None;
-                    for attempt in 1..=MAX_RETRIES {
+                Err(TurnError::Provider(ref initial_err)) if initial_err.is_retryable() => {
+                    // Track the most recent provider error across attempts so
+                    // each emitted ProviderRetry event reflects the *current*
+                    // failure kind/message/details, not the one from attempt 0.
+                    let mut current_err: ProviderError = initial_err.clone();
+                    let mut attempt: u32 = 0;
+                    loop {
+                        attempt += 1;
                         let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
                         tracing::warn!(
                             attempt,
                             max = MAX_RETRIES,
                             delay_ms = delay,
-                            error = %last_err_msg,
+                            error = %current_err.message,
                             "Transient provider error, retrying"
                         );
+                        // Surface the retry in the transcript so TUI/bot users
+                        // can see that we're backing off instead of staring at
+                        // a frozen spinner. Non-fatal: the turn continues.
+                        sender
+                            .send_important(AgentEvent::ProviderRetry {
+                                kind: ErrorKind::from(current_err.kind.clone()),
+                                message: current_err.message.clone(),
+                                details: current_err.details.clone(),
+                                attempt,
+                                max_retries: MAX_RETRIES,
+                                delay_ms: delay,
+                            })
+                            .await;
                         tokio::time::sleep(Duration::from_millis(delay)).await;
                         ensure_not_interrupted(None).map_err(|e| (e, messages.clone()))?;
                         match request_stream(&setup.client, &messages, &setup.tools, system_prompt)
                             .await
                         {
-                            Ok(s) => {
-                                found_stream = Some(s);
-                                break;
-                            }
+                            Ok(s) => break s,
                             Err(retry_err) => {
                                 if let TurnError::Provider(ref perr) = retry_err
                                     && perr.is_retryable()
                                     && attempt < MAX_RETRIES
                                 {
-                                    last_err_msg.clone_from(&perr.message);
+                                    current_err = perr.clone();
                                     continue;
                                 }
                                 return Err((retry_err, messages.clone()));
                             }
-                        }
-                    }
-                    match found_stream {
-                        Some(s) => s,
-                        None => {
-                            // All retries exhausted with retryable errors
-                            return Err((
-                                TurnError::Provider(ProviderError::api_error(
-                                    "overloaded_error",
-                                    &format!(
-                                        "Request failed after {MAX_RETRIES} retries: {last_err_msg}"
-                                    ),
-                                )),
-                                messages.clone(),
-                            ));
                         }
                     }
                 }
