@@ -348,6 +348,36 @@ pub struct ProviderError {
     pub details: Option<String>,
 }
 
+/// Substrings used by `ProviderError::is_retryable` to classify transient failures.
+const RETRYABLE_PATTERNS: &[&str] = &[
+    "overloaded",
+    "provider returned error",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "429",
+    "500",
+    "502",
+    "503",
+    "504",
+    "service unavailable",
+    "server error",
+    "internal error",
+    "network error",
+    "connection error",
+    "connection refused",
+    "other side closed",
+    "fetch failed",
+    "upstream connect",
+    "reset before headers",
+    "socket hang up",
+    "ended without",
+    "timed out",
+    "timeout",
+    "terminated",
+    "retry delay",
+];
+
 impl ProviderError {
     /// Creates a new provider error.
     pub fn new(kind: ProviderErrorKind, message: impl Into<String>) -> Self {
@@ -397,6 +427,24 @@ impl ProviderError {
             message: format!("{error_type}: {message}"),
             details: None,
         }
+    }
+
+    /// Returns true if this error is transient and safe to retry automatically.
+    ///
+    /// Matches a broad set of transient failures on the error message/details
+    /// text, mirroring pi-mono's retry heuristic: overload/rate-limit, HTTP
+    /// 429/5xx, network/connection failures, and generic timeouts. Parse
+    /// errors are never retried.
+    pub fn is_retryable(&self) -> bool {
+        if matches!(self.kind, ProviderErrorKind::Parse) {
+            return false;
+        }
+        let haystack = format!(
+            "{} {}",
+            self.message.to_lowercase(),
+            self.details.as_deref().unwrap_or("").to_lowercase()
+        );
+        RETRYABLE_PATTERNS.iter().any(|p| haystack.contains(p))
     }
 }
 
@@ -534,5 +582,47 @@ mod tests {
             merge_system_prompt(Some("  hello world  ")),
             Some("hello world".to_string())
         );
+    }
+
+    // === is_retryable tests ===
+
+    #[test]
+    fn test_retryable_overloaded() {
+        let err = ProviderError::api_error("overloaded_error", "API is temporarily overloaded");
+        assert!(err.is_retryable());
+    }
+
+    #[test]
+    fn test_retryable_rate_limit() {
+        assert!(ProviderError::api_error("rate_limit_error", "Rate limit").is_retryable());
+        assert!(ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 429").is_retryable());
+    }
+
+    #[test]
+    fn test_retryable_http_5xx() {
+        for code in ["HTTP 500", "HTTP 502", "HTTP 503", "HTTP 504"] {
+            let err = ProviderError::new(ProviderErrorKind::HttpStatus, code);
+            assert!(err.is_retryable(), "expected retryable: {code}");
+        }
+    }
+
+    #[test]
+    fn test_retryable_timeout_and_network() {
+        assert!(ProviderError::timeout("Connection timed out").is_retryable());
+        assert!(
+            ProviderError::new(
+                ProviderErrorKind::HttpStatus,
+                "fetch failed: socket hang up"
+            )
+            .is_retryable()
+        );
+    }
+
+    #[test]
+    fn test_not_retryable() {
+        assert!(!ProviderError::new(ProviderErrorKind::Parse, "Invalid JSON").is_retryable());
+        assert!(!ProviderError::api_error("invalid_request", "Bad model").is_retryable());
+        assert!(!ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 400").is_retryable());
+        assert!(!ProviderError::new(ProviderErrorKind::HttpStatus, "HTTP 401").is_retryable());
     }
 }
