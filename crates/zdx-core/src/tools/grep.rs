@@ -185,7 +185,6 @@ fn sanitize_pattern(pattern: &str) -> String {
     pattern.replace("${", r"\$\{")
 }
 
-
 /// Build a pre-validated `ignore::types::Types` filter from a user-supplied type name.
 ///
 /// Returns `Ok(Some(types))` on success, `Ok(None)` when no type is specified,
@@ -201,17 +200,15 @@ fn build_type_filter(file_type: Option<&str>) -> Result<Option<ignore::types::Ty
     let mut tb = ignore::types::TypesBuilder::new();
     tb.add_defaults();
     tb.select(ft);
-    tb.build()
-        .map(Some)
-        .map_err(|_| {
-            ToolOutput::failure(
-                "invalid_input",
-                format!(
-                    "Unknown file type '{ft}'. Use a ripgrep type name (e.g. rust, ts, py, go, json)."
-                ),
-                None,
-            )
-        })
+    tb.build().map(Some).map_err(|_| {
+        ToolOutput::failure(
+            "invalid_input",
+            format!(
+                "Unknown file type '{ft}'. Use a ripgrep type name (e.g. rust, ts, py, go, json)."
+            ),
+            None,
+        )
+    })
 }
 
 /// Resolve the search path from user input + context root.
@@ -427,7 +424,8 @@ fn execute_extract_unique(
     let has_captures = re.captures_len() > 1;
     let mut unique_values = BTreeSet::new();
 
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, file_type_filter);
+    let (files, skipped_large_files) =
+        walk_files(search_path, root, glob_matcher, file_type_filter);
 
     for path in &files {
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -729,7 +727,8 @@ fn collect_matches(
 ) -> (Vec<Vec<Match>>, usize) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, file_type_filter);
+    let (files, skipped_large_files) =
+        walk_files(search_path, root, glob_matcher, file_type_filter);
 
     for path in files {
         let mut file_matches = Vec::new();
@@ -1741,10 +1740,10 @@ mod tests {
 
 #[cfg(test)]
 mod type_filter_tests {
+    use super::*;
+    use serde_json::json;
     use std::fs;
     use tempfile::TempDir;
-    use serde_json::json;
-    use super::*;
 
     fn make_ctx(dir: &TempDir) -> ToolContext {
         ToolContext::new(dir.path().to_path_buf(), None)
@@ -1763,9 +1762,15 @@ mod type_filter_tests {
         assert!(result.is_ok());
         let data = result.data().unwrap();
         let files: Vec<&str> = data["matches"]
-            .as_array().unwrap()
-            .iter().map(|m| m["file"].as_str().unwrap()).collect();
-        assert!(files.iter().all(|f| f.ends_with(".rs")), "expected only .rs, got: {files:?}");
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["file"].as_str().unwrap())
+            .collect();
+        assert!(
+            files.iter().all(|f| f.ends_with(".rs")),
+            "expected only .rs, got: {files:?}"
+        );
         assert_eq!(data["total_matches"], 1);
     }
 
@@ -1780,8 +1785,14 @@ mod type_filter_tests {
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
-        assert!(json_str.contains(r#""code":"invalid_input""#), "got: {json_str}");
-        assert!(json_str.contains("not_a_real_type_xyz"), "error should name the bad type");
+        assert!(
+            json_str.contains(r#""code":"invalid_input""#),
+            "got: {json_str}"
+        );
+        assert!(
+            json_str.contains("not_a_real_type_xyz"),
+            "error should name the bad type"
+        );
     }
 
     #[test]
@@ -1815,7 +1826,10 @@ mod type_filter_tests {
         });
 
         let result = execute(&input, &ctx);
-        assert!(result.is_ok(), "explicit file path should bypass type filter");
+        assert!(
+            result.is_ok(),
+            "explicit file path should bypass type filter"
+        );
         let data = result.data().unwrap();
         assert_eq!(data["total_matches"], 1);
     }
