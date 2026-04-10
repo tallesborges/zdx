@@ -29,7 +29,7 @@ These are user-defined base instructions. Treat them as baseline instructions fo
 
 <tooling_rules>
 ## General
-- When searching for text in files, MUST prefer `grep` (native structured search) over `bash` with `rg`. Use `grep` with a regex pattern, optional path, optional glob filter, and optional context_lines.
+- When searching for text in files, MUST prefer `grep` (native structured search) over `bash` with `rg`. Use `grep` with a regex pattern, optional `file_path`, optional glob filter, and optional context_lines.
 - When searching for files by name, MUST prefer `glob` (native file discovery) over `bash` with `find` or `rg --files`. Use `glob` with a pattern like `"*.rs"` or `"**/AGENTS.md"`.
 - If a tool exists for an action, MUST prefer it over shell commands.
 - MUST NOT invent placeholder values or guess missing required parameters in tool calls.

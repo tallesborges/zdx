@@ -38,7 +38,7 @@ There is no dedicated memory tool. Use the normal file tools with these paths.
 ### Read the memory index
 
 ```text
-read path:"$ZDX_MEMORY_ROOT/Notes/MEMORY.md"
+read file_path:"$ZDX_MEMORY_ROOT/Notes/MEMORY.md"
 ```
 
 ### Search memory
@@ -46,8 +46,8 @@ read path:"$ZDX_MEMORY_ROOT/Notes/MEMORY.md"
 Run note and calendar searches in parallel unless the user clearly scoped one path.
 
 ```text
-grep path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"alice|cpf" case_insensitive:true
-grep path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"alice|cpf" case_insensitive:true
+grep file_path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"alice|cpf" case_insensitive:true
+grep file_path:"$ZDX_MEMORY_ROOT/Calendar" glob:"*.md" pattern:"alice|cpf" case_insensitive:true
 ```
 
 Tips:
