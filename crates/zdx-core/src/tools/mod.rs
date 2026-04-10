@@ -241,18 +241,24 @@ pub struct ResolvedPath {
     pub resolved_path: PathBuf,
 }
 
-/// Insert `path` and optional `resolved_path` fields into a JSON object.
-pub fn insert_path_fields(
+/// Insert `file_path` and optional `resolved_file_path` fields into a JSON object.
+pub fn insert_file_path_fields(
     object: &mut Map<String, Value>,
-    path: &str,
-    resolved_path: Option<&Path>,
+    file_path: &str,
+    resolved_file_path: Option<&Path>,
 ) {
-    object.insert("path".to_string(), Value::String(path.to_string()));
+    object.insert(
+        "file_path".to_string(),
+        Value::String(file_path.to_string()),
+    );
 
-    if let Some(resolved_path) = resolved_path {
-        let resolved_display = resolved_path.display().to_string();
-        if resolved_display != path {
-            object.insert("resolved_path".to_string(), Value::String(resolved_display));
+    if let Some(resolved_file_path) = resolved_file_path {
+        let resolved_display = resolved_file_path.display().to_string();
+        if resolved_display != file_path {
+            object.insert(
+                "resolved_file_path".to_string(),
+                Value::String(resolved_display),
+            );
         }
     }
 }

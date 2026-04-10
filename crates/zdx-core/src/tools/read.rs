@@ -48,7 +48,7 @@ where
     }
 }
 
-use super::{ToolContext, ToolDefinition, insert_path_fields, resolve_existing_path};
+use super::{ToolContext, ToolDefinition, insert_file_path_fields, resolve_existing_path};
 use crate::core::events::{ImageContent, ToolOutput};
 
 /// Maximum number of lines to return (truncation threshold).
@@ -195,7 +195,7 @@ fn read_image(display_path: &str, path: &Path, mime_type: &str) -> ToolOutput {
     ToolOutput::success_with_image(
         {
             let mut data = serde_json::Map::new();
-            insert_path_fields(&mut data, display_path, Some(path));
+            insert_file_path_fields(&mut data, display_path, Some(path));
             data.insert("type".to_string(), Value::String("image".to_string()));
             data.insert(
                 "mime_type".to_string(),
@@ -288,7 +288,7 @@ fn read_text_from_reader<R: BufRead>(
     let content = collected_lines.concat();
 
     let mut data = serde_json::Map::new();
-    insert_path_fields(&mut data, display_path, resolved_path);
+    insert_file_path_fields(&mut data, display_path, resolved_path);
     data.insert("content".to_string(), Value::String(content));
     data.insert("offset".to_string(), Value::from(offset));
     data.insert("lines_shown".to_string(), Value::from(lines_shown));
@@ -492,9 +492,12 @@ mod tests {
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
-        assert_eq!(data["path"], "${ZDX_HOME}/bundled-skills/memory/SKILL.md");
         assert_eq!(
-            data["resolved_path"],
+            data["file_path"],
+            "${ZDX_HOME}/bundled-skills/memory/SKILL.md"
+        );
+        assert_eq!(
+            data["resolved_file_path"],
             bundled_root
                 .join("memory")
                 .join("SKILL.md")
@@ -1014,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn test_read_preserves_requested_path_and_reports_resolved_path() {
+    fn test_read_preserves_requested_path_and_reports_resolved_file_path() {
         let temp = TempDir::new().unwrap();
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
         let file_path = temp.path().join("note.md");
@@ -1027,9 +1030,9 @@ mod tests {
         assert!(result.is_ok());
 
         let data = result.data().expect("should have data");
-        assert_eq!(data["path"], "subdir/../note.md");
+        assert_eq!(data["file_path"], "subdir/../note.md");
         assert_eq!(
-            data["resolved_path"],
+            data["resolved_file_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
     }
