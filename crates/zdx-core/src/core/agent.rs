@@ -380,7 +380,7 @@ impl ToolUseBuilder {
 fn extract_partial_tool_input(name: &str, input_json: &str) -> Option<String> {
     let field = match name {
         "write" => "content",
-        "edit" => "new",
+        "edit" => "new_string",
         _ => return None,
     };
 
@@ -596,6 +596,35 @@ async fn emit_turn_error_async(err: &TurnError, sender: &EventSender) {
     }
 }
 
+/// Emits a `TurnError` with optional committed messages for context preservation.
+/// Used by `run_turn` to include messages in Failed turns so that manual "continue"
+/// can resume from the correct state.
+async fn emit_turn_error_with_messages_async(
+    err: &TurnError,
+    messages: &[ChatMessage],
+    sender: &EventSender,
+) {
+    match err {
+        TurnError::Provider(provider_err) => {
+            sender
+                .send_important(AgentEvent::TurnFinished {
+                    status: TurnStatus::Failed {
+                        kind: provider_err.kind.clone().into(),
+                        message: provider_err.message.clone(),
+                        details: provider_err.details.clone(),
+                    },
+                    final_text: String::new(),
+                    messages: messages.to_vec(),
+                })
+                .await;
+        }
+        other => {
+            // For non-Provider errors, fall back to default behavior (no messages)
+            emit_turn_error_async(other, sender).await;
+        }
+    }
+}
+
 async fn emit_turn_diagnostics_async(diagnostics: &[TurnDiagnostic], sender: &EventSender) {
     for diagnostic in diagnostics {
         match diagnostic {
@@ -650,6 +679,10 @@ const STREAM_POLL_TIMEOUT: Duration = Duration::from_millis(250);
 const MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS: usize = 3;
 const MALFORMED_TOOL_LOOP_ABORT_MESSAGE: &str =
     "Aborting after repeated malformed tool calls with invalid JSON input";
+/// Maximum number of automatic retries for transient provider errors.
+const MAX_RETRIES: u32 = 3;
+/// Base delay for exponential backoff (milliseconds).
+const RETRY_BASE_DELAY_MS: u64 = 2000;
 
 /// Runs a single turn of the agent using async channels.
 ///
@@ -672,12 +705,19 @@ pub async fn run_turn(
     let sender = EventSender::new(tx);
     match run_turn_inner(messages, config, options, system_prompt, thread_id, &sender).await {
         Ok(result) => Ok(result),
-        Err(err) => {
-            emit_turn_error_async(&err, &sender).await;
+        Err((err, committed_messages)) => {
+            if committed_messages.is_empty() {
+                emit_turn_error_async(&err, &sender).await;
+            } else {
+                emit_turn_error_with_messages_async(&err, &committed_messages, &sender).await;
+            }
             Err(err.into_anyhow())
         }
     }
 }
+
+/// Result type for `run_turn_inner`: on error, includes committed messages for context preservation.
+type RunTurnResult = std::result::Result<(String, Vec<ChatMessage>), (TurnError, Vec<ChatMessage>)>;
 
 async fn run_turn_inner(
     messages: Vec<ChatMessage>,
@@ -686,29 +726,92 @@ async fn run_turn_inner(
     system_prompt: Option<&str>,
     thread_id: Option<&str>,
     sender: &EventSender,
-) -> TurnResult<(String, Vec<ChatMessage>)> {
-    let setup = build_run_turn_setup(config, options, thread_id).map_err(TurnError::from_anyhow)?;
+) -> RunTurnResult {
+    let setup = build_run_turn_setup(config, options, thread_id)
+        .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
     let mut messages = messages;
     let mut consecutive_malformed_tool_turns = 0usize;
 
     loop {
-        ensure_not_interrupted(None)?;
-        let stream = request_stream(&setup.client, &messages, &setup.tools, system_prompt).await?;
-        let mut stream_state = consume_stream(stream, &messages, sender).await?;
+        ensure_not_interrupted(None).map_err(|e| (e, messages.clone()))?;
+
+        // Retry loop for pre-stream transient errors (connection, overloaded before SSE starts).
+        // Mid-stream errors (from consume_stream) are NOT retried to avoid UI rewind complexity.
+        let stream =
+            match request_stream(&setup.client, &messages, &setup.tools, system_prompt).await {
+                Ok(stream) => stream,
+                Err(TurnError::Provider(ref err)) if err.is_retryable() => {
+                    let mut last_err_msg = err.message.clone();
+                    let mut found_stream = None;
+                    for attempt in 1..=MAX_RETRIES {
+                        let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_RETRIES,
+                            delay_ms = delay,
+                            error = %last_err_msg,
+                            "Transient provider error, retrying"
+                        );
+                        tokio::time::sleep(Duration::from_millis(delay)).await;
+                        ensure_not_interrupted(None).map_err(|e| (e, messages.clone()))?;
+                        match request_stream(&setup.client, &messages, &setup.tools, system_prompt)
+                            .await
+                        {
+                            Ok(s) => {
+                                found_stream = Some(s);
+                                break;
+                            }
+                            Err(retry_err) => {
+                                if let TurnError::Provider(ref perr) = retry_err
+                                    && perr.is_retryable()
+                                    && attempt < MAX_RETRIES
+                                {
+                                    last_err_msg.clone_from(&perr.message);
+                                    continue;
+                                }
+                                return Err((retry_err, messages.clone()));
+                            }
+                        }
+                    }
+                    match found_stream {
+                        Some(s) => s,
+                        None => {
+                            // All retries exhausted with retryable errors
+                            return Err((
+                                TurnError::Provider(ProviderError::api_error(
+                                    "overloaded_error",
+                                    &format!(
+                                        "Request failed after {MAX_RETRIES} retries: {last_err_msg}"
+                                    ),
+                                )),
+                                messages.clone(),
+                            ));
+                        }
+                    }
+                }
+                Err(err) => return Err((err, messages.clone())),
+            };
+        let mut stream_state = consume_stream(stream, &messages, sender)
+            .await
+            .map_err(|e| (e, messages.clone()))?;
 
         if stream_state.needs_tool_execution() {
-            let stats =
-                process_tool_turn(&mut messages, &mut stream_state.turn, &setup, sender).await?;
+            let stats = process_tool_turn(&mut messages, &mut stream_state.turn, &setup, sender)
+                .await
+                .map_err(|e| (e, messages.clone()))?;
             if stats.executable == 0 && stats.malformed > 0 {
                 consecutive_malformed_tool_turns += 1;
                 if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
-                    return Err(TurnError::Parse {
-                        message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
-                        details: Some(
-                            "Provider repeatedly requested tool calls without valid arguments"
-                                .to_string(),
-                        ),
-                    });
+                    return Err((
+                        TurnError::Parse {
+                            message: MALFORMED_TOOL_LOOP_ABORT_MESSAGE.to_string(),
+                            details: Some(
+                                "Provider repeatedly requested tool calls without valid arguments"
+                                    .to_string(),
+                            ),
+                        },
+                        messages.clone(),
+                    ));
                 }
             } else {
                 consecutive_malformed_tool_turns = 0;
@@ -716,7 +819,9 @@ async fn run_turn_inner(
             continue;
         }
 
-        return finalize_non_tool_turn(&mut messages, stream_state.turn, sender).await;
+        return finalize_non_tool_turn(&mut messages, stream_state.turn, sender)
+            .await
+            .map_err(|e| (e, messages.clone()));
     }
 }
 
@@ -788,6 +893,7 @@ struct ProviderBuildOptions<'a> {
     model_output_limit: Option<u32>,
 }
 
+#[allow(clippy::too_many_lines)]
 fn build_provider_client(
     config: &Config,
     options: ProviderBuildOptions<'_>,
@@ -1980,7 +2086,7 @@ mod tests {
         let tool_uses = vec![ToolUse {
             id: "tool1".to_string(),
             name: "read".to_string(),
-            input: serde_json::json!({"path": "test.txt"}),
+            input: serde_json::json!({"file_path": "test.txt"}),
         }];
 
         let (tx, mut rx) = create_event_channel();
@@ -2231,7 +2337,7 @@ mod tests {
                 index: 1,
                 id: "tool_1".to_string(),
                 name: "read".to_string(),
-                input_json: r#"{"path":"src/main.rs"}"#.to_string(),
+                input_json: r#"{"file_path":"src/main.rs"}"#.to_string(),
                 input_preview_len: 0,
             }],
         };
@@ -2265,7 +2371,7 @@ mod tests {
                     ChatContentBlock::ToolUse { id, name, input }
                         if id == "tool_1"
                             && name == "read"
-                            && input == &serde_json::json!({"path": "src/main.rs"})
+                            && input == &serde_json::json!({"file_path": "src/main.rs"})
                 ))
         ));
 

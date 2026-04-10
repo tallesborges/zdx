@@ -124,6 +124,13 @@ pub fn handle_agent_event(
                     vec![]
                 }
                 TurnStatus::Failed { message, .. } => {
+                    // Preserve committed messages so manual 'continue' resumes from the
+                    // correct state (with tool results from the failed attempt intact).
+                    if !messages.is_empty() {
+                        mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
+                            messages.clone(),
+                        )));
+                    }
                     transcript.mark_errored();
                     transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
                     *agent_state = AgentState::Idle;
