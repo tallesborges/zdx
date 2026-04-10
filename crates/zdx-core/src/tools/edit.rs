@@ -14,19 +14,19 @@ use crate::core::events::ToolOutput;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Edit".to_string(),
-        description: "Edit an existing file by performing an exact string replacement. The 'old' text must match exactly (including whitespace and newlines).".to_string(),
+        description: "Edit an existing file by performing an exact string replacement. The 'old_string' text must match exactly (including whitespace and newlines).".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Path to the file to edit. Relative paths resolve from the current working directory; if the path came from a sourced instruction file, resolve it from that file's directory first, then pass the converted path. Supports $VAR/${VAR} env vars."
                 },
-                "old": {
+                "old_string": {
                     "type": "string",
                     "description": "Exact text to find and replace (must match exactly)"
                 },
-                "new": {
+                "new_string": {
                     "type": "string",
                     "description": "New text to replace the old text with"
                 },
@@ -36,17 +36,18 @@ pub fn definition() -> ToolDefinition {
                     "default": 1
                 }
             },
-            "required": ["path", "old", "new"],
+            "required": ["file_path", "old_string", "new_string"],
             "additionalProperties": false
         }),
     }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EditInput {
-    path: String,
-    old: String,
-    new: String,
+    file_path: String,
+    old_string: String,
+    new_string: String,
     #[serde(default = "default_expected_replacements")]
     expected_replacements: i64,
 }
@@ -69,8 +70,8 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // Validate input
-    if input.old.is_empty() {
-        return ToolOutput::failure("invalid_input", "'old' text cannot be empty", None);
+    if input.old_string.is_empty() {
+        return ToolOutput::failure("invalid_input", "'old_string' text cannot be empty", None);
     }
 
     if input.expected_replacements < 1 {
@@ -90,7 +91,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // Resolve path
-    let resolved = match resolve_existing_path(&input.path, &ctx.root) {
+    let resolved = match resolve_existing_path(&input.file_path, &ctx.root) {
         Ok(p) => p,
         Err(e) => return e,
     };
@@ -109,7 +110,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     };
 
     // Count non-overlapping occurrences
-    let count = content.matches(&input.old).count();
+    let count = content.matches(&input.old_string).count();
 
     if count == 0 {
         return ToolOutput::failure(
@@ -118,7 +119,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
                 "No occurrences of the specified text found in '{}'",
                 file_path.display()
             ),
-            Some(format!("Searched for: {}", input.old)),
+            Some(format!("Searched for: {}", input.old_string)),
         );
     }
 
@@ -131,7 +132,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     }
 
     // Perform the replacement
-    let new_content = content.replace(&input.old, &input.new);
+    let new_content = content.replace(&input.old_string, &input.new_string);
 
     // Write back
     match fs::write(file_path, &new_content) {
@@ -162,7 +163,7 @@ mod tests {
         fs::write(&file_path, "Hello world!").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt", "old": "world", "new": "Rust"});
+        let input = json!({"file_path": "test.txt", "old_string": "world", "new_string": "Rust"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -182,7 +183,7 @@ mod tests {
         fs::write(&file_path, "Hello world!").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt", "old": "nonexistent", "new": "replacement"});
+        let input = json!({"file_path": "test.txt", "old_string": "nonexistent", "new_string": "replacement"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -203,7 +204,7 @@ mod tests {
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Default expected_replacements is 1, but there are 3 occurrences
-        let input = json!({"path": "test.txt", "old": "foo", "new": "qux"});
+        let input = json!({"file_path": "test.txt", "old_string": "foo", "new_string": "qux"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -223,8 +224,7 @@ mod tests {
         fs::write(&file_path, "foo bar foo baz foo").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input =
-            json!({"path": "test.txt", "old": "foo", "new": "qux", "expected_replacements": 3});
+        let input = json!({"file_path": "test.txt", "old_string": "foo", "new_string": "qux", "expected_replacements": 3});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -244,7 +244,7 @@ mod tests {
         fs::write(&file_path, "Hello world!").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt", "old": "", "new": "replacement"});
+        let input = json!({"file_path": "test.txt", "old_string": "", "new_string": "replacement"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -259,8 +259,7 @@ mod tests {
         fs::write(&file_path, "Hello world!").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input =
-            json!({"path": "test.txt", "old": "world", "new": "Rust", "expected_replacements": 0});
+        let input = json!({"file_path": "test.txt", "old_string": "world", "new_string": "Rust", "expected_replacements": 0});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -272,7 +271,8 @@ mod tests {
     fn test_edit_file_not_found() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "nonexistent.txt", "old": "foo", "new": "bar"});
+        let input =
+            json!({"file_path": "nonexistent.txt", "old_string": "foo", "new_string": "bar"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -287,7 +287,7 @@ mod tests {
         fs::write(&file_path, "line1\r\nline2\r\nline3").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt", "old": "line2\r\n", "new": "replaced\r\n"});
+        let input = json!({"file_path": "test.txt", "old_string": "line2\r\n", "new_string": "replaced\r\n"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -305,7 +305,8 @@ mod tests {
         fs::write(&file_path, "Hello world!").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "subdir/../test.txt", "old": "world", "new": "Rust"});
+        let input =
+            json!({"file_path": "subdir/../test.txt", "old_string": "world", "new_string": "Rust"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -316,5 +317,25 @@ mod tests {
             data["resolved_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
+    }
+
+    #[test]
+    fn test_edit_rejects_legacy_parameter_names() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "Hello world!").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // Old param names (path/old/new) must be rejected now that we use file_path/old_string/new_string
+        let input = json!({"path": "test.txt", "old": "world", "new": "Rust"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
+
+        // File must be untouched
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "Hello world!");
     }
 }

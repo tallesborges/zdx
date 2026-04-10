@@ -605,7 +605,7 @@ mod tests {
         let done = parser
             .map_event(json!({
                 "type": "response.function_call_arguments.done",
-                "arguments": "{\"path\":\"Cargo.toml\"}"
+                "arguments": "{\"file_path\":\"Cargo.toml\"}"
             }))
             .unwrap();
 
@@ -615,7 +615,7 @@ mod tests {
         ));
         assert!(matches!(
             parser.pending.pop_front(),
-            Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "{\"path\":\"Cargo.toml\"}"
+            Some(StreamEvent::InputJsonDelta { ref partial_json, .. }) if partial_json == "{\"file_path\":\"Cargo.toml\"}"
         ));
     }
 
@@ -638,7 +638,7 @@ mod tests {
         let _ = parser
             .map_event(json!({
                 "type": "response.function_call_arguments.done",
-                "arguments": "{\"path\":\"Cargo.toml\"}"
+                "arguments": "{\"file_path\":\"Cargo.toml\"}"
             }))
             .unwrap();
         let _ = parser.pending.pop_front();

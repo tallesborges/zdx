@@ -162,7 +162,7 @@ mod tests {
             ThreadEvent::ToolUse {
                 id: "tool-1".to_string(),
                 name: "read".to_string(),
-                input: json!({"path": "test.txt"}),
+                input: json!({"file_path": "test.txt"}),
                 ts: "2024-01-01T00:00:01Z".to_string(),
             },
             ThreadEvent::ToolResult {
@@ -255,7 +255,7 @@ mod tests {
             ThreadEvent::ToolUse {
                 id: "t1".to_string(),
                 name: "read".to_string(),
-                input: json!({"path": "file.txt"}),
+                input: json!({"file_path": "file.txt"}),
                 ts: "2024-01-01T00:00:03Z".to_string(),
             },
             ThreadEvent::ToolResult {

@@ -84,6 +84,10 @@ pub fn definition() -> ToolDefinition {
                 "extract_unique": {
                     "type": "boolean",
                     "description": "When true, extract only the matching text (capture group 1 if present, otherwise full match), deduplicate, and return sorted unique values. Useful for discovery queries like listing all unique tags."
+                },
+                "type": {
+                    "type": "string",
+                    "description": "Ripgrep file-type filter (e.g. \"rust\", \"ts\", \"py\"). Restricts search to files matching the named type's extensions. Returns invalid_input for unrecognized type names."
                 }
             },
             "required": ["pattern"],
@@ -93,6 +97,7 @@ pub fn definition() -> ToolDefinition {
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct GrepInput {
     pattern: String,
     path: Option<String>,
@@ -107,6 +112,8 @@ struct GrepInput {
     offset: Option<usize>,
     #[serde(default, deserialize_with = "super::bool_or_string::deserialize")]
     extract_unique: bool,
+    #[serde(rename = "type")]
+    file_type: Option<String>,
 }
 
 /// Deserialize `context_lines` from integer, string, or null, clamped to `0..=MAX_CONTEXT_LINES`.
@@ -176,6 +183,35 @@ struct GrepOutputStats {
 /// Bare `${` is invalid regex syntax; escape it to `\$\{`.
 fn sanitize_pattern(pattern: &str) -> String {
     pattern.replace("${", r"\$\{")
+}
+
+
+/// Build a pre-validated `ignore::types::Types` filter from a user-supplied type name.
+///
+/// Returns `Ok(Some(types))` on success, `Ok(None)` when no type is specified,
+/// and `Err(ToolOutput)` with `invalid_input` when the type name is unrecognized.
+fn build_type_filter(file_type: Option<&str>) -> Result<Option<ignore::types::Types>, ToolOutput> {
+    let Some(ft) = file_type else {
+        return Ok(None);
+    };
+    let ft = ft.trim();
+    if ft.is_empty() {
+        return Ok(None);
+    }
+    let mut tb = ignore::types::TypesBuilder::new();
+    tb.add_defaults();
+    tb.select(ft);
+    tb.build()
+        .map(Some)
+        .map_err(|_| {
+            ToolOutput::failure(
+                "invalid_input",
+                format!(
+                    "Unknown file type '{ft}'. Use a ripgrep type name (e.g. rust, ts, py, go, json)."
+                ),
+                None,
+            )
+        })
 }
 
 /// Resolve the search path from user input + context root.
@@ -291,6 +327,12 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         .unwrap_or(DEFAULT_MAX_COUNT)
         .clamp(1, MAX_MATCHES);
 
+    // Validate and build type filter before any walking.
+    let file_type_filter = match build_type_filter(input.file_type.as_deref()) {
+        Ok(f) => f,
+        Err(output) => return output,
+    };
+
     // Extract-unique mode: return sorted deduplicated capture values.
     if input.extract_unique {
         return execute_extract_unique(
@@ -299,6 +341,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
             &search_path,
             &ctx.root,
             glob_matcher.as_ref(),
+            file_type_filter,
             max_count,
         );
     }
@@ -311,6 +354,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         &ctx.root,
         glob_matcher.as_ref(),
         input.context_lines,
+        file_type_filter,
     );
 
     let (all_matches, truncated_by_cap) = round_robin_select(per_file, MAX_MATCHES);
@@ -363,6 +407,7 @@ fn execute_extract_unique(
     search_path: &Path,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
+    file_type_filter: Option<ignore::types::Types>,
     max_count: usize,
 ) -> ToolOutput {
     let re = match RegexBuilder::new(pattern)
@@ -382,7 +427,7 @@ fn execute_extract_unique(
     let has_captures = re.captures_len() > 1;
     let mut unique_values = BTreeSet::new();
 
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher);
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, file_type_filter);
 
     for path in &files {
         let Ok(content) = std::fs::read_to_string(path) else {
@@ -436,6 +481,7 @@ fn walk_files(
     search_path: &Path,
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
+    file_type_filter: Option<ignore::types::Types>,
 ) -> (Vec<PathBuf>, usize) {
     if search_path.is_file() {
         let skipped = search_path
@@ -452,7 +498,11 @@ fn walk_files(
 
     let mut files = Vec::new();
     let mut skipped_large_files = 0;
-    let walker = WalkBuilder::new(search_path).build();
+    let mut wb = WalkBuilder::new(search_path);
+    if let Some(t) = file_type_filter {
+        wb.types(t);
+    }
+    let walker = wb.build();
 
     for entry in walker {
         let Ok(entry) = entry else { continue };
@@ -675,10 +725,11 @@ fn collect_matches(
     root: &Path,
     glob_matcher: Option<&GlobMatcher>,
     context_lines: usize,
+    file_type_filter: Option<ignore::types::Types>,
 ) -> (Vec<Vec<Match>>, usize) {
     let mut per_file: Vec<Vec<Match>> = Vec::new();
     let mut total_collected: usize = 0;
-    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher);
+    let (files, skipped_large_files) = walk_files(search_path, root, glob_matcher, file_type_filter);
 
     for path in files {
         let mut file_matches = Vec::new();
@@ -1685,5 +1736,99 @@ mod tests {
         let value = data["values"][0].as_str().unwrap();
         assert_eq!(value.len(), MAX_SNIPPET_BYTES);
         assert!(data["warning"].as_str().unwrap().contains("500 bytes"));
+    }
+}
+
+#[cfg(test)]
+mod type_filter_tests {
+    use std::fs;
+    use tempfile::TempDir;
+    use serde_json::json;
+    use super::*;
+
+    fn make_ctx(dir: &TempDir) -> ToolContext {
+        ToolContext::new(dir.path().to_path_buf(), None)
+    }
+
+    #[test]
+    fn test_type_filter_rust_restricts_to_rs_files() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("code.rs"), "fn main() {}\n").unwrap();
+        fs::write(temp.path().join("notes.md"), "fn docs\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "fn", "type": "rust"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        let files: Vec<&str> = data["matches"]
+            .as_array().unwrap()
+            .iter().map(|m| m["file"].as_str().unwrap()).collect();
+        assert!(files.iter().all(|f| f.ends_with(".rs")), "expected only .rs, got: {files:?}");
+        assert_eq!(data["total_matches"], 1);
+    }
+
+    #[test]
+    fn test_type_filter_unknown_type_returns_invalid_input() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("code.rs"), "fn main() {}\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "fn", "type": "not_a_real_type_xyz"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#), "got: {json_str}");
+        assert!(json_str.contains("not_a_real_type_xyz"), "error should name the bad type");
+    }
+
+    #[test]
+    fn test_type_filter_absent_searches_all_files() {
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("code.rs"), "fn main() {}\n").unwrap();
+        fs::write(temp.path().join("notes.md"), "fn docs\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "fn"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 2);
+    }
+
+    #[test]
+    fn test_type_filter_bypassed_for_explicit_file_path() {
+        // When path points directly to a file, that file is always searched
+        // regardless of the type filter — explicit paths act as an override.
+        let temp = TempDir::new().unwrap();
+        fs::write(temp.path().join("script.py"), "fn fake_rust_fn() {}\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let file = temp.path().join("script.py");
+        let input = json!({
+            "pattern": "fn",
+            "path": file.to_str().unwrap(),
+            "type": "rust"
+        });
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok(), "explicit file path should bypass type filter");
+        let data = result.data().unwrap();
+        assert_eq!(data["total_matches"], 1);
+    }
+
+    #[test]
+    fn test_deny_unknown_fields_rejects_extra_keys() {
+        let temp = TempDir::new().unwrap();
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "fn", "unknown_extra_field": true});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 }

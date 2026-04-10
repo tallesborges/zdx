@@ -16,7 +16,7 @@
 //! Minimal format (sometimes model omits some tags):
 //! ```text
 //! <function=read>
-//! <parameter=path>README.md</parameter>
+//! <parameter=file_path>README.md</parameter>
 //! </tool_call>
 //! ```
 
@@ -282,7 +282,7 @@ ls -la
     fn test_parse_minimal_format() {
         // Format without <tool_call> wrapper and missing </function>
         let content = r"<function=read>
-<parameter=path>
+<parameter=file_path>
 README.md
 </parameter>
 </tool_call>";
@@ -290,7 +290,7 @@ README.md
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
-        assert_eq!(calls[0].arguments["path"], "README.md");
+        assert_eq!(calls[0].arguments["file_path"], "README.md");
         assert!(remaining.is_empty(), "remaining: {remaining}");
     }
 
@@ -298,25 +298,25 @@ README.md
     fn test_parse_minimal_format_no_tool_call_tag() {
         // Format with only function and parameter tags
         let content = r"<function=read>
-<parameter=path>README.md</parameter>
+<parameter=file_path>README.md</parameter>
 </function>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
-        assert_eq!(calls[0].arguments["path"], "README.md");
+        assert_eq!(calls[0].arguments["file_path"], "README.md");
         assert!(remaining.is_empty());
     }
 
     #[test]
     fn test_parse_inline_format() {
         // Compact inline format
-        let content = r"<function=read> <parameter=path> README.md </parameter> </tool_call>";
+        let content = r"<function=read> <parameter=file_path> README.md </parameter> </tool_call>";
 
         let (calls, remaining) = parse_tool_calls(content);
         assert_eq!(calls.len(), 1);
         assert_eq!(calls[0].name, "read");
-        assert_eq!(calls[0].arguments["path"], "README.md");
+        assert_eq!(calls[0].arguments["file_path"], "README.md");
         assert!(remaining.is_empty(), "remaining: '{remaining}'");
     }
 

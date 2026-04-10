@@ -1075,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_toggle_tool_args_for_line_ignores_non_header_lines() {
-        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
         let tool_id = tool.id();
         let mut transcript = TranscriptState::with_cells(vec![tool]);
 
@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn test_toggle_tool_output_for_line() {
         let mut tool =
-            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
         tool.set_tool_result(ToolOutput::success(serde_json::json!({
             "content": "line1\nline2"
         })));
@@ -1117,7 +1117,7 @@ mod tests {
 
     #[test]
     fn test_toggle_tool_output_for_line_ignores_non_header_lines() {
-        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"path": "a"}));
+        let tool = HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
         let tool_id = tool.id();
         let mut transcript = TranscriptState::with_cells(vec![tool]);
 

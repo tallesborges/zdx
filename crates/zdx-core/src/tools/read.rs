@@ -73,11 +73,11 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Read".to_string(),
-        description: "Read the contents of a file from disk. Prefer this over shell commands like cat, head, tail, less, or more for file reading. Always provide `path`. For large files or specific ranges, use `offset` (1-indexed) and `limit` to page through the file. Responses are capped to 2000 lines and ~40KB total, including protection against huge single lines (for example minified files or embedded base64). If the result is truncated, call Read again with a higher offset or use grep to locate relevant sections first. Returns structured metadata including `content`, `offset`, `lines_shown`, `total_lines`, `truncated`, `byte_limited`, and an optional `warning`. Also supports JPEG, PNG, GIF, and WebP images for visual analysis.".to_string(),
+        description: "Read the contents of a file from disk. Prefer this over shell commands like cat, head, tail, less, or more for file reading. Always provide `file_path`. For large files or specific ranges, use `offset` (1-indexed) and `limit` to page through the file. Responses are capped to 2000 lines and ~40KB total, including protection against huge single lines (for example minified files or embedded base64). If the result is truncated, call Read again with a higher offset or use grep to locate relevant sections first. Returns structured metadata including `content`, `offset`, `lines_shown`, `total_lines`, `truncated`, `byte_limited`, and an optional `warning`. Also supports JPEG, PNG, GIF, and WebP images for visual analysis.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Path to the file to read. Relative paths resolve from the current working directory; if the path came from a sourced instruction file, resolve it from that file's directory first, then pass the converted path. Supports $VAR/${VAR} env vars. Always provide this field."
                 },
@@ -90,15 +90,16 @@ pub fn definition() -> ToolDefinition {
                     "description": "Maximum number of lines to return (default: 2000). Use with `offset` when reading specific ranges or paging through a file."
                 }
             },
-            "required": ["path"],
+            "required": ["file_path"],
             "additionalProperties": false
         }),
     }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ReadInput {
-    path: String,
+    file_path: String,
     /// Line number to start reading from (1-indexed, default: 1)
     #[serde(default, deserialize_with = "deserialize_optional_usize")]
     offset: Option<usize>,
@@ -120,9 +121,9 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let path = input.path.trim();
+    let path = input.file_path.trim();
     if path.is_empty() {
-        return ToolOutput::failure("invalid_input", "path cannot be empty", None);
+        return ToolOutput::failure("invalid_input", "file_path cannot be empty", None);
     }
 
     let normalized_path = crate::images::path_mime::normalize_input_path(path);
@@ -406,7 +407,7 @@ mod tests {
         fs::write(&file_path, "hello world").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt"});
+        let input = json!({"file_path": "test.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -426,7 +427,7 @@ mod tests {
         fs::write(&file_path, "nested content").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "subdir/nested.txt"});
+        let input = json!({"file_path": "subdir/nested.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -441,7 +442,7 @@ mod tests {
         fs::write(&file_path, "escaped path content").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "my\\ file\\(1\\).txt"});
+        let input = json!({"file_path": "my\\ file\\(1\\).txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -453,7 +454,7 @@ mod tests {
     fn test_read_file_not_found() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "nonexistent.txt"});
+        let input = json!({"file_path": "nonexistent.txt"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -470,7 +471,7 @@ mod tests {
         fs::write(&outside_file, "external content").unwrap();
 
         let ctx = ToolContext::new(root.path().to_path_buf(), None);
-        let input = json!({ "path": outside_file.to_str().unwrap() });
+        let input = json!({ "file_path": outside_file.to_str().unwrap() });
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -486,7 +487,7 @@ mod tests {
         }
 
         let ctx = ToolContext::new(std::env::current_dir().unwrap(), None);
-        let input = json!({"path": "${ZDX_HOME}/bundled-skills/memory/SKILL.md"});
+        let input = json!({"file_path": "${ZDX_HOME}/bundled-skills/memory/SKILL.md"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -514,7 +515,7 @@ mod tests {
         fs::write(&file_path, &huge_line).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "huge_line.txt"});
+        let input = json!({"file_path": "huge_line.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -538,7 +539,7 @@ mod tests {
         fs::write(&file_path, &content).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "huge_first_line.txt"});
+        let input = json!({"file_path": "huge_first_line.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -565,7 +566,7 @@ mod tests {
         fs::write(&file_path, "").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "empty.txt"});
+        let input = json!({"file_path": "empty.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -583,7 +584,7 @@ mod tests {
         fs::write(&file_path, "line1\nline2\nline3").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "lines.txt"});
+        let input = json!({"file_path": "lines.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -600,7 +601,7 @@ mod tests {
         fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "lines.txt", "offset": 100});
+        let input = json!({"file_path": "lines.txt", "offset": 100});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -620,7 +621,7 @@ mod tests {
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // offset: 0 should be treated as offset: 1
-        let input = json!({"path": "lines.txt", "offset": 0});
+        let input = json!({"file_path": "lines.txt", "offset": 0});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -647,7 +648,7 @@ mod tests {
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Request more than MAX_LINES (2000) - should be capped
-        let input = json!({"path": "large.txt", "limit": 10000});
+        let input = json!({"file_path": "large.txt", "limit": 10000});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -666,7 +667,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
 
         // Page 1: lines 1-2
-        let input = json!({"path": "lines.txt", "offset": 1, "limit": 2});
+        let input = json!({"file_path": "lines.txt", "offset": 1, "limit": 2});
         let result = execute(&input, &ctx);
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "a\nb\n");
@@ -674,7 +675,7 @@ mod tests {
         assert!(data["warning"].as_str().unwrap().contains("Use offset=3"));
 
         // Page 2: lines 3-4
-        let input = json!({"path": "lines.txt", "offset": 3, "limit": 2});
+        let input = json!({"file_path": "lines.txt", "offset": 3, "limit": 2});
         let result = execute(&input, &ctx);
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "c\nd\n");
@@ -682,7 +683,7 @@ mod tests {
         assert!(data["warning"].as_str().unwrap().contains("Use offset=5"));
 
         // Page 3: lines 5-6
-        let input = json!({"path": "lines.txt", "offset": 5, "limit": 2});
+        let input = json!({"file_path": "lines.txt", "offset": 5, "limit": 2});
         let result = execute(&input, &ctx);
         let data = result.data().expect("should have data");
         assert_eq!(data["content"], "e\nf\n");
@@ -703,7 +704,7 @@ mod tests {
         fs::write(&file_path, &content).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "long_lines.txt"});
+        let input = json!({"file_path": "long_lines.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -727,7 +728,7 @@ mod tests {
         fs::write(&file_path, &content).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "tiny_lines.txt"});
+        let input = json!({"file_path": "tiny_lines.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -760,13 +761,13 @@ mod tests {
     fn test_read_rejects_empty_path() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "   "});
+        let input = json!({"file_path": "   "});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
-        assert_eq!(payload["error"]["message"], "path cannot be empty");
+        assert_eq!(payload["error"]["message"], "file_path cannot be empty");
     }
 
     // String-to-number coercion tests (AI sometimes passes "600" instead of 600)
@@ -779,7 +780,7 @@ mod tests {
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         // Pass both offset and limit as strings
-        let input = json!({"path": "lines.txt", "offset": "2", "limit": "2"});
+        let input = json!({"file_path": "lines.txt", "offset": "2", "limit": "2"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -796,7 +797,7 @@ mod tests {
         fs::write(&file_path, "line1\nline2\nline3\n").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "lines.txt", "offset": " ", "limit": ""});
+        let input = json!({"file_path": "lines.txt", "offset": " ", "limit": ""});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -917,7 +918,7 @@ mod tests {
         fs::write(&path, png_bytes).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.png"});
+        let input = json!({"file_path": "test.png"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -950,7 +951,7 @@ mod tests {
         fs::write(&path, jpeg_bytes).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.jpg"});
+        let input = json!({"file_path": "test.jpg"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -985,7 +986,7 @@ mod tests {
         drop(file);
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "large.png"});
+        let input = json!({"file_path": "large.png"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -1003,7 +1004,7 @@ mod tests {
         fs::write(&file_path, "hello world").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt"});
+        let input = json!({"file_path": "test.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -1020,7 +1021,7 @@ mod tests {
         fs::write(&file_path, "hello\n").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "subdir/../note.md"});
+        let input = json!({"file_path": "subdir/../note.md"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -1031,5 +1032,18 @@ mod tests {
             data["resolved_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
+    }
+
+    #[test]
+    fn test_deny_unknown_fields_rejects_extra_keys() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // "path" is no longer valid — only "file_path"
+        let input = json!({"path": "test.txt"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 }

@@ -20,7 +20,7 @@ pub fn definition() -> ToolDefinition {
         input_schema: json!({
             "type": "object",
             "properties": {
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Path to the file to write. Relative paths resolve from the current working directory; if the path came from a sourced instruction file, resolve it from that file's directory first, then pass the converted path. Supports $VAR/${VAR} env vars."
                 },
@@ -29,15 +29,16 @@ pub fn definition() -> ToolDefinition {
                     "description": "Content to write to the file"
                 }
             },
-            "required": ["path", "content"],
+            "required": ["file_path", "content"],
             "additionalProperties": false
         }),
     }
 }
 
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WriteInput {
-    path: String,
+    file_path: String,
     content: String,
 }
 
@@ -54,7 +55,10 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let display_path = input.path.trim();
+    let display_path = input.file_path.trim();
+    if display_path.is_empty() {
+        return ToolOutput::failure("invalid_input", "file_path cannot be empty", None);
+    }
     let file_path = match resolve_input_path(display_path, &ctx.root) {
         Ok(path) => path,
         Err(output) => return output,
@@ -104,7 +108,7 @@ mod tests {
     fn test_write_new_file() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "new.txt", "content": "hello world"});
+        let input = json!({"file_path": "new.txt", "content": "hello world"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -126,7 +130,7 @@ mod tests {
         fs::write(&file_path, "old content").unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "existing.txt", "content": "new content"});
+        let input = json!({"file_path": "existing.txt", "content": "new content"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -142,7 +146,7 @@ mod tests {
     fn test_write_invalid_input() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "test.txt"}); // missing content
+        let input = json!({"file_path": "test.txt"}); // missing content
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -154,20 +158,20 @@ mod tests {
     fn test_write_rejects_empty_path() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "   ", "content": "hello"});
+        let input = json!({"file_path": "   ", "content": "hello"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
-        assert_eq!(payload["error"]["message"], "path cannot be empty");
+        assert_eq!(payload["error"]["message"], "file_path cannot be empty");
     }
 
     #[test]
     fn test_write_creates_parent_dirs() {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "new_dir/nested/file.txt", "content": "nested content"});
+        let input = json!({"file_path": "new_dir/nested/file.txt", "content": "nested content"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -186,7 +190,7 @@ mod tests {
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "subdir/nested.txt", "content": "nested content"});
+        let input = json!({"file_path": "subdir/nested.txt", "content": "nested content"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -204,7 +208,7 @@ mod tests {
         let abs_path = temp.path().join("absolute.txt");
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": abs_path.to_str().unwrap(), "content": "absolute content"});
+        let input = json!({"file_path": abs_path.to_str().unwrap(), "content": "absolute content"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -217,7 +221,7 @@ mod tests {
         fs::create_dir_all(temp.path().join("subdir")).unwrap();
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
-        let input = json!({"path": "subdir/../written.txt", "content": "hello"});
+        let input = json!({"file_path": "subdir/../written.txt", "content": "hello"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -229,5 +233,18 @@ mod tests {
             data["resolved_path"],
             file_path.canonicalize().unwrap().display().to_string()
         );
+    }
+
+    #[test]
+    fn test_deny_unknown_fields_rejects_extra_keys() {
+        let temp = TempDir::new().unwrap();
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // "path" is no longer valid — only "file_path"
+        let input = json!({"path": "out.txt", "content": "hello"});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
     }
 }

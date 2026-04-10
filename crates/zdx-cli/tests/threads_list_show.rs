@@ -507,7 +507,7 @@ fn test_threads_tools_filters_by_name() {
                 "type": "tool_use",
                 "id": "toolu_read",
                 "name": "read",
-                "input": {"path": "docs/SPEC.md"},
+                "input": {"file_path": "docs/SPEC.md"},
                 "ts": "2026-02-12T12:05:00Z"
             }),
             json!({
@@ -548,7 +548,7 @@ fn test_threads_tools_filters_failed_calls() {
                 "type": "tool_use",
                 "id": "toolu_read_fail",
                 "name": "read",
-                "input": {"path": "missing.txt"},
+                "input": {"file_path": "missing.txt"},
                 "ts": "2026-02-12T13:00:00Z"
             }),
             json!({
@@ -572,7 +572,7 @@ fn test_threads_tools_filters_failed_calls() {
                 "type": "tool_use",
                 "id": "toolu_read_ok",
                 "name": "read",
-                "input": {"path": "docs/SPEC.md"},
+                "input": {"file_path": "docs/SPEC.md"},
                 "ts": "2026-02-12T13:05:00Z"
             }),
             json!({

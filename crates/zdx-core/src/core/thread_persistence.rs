@@ -8,7 +8,7 @@
 //! ```jsonl
 //! { "type": "meta", "schema_version": 1, "ts": "2025-12-17T03:21:09Z" }
 //! { "type": "message", "role": "user", "text": "...", "ts": "..." }
-//! { "type": "tool_use", "id": "...", "name": "read", "input": { "path": "..." }, "ts": "..." }
+//! { "type": "tool_use", "id": "...", "name": "read", "input": { "file_path": "..." }, "ts": "..." }
 //! { "type": "tool_result", "tool_use_id": "...", "output": { ... }, "ok": true, "ts": "..." }
 //! { "type": "reasoning", "text": "...", "replay": { "provider": "openai", "id": "...", "encrypted_content": "..." }, "ts": "..." }
 //! { "type": "message", "role": "assistant", "text": "...", "ts": "..." }
@@ -2136,7 +2136,7 @@ mod tests {
             .append(&ThreadEvent::tool_use(
                 "tool-1",
                 "read",
-                json!({"path": "main.rs"}),
+                json!({"file_path": "main.rs"}),
             ))
             .unwrap();
         thread
@@ -2322,7 +2322,7 @@ mod tests {
         let events = vec![
             ThreadEvent::meta_with_root(None),
             ThreadEvent::user_message("read main.rs"),
-            ThreadEvent::tool_use("t1", "read", json!({"path": "main.rs"})),
+            ThreadEvent::tool_use("t1", "read", json!({"file_path": "main.rs"})),
             ThreadEvent::tool_result(
                 "t1",
                 json!({"ok": true, "data": {"content": "fn main() {}"}}),
@@ -2674,8 +2674,8 @@ mod tests {
                     signature: "sig1".to_string(),
                 }),
             ),
-            ThreadEvent::tool_use("t1", "read", json!({"path": "a.md"})),
-            ThreadEvent::tool_use("t2", "read", json!({"path": "b.md"})),
+            ThreadEvent::tool_use("t1", "read", json!({"file_path": "a.md"})),
+            ThreadEvent::tool_use("t2", "read", json!({"file_path": "b.md"})),
             ThreadEvent::tool_result("t1", json!({"ok": true}), true),
             ThreadEvent::tool_result("t2", json!({"ok": true}), true),
             ThreadEvent::assistant_message("Done."),
@@ -3146,7 +3146,7 @@ mod tests {
 
         let events = vec![
             ThreadEvent::user_message("do something"),
-            ThreadEvent::tool_use("t1", "read", json!({"path": "src/main.rs"})),
+            ThreadEvent::tool_use("t1", "read", json!({"file_path": "src/main.rs"})),
             ThreadEvent::tool_result("t1", json!({"ok": true, "data": "fn main() {}"}), true),
             // Second tool requested but user interrupted before completion
             ThreadEvent::tool_use("t2", "bash", json!({"command": "cargo test"})),
