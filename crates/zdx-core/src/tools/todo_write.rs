@@ -11,13 +11,13 @@ use crate::core::thread_persistence::{self as tp, ThreadEvent};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Todo_Write".to_string(),
-        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send an `ops` array of mutations such as `replace`, `add`, `update`, and `remove`. Prefer updating tasks immediately as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one task `in_progress`.".to_string(),
+        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send an `ops` array of mutations such as `replace`, `add`, `update`, and `remove` — `ops` must be a real JSON array, not a quoted JSON string. Prefer updating tasks immediately as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one task `in_progress`. Example: {\"ops\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {
                 "ops": {
                     "type": "array",
-                    "description": "Ordered todo-list mutations to apply.",
+                    "description": "Ordered todo-list mutations to apply. Must be a JSON array, not a stringified JSON array.",
                     "minItems": 1,
                     "items": {
                         "type": "object",
@@ -141,13 +141,20 @@ pub(crate) fn execute_with_state(
     previous: Option<&TodoState>,
     current_thread_id: Option<&str>,
 ) -> ToolOutput {
-    let input: TodoInput = match serde_json::from_value(input.clone()) {
+    let normalized_input = match normalize_input(input) {
+        Ok(value) => value,
+        Err((message, detail)) => {
+            return ToolOutput::failure("invalid_input", message, detail);
+        }
+    };
+
+    let input: TodoInput = match serde_json::from_value(normalized_input.clone()) {
         Ok(i) => i,
         Err(e) => {
             return ToolOutput::failure(
                 "invalid_input",
                 "Invalid input for todo_write tool",
-                Some(format!("Parse error: {e}")),
+                Some(describe_parse_error(&normalized_input, &e)),
             );
         }
     };
@@ -170,6 +177,73 @@ pub(crate) fn execute_with_state(
         "counts": counts(&updated.tasks),
         "summary": summary(&updated.tasks)
     }))
+}
+
+fn normalize_input(input: &Value) -> Result<Value, (&'static str, Option<String>)> {
+    let Some(obj) = input.as_object() else {
+        return Ok(input.clone());
+    };
+
+    let Some(ops_value) = obj.get("ops") else {
+        return Ok(input.clone());
+    };
+
+    let Some(ops_str) = ops_value.as_str() else {
+        return Ok(input.clone());
+    };
+
+    let parsed = serde_json::from_str::<Value>(ops_str).map_err(|e| {
+        (
+            "field 'ops' must be an array",
+            Some(format!(
+                "received a string for 'ops' but it could not be parsed as JSON: {e}"
+            )),
+        )
+    })?;
+
+    let parsed_array = parsed.as_array().ok_or_else(|| {
+        (
+            "field 'ops' must be an array",
+            Some(
+                "received a string that parsed as JSON, but not as a JSON array; remove the surrounding quotes and send an array directly".to_string(),
+            ),
+        )
+    })?;
+
+    let mut normalized = obj.clone();
+    normalized.insert("ops".to_string(), Value::Array(parsed_array.clone()));
+    Ok(Value::Object(normalized))
+}
+
+fn describe_parse_error(input: &Value, error: &serde_json::Error) -> String {
+    if let Some(obj) = input.as_object() {
+        if let Some(ops) = obj.get("ops") {
+            if ops.is_string() {
+                return format!(
+                    "field 'ops' must be an array; received a string that looks like JSON. Remove the surrounding quotes. Parse error: {error}"
+                );
+            }
+            if !ops.is_array() {
+                return format!(
+                    "field 'ops' must be an array; received {}. Parse error: {error}",
+                    json_type_name(ops)
+                );
+            }
+        }
+    }
+
+    format!("Parse error: {error}")
+}
+
+fn json_type_name(value: &Value) -> &'static str {
+    match value {
+        Value::Null => "null",
+        Value::Bool(_) => "boolean",
+        Value::Number(_) => "number",
+        Value::String(_) => "string",
+        Value::Array(_) => "array",
+        Value::Object(_) => "object",
+    }
 }
 
 fn load_current_state(origin_thread_id: Option<&str>) -> Option<TodoState> {
@@ -648,6 +722,80 @@ mod tests {
         let (code, message, _) = output.error_info().unwrap();
         assert_eq!(code, "invalid_input");
         assert_eq!(message, "ops cannot be empty");
+    }
+
+    #[test]
+    fn test_execute_coerces_stringified_ops_array() {
+        let output = execute(
+            &json!({
+                "ops": "[{\"op\":\"add\",\"content\":\"Inspect codebase\"}]"
+            }),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+
+        assert!(output.is_ok());
+        let data = output.data().expect("todo_write should return data");
+        let tasks = data
+            .get("tasks")
+            .and_then(|tasks| tasks.as_array())
+            .expect("todo_write should return tasks array");
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].get("content").and_then(|v| v.as_str()), Some("Inspect codebase"));
+    }
+
+    #[test]
+    fn test_execute_rejects_stringified_non_array_ops() {
+        let output = execute(
+            &json!({
+                "ops": "{\"op\":\"add\",\"content\":\"Inspect codebase\"}"
+            }),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+
+        assert!(!output.is_ok());
+        let (code, message, detail) = output.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "field 'ops' must be an array");
+        assert!(detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("parsed as JSON, but not as a JSON array"));
+    }
+
+    #[test]
+    fn test_execute_reports_non_array_ops_type() {
+        let output = execute(
+            &json!({"ops": {"op": "add", "content": "Inspect codebase"}}),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+
+        assert!(!output.is_ok());
+        let (code, message, detail) = output.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "Invalid input for todo_write tool");
+        assert!(detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("field 'ops' must be an array; received object"));
+    }
+
+    #[test]
+    fn test_execute_reports_invalid_op_after_stringified_ops_coercion() {
+        let output = execute(
+            &json!({
+                "ops": "[{\"op\":\"bogus\",\"content\":\"Inspect codebase\"}]"
+            }),
+            &ToolContext::new(std::path::PathBuf::from("."), None),
+        );
+
+        assert!(!output.is_ok());
+        let (code, message, detail) = output.error_info().unwrap();
+        assert_eq!(code, "invalid_input");
+        assert_eq!(message, "Invalid input for todo_write tool");
+        assert!(detail
+            .as_deref()
+            .unwrap_or_default()
+            .contains("unknown variant `bogus`"));
     }
 
     #[test]

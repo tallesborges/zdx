@@ -2122,7 +2122,7 @@ mod tests {
     #[tokio::test]
     async fn test_execute_tools_carries_todo_state_within_turn() {
         let ctx = ToolContext::new(std::path::PathBuf::from("."), None);
-        let enabled_tools: HashSet<String> = vec!["Todo_Write".to_string()].into_iter().collect();
+        let enabled_tools: HashSet<String> = vec!["todo_write".to_string()].into_iter().collect();
         let tool_uses = vec![
             ToolUse {
                 id: "tool1".to_string(),
