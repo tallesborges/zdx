@@ -43,7 +43,7 @@ const MAX_CONTEXT_LINES: usize = 5;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents for text matching a regex pattern. Prefer this over running rg or grep through Bash when you need to find text in files. Use `glob` to narrow file types and `path` to scope the search. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default."
+        description: "Search file contents for text matching a regex pattern. Prefer this over running rg or grep through Bash when you need to find text in files. Use `glob` to narrow file types and `file_path` to scope the search. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default."
             .to_string(),
         input_schema: json!({
             "type": "object",
@@ -52,7 +52,7 @@ pub fn definition() -> ToolDefinition {
                     "type": "string",
                     "description": "Regex pattern to search for"
                 },
-                "path": {
+                "file_path": {
                     "type": "string",
                     "description": "Directory or file to search in. Relative paths resolve from the current working directory. Defaults to the current working directory. Supports $VAR/${VAR} env vars."
                 },
@@ -100,7 +100,7 @@ pub fn definition() -> ToolDefinition {
 #[serde(deny_unknown_fields)]
 struct GrepInput {
     pattern: String,
-    path: Option<String>,
+    file_path: Option<String>,
     glob: Option<String>,
     #[serde(default, deserialize_with = "super::bool_or_string::deserialize")]
     case_insensitive: bool,
@@ -306,7 +306,7 @@ pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
         }
     };
 
-    let search_path = match resolve_search_path(input.path.as_deref(), &ctx.root) {
+    let search_path = match resolve_search_path(input.file_path.as_deref(), &ctx.root) {
         Ok(p) => p,
         Err(output) => return output,
     };
@@ -908,7 +908,7 @@ mod tests {
         fs::write(temp.path().join("sub/nested.txt"), "match here too\n").unwrap();
 
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "match", "path": "sub"});
+        let input = json!({"pattern": "match", "file_path": "sub"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -924,7 +924,7 @@ mod tests {
         fs::write(temp.path().join("b.txt"), "target line\n").unwrap();
 
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "target", "path": "a.txt"});
+        let input = json!({"pattern": "target", "file_path": "a.txt"});
 
         let result = execute(&input, &ctx);
         assert!(result.is_ok());
@@ -962,7 +962,7 @@ mod tests {
     fn test_nonexistent_path() {
         let temp = TempDir::new().unwrap();
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "test", "path": "nonexistent"});
+        let input = json!({"pattern": "test", "file_path": "nonexistent"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -1823,7 +1823,7 @@ mod type_filter_tests {
         let file = temp.path().join("script.py");
         let input = json!({
             "pattern": "fn",
-            "path": file.to_str().unwrap(),
+            "file_path": file.to_str().unwrap(),
             "type": "rust"
         });
 
@@ -1841,6 +1841,20 @@ mod type_filter_tests {
         let temp = TempDir::new().unwrap();
         let ctx = make_ctx(&temp);
         let input = json!({"pattern": "fn", "unknown_extra_field": true});
+
+        let result = execute(&input, &ctx);
+        assert!(!result.is_ok());
+        let json_str = result.to_json_string();
+        assert!(json_str.contains(r#""code":"invalid_input""#));
+    }
+
+    #[test]
+    fn test_legacy_path_key_is_rejected() {
+        // Regression: old callers sending "path" must fail with a clear error,
+        // not silently fall back to the cwd and search an unintended broad scope.
+        let temp = TempDir::new().unwrap();
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "x", "path": "."});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());

@@ -31,7 +31,7 @@ Useful discovery patterns:
 
 ```text
 glob path:"$ZDX_MEMORY_ROOT/Notes" pattern:"**/*.md"
-grep path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"project bravo|parity|zdx" case_insensitive:true
+grep file_path:"$ZDX_MEMORY_ROOT/Notes" glob:"**/*.md" pattern:"project bravo|parity|zdx" case_insensitive:true
 ```
 
 ## Johnny Decimal naming patterns
