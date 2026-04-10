@@ -15,6 +15,20 @@ use crate::providers::shared::{ChatMessage, ProviderError, ProviderErrorKind, Pr
 use crate::providers::{DebugTrace, wrap_stream};
 use crate::tools::ToolDefinition;
 
+pub(crate) const FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: &str =
+    "fine-grained-tool-streaming-2025-05-14";
+pub(crate) const INTERLEAVED_THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
+
+pub(crate) fn build_beta_header(base_headers: &[&str], include_interleaved: bool) -> String {
+    let mut headers = Vec::with_capacity(base_headers.len() + 2);
+    headers.extend(base_headers.iter().copied());
+    headers.push(FINE_GRAINED_TOOL_STREAMING_BETA_HEADER);
+    if include_interleaved {
+        headers.push(INTERLEAVED_THINKING_BETA_HEADER);
+    }
+    headers.join(",")
+}
+
 pub(crate) fn build_api_messages_with_cache_control(messages: &[ChatMessage]) -> Vec<ApiMessage> {
     let mut api_messages: Vec<ApiMessage> = messages
         .iter()
@@ -174,16 +188,26 @@ pub(crate) async fn send_streaming_request(
 }
 
 fn apply_cache_control_to_last_user_block(api_messages: &mut [ApiMessage]) {
-    if let Some(last_user_msg) = api_messages.iter_mut().rev().find(|m| m.role == "user")
-        && let ApiMessageContent::Blocks(blocks) = &mut last_user_msg.content
-        && let Some(last_block) = blocks.last_mut()
-    {
-        match last_block {
-            ApiContentBlock::Text { cache_control, .. }
-            | ApiContentBlock::ToolResult { cache_control, .. } => {
-                *cache_control = Some(CacheControl::ephemeral());
+    if let Some(last_user_msg) = api_messages.iter_mut().rev().find(|m| m.role == "user") {
+        match &mut last_user_msg.content {
+            ApiMessageContent::Text(text) => {
+                last_user_msg.content = ApiMessageContent::Blocks(vec![ApiContentBlock::Text {
+                    text: std::mem::take(text),
+                    cache_control: Some(CacheControl::ephemeral()),
+                }]);
             }
-            _ => {}
+            ApiMessageContent::Blocks(blocks) => {
+                if let Some(last_block) = blocks.last_mut() {
+                    match last_block {
+                        ApiContentBlock::Text { cache_control, .. }
+                        | ApiContentBlock::Image { cache_control, .. }
+                        | ApiContentBlock::ToolResult { cache_control, .. } => {
+                            *cache_control = Some(CacheControl::ephemeral());
+                        }
+                        _ => {}
+                    }
+                }
+            }
         }
     }
 }
@@ -243,6 +267,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::providers::shared::{ChatContentBlock, MessageContent};
 
     #[test]
     fn thinking_and_effort_opus_46_uses_adaptive_and_allows_max() {
@@ -408,5 +433,61 @@ mod tests {
             "claude-sonnet-4-5",
             true
         ));
+    }
+
+    #[test]
+    fn plain_text_last_user_message_gets_cache_control() {
+        let api_messages = build_api_messages_with_cache_control(&[ChatMessage::user("hello")]);
+
+        assert_eq!(api_messages.len(), 1);
+        match &api_messages[0].content {
+            ApiMessageContent::Blocks(blocks) => match &blocks[0] {
+                ApiContentBlock::Text {
+                    text,
+                    cache_control,
+                } => {
+                    assert_eq!(text, "hello");
+                    assert!(cache_control.is_some());
+                }
+                other => panic!("expected text block, got {other:?}"),
+            },
+            other => panic!("expected blocks content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn image_last_user_block_gets_cache_control() {
+        let message = ChatMessage {
+            role: "user".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::Image {
+                mime_type: "image/png".to_string(),
+                data: "Zm9v".to_string(),
+            }]),
+        };
+
+        let api_messages = build_api_messages_with_cache_control(&[message]);
+
+        match &api_messages[0].content {
+            ApiMessageContent::Blocks(blocks) => match &blocks[0] {
+                ApiContentBlock::Image { cache_control, .. } => {
+                    assert!(cache_control.is_some());
+                }
+                other => panic!("expected image block, got {other:?}"),
+            },
+            other => panic!("expected blocks content, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_beta_header_always_includes_fine_grained_tool_streaming() {
+        assert_eq!(
+            build_beta_header(&[], false),
+            FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+        );
+        assert_eq!(
+            build_beta_header(&["claude-code-20250219,oauth-2025-04-20"], true),
+            "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+        );
     }
 }

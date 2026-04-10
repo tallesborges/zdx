@@ -176,7 +176,11 @@ pub(crate) enum ApiContentBlock {
         cache_control: Option<CacheControl>,
     },
     #[serde(rename = "image")]
-    Image { source: ApiImageSource },
+    Image {
+        source: ApiImageSource,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        cache_control: Option<CacheControl>,
+    },
     #[serde(rename = "tool_use")]
     ToolUse {
         id: String,
@@ -198,8 +202,8 @@ impl ApiMessage {
     /// Converts a `ChatMessage` to `ApiMessage` with optional cache control.
     ///
     /// Handles thinking blocks with missing signatures (aborted thinking) by
-    /// converting them to text blocks wrapped in `<thinking>` tags, following
-    /// the pi-mono pattern for API compatibility.
+    /// converting them to plain text blocks, matching pi-mono's Anthropic
+    /// replay fallback behavior.
     pub(crate) fn from_chat_message(msg: &ChatMessage, use_cache_control: bool) -> Self {
         match &msg.content {
             MessageContent::Text(text) => ApiMessage {
@@ -229,6 +233,7 @@ fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Optio
         }),
         ChatContentBlock::Image { mime_type, data } => Some(ApiContentBlock::Image {
             source: api_image_source(mime_type, data),
+            cache_control: use_cache_control.then(CacheControl::ephemeral),
         }),
         ChatContentBlock::ToolUse { id, name, input } => Some(ApiContentBlock::ToolUse {
             id: id.clone(),
@@ -247,14 +252,12 @@ fn api_content_block(block: &ChatContentBlock, use_cache_control: bool) -> Optio
 fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
     match reasoning.replay.as_ref() {
         Some(ReplayToken::Anthropic { signature }) => {
-            let thinking = reasoning.text.clone().unwrap_or_default();
+            let thinking = reasoning.text.as_deref().unwrap_or_default();
             if signature.is_empty() {
-                Some(wrapped_thinking_text(&thinking))
-            } else if thinking.is_empty() {
-                None
+                plain_reasoning_text(thinking)
             } else {
                 Some(ApiContentBlock::Thinking {
-                    thinking,
+                    thinking: thinking.to_string(),
                     signature: signature.clone(),
                 })
             }
@@ -263,15 +266,15 @@ fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
         None => reasoning
             .text
             .as_ref()
-            .map(|thinking| wrapped_thinking_text(thinking)),
+            .and_then(|thinking| plain_reasoning_text(thinking)),
     }
 }
 
-fn wrapped_thinking_text(thinking: &str) -> ApiContentBlock {
-    ApiContentBlock::Text {
-        text: format!("<thinking>\n{thinking}\n</thinking>"),
+fn plain_reasoning_text(thinking: &str) -> Option<ApiContentBlock> {
+    (!thinking.is_empty()).then(|| ApiContentBlock::Text {
+        text: thinking.to_string(),
         cache_control: None,
-    }
+    })
 }
 
 fn api_image_source(mime_type: &str, data: &str) -> ApiImageSource {
@@ -297,5 +300,68 @@ fn api_tool_result_block(block: &ToolResultBlock) -> ApiToolResultBlock {
         ToolResultBlock::Image { mime_type, data } => ApiToolResultBlock::Image {
             source: api_image_source(mime_type, data),
         },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_anthropic_signature_falls_back_to_plain_text() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: Some("I was thinking".to_string()),
+            replay: Some(ReplayToken::Anthropic {
+                signature: String::new(),
+            }),
+        });
+
+        assert!(matches!(
+            block,
+            Some(ApiContentBlock::Text { ref text, .. }) if text == "I was thinking"
+        ));
+    }
+
+    #[test]
+    fn reasoning_without_replay_falls_back_to_plain_text() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: Some("temporary reasoning".to_string()),
+            replay: None,
+        });
+
+        assert!(matches!(
+            block,
+            Some(ApiContentBlock::Text { ref text, .. }) if text == "temporary reasoning"
+        ));
+    }
+
+    #[test]
+    fn empty_reasoning_without_signature_is_dropped() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: Some(String::new()),
+            replay: Some(ReplayToken::Anthropic {
+                signature: String::new(),
+            }),
+        });
+
+        assert!(block.is_none());
+    }
+
+    #[test]
+    fn signature_only_reasoning_block_is_preserved() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: Some(String::new()),
+            replay: Some(ReplayToken::Anthropic {
+                signature: "sig_123".to_string(),
+            }),
+        });
+
+        assert!(matches!(
+            block,
+            Some(ApiContentBlock::Thinking {
+                ref thinking,
+                ref signature,
+            }) if thinking.is_empty() && signature == "sig_123"
+        ));
     }
 }
