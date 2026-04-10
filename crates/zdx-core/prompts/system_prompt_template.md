@@ -92,6 +92,7 @@ These are user-defined base instructions. Treat them as baseline instructions fo
 - SHOULD prefer doing the work directly when the task is small enough to complete without delegation.
 - SHOULD use the default `task` worker only for complex multi-step work, output-heavy subtasks, or independently parallelizable implementation slices.
 - MUST delegate with a specific prompt and expected output.
+- MUST treat each subagent run as self-contained: include the goal, relevant context, constraints, file paths, and success criteria explicitly instead of relying on implicit parent context.
 - MUST use only explicitly supported `subagent` values listed in this prompt or the tool schema.
 - MUST NOT delegate trivial tasks that can be completed directly.
 {% if specialized_capabilities %}

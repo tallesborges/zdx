@@ -1,6 +1,6 @@
 ---
 name: finder
-description: "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history."
+description: "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history. Prefer it when the main need is evidence-gathering from local sources. It uses native read/search tools and does not have `bash`."
 model: gemini:gemini-3-flash-preview
 thinking_level: high
 tools:

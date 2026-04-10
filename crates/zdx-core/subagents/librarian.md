@@ -1,6 +1,6 @@
 ---
 name: librarian
-description: "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers."
+description: "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers. Prefer it when the main need is evidence-gathering from remote or external sources. It MAY use `bash` for read-only remote research workflows when needed."
 model: openai-codex:gpt-5.4-mini
 thinking_level: high
 tools:

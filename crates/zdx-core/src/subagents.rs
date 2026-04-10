@@ -498,7 +498,7 @@ fn fallback_finder_capability() -> CapabilityDescriptor {
         name: FINDER_SUBAGENT_NAME.to_string(),
         title: "Finder".to_string(),
         description:
-            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history."
+            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history. Prefer it when the main need is evidence-gathering from local sources. It uses native read/search tools and does not have `bash`."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: FINDER_SUBAGENT_NAME.to_string(),
@@ -511,7 +511,7 @@ fn fallback_librarian_capability() -> CapabilityDescriptor {
         name: LIBRARIAN_SUBAGENT_NAME.to_string(),
         title: "Librarian".to_string(),
         description:
-            "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers."
+            "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers. Prefer it when the main need is evidence-gathering from remote or external sources. It MAY use `bash` for read-only remote research workflows when needed."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: LIBRARIAN_SUBAGENT_NAME.to_string(),
@@ -537,7 +537,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery or external research when `finder` or `librarian` is a better fit. When required evidence is missing, `oracle` SHOULD explicitly state what local discovery should be delegated to `finder` and what external research should be delegated to `librarian`, rather than broadening its own role."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
