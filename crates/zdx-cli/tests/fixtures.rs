@@ -76,9 +76,9 @@ mod tests {
 
     #[test]
     fn test_tool_use_sse_substitution() {
-        let result = tool_use_sse("toolu_123", "read", r#"{"path":"file.txt"}"#);
+        let result = tool_use_sse("toolu_123", "read", r#"{"file_path":"file.txt"}"#);
         assert!(result.contains(r#""id":"toolu_123""#));
         assert!(result.contains(r#""name":"read""#));
-        assert!(result.contains(r#"\"path\":\"file.txt\""#));
+        assert!(result.contains(r#"\"file_path\":\"file.txt\""#));
     }
 }

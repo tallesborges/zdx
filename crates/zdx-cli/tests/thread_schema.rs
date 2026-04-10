@@ -22,7 +22,7 @@ async fn test_threads_show_displays_tool_events() {
 
     let thread_content = r#"{"type":"meta","schema_version":1,"ts":"2025-01-01T00:00:00Z"}
 {"type":"message","role":"user","text":"read main.rs","ts":"2025-01-01T00:00:01Z"}
-{"type":"tool_use","id":"t1","name":"read","input":{"path":"main.rs"},"ts":"2025-01-01T00:00:02Z"}
+{"type":"tool_use","id":"t1","name":"read","input":{"file_path":"main.rs"},"ts":"2025-01-01T00:00:02Z"}
 {"type":"tool_result","tool_use_id":"t1","output":{"ok":true,"data":{"content":"fn main() {}"}},"ok":true,"ts":"2025-01-01T00:00:03Z"}
 {"type":"message","role":"assistant","text":"Here is the file.","ts":"2025-01-01T00:00:04Z"}"#;
     fs::write(&thread_path, thread_content).unwrap();

@@ -43,7 +43,7 @@ fn extract_u64(value: &Value) -> Option<u64> {
 fn tool_input_delta<'a>(name: &str, input: &'a Value) -> Option<&'a str> {
     match name {
         "write" => input.get("content")?.as_str(),
-        "edit" => input.get("new")?.as_str(),
+        "edit" => input.get("new_string").or_else(|| input.get("new"))?.as_str(),
         _ => None,
     }
 }
@@ -129,7 +129,8 @@ fn tool_display_text(name: &str, input: &Value) -> String {
     match name {
         "bash" => value_as_trimmed_str(input, "command")
             .map_or_else(|| "bash".to_string(), str::to_string),
-        "read" | "write" | "edit" => value_as_trimmed_str(input, "path")
+        "read" | "write" | "edit" => value_as_trimmed_str(input, "file_path")
+            .or_else(|| value_as_trimmed_str(input, "path"))
             .map_or_else(|| name.to_string(), |path| format!("{name} {path}")),
         "apply_patch" => value_as_trimmed_str(input, "patch")
             .and_then(summarize_apply_patch_targets)
@@ -1912,7 +1913,7 @@ mod tests {
     #[test]
     fn test_tool_running() {
         let cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+            HistoryCell::tool_running("123", "read", serde_json::json!({"file_path": "test.txt"}));
         let lines = cell.display_lines(80, 0);
 
         // Should have tool info line (spinner indicates running, no separate status line)
@@ -1936,7 +1937,7 @@ mod tests {
             "123",
             "read",
             serde_json::json!({
-                "path": "test.txt",
+                "file_path": "test.txt",
                 "offset": 10,
                 "limit": 25
             }),
@@ -2128,7 +2129,7 @@ mod tests {
     #[test]
     fn test_tool_success() {
         let mut cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+            HistoryCell::tool_running("123", "read", serde_json::json!({"file_path": "test.txt"}));
         cell.set_tool_result(ToolOutput::success(
             serde_json::json!({"content": "file data"}),
         ));
@@ -2153,7 +2154,7 @@ mod tests {
     #[test]
     fn test_tool_failure() {
         let mut cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({ "path": "test.txt" }));
+            HistoryCell::tool_running("123", "read", serde_json::json!({ "file_path": "test.txt" }));
         cell.set_tool_result(ToolOutput::failure("not_found", "File not found", None));
 
         let lines = cell.display_lines(80, 0);
@@ -2681,7 +2682,7 @@ mod tests {
     #[test]
     fn test_tool_read_truncation_warning_displayed() {
         let mut cell =
-            HistoryCell::tool_running("1", "read", serde_json::json!({"path": "large.txt"}));
+            HistoryCell::tool_running("1", "read", serde_json::json!({"file_path": "large.txt"}));
 
         // Simulate a read tool result with truncated file
         cell.set_tool_result(ToolOutput::success(serde_json::json!({
@@ -2715,7 +2716,7 @@ mod tests {
         let mut cell = HistoryCell::tool_running(
             "1",
             "read",
-            serde_json::json!({"path": "large.txt", "limit": 240}),
+            serde_json::json!({"file_path": "large.txt", "limit": 240}),
         );
 
         cell.set_tool_result(ToolOutput::success(serde_json::json!({
@@ -2863,7 +2864,7 @@ mod tests {
     #[test]
     fn test_mark_errored_tool() {
         let mut cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+            HistoryCell::tool_running("123", "read", serde_json::json!({"file_path": "test.txt"}));
 
         // Should be Running initially
         match &cell {
@@ -2936,7 +2937,7 @@ mod tests {
     fn test_mark_errored_does_not_affect_completed() {
         // Completed tool should not change
         let mut tool_cell =
-            HistoryCell::tool_running("123", "read", serde_json::json!({"path": "test.txt"}));
+            HistoryCell::tool_running("123", "read", serde_json::json!({"file_path": "test.txt"}));
         tool_cell.set_tool_result(ToolOutput::success(serde_json::json!({"ok": true})));
 
         match &tool_cell {

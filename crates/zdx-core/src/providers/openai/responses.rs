@@ -417,7 +417,7 @@ mod tests {
             ChatContentBlock::ToolUse {
                 id: "call_1".to_string(),
                 name: "read".to_string(),
-                input: serde_json::json!({"path": "src/main.rs"}),
+                input: serde_json::json!({"file_path": "src/main.rs"}),
             },
         ])];
 

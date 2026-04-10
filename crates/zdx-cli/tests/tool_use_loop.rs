@@ -47,7 +47,7 @@ async fn test_tool_use_loop_reads_file() {
         "I'll read that file for you.",
         "toolu_001",
         "read",
-        r#"{"path": "test.txt"}"#,
+        r#"{"file_path": "test.txt"}"#,
     );
     let second_response = text_sse("The file contains: Hello from file!");
 
@@ -104,7 +104,7 @@ async fn test_tool_use_loop_second_request_has_tool_result() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = Arc::clone(&second_request_body);
 
-    let first_response = tool_use_sse("toolu_abc123", "read", r#"{"path": "data.txt"}"#);
+    let first_response = tool_use_sse("toolu_abc123", "read", r#"{"file_path": "data.txt"}"#);
     let second_response = text_sse("Done!");
 
     Mock::given(method("POST"))
@@ -172,7 +172,7 @@ async fn test_tool_read_outside_root_allowed() {
     let second_request_body = Arc::new(std::sync::Mutex::new(String::new()));
     let second_request_body_clone = Arc::clone(&second_request_body);
 
-    let input_json = format!(r#"{{"path": "{outside_path}"}}"#);
+    let input_json = format!(r#"{{"file_path": "{outside_path}"}}"#);
     let first_response = tool_use_sse("toolu_evil", "read", &input_json);
     let second_response = text_sse("File read successfully.");
 
@@ -227,7 +227,11 @@ async fn test_tool_shows_activity_indicator() {
     }
     let zdx_home = temp_zdx_home();
     let mock_server = MockServer::start().await;
-    let first_response = tool_use_sse("toolu_indicator", "read", r#"{"path": "nonexistent.txt"}"#);
+    let first_response = tool_use_sse(
+        "toolu_indicator",
+        "read",
+        r#"{"file_path": "nonexistent.txt"}"#,
+    );
     let second_response = text_sse("Done.");
 
     let call_count = Arc::new(AtomicUsize::new(0));
@@ -402,7 +406,7 @@ async fn test_tool_use_loop_writes_file() {
     let first_response = tool_use_sse(
         "toolu_write001",
         "write",
-        r#"{"path": "output.txt", "content": "Hello from write tool!"}"#,
+        r#"{"file_path": "output.txt", "content": "Hello from write tool!"}"#,
     );
     let second_response = text_sse("File written successfully!");
 
@@ -483,7 +487,7 @@ async fn test_tool_use_loop_edits_file() {
     let first_response = tool_use_sse(
         "toolu_edit001",
         "edit",
-        r#"{"path": "target.txt", "old": "world", "new": "Rust"}"#,
+        r#"{"file_path": "target.txt", "old_string": "world", "new_string": "Rust"}"#,
     );
     let second_response = text_sse("File edited successfully!");
 

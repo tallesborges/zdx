@@ -961,7 +961,7 @@ mod tests {
 
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let enabled = all_enabled_tools();
-        let input = json!({"path": "test.txt"});
+        let input = json!({"file_path": "test.txt"});
 
         // Call with PascalCase (as Anthropic might return)
         let (output, _) = execute_tool("Read", "toolu_test", &input, &ctx, &enabled).await;
