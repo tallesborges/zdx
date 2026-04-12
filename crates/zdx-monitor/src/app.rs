@@ -249,6 +249,7 @@ pub fn run(root: &Path) -> Result<()> {
             && key.kind == KeyEventKind::Press
         {
             handle_key_event(&mut app, key.code);
+            refresh_app(&mut app);
         }
 
         if last_tick.elapsed() >= tick_rate {
@@ -459,10 +460,7 @@ fn start_service(service: &ServiceInfo, root: &Path) -> Result<String> {
 
 fn stop_service(service: &ServiceInfo) -> Result<String> {
     match pidfile::terminate(&service.key)? {
-        Some(pid) => {
-            wait_for_service_state(&service.key, false, Duration::from_secs(3));
-            Ok(format!("Stopped {} (PID {})", service.name, pid))
-        }
+        Some(pid) => Ok(format!("Stopping {} (PID {})…", service.name, pid)),
         None => Ok(format!("{} is already stopped", service.name)),
     }
 }
@@ -480,20 +478,6 @@ fn restart_service(service: &ServiceInfo, root: &Path) -> Result<String> {
         let _ = stop_service(service)?;
     }
     start_service(service, root).map(|message| format!("Restarted {} • {message}", service.name))
-}
-
-fn wait_for_service_state(name: &str, should_be_running: bool, timeout: Duration) {
-    let start = Instant::now();
-    while start.elapsed() < timeout {
-        let running = matches!(
-            pidfile::status(name),
-            pidfile::ServiceStatus::Running { .. }
-        );
-        if running == should_be_running {
-            break;
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
 }
 
 fn format_duration(d: std::time::Duration) -> String {
