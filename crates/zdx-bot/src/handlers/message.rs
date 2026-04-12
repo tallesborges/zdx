@@ -7,8 +7,7 @@ use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::ThinkingLevel;
 use zdx_core::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
-use zdx_core::core::thread_persistence;
-use zdx_core::core::worktree;
+use zdx_core::core::{thread_persistence, worktree};
 use zdx_core::models::{ModelOption, ModelPricing};
 use zdx_core::providers::{ProviderAuthMode, provider_for_model};
 

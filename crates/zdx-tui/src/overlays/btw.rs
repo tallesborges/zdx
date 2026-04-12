@@ -10,8 +10,7 @@ use zdx_core::config::{ProvidersConfig, ThinkingLevel};
 use zdx_core::core::events::AgentEvent;
 use zdx_core::core::thread_persistence::Thread;
 use zdx_core::models::{ModelOption, available_models, model_supports_reasoning};
-use zdx_core::providers::ChatMessage;
-use zdx_core::providers::{ProviderKind, resolve_provider};
+use zdx_core::providers::{ChatMessage, ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
@@ -635,8 +634,9 @@ fn map_style(style: crate::transcript::Style) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crossterm::event::{KeyModifiers, MouseEvent, MouseEventKind};
+
+    use super::*;
 
     #[test]
     fn btw_opens_with_system_cell() {

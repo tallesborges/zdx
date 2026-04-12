@@ -1000,8 +1000,7 @@ impl UsagePersistor {
     }
 
     fn handle_event(&mut self, event: &crate::core::events::AgentEvent) -> Vec<ThreadEvent> {
-        use crate::core::events::AgentEvent;
-        use crate::core::events::TurnStatus;
+        use crate::core::events::{AgentEvent, TurnStatus};
 
         let mut events = Vec::new();
 
