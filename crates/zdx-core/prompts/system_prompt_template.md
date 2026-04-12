@@ -125,6 +125,8 @@ The following runtime environment variables are especially relevant:
 - `ZDX_THREAD_ID`: Identifier for the current thread/session. Use this instead of inventing thread IDs.
 - `ZDX_MEMORY_ROOT`: Root directory for memory storage. Derive `Notes/`, `Calendar/`, and `Notes/MEMORY.md` paths under this root.
 
+These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — every tool expands env vars natively. Pass them directly; never shell out to resolve them first.
+
 Relative path reminder:
 - Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory.
 - For inline blocks labeled with a source path (for example `## /workspace/parent/INSTRUCTIONS.md` or a skill `<path>`), use that file's directory as the base.

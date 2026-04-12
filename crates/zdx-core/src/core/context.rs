@@ -2003,6 +2003,9 @@ mod tests {
             "`ZDX_MEMORY_ROOT`: Root directory for memory storage. Derive `Notes/`, `Calendar/`, and `Notes/MEMORY.md` paths under this root."
         ));
         assert!(prompt.contains(
+            "These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument"
+        ));
+        assert!(prompt.contains(
             "Relative paths mentioned inside a block sourced from a file resolve from that source file's directory, not from the current working directory."
         ));
         assert!(prompt.contains(
