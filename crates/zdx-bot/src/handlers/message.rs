@@ -7,7 +7,7 @@ use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
 use zdx_core::config::ThinkingLevel;
 use zdx_core::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
-use zdx_core::core::thread_persistence::{self, ThreadEvent};
+use zdx_core::core::thread_persistence;
 use zdx_core::core::worktree;
 use zdx_core::models::{ModelOption, ModelPricing};
 use zdx_core::providers::{ProviderAuthMode, provider_for_model};
@@ -1170,7 +1170,7 @@ async fn stream_turn_events(
         tokio::select! {
             biased;
             () = status.token.cancelled() => {
-                handle.task.abort();
+                handle.cancel.cancel();
                 break;
             }
             event = handle.rx.recv() => {
@@ -1248,7 +1248,7 @@ async fn finalize_turn(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_ctx: &ReplyContext,
-    thread: &mut zdx_core::core::thread_persistence::Thread,
+    _thread: &mut zdx_core::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
 ) -> Result<()> {
@@ -1279,15 +1279,6 @@ async fn finalize_turn(
                 .await;
         }
         return Ok(());
-    }
-
-    if result.got_result {
-        thread
-            .append(&ThreadEvent::assistant_message_with_phase(
-                &result.final_text,
-                Some("final_answer".to_string()),
-            ))
-            .context("append assistant message")?;
     }
 
     send_final_response(

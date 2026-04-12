@@ -43,6 +43,7 @@ ZDX solves this with a boring, reliable core:
 - Transcript UX: scroll, select, copy.
 - Threads persist and replay deterministically.
 - **Queued prompts:** when a turn is streaming, submitting a normal prompt enqueues it. The next queued prompt auto-sends when the turn ends. A small queue panel appears between transcript and input (first 3 prompts, 30-char summaries). Queue is in-memory only.
+- **Side questions (`/btw`):** the user can open a popup, ask a side question from the latest stable thread context, and ZDX runs it in a background forked thread without interrupting the current run. The result is available later in thread history.
 
 ### Secondary: `zdx exec ...` (non-interactive)
 

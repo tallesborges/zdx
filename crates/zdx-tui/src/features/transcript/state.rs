@@ -416,6 +416,20 @@ impl TranscriptState {
         &self.cells
     }
 
+    /// Returns the number of cells that belong to committed/stable history.
+    ///
+    /// When a prompt is pending or actively running, this excludes that turn and
+    /// all cells that followed it so side features can fork from stable context.
+    pub fn stable_prefix_len(&self) -> usize {
+        let in_flight_id = self.active_user_cell_id.or(self.pending_user_cell_id);
+        if let Some(in_flight_id) = in_flight_id
+            && let Some(index) = self.cells.iter().position(|cell| cell.id() == in_flight_id)
+        {
+            return index;
+        }
+        self.cells.len()
+    }
+
     /// Resets transcript to empty state (for /new, handoff submit).
     ///
     /// Clears cells, scroll, and wrap cache. Keeps viewport/terminal size.

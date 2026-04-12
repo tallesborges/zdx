@@ -2,6 +2,7 @@
 //!
 //! Manages the active thread, message history, and token usage tracking.
 
+use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_persistence::{Thread, Usage};
 use zdx_core::models::ModelPricing;
 use zdx_core::providers::ChatMessage;
@@ -21,6 +22,12 @@ pub struct ThreadState {
     /// Thread messages (API format).
     pub messages: Vec<ChatMessage>,
 
+    /// Optional thread-local model override.
+    pub model_override: Option<String>,
+
+    /// Optional thread-local thinking override.
+    pub thinking_override: Option<ThinkingLevel>,
+
     /// Cumulative token usage for this thread.
     pub usage: ThreadUsage,
 }
@@ -38,6 +45,8 @@ impl ThreadState {
             thread_handle: None,
             title: None,
             messages: Vec::new(),
+            model_override: None,
+            thinking_override: None,
             usage: ThreadUsage::new(),
         }
     }
@@ -52,6 +61,8 @@ impl ThreadState {
             thread_handle,
             title,
             messages,
+            model_override: None,
+            thinking_override: None,
             usage: ThreadUsage::new(),
         }
     }
@@ -66,7 +77,16 @@ impl ThreadState {
                 self.thread_handle = thread_handle;
                 if self.thread_handle.is_none() {
                     self.title = None;
+                    self.model_override = None;
+                    self.thinking_override = None;
                 }
+            }
+            ThreadMutation::SetOverrides {
+                model_override,
+                thinking_override,
+            } => {
+                self.model_override = model_override;
+                self.thinking_override = thinking_override;
             }
             ThreadMutation::ResetUsage => self.usage = ThreadUsage::new(),
             ThreadMutation::SetUsage { cumulative, latest } => {

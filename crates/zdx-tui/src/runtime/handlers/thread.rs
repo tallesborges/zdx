@@ -1,9 +1,15 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
+use tokio_util::sync::CancellationToken;
+use zdx_core::agent_activity;
+use zdx_core::config::{Config, ThinkingLevel};
+use zdx_core::core::agent::{self, AgentOptions};
 use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::core::{thread_persistence as tp, worktree};
+use zdx_core::providers::ChatMessage;
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
@@ -19,11 +25,18 @@ pub async fn thread_list_load(
         Ok(threads) if threads.is_empty() => UiEvent::Thread(ThreadUiEvent::ListFailed {
             error: "No threads found.".to_string(),
         }),
-        Ok(threads) => UiEvent::Thread(ThreadUiEvent::ListLoaded {
-            threads,
-            original_cells,
-            mode,
-        }),
+        Ok(threads) => {
+            let active_thread_ids: HashSet<String> = agent_activity::list_active()
+                .into_iter()
+                .filter_map(|run| run.thread_id)
+                .collect();
+            UiEvent::Thread(ThreadUiEvent::ListLoaded {
+                threads,
+                active_thread_ids,
+                original_cells,
+                mode,
+            })
+        }
         Err(e) => UiEvent::Thread(ThreadUiEvent::ListFailed {
             error: format!("Failed to load threads: {e}"),
         }),
@@ -51,6 +64,16 @@ pub async fn thread_load(thread_id: String, root: PathBuf) -> UiEvent {
 
 /// Synchronous thread loading (runs in blocking task).
 fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
+    let is_active_elsewhere = agent_activity::list_active()
+        .into_iter()
+        .filter_map(|run| run.thread_id)
+        .any(|id| id == thread_id);
+    if is_active_elsewhere {
+        return UiEvent::Thread(ThreadUiEvent::LoadFailed {
+            error: "This thread is still running in the background. Wait for it to finish before opening it.".to_string(),
+        });
+    }
+
     // Load thread events (I/O)
     let events = match tp::load_thread_events(thread_id) {
         Ok(events) => events,
@@ -65,6 +88,8 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
     let usage = tp::extract_usage_from_thread_events(&events);
 
     let title = tp::extract_title_from_events(&events);
+    let model_override = tp::read_thread_model_override(thread_id).ok().flatten();
+    let thinking_override = tp::read_thread_thinking_override(thread_id).ok().flatten();
 
     // Build transcript cells from events
     let cells = build_transcript_from_events(&events);
@@ -104,6 +129,8 @@ fn load_thread_sync(thread_id: &str, root: &Path) -> UiEvent {
         stored_root: stored_root.map(PathBuf::from),
         thread_handle,
         title,
+        model_override,
+        thinking_override,
         usage,
     })
 }
@@ -258,18 +285,30 @@ pub fn resolve_project_root(root: &Path) -> anyhow::Result<PathBuf> {
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn thread_preview(thread_id: String) -> UiEvent {
-    tokio::task::spawn_blocking(move || match tp::load_thread_events(&thread_id) {
-        Ok(events) => {
-            let cells = build_transcript_from_events(&events);
-            UiEvent::Thread(ThreadUiEvent::PreviewLoaded { cells })
+    tokio::task::spawn_blocking(move || {
+        let is_active_elsewhere = agent_activity::list_active()
+            .into_iter()
+            .filter_map(|run| run.thread_id)
+            .any(|id| id == thread_id);
+        if is_active_elsewhere {
+            return UiEvent::Thread(ThreadUiEvent::PreviewFailed { thread_id });
         }
-        Err(_) => {
-            // Silent failure for preview - errors shown on actual load
-            UiEvent::Thread(ThreadUiEvent::PreviewFailed)
+
+        match tp::load_thread_events(&thread_id) {
+            Ok(events) => {
+                let cells = build_transcript_from_events(&events);
+                UiEvent::Thread(ThreadUiEvent::PreviewLoaded { thread_id, cells })
+            }
+            Err(_) => {
+                // Silent failure for preview - errors shown on actual load
+                UiEvent::Thread(ThreadUiEvent::PreviewFailed { thread_id })
+            }
         }
     })
     .await
-    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed))
+    .unwrap_or(UiEvent::Thread(ThreadUiEvent::PreviewFailed {
+        thread_id: String::new(),
+    }))
 }
 
 /// Creates a new thread.
@@ -326,6 +365,111 @@ pub async fn thread_fork(
                 error: format!("Task failed: {e}"),
             })
         })
+}
+
+/// Starts a live BTW popup turn in a forked thread.
+pub fn spawn_btw_turn(
+    mut config: Config,
+    agent_opts: AgentOptions,
+    system_prompt: Option<String>,
+    base_messages: Vec<ChatMessage>,
+    thread_handle: Option<tp::Thread>,
+    messages: Vec<ChatMessage>,
+    prompt: String,
+    model: String,
+    thinking_level: ThinkingLevel,
+) -> Result<UiEvent, String> {
+    config.model = model.clone();
+    config.thinking_level = thinking_level;
+    let (thread_handle, messages) = prepare_btw_turn(
+        base_messages,
+        thread_handle,
+        messages,
+        &prompt,
+        &agent_opts.root,
+        &model,
+        thinking_level,
+    )
+    .map_err(|e| format!("Failed to start side thread: {e}"))?;
+
+    let thread_id = thread_handle.id.clone();
+    let (agent_tx, agent_rx) = agent::create_event_channel();
+    let cancel = CancellationToken::new();
+    let run_cancel = cancel.clone();
+    let (tui_tx, tui_rx) = agent::create_event_channel();
+    let (persist_tx, persist_rx) = agent::create_event_channel();
+    let _broadcaster = agent::spawn_broadcaster_with_modes(
+        agent_rx,
+        vec![
+            (tui_tx, agent::BroadcastMode::Ui),
+            (persist_tx, agent::BroadcastMode::Reliable),
+        ],
+    );
+    let _persist = tp::spawn_thread_persist_task_with_completed_messages(
+        thread_handle.clone(),
+        persist_rx,
+        true,
+    );
+
+    let run_messages = messages.clone();
+    tokio::spawn(async move {
+        let _ = agent::run_turn_with_cancel(
+            run_messages,
+            &config,
+            &agent_opts,
+            system_prompt.as_deref(),
+            Some(&thread_id),
+            agent_tx.clone(),
+            Some(run_cancel),
+        )
+        .await;
+    });
+
+    Ok(UiEvent::BtwAgentSpawned {
+        thread_handle,
+        prompt,
+        messages,
+        rx: tui_rx,
+        cancel,
+    })
+}
+
+fn prepare_btw_turn(
+    base_messages: Vec<ChatMessage>,
+    thread_handle: Option<tp::Thread>,
+    mut messages: Vec<ChatMessage>,
+    prompt: &str,
+    root: &Path,
+    model: &str,
+    thinking_level: ThinkingLevel,
+) -> anyhow::Result<(tp::Thread, Vec<ChatMessage>)> {
+    let mut thread_handle = if let Some(thread_handle) = thread_handle {
+        thread_handle
+    } else {
+        let mut thread_handle =
+            tp::Thread::new_with_root(root).context("Failed to create side thread")?;
+        let events = tp::messages_to_events(&base_messages);
+        for event in &events {
+            thread_handle
+                .append(event)
+                .context("Failed to persist side thread context")?;
+        }
+        messages = base_messages;
+        thread_handle
+    };
+
+    thread_handle
+        .append(&ThreadEvent::user_message(prompt))
+        .context("Failed to persist side question")?;
+    thread_handle
+        .set_model_override(Some(model.to_string()))
+        .context("Failed to persist side thread model override")?;
+    thread_handle
+        .set_thinking_override(Some(thinking_level))
+        .context("Failed to persist side thread thinking override")?;
+    messages.push(ChatMessage::user(prompt));
+
+    Ok((thread_handle, messages))
 }
 
 fn fork_thread_sync(

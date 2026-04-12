@@ -43,6 +43,13 @@ impl Command {
 /// Available commands.
 pub const COMMANDS: &[Command] = &[
     Command {
+        name: "btw",
+        aliases: &["side"],
+        description: "Ask a side question in a background fork",
+        category: "thread",
+        shortcut: None,
+    },
+    Command {
         name: "config",
         aliases: &["settings"],
         description: "Open config file in default editor",
@@ -228,6 +235,7 @@ mod tests {
 
     #[test]
     fn test_command_display_name() {
+        assert_eq!(find_command("btw").display_name(), "btw (side)");
         assert_eq!(find_command("config").display_name(), "config (settings)");
         assert_eq!(find_command("copy-id").display_name(), "copy-id (copyid)");
         assert_eq!(find_command("debug").display_name(), "debug (perf, status)");

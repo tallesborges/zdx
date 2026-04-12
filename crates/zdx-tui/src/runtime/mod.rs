@@ -351,7 +351,12 @@ impl TuiRuntime {
         // - Recent terminal activity (scrolling, typing)
         // Otherwise use slow polling to save CPU.
         let recent_terminal_activity = self.last_terminal_event.elapsed() < IDLE_POLL_DURATION;
+        let popup_running = matches!(
+            self.state.overlay.as_ref(),
+            Some(crate::overlays::Overlay::Btw(state)) if state.agent_state.is_running()
+        );
         let needs_fast_poll = self.state.tui.agent_state.is_running()
+            || popup_running
             || self.state.tui.tasks.state(TaskKind::Bash).is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.input.handoff.is_generating()
@@ -414,6 +419,20 @@ impl TuiRuntime {
             };
 
             events.push(UiEvent::Agent((*event).clone()));
+        }
+
+        if let Some(crate::overlays::Overlay::Btw(state)) = &mut self.state.overlay {
+            while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } =
+                &mut state.agent_state
+            {
+                let event = match rx.try_recv() {
+                    Ok(ev) => ev,
+                    Err(mpsc::error::TryRecvError::Empty) => break,
+                    Err(mpsc::error::TryRecvError::Disconnected) => break,
+                };
+
+                events.push(UiEvent::BtwAgent((*event).clone()));
+            }
         }
     }
 
@@ -494,8 +513,43 @@ impl TuiRuntime {
                 let event = handlers::spawn_agent_turn(&self.state.tui);
                 self.dispatch_event(event);
             }
+            UiEffect::StartBtwTurn {
+                base_messages,
+                thread_handle,
+                messages,
+                prompt,
+                model,
+                thinking_level,
+            } => {
+                let config = self.state.tui.config.clone();
+                let agent_opts = self.state.tui.agent_opts.clone();
+                let system_prompt = self.state.tui.system_prompt.clone();
+                match handlers::spawn_btw_turn(
+                    config,
+                    agent_opts,
+                    system_prompt,
+                    base_messages,
+                    thread_handle,
+                    messages,
+                    prompt,
+                    model,
+                    thinking_level,
+                ) {
+                    Ok(event) => self.dispatch_event(event),
+                    Err(error) => self.dispatch_event(UiEvent::Thread(
+                        crate::events::ThreadUiEvent::ForkFailed { error },
+                    )),
+                }
+            }
             UiEffect::InterruptAgent => {
                 handlers::interrupt_agent(&self.state.tui);
+            }
+            UiEffect::InterruptBtwAgent => {
+                if let Some(crate::overlays::Overlay::Btw(state)) = &self.state.overlay
+                    && let Some(cancel) = state.agent_state.cancel_token()
+                {
+                    cancel.cancel();
+                }
             }
             UiEffect::InterruptBash => {
                 // Unified cancellation: call cancel() on the token
@@ -639,9 +693,27 @@ impl TuiRuntime {
                 let _ = zdx_core::config::Config::save_model(&model);
                 // Errors are silently ignored - model is already set in state
             }
+            UiEffect::PersistThreadModelOverride { model } => {
+                if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
+                    && let Ok(mut thread) = zdx_core::core::thread_persistence::Thread::with_id(
+                        thread_handle.id.clone(),
+                    )
+                {
+                    let _ = thread.set_model_override(Some(model));
+                }
+            }
             UiEffect::PersistThinking { level } => {
                 let _ = zdx_core::config::Config::save_thinking_level(level);
                 // Errors are silently ignored - level is already set in state
+            }
+            UiEffect::PersistThreadThinkingOverride { level } => {
+                if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
+                    && let Ok(mut thread) = zdx_core::core::thread_persistence::Thread::with_id(
+                        thread_handle.id.clone(),
+                    )
+                {
+                    let _ = thread.set_thinking_override(Some(level));
+                }
             }
 
             // Thread effects (pure async handlers)
@@ -695,6 +767,15 @@ impl TuiRuntime {
                 });
             }
             UiEffect::OpenThreadPicker { mode } => {
+                if mode.is_switch() && self.state.tui.agent_state.is_running() {
+                    self.state
+                        .tui
+                        .transcript
+                        .push_cell(crate::transcript::HistoryCell::system(
+                            "Stop the current task first.".to_string(),
+                        ));
+                    return;
+                }
                 let original_cells = if mode.is_switch() {
                     self.state.tui.transcript.cells().to_vec()
                 } else {

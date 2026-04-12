@@ -1,6 +1,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use tokio_util::sync::CancellationToken;
 use zdx_core::config::{Config, TextVerbosity};
 use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
 use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
@@ -79,8 +80,10 @@ pub(crate) fn record_user_message(
 pub(crate) struct AgentTurnHandle {
     /// Event stream for the caller to consume.
     pub rx: AgentEventRx,
-    /// Task handle for the agent. Abort this on cancellation.
-    pub task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
+    /// Cancellation token for this agent turn.
+    pub cancel: CancellationToken,
+    /// Task handle kept alive for the running agent turn.
+    pub _task: tokio::task::JoinHandle<Result<(String, Vec<ChatMessage>)>>,
 }
 
 struct PreparedBotTurn {
@@ -157,28 +160,45 @@ pub(crate) fn spawn_agent_turn(
 
     // Create channels: agent -> broadcaster -> [bot, persist]
     let (agent_tx, agent_rx) = agent::create_event_channel();
+    let cancel = CancellationToken::new();
+    let run_cancel = cancel.clone();
     let (bot_tx, bot_rx) = agent::create_event_channel();
     let (persist_tx, persist_rx) = agent::create_event_channel();
 
-    agent::spawn_broadcaster(agent_rx, vec![bot_tx, persist_tx]);
-    thread_persistence::spawn_thread_persist_task(thread.clone(), persist_rx);
+    agent::spawn_broadcaster_with_modes(
+        agent_rx,
+        vec![
+            (bot_tx, agent::BroadcastMode::Ui),
+            (persist_tx, agent::BroadcastMode::Reliable),
+        ],
+    );
+    thread_persistence::spawn_thread_persist_task_with_completed_messages(
+        thread.clone(),
+        persist_rx,
+        true,
+    );
 
     // Spawn agent in background — owned values moved in
     let config = bot_config;
     let thread_id = thread_id.to_string();
     let task = tokio::spawn(async move {
-        agent::run_turn(
+        agent::run_turn_with_cancel(
             messages,
             &config,
             &agent_opts,
             system_prompt.as_deref(),
             Some(&thread_id),
             agent_tx,
+            Some(run_cancel),
         )
         .await
     });
 
-    Ok(AgentTurnHandle { rx: bot_rx, task })
+    Ok(AgentTurnHandle {
+        rx: bot_rx,
+        cancel,
+        _task: task,
+    })
 }
 
 /// Maps an `AgentEvent` to a short status emoji + label for Telegram display.

@@ -956,9 +956,18 @@ fn generate_thread_id() -> String {
 ///
 /// persist_handle.await.unwrap(); // Wait for persistence to finish
 /// ```
-pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> JoinHandle<()> {
+pub fn spawn_thread_persist_task(thread: Thread, rx: AgentEventRx) -> JoinHandle<()> {
+    spawn_thread_persist_task_with_completed_messages(thread, rx, false)
+}
+
+/// Spawns a persistence task with optional assistant-final-message persistence.
+pub fn spawn_thread_persist_task_with_completed_messages(
+    mut thread: Thread,
+    mut rx: AgentEventRx,
+    persist_completed_messages: bool,
+) -> JoinHandle<()> {
     tokio::spawn(async move {
-        let mut usage_persistor = UsagePersistor::default();
+        let mut usage_persistor = UsagePersistor::new(persist_completed_messages);
         while let Some(event) = rx.recv().await {
             for thread_event in usage_persistor.handle_event(&event) {
                 // Best-effort persistence - log errors but don't panic
@@ -979,11 +988,20 @@ pub fn spawn_thread_persist_task(mut thread: Thread, mut rx: AgentEventRx) -> Jo
 #[derive(Debug, Default)]
 struct UsagePersistor {
     pending: Option<Usage>,
+    persist_completed_messages: bool,
 }
 
 impl UsagePersistor {
+    fn new(persist_completed_messages: bool) -> Self {
+        Self {
+            pending: None,
+            persist_completed_messages,
+        }
+    }
+
     fn handle_event(&mut self, event: &crate::core::events::AgentEvent) -> Vec<ThreadEvent> {
         use crate::core::events::AgentEvent;
+        use crate::core::events::TurnStatus;
 
         let mut events = Vec::new();
 
@@ -1016,10 +1034,21 @@ impl UsagePersistor {
                     }
                 }
             }
-            AgentEvent::TurnFinished { .. } => {
+            AgentEvent::TurnFinished {
+                status, final_text, ..
+            } => {
                 self.flush_pending(&mut events);
                 if let Some(thread_event) = ThreadEvent::from_agent(event) {
                     events.push(thread_event);
+                }
+                if self.persist_completed_messages
+                    && matches!(status, TurnStatus::Completed)
+                    && !final_text.is_empty()
+                {
+                    events.push(ThreadEvent::assistant_message_with_phase(
+                        final_text,
+                        Some("final_answer".to_string()),
+                    ));
                 }
             }
             _ => {
@@ -1696,6 +1725,113 @@ pub fn read_thread_pending_topic_title(id: &str) -> Result<bool> {
 pub fn load_thread_as_messages(id: &str) -> Result<Vec<crate::providers::ChatMessage>> {
     let events = load_thread_events(id)?;
     Ok(thread_events_to_messages(events))
+}
+
+/// Converts chat messages back into thread events for replay/fork bootstrapping.
+pub fn messages_to_events(messages: &[crate::providers::ChatMessage]) -> Vec<ThreadEvent> {
+    use crate::providers::{ChatContentBlock, MessageContent};
+
+    let mut events = Vec::new();
+    for message in messages {
+        match (&message.role[..], &message.content) {
+            ("user", MessageContent::Text(text)) => {
+                events.push(ThreadEvent::user_message(text));
+            }
+            ("assistant", MessageContent::Text(text)) => {
+                events.push(ThreadEvent::assistant_message_with_phase(
+                    text,
+                    message.phase.clone(),
+                ));
+            }
+            ("assistant", MessageContent::Blocks(blocks)) => {
+                for block in blocks {
+                    match block {
+                        ChatContentBlock::Reasoning(reasoning) => {
+                            events.push(ThreadEvent::reasoning(
+                                reasoning.text.clone(),
+                                reasoning.replay.clone(),
+                            ));
+                        }
+                        ChatContentBlock::Text(text) => {
+                            events.push(ThreadEvent::assistant_message_with_phase(
+                                text,
+                                message.phase.clone(),
+                            ));
+                        }
+                        ChatContentBlock::ToolUse { id, name, input } => {
+                            events.push(ThreadEvent::tool_use(
+                                id.clone(),
+                                name.clone(),
+                                input.clone(),
+                            ));
+                        }
+                        ChatContentBlock::ToolResult(result) => {
+                            events.push(ThreadEvent::tool_result(
+                                result.tool_use_id.clone(),
+                                tool_result_content_to_value(&result.content),
+                                !result.is_error,
+                            ));
+                        }
+                        ChatContentBlock::Image { .. } => {}
+                    }
+                }
+            }
+            ("user", MessageContent::Blocks(blocks)) => {
+                let mut user_text_parts = Vec::new();
+                for block in blocks {
+                    match block {
+                        ChatContentBlock::Text(text) => user_text_parts.push(text.clone()),
+                        ChatContentBlock::ToolResult(result) => {
+                            if !user_text_parts.is_empty() {
+                                events
+                                    .push(ThreadEvent::user_message(user_text_parts.join("\n\n")));
+                                user_text_parts.clear();
+                            }
+                            events.push(ThreadEvent::tool_result(
+                                result.tool_use_id.clone(),
+                                tool_result_content_to_value(&result.content),
+                                !result.is_error,
+                            ));
+                        }
+                        ChatContentBlock::Image { .. } => {}
+                        ChatContentBlock::Reasoning(reasoning) => {
+                            events.push(ThreadEvent::reasoning(
+                                reasoning.text.clone(),
+                                reasoning.replay.clone(),
+                            ));
+                        }
+                        ChatContentBlock::ToolUse { id, name, input } => {
+                            events.push(ThreadEvent::tool_use(
+                                id.clone(),
+                                name.clone(),
+                                input.clone(),
+                            ));
+                        }
+                    }
+                }
+                if !user_text_parts.is_empty() {
+                    events.push(ThreadEvent::user_message(user_text_parts.join("\n\n")));
+                }
+            }
+            _ => {}
+        }
+    }
+    events
+}
+
+fn tool_result_content_to_value(content: &crate::tools::ToolResultContent) -> Value {
+    let text = match content {
+        crate::tools::ToolResultContent::Text(text) => text.as_str(),
+        crate::tools::ToolResultContent::Blocks(blocks) => blocks
+            .iter()
+            .find_map(|block| match block {
+                crate::tools::ToolResultBlock::Text { text } => Some(text.as_str()),
+                crate::tools::ToolResultBlock::Image { .. } => None,
+            })
+            .unwrap_or(""),
+    };
+
+    serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.to_string()))
 }
 
 /// Updates a thread's title by ID.

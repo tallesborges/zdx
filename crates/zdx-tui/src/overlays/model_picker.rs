@@ -91,15 +91,39 @@ impl ModelPickerState {
                 let display_name = model_label(model);
 
                 let root = tui.agent_opts.root.clone();
+                let use_thread_override = tui.thread.thread_handle.is_some()
+                    && (tui.thread.model_override.is_some()
+                        || tui.thread.thinking_override.is_some());
                 OverlayUpdate::close()
                     .with_ui_effects(vec![
-                        UiEffect::PersistModel {
-                            model: model_id.clone(),
+                        if use_thread_override {
+                            UiEffect::PersistThreadModelOverride {
+                                model: model_id.clone(),
+                            }
+                        } else {
+                            UiEffect::PersistModel {
+                                model: model_id.clone(),
+                            }
                         },
                         UiEffect::RefreshSystemPrompt { path: root },
                     ])
                     .with_mutations(vec![
-                        StateMutation::Config(ConfigMutation::SetModel(model_id)),
+                        if use_thread_override {
+                            StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
+                                model_override: Some(model_id.clone()),
+                                thinking_override: tui.thread.thinking_override,
+                            })
+                        } else {
+                            StateMutation::Config(ConfigMutation::SetModel(model_id.clone()))
+                        },
+                        StateMutation::SetActiveThreadOverrides {
+                            model_override: if use_thread_override {
+                                Some(model_id)
+                            } else {
+                                tui.thread.model_override.clone()
+                            },
+                            thinking_override: tui.thread.thinking_override,
+                        },
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(
                             format!("Switched to {display_name}"),
                         )),

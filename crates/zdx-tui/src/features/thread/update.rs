@@ -8,8 +8,10 @@
     clippy::needless_pass_by_value
 )]
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
+use zdx_core::config::ThinkingLevel;
 use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage, short_thread_id};
 use zdx_core::providers::ChatMessage;
 
@@ -26,6 +28,7 @@ use crate::transcript::HistoryCell;
 pub enum ThreadOverlayAction {
     OpenThreadPicker {
         threads: Vec<ThreadSummary>,
+        active_thread_ids: HashSet<String>,
         original_cells: Vec<HistoryCell>,
         mode: crate::overlays::ThreadPickerMode,
     },
@@ -40,11 +43,13 @@ pub fn handle_thread_event(
     let effects = match event {
         ThreadUiEvent::ListLoaded {
             threads,
+            active_thread_ids,
             original_cells,
             mode,
         } => {
             overlay_action = ThreadOverlayAction::OpenThreadPicker {
                 threads,
+                active_thread_ids,
                 original_cells,
                 mode,
             };
@@ -64,6 +69,8 @@ pub fn handle_thread_event(
             stored_root,
             thread_handle,
             title,
+            model_override,
+            thinking_override,
             usage,
         } => {
             let mut effects = Vec::new();
@@ -79,6 +86,8 @@ pub fn handle_thread_event(
                     messages,
                     history,
                     title,
+                    model_override,
+                    thinking_override,
                     usage,
                 },
                 &mut mutations,
@@ -91,11 +100,14 @@ pub fn handle_thread_event(
             ));
             vec![]
         }
-        ThreadUiEvent::PreviewLoaded { cells } => {
+        ThreadUiEvent::PreviewLoaded {
+            thread_id: _,
+            cells,
+        } => {
             handle_thread_preview_loaded(cells, &mut mutations);
             vec![]
         }
-        ThreadUiEvent::PreviewFailed => {
+        ThreadUiEvent::PreviewFailed { thread_id: _ } => {
             // Silent failure for preview - errors shown on actual load
             vec![]
         }
@@ -231,6 +243,8 @@ fn handle_thread_loaded(loaded: ThreadLoaded, mutations: &mut Vec<StateMutation>
         messages,
         history,
         title,
+        model_override,
+        thinking_override,
         usage,
     } = loaded;
     let (cumulative, latest) = usage;
@@ -246,10 +260,18 @@ fn handle_thread_loaded(loaded: ThreadLoaded, mutations: &mut Vec<StateMutation>
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(
         thread_handle,
     )));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetOverrides {
+        model_override: model_override.clone(),
+        thinking_override,
+    }));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
         latest,
     }));
+    mutations.push(StateMutation::SetActiveThreadOverrides {
+        model_override,
+        thinking_override,
+    });
     mutations.push(StateMutation::Input(InputMutation::SetHistory(history)));
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
@@ -287,7 +309,15 @@ fn handle_thread_created(
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_handle,
     ))));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetOverrides {
+        model_override: None,
+        thinking_override: None,
+    }));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
+    mutations.push(StateMutation::SetActiveThreadOverrides {
+        model_override: None,
+        thinking_override: None,
+    });
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
 
     // Show startup messages
@@ -319,6 +349,10 @@ fn handle_thread_forked(forked: ThreadForked, mutations: &mut Vec<StateMutation>
     mutations.push(StateMutation::Thread(ThreadMutation::SetThread(Some(
         thread_handle,
     ))));
+    mutations.push(StateMutation::Thread(ThreadMutation::SetOverrides {
+        model_override: None,
+        thinking_override: None,
+    }));
     mutations.push(StateMutation::Thread(ThreadMutation::SetTitle(None)));
     mutations.push(StateMutation::Thread(ThreadMutation::SetUsage {
         cumulative,
@@ -342,6 +376,8 @@ struct ThreadLoaded {
     messages: Vec<ChatMessage>,
     history: Vec<String>,
     title: Option<String>,
+    model_override: Option<String>,
+    thinking_override: Option<ThinkingLevel>,
     usage: (Usage, Usage),
 }
 

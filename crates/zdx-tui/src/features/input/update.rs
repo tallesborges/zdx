@@ -4,6 +4,7 @@
 //! All state mutations for input-related events happen here.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
+use zdx_core::agent_activity;
 use zdx_core::core::thread_persistence::ThreadEvent;
 use zdx_core::providers::ChatMessage;
 
@@ -31,6 +32,7 @@ pub struct InputContext<'a> {
     pub thread_id: Option<String>,
     pub thread_title: Option<&'a str>,
     pub model_id: &'a str,
+    pub active_thread_ids: &'a std::collections::HashSet<String>,
 }
 
 fn is_image_path(text: &str) -> bool {
@@ -451,7 +453,7 @@ fn handle_voice_hotkey(input: &mut InputState) -> KeyResult {
 }
 
 // =============================================================================
-// Overlays: command palette, thinking picker
+// Overlays: command palette, model picker, thinking picker
 // =============================================================================
 
 fn handle_overlays(
@@ -468,6 +470,10 @@ fn handle_overlays(
         // Ctrl+O: open command palette
         KeyCode::Char('o') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
+        }
+        // Ctrl+P: open model picker (`Ctrl+M` usually arrives as Enter in terminals)
+        KeyCode::Char('p') if mods.only_ctrl() => {
+            Some((vec![], vec![], Some(OverlayRequest::ModelPicker)))
         }
         // Ctrl+T: open thinking picker (if model supports reasoning)
         KeyCode::Char('t') if mods.only_ctrl() => {
@@ -498,6 +504,7 @@ fn handle_submission(
             ctx.tasks,
             ctx.thread_id.clone(),
             ctx.thread_title,
+            ctx.active_thread_ids,
         )),
         _ => None,
     }
@@ -619,6 +626,7 @@ fn submit_input(
     tasks: &Tasks,
     thread_id: Option<String>,
     thread_title: Option<&str>,
+    active_thread_ids: &std::collections::HashSet<String>,
 ) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -648,6 +656,20 @@ fn submit_input(
 
     let title_task_running = tasks.state(TaskKind::ThreadTitle).is_running();
     let should_suggest_title = thread_id.is_some() && thread_title.is_none() && !title_task_running;
+
+    if let Some(thread_id) = thread_id.as_deref()
+        && (active_thread_ids.contains(thread_id) || thread_has_background_run(thread_id))
+    {
+        return (
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "This thread is still running in the background. Wait for it to finish before sending a new message.".to_string(),
+                ),
+            )],
+            None,
+        );
+    }
 
     // Try bash commands
     if let Some((mut effects, mutations, overlay)) = handle_bash_commands(input, trimmed, &text) {
@@ -745,6 +767,13 @@ fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Op
     }
 
     None
+}
+
+fn thread_has_background_run(thread_id: &str) -> bool {
+    agent_activity::list_active()
+        .into_iter()
+        .filter_map(|run| run.thread_id)
+        .any(|id| id == thread_id)
 }
 
 fn handle_handoff_submission(
