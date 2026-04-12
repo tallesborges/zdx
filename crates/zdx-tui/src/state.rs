@@ -292,6 +292,15 @@ impl TuiState {
         combined
     }
 
+    pub fn active_thread_ids_view(&self) -> HashSet<String> {
+        let mut combined: HashSet<String> = zdx_core::agent_activity::list_active()
+            .into_iter()
+            .filter_map(|run| run.thread_id)
+            .collect();
+        combined.extend(self.optimistic_active_threads.keys().cloned());
+        combined
+    }
+
     /// Builds transcript cells from message history.
     fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
         use zdx_core::providers::MessageContent;
