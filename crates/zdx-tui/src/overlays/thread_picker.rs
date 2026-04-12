@@ -106,7 +106,7 @@ impl ThreadPickerState {
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
-        self.refresh_active_thread_ids();
+        self.refresh_active_thread_ids(tui);
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -254,11 +254,8 @@ impl ThreadPickerState {
         self.active_thread_ids.contains(thread_id)
     }
 
-    fn refresh_active_thread_ids(&mut self) {
-        self.active_thread_ids = zdx_core::agent_activity::list_active()
-            .into_iter()
-            .filter_map(|run| run.thread_id)
-            .collect();
+    fn refresh_active_thread_ids(&mut self, tui: &TuiState) {
+        self.active_thread_ids = tui.active_thread_ids_view();
     }
 
     /// Returns true if the "Copied!" feedback should be shown.

@@ -94,6 +94,14 @@ impl ModelPickerState {
                 let use_thread_override = tui.thread.thread_handle.is_some()
                     && (tui.thread.model_override.is_some()
                         || tui.thread.thinking_override.is_some());
+                if use_thread_override && tui.agent_state.is_running() {
+                    return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Stop the current task first before changing this thread's model override."
+                                .to_string(),
+                        ),
+                    )]);
+                }
                 OverlayUpdate::close()
                     .with_ui_effects(vec![
                         if use_thread_override {

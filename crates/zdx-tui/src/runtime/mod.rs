@@ -786,6 +786,17 @@ impl TuiRuntime {
                 });
             }
             UiEffect::LoadThread { thread_id } => {
+                if self
+                    .state
+                    .tui
+                    .snapshot_active_thread_ids()
+                    .contains(&thread_id)
+                {
+                    self.dispatch_event(UiEvent::Thread(crate::events::ThreadUiEvent::LoadFailed {
+                        error: "This thread is still running in the background. Wait for it to finish before opening it.".to_string(),
+                    }));
+                    return;
+                }
                 let root = self.state.tui.agent_opts.root.clone();
                 self.spawn_task(TaskKind::ThreadLoad, TaskMeta::None, false, move |_| {
                     handlers::thread_load(thread_id, root)
@@ -856,6 +867,17 @@ impl TuiRuntime {
                 self.dispatch_event(event);
             }
             UiEffect::PreviewThread { thread_id } => {
+                if self
+                    .state
+                    .tui
+                    .snapshot_active_thread_ids()
+                    .contains(&thread_id)
+                {
+                    self.dispatch_event(UiEvent::Thread(
+                        crate::events::ThreadUiEvent::PreviewFailed { thread_id },
+                    ));
+                    return;
+                }
                 self.spawn_task(TaskKind::ThreadPreview, TaskMeta::None, false, move |_| {
                     handlers::thread_preview(thread_id)
                 });
