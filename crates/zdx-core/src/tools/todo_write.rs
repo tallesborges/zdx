@@ -740,7 +740,10 @@ mod tests {
             .and_then(|tasks| tasks.as_array())
             .expect("todo_write should return tasks array");
         assert_eq!(tasks.len(), 1);
-        assert_eq!(tasks[0].get("content").and_then(|v| v.as_str()), Some("Inspect codebase"));
+        assert_eq!(
+            tasks[0].get("content").and_then(|v| v.as_str()),
+            Some("Inspect codebase")
+        );
     }
 
     #[test]
@@ -756,10 +759,12 @@ mod tests {
         let (code, message, detail) = output.error_info().unwrap();
         assert_eq!(code, "invalid_input");
         assert_eq!(message, "field 'ops' must be an array");
-        assert!(detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("parsed as JSON, but not as a JSON array"));
+        assert!(
+            detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("parsed as JSON, but not as a JSON array")
+        );
     }
 
     #[test]
@@ -773,10 +778,12 @@ mod tests {
         let (code, message, detail) = output.error_info().unwrap();
         assert_eq!(code, "invalid_input");
         assert_eq!(message, "Invalid input for todo_write tool");
-        assert!(detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("field 'ops' must be an array; received object"));
+        assert!(
+            detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("field 'ops' must be an array; received object")
+        );
     }
 
     #[test]
@@ -792,10 +799,12 @@ mod tests {
         let (code, message, detail) = output.error_info().unwrap();
         assert_eq!(code, "invalid_input");
         assert_eq!(message, "Invalid input for todo_write tool");
-        assert!(detail
-            .as_deref()
-            .unwrap_or_default()
-            .contains("unknown variant `bogus`"));
+        assert!(
+            detail
+                .as_deref()
+                .unwrap_or_default()
+                .contains("unknown variant `bogus`")
+        );
     }
 
     #[test]

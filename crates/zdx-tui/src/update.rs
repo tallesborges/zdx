@@ -31,18 +31,60 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.transcript.check_selection_timeout();
             // Apply pending streaming deltas each tick so final chunks render without input
             transcript::apply_pending_delta(&mut app.tui.transcript, &mut app.tui.agent_state);
+            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
+                transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
+            }
             vec![]
         }
         UiEvent::Frame { width, height } => {
             handle_frame(&mut app.tui, width, height);
+            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
+                transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
+            }
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => handle_agent_event(app, &agent_event),
-        UiEvent::AgentSpawned { rx } => {
-            app.tui.agent_state = AgentState::Waiting { rx };
+        UiEvent::AgentSpawned { rx, cancel } => {
+            if let Some(thread_id) = app
+                .tui
+                .thread
+                .thread_handle
+                .as_ref()
+                .map(|thread| thread.id.clone())
+            {
+                app.tui.mark_thread_running(thread_id);
+            }
+            app.tui.agent_state = AgentState::Waiting { rx, cancel };
             app.tui.transcript.activate_pending_user_cell();
             app.tui.status_line.start_turn();
+            vec![]
+        }
+        UiEvent::BtwAgentSpawned {
+            thread_handle,
+            prompt,
+            messages,
+            rx,
+            cancel,
+        } => {
+            app.tui.mark_thread_running(thread_handle.id.clone());
+            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
+                state.on_turn_spawned(thread_handle, prompt, messages, rx, cancel);
+            }
+            vec![]
+        }
+        UiEvent::BtwAgent(agent_event) => {
+            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
+                let finished = matches!(
+                    agent_event,
+                    zdx_core::core::events::AgentEvent::TurnFinished { .. }
+                );
+                let thread_id = state.thread_handle.as_ref().map(|thread| thread.id.clone());
+                state.handle_agent_event(&agent_event);
+                if finished && let Some(thread_id) = thread_id {
+                    app.tui.mark_thread_finished(&thread_id);
+                }
+            }
             vec![]
         }
         UiEvent::LoginResult { result } => handle_login_result_event(app, result),
@@ -225,6 +267,16 @@ fn handle_agent_event(
         agent_event,
         zdx_core::core::events::AgentEvent::TurnFinished { .. }
     );
+    if should_dequeue
+        && let Some(thread_id) = app
+            .tui
+            .thread
+            .thread_handle
+            .as_ref()
+            .map(|thread| thread.id.clone())
+    {
+        app.tui.mark_thread_finished(&thread_id);
+    }
     maybe_push_timing_cell(app, should_dequeue);
     maybe_send_next_queued_prompt(app, should_dequeue, &mut effects);
 
@@ -500,12 +552,21 @@ fn handle_system_prompt_refreshed(
 }
 
 fn handle_thread_ui_event(app: &mut AppState, thread_event: ThreadUiEvent) -> Vec<UiEffect> {
-    let allow_preview = matches!(
-        app.overlay.as_ref(),
-        Some(overlays::Overlay::ThreadPicker(_))
-    );
+    let preview_target = match app.overlay.as_ref() {
+        Some(overlays::Overlay::ThreadPicker(picker)) => {
+            picker.selected_thread().map(|thread| thread.id.clone())
+        }
+        _ => None,
+    };
     match thread_event {
-        ThreadUiEvent::PreviewLoaded { .. } | ThreadUiEvent::PreviewFailed if !allow_preview => {
+        ThreadUiEvent::PreviewLoaded { thread_id, .. }
+            if preview_target.as_deref() != Some(thread_id.as_str()) =>
+        {
+            vec![]
+        }
+        ThreadUiEvent::PreviewFailed { thread_id }
+            if preview_target.as_deref() != Some(thread_id.as_str()) =>
+        {
             vec![]
         }
         ThreadUiEvent::TitleSuggested { thread_id, .. }
@@ -534,11 +595,13 @@ fn maybe_open_thread_picker_overlay(
 ) {
     if let thread::ThreadOverlayAction::OpenThreadPicker {
         threads,
+        mut active_thread_ids,
         original_cells,
         mode,
     } = overlay_action
         && app.overlay.is_none()
     {
+        active_thread_ids.extend(app.tui.snapshot_active_thread_ids());
         let current_thread_id = app
             .tui
             .thread
@@ -547,6 +610,7 @@ fn maybe_open_thread_picker_overlay(
             .map(|log| log.id.clone());
         let (state, overlay_effects) = overlays::ThreadPickerState::open(
             threads,
+            active_thread_ids,
             original_cells,
             &app.tui.agent_opts.root,
             current_thread_id,
@@ -578,6 +642,13 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
                 tui.git_branch = git_branch;
                 tui.display_path = display_path;
             }
+            StateMutation::SetActiveThreadOverrides {
+                model_override,
+                thinking_override,
+            } => {
+                tui.config.model = model_override.unwrap_or_else(|| tui.base_model.clone());
+                tui.config.thinking_level = thinking_override.unwrap_or(tui.base_thinking_level);
+            }
             StateMutation::SetSystemPrompt(system_prompt) => {
                 tui.system_prompt = system_prompt;
             }
@@ -593,8 +664,14 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
 
 fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
     match mutation {
-        ConfigMutation::SetModel(model) => tui.config.model = model,
-        ConfigMutation::SetThinkingLevel(level) => tui.config.thinking_level = level,
+        ConfigMutation::SetModel(model) => {
+            tui.base_model = model.clone();
+            tui.config.model = model;
+        }
+        ConfigMutation::SetThinkingLevel(level) => {
+            tui.base_thinking_level = level;
+            tui.config.thinking_level = level;
+        }
     }
 }
 
@@ -699,6 +776,29 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
             effects
         }
+        overlays::OverlayRequest::Btw => {
+            let base_messages = build_btw_base_messages(&app.tui);
+            match overlays::BtwState::open(
+                base_messages,
+                &app.tui.config.model,
+                app.tui.config.thinking_level,
+                &app.tui.config.providers,
+            ) {
+                Ok((state, effects)) => {
+                    app.overlay = Some(overlays::Overlay::Btw(state));
+                    effects
+                }
+                Err(error) => {
+                    apply_mutations(
+                        &mut app.tui,
+                        vec![StateMutation::Transcript(
+                            TranscriptMutation::AppendSystemMessage(error),
+                        )],
+                    );
+                    vec![]
+                }
+            }
+        }
         overlays::OverlayRequest::Login => {
             let (state, effects) = overlays::LoginState::open(&app.tui);
             app.overlay = Some(overlays::Overlay::Login(state));
@@ -744,6 +844,19 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
     }
 }
 
+fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_core::providers::ChatMessage> {
+    let mut messages = tui.thread.messages.clone();
+    let has_in_flight_turn = tui.agent_state.is_running() || tui.transcript.has_pending_user_cell();
+    if has_in_flight_turn
+        && messages
+            .last()
+            .is_some_and(|message| message.role == "user")
+    {
+        messages.pop();
+    }
+    messages
+}
+
 // ============================================================================
 // Frame Handler (layout, delta coalescing, cell line info)
 // ============================================================================
@@ -785,6 +898,15 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
+            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
+                let (width, height) = app.tui.transcript.terminal_size;
+                let area = ratatui::layout::Rect::new(0, 0, width, height);
+                let input_y = app.tui.input_area.get().y;
+                if state.handle_mouse(mouse, area, input_y) {
+                    return vec![];
+                }
+            }
+
             // Check if click is in the input area first
             let input_area = app.tui.input_area.get();
             if mouse.row >= input_area.y
@@ -864,12 +986,14 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         .thread_handle
         .as_ref()
         .map(|thread_handle| thread_handle.id.clone());
+    let active_thread_ids = app.tui.snapshot_active_thread_ids();
     let ctx = input::InputContext {
         agent_state: &app.tui.agent_state,
         tasks: &app.tui.tasks,
         thread_id,
         thread_title: app.tui.thread.title.as_deref(),
         model_id: &app.tui.config.model,
+        active_thread_ids: &active_thread_ids,
     };
     let (effects, mutations, overlay_request) =
         input::handle_main_key(&mut app.tui.input, &ctx, key);

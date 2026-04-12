@@ -25,6 +25,10 @@ pub enum StateMutation {
         git_branch: Option<String>,
         display_path: String,
     },
+    SetActiveThreadOverrides {
+        model_override: Option<String>,
+        thinking_override: Option<ThinkingLevel>,
+    },
     SetSystemPrompt(Option<String>),
     SetLastSkillRepo(String),
     /// Toggle the debug status line visibility.
@@ -81,6 +85,10 @@ pub enum ThreadMutation {
     SetMessages(Vec<ChatMessage>),
     AppendMessage(ChatMessage),
     SetThread(Option<Thread>),
+    SetOverrides {
+        model_override: Option<String>,
+        thinking_override: Option<ThinkingLevel>,
+    },
     ResetUsage,
     /// Restore usage from persisted thread (cumulative + latest for context %)
     SetUsage {

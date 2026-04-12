@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::time::Instant;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -53,6 +54,7 @@ impl ThreadPickerMode {
 #[derive(Debug)]
 pub struct ThreadPickerState {
     pub all_threads: Vec<ThreadSummary>,
+    pub active_thread_ids: HashSet<String>,
     pub scope: ThreadScope,
     pub current_root: String,
     pub selected: usize,
@@ -70,6 +72,7 @@ pub struct ThreadPickerState {
 impl ThreadPickerState {
     pub fn open(
         threads: Vec<ThreadSummary>,
+        active_thread_ids: HashSet<String>,
         original_cells: Vec<HistoryCell>,
         current_root: &std::path::Path,
         current_thread_id: Option<String>,
@@ -82,6 +85,7 @@ impl ThreadPickerState {
             .to_string();
         let mut state = Self {
             all_threads: threads,
+            active_thread_ids,
             scope: ThreadScope::Current,
             current_root,
             selected: 0,
@@ -102,6 +106,7 @@ impl ThreadPickerState {
     }
 
     pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+        self.refresh_active_thread_ids();
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         let alt = key.modifiers.contains(KeyModifiers::ALT);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
@@ -119,7 +124,7 @@ impl ThreadPickerState {
             KeyCode::Char('u') if ctrl && !shift && !alt => {
                 self.filter.clear();
                 self.clamp_selection();
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+                self.preview_update()
             }
             KeyCode::Backspace => {
                 if alt {
@@ -128,12 +133,12 @@ impl ThreadPickerState {
                     self.filter.pop();
                 }
                 self.clamp_selection();
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+                self.preview_update()
             }
             KeyCode::Char(c) if !ctrl => {
                 self.filter.push(c);
                 self.clamp_selection();
-                OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+                self.preview_update()
             }
             _ => OverlayUpdate::stay(),
         }
@@ -143,7 +148,7 @@ impl ThreadPickerState {
         self.scope = self.scope.toggle();
         self.selected = 0;
         self.offset = 0;
-        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+        self.preview_update()
     }
 
     fn close_overlay(&self) -> OverlayUpdate {
@@ -169,7 +174,7 @@ impl ThreadPickerState {
             }
         }
         self.selected = self.selected.min(total.saturating_sub(1));
-        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+        self.preview_update()
     }
 
     fn navigate_down(&mut self) -> OverlayUpdate {
@@ -181,7 +186,7 @@ impl ThreadPickerState {
                 self.offset = self.selected - visible_height + 1;
             }
         }
-        OverlayUpdate::stay().with_ui_effects(self.preview_selected_effects())
+        self.preview_update()
     }
 
     fn handle_enter(&self, tui: &TuiState) -> OverlayUpdate {
@@ -195,6 +200,16 @@ impl ThreadPickerState {
         if tui.agent_state.is_running() {
             return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
                 TranscriptMutation::AppendSystemMessage("Stop the current task first.".to_string()),
+            )]);
+        }
+
+        if let Some(thread) = self.selected_thread()
+            && self.active_thread_ids.contains(&thread.id)
+        {
+            return OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage(
+                    "This thread is still running in the background. Wait for it to finish before opening it.".to_string(),
+                ),
             )]);
         }
 
@@ -233,6 +248,17 @@ impl ThreadPickerState {
         self.visible_tree_items()
             .get(self.selected)
             .map(|item| item.summary)
+    }
+
+    pub fn is_thread_active(&self, thread_id: &str) -> bool {
+        self.active_thread_ids.contains(thread_id)
+    }
+
+    fn refresh_active_thread_ids(&mut self) {
+        self.active_thread_ids = zdx_core::agent_activity::list_active()
+            .into_iter()
+            .filter_map(|run| run.thread_id)
+            .collect();
     }
 
     /// Returns true if the "Copied!" feedback should be shown.
@@ -318,9 +344,27 @@ impl ThreadPickerState {
         }
         let thread_id = self.selected_thread().map(|thread| thread.id.clone());
         if let Some(thread_id) = thread_id {
+            if self.active_thread_ids.contains(&thread_id) {
+                return Vec::new();
+            }
             vec![UiEffect::PreviewThread { thread_id }]
         } else {
             Vec::new()
+        }
+    }
+
+    fn preview_update(&mut self) -> OverlayUpdate {
+        let effects = self.preview_selected_effects();
+        if effects.is_empty() && self.mode.is_switch() {
+            OverlayUpdate::stay().with_mutations(vec![
+                StateMutation::Transcript(TranscriptMutation::ReplaceCells(
+                    self.original_cells.clone(),
+                )),
+                StateMutation::Transcript(TranscriptMutation::ResetScroll),
+                StateMutation::Transcript(TranscriptMutation::ClearWrapCache),
+            ])
+        } else {
+            OverlayUpdate::stay().with_ui_effects(effects)
         }
     }
 
@@ -444,12 +488,15 @@ fn clear_word_left(input: &mut String) {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
     fn test_thread_picker_state_new_empty() {
         let (state, _) = ThreadPickerState::open(
             vec![],
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,
@@ -487,6 +534,7 @@ mod tests {
         ];
         let (state, _) = ThreadPickerState::open(
             threads,
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,
@@ -512,6 +560,7 @@ mod tests {
         ];
         let (state, _) = ThreadPickerState::open(
             threads,
+            HashSet::new(),
             original_cells.clone(),
             std::path::Path::new("."),
             None,
@@ -545,6 +594,7 @@ mod tests {
         ];
         let (state, _) = ThreadPickerState::open(
             threads,
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,
@@ -588,6 +638,7 @@ mod tests {
         ];
         let (mut state, _) = ThreadPickerState::open(
             threads,
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,
@@ -615,6 +666,7 @@ mod tests {
                     handoff_from: None,
                 })
                 .collect(),
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,
@@ -652,6 +704,7 @@ mod tests {
                     handoff_from: None,
                 })
                 .collect(),
+            HashSet::new(),
             vec![],
             std::path::Path::new("."),
             None,

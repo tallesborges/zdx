@@ -1,18 +1,21 @@
-use zdx_core::core::{interrupt, thread_persistence};
+use tokio_util::sync::CancellationToken;
+use zdx_core::core::thread_persistence;
 
 use crate::events::UiEvent;
 use crate::state::TuiState;
 
 /// Interrupts the running agent.
 pub fn interrupt_agent(tui: &TuiState) {
-    if tui.agent_state.is_running() {
-        interrupt::trigger_ctrl_c();
+    if let Some(cancel) = tui.agent_state.cancel_token() {
+        cancel.cancel();
     }
 }
 
 /// Spawns an agent turn.
 pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let (agent_tx, agent_rx) = zdx_core::core::agent::create_event_channel();
+    let cancel = CancellationToken::new();
+    let run_cancel = cancel.clone();
 
     let messages = tui.thread.messages.clone();
     let config = tui.config.clone();
@@ -24,25 +27,35 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     if let Some(thread_handle) = tui.thread.thread_handle.clone() {
         let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
-        let _broadcaster =
-            zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-        let _persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
+        let _broadcaster = zdx_core::core::agent::spawn_broadcaster_with_modes(
+            agent_rx,
+            vec![
+                (tui_tx, zdx_core::core::agent::BroadcastMode::Ui),
+                (persist_tx, zdx_core::core::agent::BroadcastMode::Reliable),
+            ],
+        );
+        let _persist = thread_persistence::spawn_thread_persist_task_with_completed_messages(
+            thread_handle,
+            persist_rx,
+            true,
+        );
     } else {
         let _broadcaster = zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
 
     // Spawn the agent task - it will send TurnFinished when done
     tokio::spawn(async move {
-        let _ = zdx_core::core::agent::run_turn(
+        let _ = zdx_core::core::agent::run_turn_with_cancel(
             messages,
             &config,
             &agent_opts,
             system_prompt.as_deref(),
             thread_id.as_deref(),
             agent_tx.clone(),
+            Some(run_cancel),
         )
         .await;
     });
 
-    UiEvent::AgentSpawned { rx: tui_rx }
+    UiEvent::AgentSpawned { rx: tui_rx, cancel }
 }

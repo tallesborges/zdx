@@ -8,7 +8,6 @@
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use zdx_core::core::events::{AgentEvent, TurnStatus};
 use zdx_core::core::interrupt;
-use zdx_core::core::thread_persistence::ThreadEvent;
 
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};
@@ -77,9 +76,10 @@ pub fn handle_agent_event(
             // Transition from Waiting to Streaming so UI shows activity
             if let AgentState::Waiting { .. } = agent_state {
                 let old_state = std::mem::replace(agent_state, AgentState::Idle);
-                if let AgentState::Waiting { rx } = old_state {
+                if let AgentState::Waiting { rx, cancel } = old_state {
                     *agent_state = AgentState::Streaming {
                         rx,
+                        cancel,
                         cell_id,
                         pending_delta: String::new(),
                     };
@@ -115,17 +115,8 @@ pub fn handle_agent_event(
                         messages.clone(),
                     )));
                     *agent_state = AgentState::Idle;
-
-                    if !final_text.is_empty() && has_thread {
-                        vec![UiEffect::SaveThread {
-                            event: ThreadEvent::assistant_message_with_phase(
-                                final_text,
-                                Some("final_answer".to_string()),
-                            ),
-                        }]
-                    } else {
-                        vec![]
-                    }
+                    let _ = (final_text, has_thread);
+                    vec![]
                 }
                 TurnStatus::Interrupted => {
                     if !messages.is_empty() {
@@ -208,9 +199,10 @@ fn handle_assistant_delta(
             transcript.push_cell(cell);
 
             let old_state = std::mem::replace(agent_state, AgentState::Idle);
-            if let AgentState::Waiting { rx } = old_state {
+            if let AgentState::Waiting { rx, cancel } = old_state {
                 *agent_state = AgentState::Streaming {
                     rx,
+                    cancel,
                     cell_id,
                     pending_delta: text.to_string(),
                 };
@@ -262,12 +254,13 @@ fn handle_thinking_delta(
     // Transition from Waiting to Streaming
     if let AgentState::Waiting { .. } = agent_state {
         let old_state = std::mem::replace(agent_state, AgentState::Idle);
-        if let AgentState::Waiting { rx } = old_state {
+        if let AgentState::Waiting { rx, cancel } = old_state {
             let cell = HistoryCell::thinking_streaming(text);
             let cell_id = cell.id();
             transcript.push_cell(cell);
             *agent_state = AgentState::Streaming {
                 rx,
+                cancel,
                 cell_id,
                 pending_delta: String::new(),
             };

@@ -29,10 +29,13 @@
 //!
 //! This allows overlay handlers to get `&mut self` and `&mut TuiState` simultaneously.
 
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use zdx_core::config::Config;
 use zdx_core::core::agent::{AgentOptions, ToolConfig};
 use zdx_core::core::events::AgentEvent;
@@ -104,6 +107,8 @@ pub enum AgentState {
     Streaming {
         /// Receiver for agent events.
         rx: mpsc::Receiver<Arc<AgentEvent>>,
+        /// Cancellation token for this run.
+        cancel: CancellationToken,
         /// ID of the streaming assistant cell in transcript.
         cell_id: CellId,
         /// Buffered delta text to apply on next tick (coalescing).
@@ -113,6 +118,8 @@ pub enum AgentState {
     Waiting {
         /// Receiver for agent events.
         rx: mpsc::Receiver<Arc<AgentEvent>>,
+        /// Cancellation token for this run.
+        cancel: CancellationToken,
     },
 }
 
@@ -120,6 +127,15 @@ impl AgentState {
     /// Returns true if the agent is currently running (waiting or streaming).
     pub fn is_running(&self) -> bool {
         !matches!(self, AgentState::Idle)
+    }
+
+    pub fn cancel_token(&self) -> Option<CancellationToken> {
+        match self {
+            AgentState::Idle => None,
+            AgentState::Waiting { cancel, .. } | AgentState::Streaming { cancel, .. } => {
+                Some(cancel.clone())
+            }
+        }
     }
 }
 
@@ -149,6 +165,10 @@ pub struct TuiState {
     pub auth: AuthState,
     /// Agent configuration.
     pub config: Config,
+    /// User/default model preference (without per-thread overrides applied).
+    pub base_model: String,
+    /// User/default thinking preference (without per-thread overrides applied).
+    pub base_thinking_level: zdx_core::config::ThinkingLevel,
     /// Last selected skill repository in this session.
     pub last_skill_repo: Option<String>,
     /// Agent options (root path, etc).
@@ -169,6 +189,9 @@ pub struct TuiState {
     pub show_debug_status: bool,
     /// Input area rect (set during render, used for mouse click routing).
     pub input_area: std::cell::Cell<ratatui::layout::Rect>,
+    /// Optimistic thread-running markers used to bridge spawn-time races before
+    /// activity markers are visible on disk.
+    pub optimistic_active_threads: HashMap<String, Instant>,
 }
 
 impl TuiState {
@@ -229,6 +252,8 @@ impl TuiState {
             task_seq: TaskSeq::default(),
             tasks: Tasks::default(),
             auth,
+            base_model: config.model.clone(),
+            base_thinking_level: config.thinking_level,
             config,
             last_skill_repo: None,
             agent_opts,
@@ -240,7 +265,31 @@ impl TuiState {
             status_line: crate::statusline::StatusLineAccumulator::new(),
             show_debug_status: false,
             input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+            optimistic_active_threads: HashMap::new(),
         }
+    }
+
+    pub fn mark_thread_running(&mut self, thread_id: String) {
+        self.optimistic_active_threads
+            .insert(thread_id, Instant::now());
+    }
+
+    pub fn mark_thread_finished(&mut self, thread_id: &str) {
+        self.optimistic_active_threads.remove(thread_id);
+    }
+
+    pub fn snapshot_active_thread_ids(&mut self) -> HashSet<String> {
+        let registry: HashSet<String> = zdx_core::agent_activity::list_active()
+            .into_iter()
+            .filter_map(|run| run.thread_id)
+            .collect();
+        let grace = Duration::from_secs(2);
+        self.optimistic_active_threads
+            .retain(|thread_id, started| registry.contains(thread_id) || started.elapsed() < grace);
+
+        let mut combined = registry;
+        combined.extend(self.optimistic_active_threads.keys().cloned());
+        combined
     }
 
     /// Builds transcript cells from message history.

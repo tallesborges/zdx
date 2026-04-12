@@ -24,11 +24,13 @@
 //! - Cancellation is initiated via `UiEffect::CancelTask` which calls `token.cancel()`
 //! - This keeps the runtime as a "dumb executor" and reducer as the source of truth
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::mpsc;
+use tokio_util::sync::CancellationToken;
 use zdx_core::core::events::{AgentEvent, ToolOutput};
 use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage};
 use zdx_core::providers::ChatMessage;
@@ -45,6 +47,7 @@ pub enum ThreadUiEvent {
     /// Thread list loaded for picker.
     ListLoaded {
         threads: Vec<ThreadSummary>,
+        active_thread_ids: HashSet<String>,
         original_cells: Vec<HistoryCell>,
         mode: crate::overlays::ThreadPickerMode,
     },
@@ -61,6 +64,8 @@ pub enum ThreadUiEvent {
         stored_root: Option<PathBuf>,
         thread_handle: Option<Thread>,
         title: Option<String>,
+        model_override: Option<String>,
+        thinking_override: Option<zdx_core::config::ThinkingLevel>,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
     },
@@ -69,10 +74,13 @@ pub enum ThreadUiEvent {
     LoadFailed { error: String },
 
     /// Thread preview loaded (for thread picker navigation).
-    PreviewLoaded { cells: Vec<HistoryCell> },
+    PreviewLoaded {
+        thread_id: String,
+        cells: Vec<HistoryCell>,
+    },
 
     /// Thread preview load failed (silent - just don't update).
-    PreviewFailed,
+    PreviewFailed { thread_id: String },
 
     /// New thread created successfully.
     Created {
@@ -216,7 +224,22 @@ pub enum UiEvent {
     Agent(AgentEvent),
 
     /// Agent turn spawned; reducer should set agent state to Waiting.
-    AgentSpawned { rx: mpsc::Receiver<Arc<AgentEvent>> },
+    AgentSpawned {
+        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        cancel: CancellationToken,
+    },
+
+    /// BTW popup agent turn spawned.
+    BtwAgentSpawned {
+        thread_handle: Thread,
+        prompt: String,
+        messages: Vec<ChatMessage>,
+        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        cancel: CancellationToken,
+    },
+
+    /// BTW popup agent event stream.
+    BtwAgent(AgentEvent),
 
     /// Async login token exchange completed.
     LoginResult { result: Result<(), String> },

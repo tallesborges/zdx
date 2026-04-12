@@ -29,7 +29,7 @@ impl ThinkingPickerState {
         render_thinking_picker(frame, self, area, input_y);
     }
 
-    pub fn handle_key(&mut self, _tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
+    pub fn handle_key(&mut self, tui: &TuiState, key: KeyEvent) -> OverlayUpdate {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
 
         match key.code {
@@ -59,10 +59,32 @@ impl ThinkingPickerState {
                 } else {
                     format!("Thinking level set to {}", level.display_name())
                 };
+                let use_thread_override = tui.thread.thread_handle.is_some()
+                    && (tui.thread.model_override.is_some()
+                        || tui.thread.thinking_override.is_some());
                 OverlayUpdate::close()
-                    .with_ui_effects(vec![UiEffect::PersistThinking { level }])
+                    .with_ui_effects(vec![if use_thread_override {
+                        UiEffect::PersistThreadThinkingOverride { level }
+                    } else {
+                        UiEffect::PersistThinking { level }
+                    }])
                     .with_mutations(vec![
-                        StateMutation::Config(ConfigMutation::SetThinkingLevel(level)),
+                        if use_thread_override {
+                            StateMutation::Thread(crate::mutations::ThreadMutation::SetOverrides {
+                                model_override: tui.thread.model_override.clone(),
+                                thinking_override: Some(level),
+                            })
+                        } else {
+                            StateMutation::Config(ConfigMutation::SetThinkingLevel(level))
+                        },
+                        StateMutation::SetActiveThreadOverrides {
+                            model_override: tui.thread.model_override.clone(),
+                            thinking_override: if use_thread_override {
+                                Some(level)
+                            } else {
+                                tui.thread.thinking_override
+                            },
+                        },
                         StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message)),
                     ])
             }

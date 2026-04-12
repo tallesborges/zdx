@@ -182,6 +182,11 @@ fn build_thread_list_item(
         if item.depth > 0 { "└── " } else { "" }
     );
     let handoff_label = if item.is_handoff { "[handoff] " } else { "" };
+    let running_label = if picker.is_thread_active(&thread.id) {
+        "[running] "
+    } else {
+        ""
+    };
     let is_current = picker
         .current_thread_id
         .as_ref()
@@ -192,13 +197,19 @@ fn build_thread_list_item(
     let available_width = (inner_width as usize).saturating_sub(highlight_width);
     let date_width = timestamp.width();
     let name_max_width = available_width.saturating_sub(
-        tree_prefix.width() + handoff_label.width() + current_label.width() + date_width + 2,
+        tree_prefix.width()
+            + handoff_label.width()
+            + running_label.width()
+            + current_label.width()
+            + date_width
+            + 2,
     );
     let display_name = truncate_with_ellipsis(&display_name, name_max_width);
     let gap = available_width
         .saturating_sub(
             tree_prefix.width()
                 + handoff_label.width()
+                + running_label.width()
                 + display_name.width()
                 + current_label.width()
                 + date_width,
@@ -211,6 +222,7 @@ fn build_thread_list_item(
             handoff_label.to_string(),
             Style::default().fg(Color::Yellow),
         ),
+        Span::styled(running_label.to_string(), Style::default().fg(Color::Green)),
         Span::styled(current_label.to_string(), Style::default().fg(Color::Cyan)),
         Span::styled(display_name, Style::default().fg(Color::White)),
         Span::styled(" ".repeat(gap), Style::default()),

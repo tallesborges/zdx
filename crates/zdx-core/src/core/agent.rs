@@ -4,6 +4,7 @@
 //! via async channels. No direct stdout/stderr writes occur in this module.
 
 use std::collections::HashSet;
+use std::future;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -14,6 +15,7 @@ use tokio::sync::mpsc;
 use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
+use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, TextVerbosity, ThinkingLevel};
 use crate::core::events::{AgentEvent, ErrorKind, ToolOutput, TurnStatus};
@@ -257,18 +259,54 @@ impl ProviderClient {
 /// // Renderer receives from render_rx
 /// // Persister receives from persist_rx
 /// ```
-pub fn spawn_broadcaster(
-    mut rx: AgentEventRx,
-    mut subscribers: Vec<AgentEventTx>,
+pub fn spawn_broadcaster(rx: AgentEventRx, mut subscribers: Vec<AgentEventTx>) -> JoinHandle<()> {
+    let subscribers = subscribers
+        .drain(..)
+        .map(|tx| (tx, BroadcastMode::BestEffort))
+        .collect();
+    spawn_broadcaster_with_modes(rx, subscribers)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastMode {
+    BestEffort,
+    Ui,
+    Reliable,
+}
+
+pub fn spawn_broadcaster_with_modes(
+    rx: AgentEventRx,
+    mut subscribers: Vec<(AgentEventTx, BroadcastMode)>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
+        let mut rx = rx;
         while let Some(event) = rx.recv().await {
-            subscribers.retain(|tx| {
-                match tx.try_send(Arc::clone(&event)) {
-                    Ok(()) | Err(TrySendError::Full(_)) => true, // drop this event, keep channel
-                    Err(TrySendError::Closed(_)) => false,       // remove closed channel
+            let mut kept = Vec::with_capacity(subscribers.len());
+            for (tx, mode) in subscribers.drain(..) {
+                let keep = match mode {
+                    BroadcastMode::BestEffort => match tx.try_send(Arc::clone(&event)) {
+                        Ok(()) | Err(TrySendError::Full(_)) => true,
+                        Err(TrySendError::Closed(_)) => false,
+                    },
+                    BroadcastMode::Ui => match &*event {
+                        AgentEvent::AssistantDelta { .. }
+                        | AgentEvent::ReasoningDelta { .. }
+                        | AgentEvent::ToolInputDelta { .. }
+                        | AgentEvent::ToolOutputDelta { .. } => {
+                            match tx.try_send(Arc::clone(&event)) {
+                                Ok(()) | Err(TrySendError::Full(_)) => true,
+                                Err(TrySendError::Closed(_)) => false,
+                            }
+                        }
+                        _ => tx.send(Arc::clone(&event)).await.is_ok(),
+                    },
+                    BroadcastMode::Reliable => tx.send(Arc::clone(&event)).await.is_ok(),
+                };
+                if keep {
+                    kept.push((tx, mode));
                 }
-            });
+            }
+            subscribers = kept;
         }
     })
 }
@@ -701,9 +739,40 @@ pub async fn run_turn(
     thread_id: Option<&str>,
     tx: AgentEventTx,
 ) -> Result<(String, Vec<ChatMessage>)> {
+    run_turn_with_cancel(
+        messages,
+        config,
+        options,
+        system_prompt,
+        thread_id,
+        tx,
+        None,
+    )
+    .await
+}
+
+pub async fn run_turn_with_cancel(
+    messages: Vec<ChatMessage>,
+    config: &Config,
+    options: &AgentOptions,
+    system_prompt: Option<&str>,
+    thread_id: Option<&str>,
+    tx: AgentEventTx,
+    cancel: Option<CancellationToken>,
+) -> Result<(String, Vec<ChatMessage>)> {
     let _run_guard = crate::agent_activity::start(thread_id, options.surface.as_deref());
     let sender = EventSender::new(tx);
-    match run_turn_inner(messages, config, options, system_prompt, thread_id, &sender).await {
+    match run_turn_inner(
+        messages,
+        config,
+        options,
+        system_prompt,
+        thread_id,
+        &sender,
+        cancel.as_ref(),
+    )
+    .await
+    {
         Ok(result) => Ok(result),
         Err((err, committed_messages)) => {
             if committed_messages.is_empty() {
@@ -726,6 +795,7 @@ async fn run_turn_inner(
     system_prompt: Option<&str>,
     thread_id: Option<&str>,
     sender: &EventSender,
+    cancel: Option<&CancellationToken>,
 ) -> RunTurnResult {
     let setup = build_run_turn_setup(config, options, thread_id)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
@@ -733,71 +803,90 @@ async fn run_turn_inner(
     let mut consecutive_malformed_tool_turns = 0usize;
 
     loop {
-        ensure_not_interrupted(None).map_err(|e| (e, messages.clone()))?;
+        ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
 
         // Retry loop for pre-stream transient errors (connection, overloaded before SSE starts).
         // Mid-stream errors (from consume_stream) are NOT retried to avoid UI rewind complexity.
-        let stream =
-            match request_stream(&setup.client, &messages, &setup.tools, system_prompt).await {
-                Ok(stream) => stream,
-                Err(TurnError::Provider(ref initial_err)) if initial_err.is_retryable() => {
-                    // Track the most recent provider error across attempts so
-                    // each emitted ProviderRetry event reflects the *current*
-                    // failure kind/message/details, not the one from attempt 0.
-                    let mut current_err: ProviderError = initial_err.clone();
-                    let mut attempt: u32 = 0;
-                    loop {
-                        attempt += 1;
-                        let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
-                        tracing::warn!(
+        let stream = match request_stream(
+            &setup.client,
+            &messages,
+            &setup.tools,
+            system_prompt,
+            cancel,
+        )
+        .await
+        {
+            Ok(stream) => stream,
+            Err(TurnError::Provider(ref initial_err)) if initial_err.is_retryable() => {
+                // Track the most recent provider error across attempts so
+                // each emitted ProviderRetry event reflects the *current*
+                // failure kind/message/details, not the one from attempt 0.
+                let mut current_err: ProviderError = initial_err.clone();
+                let mut attempt: u32 = 0;
+                loop {
+                    attempt += 1;
+                    let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
+                    tracing::warn!(
+                        attempt,
+                        max = MAX_RETRIES,
+                        delay_ms = delay,
+                        error = %current_err.message,
+                        "Transient provider error, retrying"
+                    );
+                    // Surface the retry in the transcript so TUI/bot users
+                    // can see that we're backing off instead of staring at
+                    // a frozen spinner. Non-fatal: the turn continues.
+                    sender
+                        .send_important(AgentEvent::ProviderRetry {
+                            kind: ErrorKind::from(current_err.kind.clone()),
+                            message: current_err.message.clone(),
+                            details: current_err.details.clone(),
                             attempt,
-                            max = MAX_RETRIES,
-                            delay_ms = delay,
-                            error = %current_err.message,
-                            "Transient provider error, retrying"
-                        );
-                        // Surface the retry in the transcript so TUI/bot users
-                        // can see that we're backing off instead of staring at
-                        // a frozen spinner. Non-fatal: the turn continues.
-                        sender
-                            .send_important(AgentEvent::ProviderRetry {
-                                kind: ErrorKind::from(current_err.kind.clone()),
-                                message: current_err.message.clone(),
-                                details: current_err.details.clone(),
-                                attempt,
-                                max_retries: MAX_RETRIES,
-                                delay_ms: delay,
-                            })
-                            .await;
-                        tokio::time::sleep(Duration::from_millis(delay)).await;
-                        ensure_not_interrupted(None).map_err(|e| (e, messages.clone()))?;
-                        match request_stream(&setup.client, &messages, &setup.tools, system_prompt)
-                            .await
-                        {
-                            Ok(s) => break s,
-                            Err(retry_err) => {
-                                if let TurnError::Provider(ref perr) = retry_err
-                                    && perr.is_retryable()
-                                    && attempt < MAX_RETRIES
-                                {
-                                    current_err = perr.clone();
-                                    continue;
-                                }
-                                return Err((retry_err, messages.clone()));
+                            max_retries: MAX_RETRIES,
+                            delay_ms: delay,
+                        })
+                        .await;
+                    tokio::time::sleep(Duration::from_millis(delay)).await;
+                    ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
+                    match request_stream(
+                        &setup.client,
+                        &messages,
+                        &setup.tools,
+                        system_prompt,
+                        cancel,
+                    )
+                    .await
+                    {
+                        Ok(s) => break s,
+                        Err(retry_err) => {
+                            if let TurnError::Provider(ref perr) = retry_err
+                                && perr.is_retryable()
+                                && attempt < MAX_RETRIES
+                            {
+                                current_err = perr.clone();
+                                continue;
                             }
+                            return Err((retry_err, messages.clone()));
                         }
                     }
                 }
-                Err(err) => return Err((err, messages.clone())),
-            };
-        let mut stream_state = consume_stream(stream, &messages, sender)
+            }
+            Err(err) => return Err((err, messages.clone())),
+        };
+        let mut stream_state = consume_stream(stream, &messages, sender, cancel)
             .await
             .map_err(|e| (e, messages.clone()))?;
 
         if stream_state.needs_tool_execution() {
-            let stats = process_tool_turn(&mut messages, &mut stream_state.turn, &setup, sender)
-                .await
-                .map_err(|e| (e, messages.clone()))?;
+            let stats = process_tool_turn(
+                &mut messages,
+                &mut stream_state.turn,
+                &setup,
+                sender,
+                cancel,
+            )
+            .await
+            .map_err(|e| (e, messages.clone()))?;
             if stats.executable == 0 && stats.malformed > 0 {
                 consecutive_malformed_tool_turns += 1;
                 if consecutive_malformed_tool_turns >= MAX_CONSECUTIVE_MALFORMED_TOOL_TURNS {
@@ -1341,8 +1430,11 @@ impl StreamState {
     }
 }
 
-fn ensure_not_interrupted(partial_content: Option<String>) -> TurnResult<()> {
-    if interrupt::is_interrupted() {
+fn ensure_not_interrupted(
+    partial_content: Option<String>,
+    cancel: Option<&CancellationToken>,
+) -> TurnResult<()> {
+    if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
         return Err(TurnError::interrupted(partial_content));
     }
     Ok(())
@@ -1353,10 +1445,14 @@ async fn request_stream(
     messages: &[ChatMessage],
     tools: &[ToolDefinition],
     system_prompt: Option<&str>,
+    cancel: Option<&CancellationToken>,
 ) -> TurnResult<ProviderStream> {
     let stream_result = tokio::select! {
         biased;
         () = interrupt::wait_for_interrupt() => {
+            return Err(TurnError::interrupted(None));
+        }
+        () = wait_for_cancel(cancel) => {
             return Err(TurnError::interrupted(None));
         }
         result = client.send_messages_stream(messages, tools, system_prompt) => result,
@@ -1371,11 +1467,12 @@ async fn consume_stream(
     mut stream: ProviderStream,
     prior_messages: &[ChatMessage],
     sender: &EventSender,
+    cancel: Option<&CancellationToken>,
 ) -> TurnResult<StreamState> {
     let mut state = StreamState::new();
 
     loop {
-        if interrupt::is_interrupted() {
+        if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
             return Err(interrupted_turn_from_stream(prior_messages, state.turn));
         }
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
@@ -1636,6 +1733,7 @@ async fn process_tool_turn(
     turn: &mut AssistantTurnBuilder,
     setup: &RunTurnSetup,
     sender: &EventSender,
+    cancel: Option<&CancellationToken>,
 ) -> TurnResult<ToolTurnStats> {
     let outcome = finalize_tool_calls(turn);
     let executable_count = outcome.executable.len();
@@ -1655,12 +1753,13 @@ async fn process_tool_turn(
         &setup.enabled_tools,
         sender,
         &setup.tool_registry,
+        cancel,
     )
     .await;
     tool_results.extend(outcome.malformed_results);
     messages.push(ChatMessage::tool_results(tool_results));
 
-    if interrupt::is_interrupted() {
+    if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
         return Err(TurnError::interrupted_with_completion(
             (!turn_text.is_empty()).then_some(turn_text.clone()),
             turn_text,
@@ -1869,6 +1968,7 @@ async fn execute_tools_async(
     enabled_tools: &HashSet<String>,
     sender: &EventSender,
     tool_registry: &ToolRegistry,
+    cancel: Option<&CancellationToken>,
 ) -> Vec<ToolResult> {
     let mut join_set: JoinSet<(usize, String, ToolOutput, ToolResult)> = JoinSet::new();
     let mut results: Vec<Option<(ToolOutput, ToolResult)>> = vec![None; tool_uses.len()];
@@ -1940,6 +2040,17 @@ async fn execute_tools_async(
                 .await;
                 break;
             }
+            () = wait_for_cancel(cancel) => {
+                handle_tool_interrupt(
+                    &mut join_set,
+                    &mut completed,
+                    &mut results,
+                    tool_uses,
+                    sender,
+                )
+                .await;
+                break;
+            }
             task_result = join_set.join_next() => {
                 match task_result {
                     Some(Ok((idx, id, output, result))) => {
@@ -1972,6 +2083,14 @@ async fn execute_tools_async(
         .into_iter()
         .map(|opt| opt.expect("all slots should be filled").1)
         .collect()
+}
+
+async fn wait_for_cancel(cancel: Option<&CancellationToken>) {
+    if let Some(cancel) = cancel {
+        cancel.cancelled().await;
+    } else {
+        future::pending::<()>().await;
+    }
 }
 
 async fn emit_tool_started_events(tool_uses: &[ToolUse], sender: &EventSender) {
@@ -2094,7 +2213,15 @@ mod tests {
         // Run in a task so we can collect events
         let tool_registry = ToolRegistry::builtins();
         let handle = tokio::spawn(async move {
-            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender, &tool_registry).await
+            execute_tools_async(
+                &tool_uses,
+                &ctx,
+                &enabled_tools,
+                &sender,
+                &tool_registry,
+                None,
+            )
+            .await
         });
 
         // Collect events with timeout to avoid hangs
@@ -2149,8 +2276,15 @@ mod tests {
         let sender = EventSender::new(tx);
         let tool_registry = ToolRegistry::builtins();
 
-        let results =
-            execute_tools_async(&tool_uses, &ctx, &enabled_tools, &sender, &tool_registry).await;
+        let results = execute_tools_async(
+            &tool_uses,
+            &ctx,
+            &enabled_tools,
+            &sender,
+            &tool_registry,
+            None,
+        )
+        .await;
 
         assert_eq!(results.len(), 2);
         assert!(!results[0].is_error);

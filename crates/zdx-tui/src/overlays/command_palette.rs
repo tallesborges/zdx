@@ -125,6 +125,21 @@ fn execute_command(
     cmd_name: &str,
 ) -> (Option<OverlayRequest>, Vec<UiEffect>, Vec<StateMutation>) {
     match cmd_name {
+        "btw" => {
+            if tui.thread.thread_handle.is_none() {
+                (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "BTW requires an active thread.".to_string(),
+                        ),
+                    )],
+                )
+            } else {
+                (Some(OverlayRequest::Btw), vec![], vec![])
+            }
+        }
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "debug" => (None, vec![], vec![StateMutation::ToggleDebugStatus]),
         "models" => (None, vec![UiEffect::OpenModelsConfig], vec![]),
@@ -157,6 +172,17 @@ fn execute_command(
         "threads" => {
             if tui.tasks.state(TaskKind::ThreadList).is_running() {
                 return (None, vec![], vec![]);
+            }
+            if tui.agent_state.is_running() {
+                return (
+                    None,
+                    vec![],
+                    vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "Stop the current task first.".to_string(),
+                        ),
+                    )],
+                );
             }
             (
                 None,
