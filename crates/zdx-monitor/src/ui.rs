@@ -1,7 +1,7 @@
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Borders, List, ListItem, Paragraph, Tabs};
 
-use crate::app::{MonitorApp, Section};
+use crate::app::{ConfigLine, MonitorApp, Section};
 
 pub fn render(f: &mut Frame, app: &MonitorApp) {
     let chunks = Layout::default()
@@ -87,7 +87,7 @@ fn footer_hint(section: Section) -> &'static str {
     match section {
         Section::Services => "↑↓ navigate • Enter toggle • r restart • Tab switch • q quit",
         Section::ActiveAgents | Section::Automations => "↑↓ navigate • Tab switch • q quit",
-        Section::Config => "Tab switch • q quit",
+        Section::Config => "↑↓ scroll • PgUp/PgDn page • Tab switch • q quit",
         Section::Threads => "↑↓ navigate • y copy thread ID • Tab switch • q quit",
     }
 }
@@ -131,16 +131,80 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
 }
 
 fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let home = zdx_engine::config::paths::zdx_home();
-    let threads = zdx_engine::config::paths::threads_dir();
-    let text = format!(
-        " Model:       {}\n Thinking:    {:?}\n ZDX Home:    {}\n Threads dir: {}",
-        app.config.model,
-        app.config.thinking_level,
-        home.display(),
-        threads.display(),
-    );
-    let p = Paragraph::new(text).block(Block::default().borders(Borders::ALL).title("Config"));
+    let inner_width = area.width.saturating_sub(2) as usize;
+    let key_col = 30usize;
+
+    let mut lines: Vec<Line> = Vec::new();
+    let mut is_first = true;
+
+    for cl in &app.config_lines {
+        match cl {
+            ConfigLine::Section(name) => {
+                if !is_first {
+                    lines.push(Line::from(""));
+                }
+                is_first = false;
+
+                lines.push(Line::from(vec![Span::styled(
+                    format!(" ── {} ", name.to_uppercase()),
+                    Style::default()
+                        .fg(Color::Cyan)
+                        .add_modifier(Modifier::BOLD),
+                )]));
+            }
+            ConfigLine::Separator => {
+                let dashes = "─".repeat(inner_width.saturating_sub(4));
+                lines.push(Line::from(Span::styled(
+                    format!("    {dashes}"),
+                    Style::default().fg(Color::DarkGray),
+                )));
+            }
+            ConfigLine::Row(key, value) => {
+                let val_style = if value == "***" || value.starts_with("***") {
+                    Style::default().fg(Color::DarkGray)
+                } else {
+                    Style::default()
+                };
+
+                lines.push(Line::from(vec![
+                    Span::styled(
+                        format!("    {key:<key_col$} "),
+                        Style::default().fg(Color::DarkGray),
+                    ),
+                    Span::styled(value.clone(), val_style),
+                ]));
+            }
+        }
+    }
+
+    let total_fields = app
+        .config_lines
+        .iter()
+        .filter(|l| matches!(l, ConfigLine::Row(..)))
+        .count();
+
+    let visible_lines = area.height.saturating_sub(2) as usize;
+    let total_lines = lines.len();
+
+    let scroll_info = if total_lines > visible_lines {
+        let max_scroll = total_lines - visible_lines;
+        let current_scroll = app.config_scroll.min(max_scroll);
+        let percent = if max_scroll > 0 {
+            (current_scroll * 100) / max_scroll
+        } else {
+            100
+        };
+        format!(" [{percent}%]")
+    } else {
+        String::new()
+    };
+
+    let title = format!(" Config ({total_fields} fields){scroll_info} ");
+
+    let p = Paragraph::new(Text::from(lines))
+        .block(Block::default().borders(Borders::ALL).title(title))
+        .scroll((app.config_scroll as u16, 0));
+
     f.render_widget(p, area);
 }
 
