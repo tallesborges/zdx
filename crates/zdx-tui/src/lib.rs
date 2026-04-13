@@ -19,17 +19,14 @@ use anyhow::Result;
 pub use features::transcript::markdown;
 pub use features::{auth, input, statusline, thread, transcript};
 pub use runtime::TuiRuntime;
-use zdx_core::config::Config;
-use zdx_core::core::thread_persistence::Thread;
-use zdx_core::providers::ChatMessage;
-use zdx_core::skills::Skill;
+use zdx_engine::config::Config;
+use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::providers::ChatMessage;
+use zdx_engine::skills::Skill;
 
 use crate::transcript::HistoryCell;
 
-pub(crate) const TUI_INSTRUCTION_LAYER: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/chat_instruction_layer.md"
-));
+pub(crate) const TUI_INSTRUCTION_LAYER: &str = zdx_engine::prompts::CHAT_INSTRUCTION_LAYER;
 
 pub(crate) fn tui_instruction_layers() -> Vec<&'static str> {
     let trimmed = TUI_INSTRUCTION_LAYER.trim();
@@ -73,11 +70,11 @@ pub async fn run_interactive_chat_with_history(
     let thread_id_ref = thread_handle.as_ref().map(|t| t.id.as_str());
 
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_core::core::context::set_runtime_env(config, thread_id_ref);
+    zdx_engine::core::context::set_runtime_env(config, thread_id_ref);
 
     let instruction_layers = tui_instruction_layers();
     let effective =
-        zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+        zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             &root,
             &instruction_layers,
@@ -121,7 +118,7 @@ pub async fn run_interactive_chat_with_history(
     };
 
     // Add system message for config path (only if config exists on disk).
-    let config_path = zdx_core::config::paths::config_path();
+    let config_path = zdx_engine::config::paths::config_path();
     if config_path.exists() {
         let message = format!("Config file: {}", config_path.display());
         runtime

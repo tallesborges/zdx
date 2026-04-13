@@ -1,7 +1,7 @@
 //! Config command handlers.
 
 use anyhow::{Context, Result};
-use zdx_core::config;
+use zdx_engine::config;
 
 pub fn path() {
     println!("{}", config::paths::config_path().display());

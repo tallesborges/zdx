@@ -1,7 +1,7 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use zdx_core::providers::ProviderKind;
+use zdx_engine::providers::ProviderKind;
 
 use super::OverlayUpdate;
 use crate::auth::render_login_overlay;
@@ -52,7 +52,7 @@ impl LoginState {
     fn open_with_provider(provider: ProviderKind, error: Option<String>) -> (Self, Vec<UiEffect>) {
         match provider {
             ProviderKind::ClaudeCli => {
-                use zdx_core::providers::oauth::claude_cli;
+                use zdx_engine::providers::oauth::claude_cli;
 
                 let pkce = claude_cli::generate_pkce();
                 let oauth_state = uuid::Uuid::new_v4().to_string();
@@ -78,7 +78,7 @@ impl LoginState {
                 (state, effects)
             }
             ProviderKind::OpenAICodex => {
-                use zdx_core::providers::oauth::openai_codex;
+                use zdx_engine::providers::oauth::openai_codex;
 
                 let pkce = openai_codex::generate_pkce();
                 let oauth_state = uuid::Uuid::new_v4().to_string();
@@ -103,7 +103,7 @@ impl LoginState {
                 (state, effects)
             }
             ProviderKind::GeminiCli => {
-                use zdx_core::providers::oauth::gemini_cli;
+                use zdx_engine::providers::oauth::gemini_cli;
 
                 let pkce = gemini_cli::generate_pkce();
                 let oauth_state = uuid::Uuid::new_v4().to_string();

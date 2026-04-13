@@ -491,7 +491,7 @@ impl TranscriptState {
     pub fn set_tool_result_for(
         &mut self,
         tool_id: &str,
-        result: zdx_core::core::events::ToolOutput,
+        result: zdx_engine::core::events::ToolOutput,
     ) {
         if let Some(cell) = self.cells.iter_mut().find(
             |c| matches!(c, super::HistoryCell::Tool { tool_use_id, .. } if tool_use_id == tool_id),
@@ -548,7 +548,7 @@ impl TranscriptState {
     /// Finalizes the last streaming thinking cell.
     pub fn finalize_last_thinking_cell(
         &mut self,
-        replay: Option<zdx_core::providers::ReplayToken>,
+        replay: Option<zdx_engine::providers::ReplayToken>,
     ) {
         if let Some(cell) = self.cells.iter_mut().rev().find(|c| {
             matches!(
@@ -889,7 +889,7 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use zdx_core::core::events::ToolOutput;
+    use zdx_engine::core::events::ToolOutput;
 
     use super::*;
     use crate::transcript::{HistoryCell, LineMapping};

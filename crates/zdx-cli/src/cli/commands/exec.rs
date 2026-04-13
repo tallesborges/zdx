@@ -3,10 +3,10 @@
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use zdx_core::config::{self, ThinkingLevel};
-use zdx_core::core::agent::{ToolConfig, ToolSelection};
-use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::tools::ToolRegistry;
+use zdx_engine::config::{self, ThinkingLevel};
+use zdx_engine::core::agent::{ToolConfig, ToolSelection};
+use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::tools::ToolRegistry;
 
 use crate::modes;
 

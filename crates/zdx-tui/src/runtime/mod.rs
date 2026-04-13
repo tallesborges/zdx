@@ -41,10 +41,10 @@ use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::Config;
-use zdx_core::core::interrupt;
-use zdx_core::core::thread_persistence::Thread;
-use zdx_core::providers::ChatMessage;
+use zdx_engine::config::Config;
+use zdx_engine::core::interrupt;
+use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskMeta, TaskStarted};
 use crate::effects::UiEffect;
@@ -532,7 +532,7 @@ impl TuiRuntime {
                     thread_handle,
                     messages,
                     prompt,
-                    model,
+                    &model,
                     thinking_level,
                 ) {
                     Ok(event) => self.dispatch_event(event),
@@ -670,7 +670,7 @@ impl TuiRuntime {
 
             // Config effects
             UiEffect::OpenConfig => {
-                let config_path = zdx_core::config::paths::config_path();
+                let config_path = zdx_engine::config::paths::config_path();
                 if config_path.exists() {
                     let _ = self.open_path_in_editor(&config_path);
                     // Note: errors are silently ignored for simplicity
@@ -683,19 +683,19 @@ impl TuiRuntime {
                     if let Some(parent) = models_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let _ = std::fs::write(&models_path, zdx_core::models::default_models_toml());
+                    let _ = std::fs::write(&models_path, zdx_engine::models::default_models_toml());
                 }
                 let _ = self.open_path_in_editor(&models_path);
                 // Note: errors are silently ignored for simplicity
                 // Could add an event for error reporting if needed
             }
             UiEffect::PersistModel { model } => {
-                let _ = zdx_core::config::Config::save_model(&model);
+                let _ = zdx_engine::config::Config::save_model(&model);
                 // Errors are silently ignored - model is already set in state
             }
             UiEffect::PersistThreadModelOverride { model } => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
-                    && let Ok(mut thread) = zdx_core::core::thread_persistence::Thread::with_id(
+                    && let Ok(mut thread) = zdx_engine::core::thread_persistence::Thread::with_id(
                         thread_handle.id.clone(),
                     )
                 {
@@ -703,12 +703,12 @@ impl TuiRuntime {
                 }
             }
             UiEffect::PersistThinking { level } => {
-                let _ = zdx_core::config::Config::save_thinking_level(level);
+                let _ = zdx_engine::config::Config::save_thinking_level(level);
                 // Errors are silently ignored - level is already set in state
             }
             UiEffect::PersistThreadThinkingOverride { level } => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
-                    && let Ok(mut thread) = zdx_core::core::thread_persistence::Thread::with_id(
+                    && let Ok(mut thread) = zdx_engine::core::thread_persistence::Thread::with_id(
                         thread_handle.id.clone(),
                     )
                 {

@@ -4,8 +4,8 @@ use std::sync::{Arc, RwLock};
 
 use tokio::sync::{Mutex, Notify};
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::Config;
-use zdx_core::core::agent::ToolConfig;
+use zdx_engine::config::Config;
+use zdx_engine::core::agent::ToolConfig;
 
 use crate::telegram::TelegramClient;
 

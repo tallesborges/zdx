@@ -4,7 +4,7 @@ use std::io::{self, Write};
 use std::path::Path;
 
 use anyhow::{Context, Result, bail};
-use zdx_core::config::{BotsConfig, Config, NamedBotConfig, ThinkingLevel};
+use zdx_engine::config::{BotsConfig, Config, NamedBotConfig, ThinkingLevel};
 
 pub struct BotInitOptions {
     pub name: Option<String>,
@@ -71,7 +71,7 @@ pub fn init(root: &Path, config: &Config, options: BotInitOptions) -> Result<()>
     println!(
         "Saved bot '{}' to {}",
         name,
-        zdx_core::config::paths::bots_config_path().display()
+        zdx_engine::config::paths::bots_config_path().display()
     );
     println!("Run `zdx bot --bot {name}` to start it.");
     Ok(())

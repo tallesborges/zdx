@@ -18,4 +18,4 @@ crossterm.workspace = true
 ratatui.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-zdx-core = { path = "../zdx-core" }
+zdx-engine = { path = "../zdx-engine" }

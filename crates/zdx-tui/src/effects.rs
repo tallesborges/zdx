@@ -21,9 +21,9 @@
 use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_persistence::{Thread, ThreadEvent};
-use zdx_core::providers::{ChatMessage, ProviderKind};
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::core::thread_persistence::{Thread, ThreadEvent};
+use zdx_engine::providers::{ChatMessage, ProviderKind};
 
 use crate::common::TaskKind;
 use crate::events::RecordedAudio;

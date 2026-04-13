@@ -2,10 +2,14 @@
 members = [
     "crates/zdx-cli",
     "crates/xtask",
-    "crates/zdx-core",
+    "crates/zdx-assets",
+    "crates/zdx-types",
+    "crates/zdx-engine",
     "crates/zdx-tui",
     "crates/zdx-bot",
     "crates/zdx-monitor",
+    "crates/zdx-providers",
+    "crates/zdx-tools",
 ]
 resolver = "2"
 
@@ -48,6 +52,10 @@ ctrlc = "3.4"
 futures-util = "0.3.31"
 eventsource-stream = "0.2"
 enum-map = "2"
+zdx-assets = { path = "crates/zdx-assets" }
+zdx-providers = { path = "crates/zdx-providers" }
+zdx-tools = { path = "crates/zdx-tools" }
+zdx-types = { path = "crates/zdx-types" }
 fast_image_resize = "6"
 globset = "0.4"
 grep-matcher = "0.1"
@@ -82,6 +90,14 @@ tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
 uuid = { version = "1.19.0", features = ["v4"] }
+
+[profile.dev]
+debug = "line-tables-only"
+split-debuginfo = "unpacked"
+codegen-units = 256
+
+[profile.dev.package."*"]
+opt-level = 1
 
 # The profile that 'dist' will build with
 [profile.dist]

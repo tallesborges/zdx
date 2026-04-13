@@ -8,10 +8,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::Config;
-use zdx_core::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
-use zdx_core::core::thread_persistence::{self, Thread};
-use zdx_core::prompts::HANDOFF_PROMPT_TEMPLATE;
+use zdx_engine::config::Config;
+use zdx_engine::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
+use zdx_engine::core::thread_persistence::{self, Thread};
+use zdx_engine::prompts::HANDOFF_PROMPT_TEMPLATE;
 
 use crate::events::UiEvent;
 
@@ -57,7 +57,7 @@ async fn run_subagent(
     let options = ExecSubagentOptions {
         model: Some(handoff_model),
         system_prompt: None,
-        thinking_level: Some(zdx_core::config::ThinkingLevel::Minimal),
+        thinking_level: Some(zdx_engine::config::ThinkingLevel::Minimal),
         no_tools: false,
         no_system_prompt: true,
         tools_override: Some(vec!["read".to_string()]),
@@ -86,7 +86,7 @@ pub fn execute_handoff_submit(
 
     let instruction_layers = crate::tui_instruction_layers();
     let context_paths =
-        match zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+        match zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             root,
             &instruction_layers,

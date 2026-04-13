@@ -21,7 +21,7 @@ default = ["tui"]
 tui = ["dep:zdx-tui"]
 
 [dependencies]
-zdx-core = { path = "../zdx-core" }
+zdx-engine = { path = "../zdx-engine" }
 zdx-tui = { path = "../zdx-tui", optional = true }
 zdx-bot = { path = "../zdx-bot" }
 zdx-monitor = { path = "../zdx-monitor" }

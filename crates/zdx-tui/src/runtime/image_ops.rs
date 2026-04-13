@@ -15,7 +15,7 @@ pub(crate) fn read_and_encode_image(path: &str) -> anyhow::Result<(String, Strin
     use anyhow::Context;
     use base64::Engine;
 
-    let path = zdx_core::images::path_mime::normalize_input_path(path);
+    let path = zdx_engine::images::path_mime::normalize_input_path(path);
 
     let metadata = std::fs::metadata(&path)
         .with_context(|| format!("Cannot read image: {}", path.display()))?;
@@ -28,7 +28,7 @@ pub(crate) fn read_and_encode_image(path: &str) -> anyhow::Result<(String, Strin
     let encoded = base64::engine::general_purpose::STANDARD.encode(&data);
 
     let mime_type =
-        zdx_core::images::path_mime::mime_type_for_extension(path.to_str().unwrap_or(""))
+        zdx_engine::images::path_mime::mime_type_for_extension(path.to_str().unwrap_or(""))
             .unwrap_or("image/png")
             .to_string();
 
@@ -42,8 +42,10 @@ pub(crate) fn decode_image_preview(
     use base64::Engine;
 
     let max_dims = preview_target_max_dims();
-    let decoded =
-        zdx_core::images::decode::decode_image_to_png(std::path::Path::new(image_path), max_dims)?;
+    let decoded = zdx_engine::images::decode::decode_image_to_png(
+        std::path::Path::new(image_path),
+        max_dims,
+    )?;
 
     Ok(crate::events::KittyImageData {
         base64_png: base64::engine::general_purpose::STANDARD.encode(decoded.png_bytes),

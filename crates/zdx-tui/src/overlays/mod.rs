@@ -142,7 +142,7 @@ pub enum Overlay {
     ModelPicker(ModelPickerState),
     SkillPicker(SkillPickerState),
     ThinkingPicker(ThinkingPickerState),
-    Btw(BtwState),
+    Btw(Box<BtwState>),
     ThreadPicker(ThreadPickerState),
     Login(LoginState),
     FilePicker(FilePickerState),
@@ -217,7 +217,7 @@ impl OverlayExt for Option<Overlay> {
 
 #[cfg(test)]
 mod tests {
-    use zdx_core::config::ThinkingLevel;
+    use zdx_engine::config::ThinkingLevel;
 
     use super::*;
     use crate::transcript::ScrollState;
@@ -230,13 +230,13 @@ mod tests {
         assert!(none.is_none());
 
         let (palette, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         let overlay: Option<Overlay> = Some(Overlay::CommandPalette(palette));
         assert!(overlay.is_some());
 
-        let providers = zdx_core::config::ProvidersConfig::default();
+        let providers = zdx_engine::config::ProvidersConfig::default();
         let (picker, _) = ModelPickerState::open("test", &providers);
         let overlay: Option<Overlay> = Some(Overlay::ModelPicker(picker));
         assert!(overlay.is_some());
@@ -250,7 +250,7 @@ mod tests {
         assert!(overlay.is_some());
 
         let overlay: Option<Overlay> = Some(Overlay::Login(LoginState::Exchanging {
-            provider: zdx_core::providers::ProviderKind::Anthropic,
+            provider: zdx_engine::providers::ProviderKind::Anthropic,
         }));
         assert!(overlay.is_some());
 

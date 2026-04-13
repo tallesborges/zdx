@@ -8,9 +8,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph};
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
-use zdx_core::config::ThinkingLevel;
-use zdx_core::models::{ModelOption, model_supports_reasoning};
-use zdx_core::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::models::{ModelOption, model_supports_reasoning};
+use zdx_engine::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
 
 use crate::input::TextBuffer;
 use crate::state::TuiState;

@@ -2,10 +2,10 @@
 //!
 //! Manages the active thread, message history, and token usage tracking.
 
-use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_persistence::{Thread, Usage};
-use zdx_core::models::ModelPricing;
-use zdx_core::providers::ChatMessage;
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::core::thread_persistence::{Thread, Usage};
+use zdx_engine::models::ModelPricing;
+use zdx_engine::providers::ChatMessage;
 
 use crate::mutations::ThreadMutation;
 
@@ -55,7 +55,7 @@ impl ThreadState {
     pub fn with_thread(thread_handle: Option<Thread>, messages: Vec<ChatMessage>) -> Self {
         let title = thread_handle
             .as_ref()
-            .and_then(|log| zdx_core::core::thread_persistence::read_thread_title(&log.id).ok())
+            .and_then(|log| zdx_engine::core::thread_persistence::read_thread_title(&log.id).ok())
             .flatten();
         Self {
             thread_handle,
@@ -390,7 +390,7 @@ mod tests {
 
     #[test]
     fn test_thread_usage_calculate_cost() {
-        use zdx_core::models::ModelPricing;
+        use zdx_engine::models::ModelPricing;
         let pricing = ModelPricing {
             input: 3.0,        // $3 per million
             output: 15.0,      // $15 per million
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_thread_usage_cache_savings() {
-        use zdx_core::models::ModelPricing;
+        use zdx_engine::models::ModelPricing;
         let pricing = ModelPricing {
             input: 3.0,
             output: 15.0,

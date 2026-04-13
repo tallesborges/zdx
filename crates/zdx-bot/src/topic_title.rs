@@ -4,7 +4,7 @@
 //! to generate a descriptive title, renames the topic via Telegram API,
 //! and syncs the persisted ZDX thread title.
 
-use zdx_core::core::{thread_persistence, title_generation};
+use zdx_engine::core::{thread_persistence, title_generation};
 
 use crate::bot::context::BotContext;
 

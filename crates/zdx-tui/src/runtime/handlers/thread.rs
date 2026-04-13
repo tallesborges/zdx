@@ -4,12 +4,12 @@ use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
 use tokio_util::sync::CancellationToken;
-use zdx_core::agent_activity;
-use zdx_core::config::{Config, ThinkingLevel};
-use zdx_core::core::agent::{self, AgentOptions};
-use zdx_core::core::thread_persistence::ThreadEvent;
-use zdx_core::core::{thread_persistence as tp, worktree};
-use zdx_core::providers::ChatMessage;
+use zdx_engine::agent_activity;
+use zdx_engine::config::{Config, ThinkingLevel};
+use zdx_engine::core::agent::{self, AgentOptions};
+use zdx_engine::core::thread_persistence::ThreadEvent;
+use zdx_engine::core::{thread_persistence as tp, worktree};
+use zdx_engine::providers::ChatMessage;
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
@@ -166,10 +166,10 @@ pub fn resolve_root_display(path: PathBuf) -> UiEvent {
 }
 
 /// Refreshes the effective system prompt for a new root.
-pub fn refresh_system_prompt(config: &zdx_core::config::Config, path: &Path) -> UiEvent {
+pub fn refresh_system_prompt(config: &zdx_engine::config::Config, path: &Path) -> UiEvent {
     let instruction_layers = crate::tui_instruction_layers();
     let result =
-        zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+        zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             config,
             path,
             &instruction_layers,
@@ -193,7 +193,7 @@ fn get_git_branch(root: &Path) -> Option<String> {
 
 fn shorten_path(path: &Path) -> String {
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(home) = zdx_core::config::paths::home_dir()
+    if let Some(home) = zdx_engine::config::paths::home_dir()
         && let Ok(relative) = path.strip_prefix(&home)
     {
         let display = format!("~/{}", relative.display());
@@ -314,7 +314,7 @@ pub async fn thread_preview(thread_id: String) -> UiEvent {
 /// Creates a new thread.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
-pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> UiEvent {
+pub async fn thread_create(config: zdx_engine::config::Config, root: PathBuf) -> UiEvent {
     tokio::task::spawn_blocking(move || {
         let thread_handle = match tp::Thread::new_with_root(&root) {
             Ok(thread_handle) => thread_handle,
@@ -327,7 +327,7 @@ pub async fn thread_create(config: zdx_core::config::Config, root: PathBuf) -> U
 
         // Load project context file paths and skills
         let instruction_layers = crate::tui_instruction_layers();
-        let context = zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+        let context = zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
             &config,
             &root,
             &instruction_layers,
@@ -368,6 +368,7 @@ pub async fn thread_fork(
 }
 
 /// Starts a live BTW popup turn in a forked thread.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_btw_turn(
     mut config: Config,
     agent_opts: AgentOptions,
@@ -376,10 +377,10 @@ pub fn spawn_btw_turn(
     thread_handle: Option<tp::Thread>,
     messages: Vec<ChatMessage>,
     prompt: String,
-    model: String,
+    model: &str,
     thinking_level: ThinkingLevel,
 ) -> Result<UiEvent, String> {
-    config.model = model.clone();
+    config.model = model.to_string();
     config.thinking_level = thinking_level;
     let (thread_handle, messages) = prepare_btw_turn(
         base_messages,
@@ -387,7 +388,7 @@ pub fn spawn_btw_turn(
         messages,
         &prompt,
         &agent_opts.root,
-        &model,
+        model,
         thinking_level,
     )
     .map_err(|e| format!("Failed to start side thread: {e}"))?;
