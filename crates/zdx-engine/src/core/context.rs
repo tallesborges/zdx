@@ -149,7 +149,7 @@ pub struct LoadedContext {
 pub struct ScopedContextFile {
     /// Absolute path to the context file.
     pub path: PathBuf,
-    /// Relative scope directory from project root (e.g., "crates/zdx-core").
+    /// Relative scope directory from project root (e.g., "crates/zdx-engine").
     pub scope: String,
 }
 

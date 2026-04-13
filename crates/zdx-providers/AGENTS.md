@@ -18,6 +18,6 @@ LLM provider implementations extracted from `zdx-core`.
 ## Conventions
 
 - Pure value types (DTOs, enums) belong in `zdx-types`, not here.
-- This crate must NOT depend on `zdx-engine` or `zdx-core` (no circular deps).
-- `zdx-engine` re-exports everything via a thin `providers.rs` facade, so `zdx_core::providers::*` keeps working through the zdx-core facade.
+- This crate must NOT depend on `zdx-engine` (no circular deps).
+- `zdx-engine` re-exports everything via a thin `providers.rs` facade.
 - Provider routing hints (e.g. for apiyi/zen meta-providers) are passed as `api_hint: Option<String>` parameters — model registry lookups happen in the caller (`zdx-engine`).

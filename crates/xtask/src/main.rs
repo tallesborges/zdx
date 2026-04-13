@@ -28,7 +28,7 @@ enum CommandName {
     /// If no directory is specified, it includes all default directories.
     /// If directories are specified (e.g., "crates/zdx-tui"), it only includes those.
     Codebase {
-        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-core").
+        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-engine").
         /// If not provided, defaults to all workspace directories.
         #[arg(value_name = "DIR")]
         dirs: Vec<String>,
