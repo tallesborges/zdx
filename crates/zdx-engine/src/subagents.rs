@@ -15,7 +15,6 @@ use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, s
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const FINDER_SUBAGENT_NAME: &str = "finder";
-pub const LIBRARIAN_SUBAGENT_NAME: &str = "librarian";
 pub const DESIGNER_SUBAGENT_NAME: &str = "designer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
@@ -228,7 +227,6 @@ pub fn capability_catalog(
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(finder_capability(root)?);
-        capabilities.push(librarian_capability(root)?);
         capabilities.push(designer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
@@ -244,7 +242,6 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(fallback_finder_capability());
-        capabilities.push(fallback_librarian_capability());
         capabilities.push(fallback_designer_capability());
         capabilities.push(fallback_oracle_capability());
     }
@@ -419,10 +416,6 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             zdx_assets::FINDER_SUBAGENT,
         ),
         (
-            manifest_dir.join("subagents").join("librarian.md"),
-            zdx_assets::LIBRARIAN_SUBAGENT,
-        ),
-        (
             manifest_dir.join("subagents").join("designer.md"),
             zdx_assets::DESIGNER_SUBAGENT,
         ),
@@ -469,18 +462,6 @@ fn finder_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn librarian_capability(root: &Path) -> Result<CapabilityDescriptor> {
-    let definition = load_by_name(root, LIBRARIAN_SUBAGENT_NAME)?;
-    Ok(CapabilityDescriptor {
-        name: definition.name.clone(),
-        title: "Librarian".to_string(),
-        description: definition.description,
-        kind: CapabilityKind::Subagent {
-            subagent: definition.name,
-        },
-    })
-}
-
 fn designer_capability(root: &Path) -> Result<CapabilityDescriptor> {
     let definition = load_by_name(root, DESIGNER_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
@@ -506,19 +487,6 @@ fn fallback_finder_capability() -> CapabilityDescriptor {
     }
 }
 
-fn fallback_librarian_capability() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name: LIBRARIAN_SUBAGENT_NAME.to_string(),
-        title: "Librarian".to_string(),
-        description:
-            "Use for remote repository and external reference research: GitHub/Bitbucket codebases, cross-repo architecture, commit history, and detailed explanatory answers. Prefer it when the main need is evidence-gathering from remote or external sources. It MAY use `bash` for read-only remote research workflows when needed."
-                .to_string(),
-        kind: CapabilityKind::Subagent {
-            subagent: LIBRARIAN_SUBAGENT_NAME.to_string(),
-        },
-    }
-}
-
 fn fallback_designer_capability() -> CapabilityDescriptor {
     CapabilityDescriptor {
         name: DESIGNER_SUBAGENT_NAME.to_string(),
@@ -537,7 +505,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery or external research when `finder` or `librarian` is a better fit. When required evidence is missing, `oracle` SHOULD explicitly state what local discovery should be delegated to `finder` and what external research should be delegated to `librarian`, rather than broadening its own role."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery when `finder` is a better fit."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
@@ -769,7 +737,6 @@ mod tests {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "finder"));
-        assert!(all.iter().any(|s| s.name == "librarian"));
         assert!(all.iter().any(|s| s.name == "designer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
@@ -926,7 +893,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "finder", "librarian", "designer", "oracle"]
+            vec!["task", "finder", "designer", "oracle"]
         );
     }
 
@@ -996,9 +963,9 @@ mod tests {
         config.skills.sources.agents_project = false;
 
         let definition = SubagentDefinition {
-            name: "librarian".to_string(),
-            description: "Librarian".to_string(),
-            path: root.path().join("librarian.md"),
+            name: "researcher".to_string(),
+            description: "Researcher".to_string(),
+            path: root.path().join("researcher.md"),
             source: SubagentSource::User,
             model: None,
             thinking_level: None,

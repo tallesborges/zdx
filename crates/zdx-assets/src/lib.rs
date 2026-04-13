@@ -56,9 +56,6 @@ pub const DEFAULT_MODELS_TOML: &str = include_str!("../default_models.toml");
 /// Built-in `finder` subagent definition.
 pub const FINDER_SUBAGENT: &str = include_str!("../subagents/finder.md");
 
-/// Built-in `librarian` subagent definition.
-pub const LIBRARIAN_SUBAGENT: &str = include_str!("../subagents/librarian.md");
-
 /// Built-in `designer` subagent definition.
 pub const DESIGNER_SUBAGENT: &str = include_str!("../subagents/designer.md");
 
