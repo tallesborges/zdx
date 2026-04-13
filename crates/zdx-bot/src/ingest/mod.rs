@@ -6,7 +6,7 @@ use anyhow::{Context, Result, anyhow};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::{Config, paths};
+use zdx_engine::config::{Config, paths};
 
 use crate::telegram::{Audio, Document, Message, PhotoSize, TelegramClient, Voice};
 use crate::transcribe;

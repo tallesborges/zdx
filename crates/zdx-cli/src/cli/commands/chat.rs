@@ -4,8 +4,8 @@ use std::io::{IsTerminal, Read};
 use std::path::PathBuf;
 
 use anyhow::{Context, Result};
-use zdx_core::config;
-use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::config;
+use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
 
 use super::exec;
 use crate::modes;

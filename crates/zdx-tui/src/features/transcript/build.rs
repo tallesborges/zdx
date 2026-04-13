@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use zdx_core::core::events::ToolOutput;
-use zdx_core::core::thread_persistence::ThreadEvent;
+use zdx_engine::core::events::ToolOutput;
+use zdx_engine::core::thread_persistence::ThreadEvent;
 
 use super::HistoryCell;
 
@@ -197,7 +197,7 @@ mod tests {
     fn test_build_transcript_from_events_reasoning() {
         let events = vec![ThreadEvent::Reasoning {
             text: Some("Let me analyze this...".to_string()),
-            replay: Some(zdx_core::providers::ReplayToken::Anthropic {
+            replay: Some(zdx_engine::providers::ReplayToken::Anthropic {
                 signature: "sig123".to_string(),
             }),
             ts: "2024-01-01T00:00:01Z".to_string(),
@@ -217,7 +217,7 @@ mod tests {
                 assert_eq!(content, "Let me analyze this...");
                 assert!(matches!(
                     replay,
-                    Some(zdx_core::providers::ReplayToken::Anthropic { signature })
+                    Some(zdx_engine::providers::ReplayToken::Anthropic { signature })
                         if signature == "sig123"
                 ));
                 assert!(!*is_streaming);
@@ -247,7 +247,7 @@ mod tests {
             },
             ThreadEvent::Reasoning {
                 text: Some("Analyzing...".to_string()),
-                replay: Some(zdx_core::providers::ReplayToken::Anthropic {
+                replay: Some(zdx_engine::providers::ReplayToken::Anthropic {
                     signature: "sig".to_string(),
                 }),
                 ts: "2024-01-01T00:00:02Z".to_string(),

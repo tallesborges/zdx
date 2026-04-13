@@ -4421,7 +4421,7 @@ dependencies = [
  "uuid",
  "wiremock",
  "zdx-bot",
- "zdx-core",
+ "zdx-engine",
  "zdx-monitor",
  "zdx-tui",
 ]
@@ -4445,13 +4445,6 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "zdx-core",
-]
-
-[[package]]
-name = "zdx-core"
-version = "0.2.1"
-dependencies = [
  "zdx-engine",
 ]
 
@@ -4504,7 +4497,7 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "zdx-core",
+ "zdx-engine",
 ]
 
 [[package]]
@@ -4580,7 +4573,7 @@ dependencies = [
  "unicode-width",
  "url",
  "uuid",
- "zdx-core",
+ "zdx-engine",
 ]
 
 [[package]]

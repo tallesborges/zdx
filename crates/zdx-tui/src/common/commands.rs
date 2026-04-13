@@ -193,7 +193,7 @@ pub const COMMANDS: &[Command] = &[
 
 pub fn command_available(command: &Command, model_id: &str) -> bool {
     if command.name == "thinking" {
-        return zdx_core::models::model_supports_reasoning(model_id);
+        return zdx_engine::models::model_supports_reasoning(model_id);
     }
     true
 }

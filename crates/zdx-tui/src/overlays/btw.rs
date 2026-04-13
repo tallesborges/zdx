@@ -6,11 +6,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use zdx_core::config::{ProvidersConfig, ThinkingLevel};
-use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_persistence::Thread;
-use zdx_core::models::{ModelOption, available_models, model_supports_reasoning};
-use zdx_core::providers::{ChatMessage, ProviderKind, resolve_provider};
+use zdx_engine::config::{ProvidersConfig, ThinkingLevel};
+use zdx_engine::core::events::AgentEvent;
+use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::models::{ModelOption, available_models, model_supports_reasoning};
+use zdx_engine::providers::{ChatMessage, ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;

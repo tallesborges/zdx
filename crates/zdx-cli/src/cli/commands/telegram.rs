@@ -2,7 +2,7 @@
 
 use anyhow::{Result, bail};
 use zdx_bot::telegram::TelegramClient;
-use zdx_core::config::Config;
+use zdx_engine::config::Config;
 
 pub async fn create_topic(
     config: &Config,

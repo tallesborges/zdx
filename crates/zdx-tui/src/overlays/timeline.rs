@@ -12,7 +12,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use serde_json::json;
-use zdx_core::core::thread_persistence::ThreadEvent;
+use zdx_engine::core::thread_persistence::ThreadEvent;
 
 use super::OverlayUpdate;
 use crate::common::{TaskKind, sanitize_for_display, truncate_with_ellipsis};

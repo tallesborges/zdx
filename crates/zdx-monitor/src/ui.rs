@@ -131,8 +131,8 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
 }
 
 fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
-    let home = zdx_core::config::paths::zdx_home();
-    let threads = zdx_core::config::paths::threads_dir();
+    let home = zdx_engine::config::paths::zdx_home();
+    let threads = zdx_engine::config::paths::threads_dir();
     let text = format!(
         " Model:       {}\n Thinking:    {:?}\n ZDX Home:    {}\n Threads dir: {}",
         app.config.model,

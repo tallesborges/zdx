@@ -381,7 +381,7 @@ fn join_repo_path(base: &str, child: &str) -> String {
 
 fn skill_install_root() -> PathBuf {
     // Install to user's ZDX home skills directory (~/.zdx/skills/)
-    zdx_core::config::paths::zdx_home().join("skills")
+    zdx_engine::config::paths::zdx_home().join("skills")
 }
 
 fn skill_name_from_path(path: &str) -> String {

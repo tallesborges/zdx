@@ -4,7 +4,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState};
-use zdx_core::config::ThinkingLevel;
+use zdx_engine::config::ThinkingLevel;
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;

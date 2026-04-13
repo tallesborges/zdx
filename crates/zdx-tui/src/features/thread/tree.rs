@@ -11,7 +11,7 @@
 
 use std::collections::HashMap;
 
-use zdx_core::core::thread_persistence::ThreadSummary;
+use zdx_engine::core::thread_persistence::ThreadSummary;
 
 /// A thread prepared for hierarchical display.
 ///

@@ -20,17 +20,21 @@ pub enum LoginOverlayAction {
 pub fn handle_login_result(
     auth: &mut AuthState,
     result: Result<(), String>,
-    provider: zdx_core::providers::ProviderKind,
+    provider: zdx_engine::providers::ProviderKind,
 ) -> (Vec<StateMutation>, LoginOverlayAction) {
     match result {
         Ok(()) => {
             auth.refresh();
             let message = match provider {
-                zdx_core::providers::ProviderKind::ClaudeCli => "Logged in with Claude CLI OAuth.",
-                zdx_core::providers::ProviderKind::OpenAICodex => {
+                zdx_engine::providers::ProviderKind::ClaudeCli => {
+                    "Logged in with Claude CLI OAuth."
+                }
+                zdx_engine::providers::ProviderKind::OpenAICodex => {
                     "Logged in with OpenAI Codex OAuth."
                 }
-                zdx_core::providers::ProviderKind::GeminiCli => "Logged in with Gemini CLI OAuth.",
+                zdx_engine::providers::ProviderKind::GeminiCli => {
+                    "Logged in with Gemini CLI OAuth."
+                }
                 _ => "Login complete.",
             };
             (

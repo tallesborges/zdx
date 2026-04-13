@@ -13,8 +13,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use unicode_width::UnicodeWidthStr;
-use zdx_core::core::events::ToolOutput;
-use zdx_core::providers::ReplayToken;
+use zdx_engine::core::events::ToolOutput;
+use zdx_engine::providers::ReplayToken;
 
 use super::style::{Style, StyledLine, StyledSpan};
 use super::wrap::{WrapCache, render_prefixed_content, wrap_chars, wrap_text};

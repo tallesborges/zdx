@@ -1,7 +1,7 @@
 mod cli;
 mod modes;
 
-use zdx_core::core::interrupt;
+use zdx_engine::core::interrupt;
 
 fn main() {
     if let Err(e) = cli::run() {

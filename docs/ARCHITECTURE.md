@@ -10,8 +10,7 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 - **zdx-providers:** LLM provider implementations (Anthropic, OpenAI, Gemini, etc.). Depends on zdx-types and zdx-assets.
 - **zdx-tools:** Leaf tool implementations (bash, edit, read, write, glob, grep, etc.) with a minimal ToolContext. Depends on zdx-types.
 - **zdx-engine:** Runtime engine: config, agent orchestration, thread persistence, skills, subagents, MCP, engine-backed tools, and all remaining runtime modules. Depends on zdx-types, zdx-assets, zdx-providers, zdx-tools.
-- **zdx-core:** Compatibility facade — re-exports everything from zdx-engine. Surface crates depend on this for backward compatibility.
-- **zdx-tui:** Full-screen TUI (Elm/MVU), depends on zdx-core.
+- **zdx-tui:** Full-screen TUI (Elm/MVU), depends on zdx-engine.
 - **zdx-bot:** Telegram bot surface.
 - **zdx-monitor:** Service dashboard TUI.
 

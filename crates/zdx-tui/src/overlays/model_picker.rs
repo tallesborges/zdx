@@ -6,9 +6,9 @@ use ratatui::layout::{Alignment, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
-use zdx_core::config::ProvidersConfig;
-use zdx_core::models::{ModelOption, available_models};
-use zdx_core::providers::{ProviderKind, resolve_provider};
+use zdx_engine::config::ProvidersConfig;
+use zdx_engine::models::{ModelOption, available_models};
+use zdx_engine::providers::{ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
@@ -310,7 +310,7 @@ fn model_line(model: &ModelOption, width: u16) -> Line<'static> {
     let is_subscription = ProviderKind::all()
         .iter()
         .find(|kind| kind.id() == model.provider)
-        .is_some_and(zdx_core::providers::ProviderKind::is_subscription);
+        .is_some_and(zdx_engine::providers::ProviderKind::is_subscription);
 
     // Build the right side with pricing and context
     let (pricing_text, pricing_suffix) = if is_subscription && !pricing.is_empty() {

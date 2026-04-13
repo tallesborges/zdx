@@ -13,8 +13,8 @@ pub async fn bash_execution(
     root: PathBuf,
     cancel: Option<CancellationToken>,
 ) -> UiEvent {
-    use zdx_core::core::events::ToolOutput;
-    use zdx_core::tools::{ToolContext, bash};
+    use zdx_engine::core::events::ToolOutput;
+    use zdx_engine::tools::{ToolContext, bash};
 
     let cmd = command.clone();
     let result_id = id.clone();

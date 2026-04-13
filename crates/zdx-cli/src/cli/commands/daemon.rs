@@ -8,8 +8,8 @@ use std::time::Duration;
 use anyhow::{Context, Result};
 use chrono::Local;
 use serde::{Deserialize, Serialize};
-use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::{automations, config};
+use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::{automations, config};
 
 use super::automations as automation_commands;
 
@@ -31,10 +31,10 @@ pub async fn run(
     poll_interval_secs: u64,
 ) -> Result<()> {
     let poll = Duration::from_secs(poll_interval_secs.max(1));
-    zdx_core::pidfile::ensure_unique("daemon")?;
+    zdx_engine::pidfile::ensure_unique("daemon")?;
     let state_path = daemon_state_path();
     let mut state = load_state(&state_path)?;
-    let _pid_guard = zdx_core::pidfile::write("daemon").context("write daemon PID file")?;
+    let _pid_guard = zdx_engine::pidfile::write("daemon").context("write daemon PID file")?;
 
     tracing::info!(root = %root.display(), poll_secs = poll.as_secs(), "Daemon started");
 

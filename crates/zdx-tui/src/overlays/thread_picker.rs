@@ -4,7 +4,7 @@ use std::time::Instant;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use zdx_core::core::thread_persistence::ThreadSummary;
+use zdx_engine::core::thread_persistence::ThreadSummary;
 
 use super::OverlayUpdate;
 use crate::common::TaskKind;

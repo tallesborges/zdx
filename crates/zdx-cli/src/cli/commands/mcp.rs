@@ -8,7 +8,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow};
 use serde::Serialize;
 use serde_json::Value;
-use zdx_core::mcp::{
+use zdx_engine::mcp::{
     McpAuthRequirement, McpAuthorizationServerMetadata, McpDiagnostic, McpHttpServerConfig,
     McpOAuthCache, McpOAuthClientConfig, McpServerState, McpServerStatus, McpTool, McpWorkspace,
 };
@@ -32,9 +32,9 @@ pub async fn auth(root: &Path, server_name: &str) -> Result<()> {
         .resource
         .clone()
         .unwrap_or_else(|| resolved.server.url.clone());
-    let (pkce_verifier, pkce_challenge) = zdx_core::mcp::generate_pkce();
+    let (pkce_verifier, pkce_challenge) = zdx_engine::mcp::generate_pkce();
     let state = uuid::Uuid::new_v4().to_string();
-    let auth_url = zdx_core::mcp::build_oauth_authorization_url(
+    let auth_url = zdx_engine::mcp::build_oauth_authorization_url(
         &resolved.metadata,
         &client_config,
         &resource,
@@ -48,7 +48,7 @@ pub async fn auth(root: &Path, server_name: &str) -> Result<()> {
     let code = read_authorization_code(&auth_url, &redirect_uri, &state)?;
 
     println!("Exchanging code for tokens...");
-    let mut credentials = zdx_core::mcp::exchange_oauth_code(
+    let mut credentials = zdx_engine::mcp::exchange_oauth_code(
         &resolved.metadata,
         &client_config,
         &resource,
@@ -82,8 +82,8 @@ pub async fn auth(root: &Path, server_name: &str) -> Result<()> {
 }
 
 pub async fn logout(root: &Path, server_name: &str) -> Result<()> {
-    let server = zdx_core::mcp::load_http_server_config(root, server_name)?;
-    let removed = zdx_core::mcp::clear_http_auth_credentials(&server).await?;
+    let server = zdx_engine::mcp::load_http_server_config(root, server_name)?;
+    let removed = zdx_engine::mcp::clear_http_auth_credentials(&server).await?;
 
     if removed {
         println!(
@@ -102,8 +102,8 @@ pub async fn logout(root: &Path, server_name: &str) -> Result<()> {
 }
 
 async fn resolve_auth_target(root: &Path, server_name: &str) -> Result<ResolvedMcpAuth> {
-    let server = zdx_core::mcp::load_http_server_config(root, server_name)?;
-    let inspection = zdx_core::mcp::inspect_http_auth(&server).await?;
+    let server = zdx_engine::mcp::load_http_server_config(root, server_name)?;
+    let inspection = zdx_engine::mcp::inspect_http_auth(&server).await?;
     let requirement = inspection.requirement.ok_or_else(|| {
         anyhow!(
             "MCP server '{}' did not advertise OAuth auth requirements. If it uses static headers, configure them directly in .mcp.json.",
@@ -140,7 +140,7 @@ async fn resolve_auth_target(root: &Path, server_name: &str) -> Result<ResolvedM
 async fn resolve_client_config(resolved: &ResolvedMcpAuth) -> Result<McpOAuthClientConfig> {
     match resolved.server.oauth.clone() {
         Some(oauth) => Ok(oauth),
-        None => zdx_core::mcp::register_dynamic_client(
+        None => zdx_engine::mcp::register_dynamic_client(
             &resolved.metadata,
             DEFAULT_MCP_REDIRECT_URI,
         )
@@ -217,7 +217,7 @@ fn read_authorization_code(auth_url: &str, redirect_uri: &str, state: &str) -> R
 
     let mut input = String::new();
     io::stdin().lock().read_line(&mut input)?;
-    let (code, provided_state) = zdx_core::mcp::parse_authorization_input(&input);
+    let (code, provided_state) = zdx_engine::mcp::parse_authorization_input(&input);
     if let Some(provided_state) = provided_state
         && provided_state != state
     {
@@ -227,7 +227,7 @@ fn read_authorization_code(auth_url: &str, redirect_uri: &str, state: &str) -> R
 }
 
 pub async fn servers(root: &Path) -> Result<()> {
-    let workspace = zdx_core::mcp::load_workspace(root).await;
+    let workspace = zdx_engine::mcp::load_workspace(root).await;
     let output = ServersOutput {
         config_path: workspace.config_path().display().to_string(),
         config_exists: workspace.config_exists(),
@@ -247,7 +247,7 @@ pub async fn servers(root: &Path) -> Result<()> {
 }
 
 pub async fn tools(root: &Path, server_name: &str) -> Result<()> {
-    let workspace = zdx_core::mcp::load_workspace(root).await;
+    let workspace = zdx_engine::mcp::load_workspace(root).await;
     let status = require_loaded_server(&workspace, server_name)?;
     let tools = workspace
         .tools(server_name)
@@ -263,7 +263,7 @@ pub async fn tools(root: &Path, server_name: &str) -> Result<()> {
 }
 
 pub async fn schema(root: &Path, server_name: &str, tool_name: &str) -> Result<()> {
-    let workspace = zdx_core::mcp::load_workspace(root).await;
+    let workspace = zdx_engine::mcp::load_workspace(root).await;
     let status = require_loaded_server(&workspace, server_name)?;
     let tool = workspace
         .tool(server_name, tool_name)
@@ -282,7 +282,7 @@ pub async fn schema(root: &Path, server_name: &str, tool_name: &str) -> Result<(
 }
 
 pub async fn call(root: &Path, server_name: &str, tool_name: &str, input_json: &str) -> Result<()> {
-    let workspace = zdx_core::mcp::load_workspace(root).await;
+    let workspace = zdx_engine::mcp::load_workspace(root).await;
     let input: Value = serde_json::from_str(input_json)
         .with_context(|| format!("parse --json input for MCP tool '{tool_name}'"))?;
     let output = workspace

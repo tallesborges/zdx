@@ -6,8 +6,8 @@
 //! - Delta coalescing (pending text, scroll)
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
-use zdx_core::core::events::{AgentEvent, TurnStatus};
-use zdx_core::core::interrupt;
+use zdx_engine::core::events::{AgentEvent, TurnStatus};
+use zdx_engine::core::interrupt;
 
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};

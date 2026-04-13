@@ -8,15 +8,15 @@ use crate::events::UiEvent;
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn token_exchange(
-    provider: zdx_core::providers::ProviderKind,
+    provider: zdx_engine::providers::ProviderKind,
     code: String,
     verifier: String,
     redirect_uri: Option<String>,
 ) -> UiEvent {
-    use zdx_core::providers::oauth::{claude_cli, gemini_cli, openai_codex};
+    use zdx_engine::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
     let result = match provider {
-        zdx_core::providers::ProviderKind::ClaudeCli => {
+        zdx_engine::providers::ProviderKind::ClaudeCli => {
             let pkce = claude_cli::Pkce {
                 verifier,
                 challenge: String::new(),
@@ -33,7 +33,7 @@ pub async fn token_exchange(
                 Err(e) => Err(e.to_string()),
             }
         }
-        zdx_core::providers::ProviderKind::OpenAICodex => {
+        zdx_engine::providers::ProviderKind::OpenAICodex => {
             let pkce = openai_codex::Pkce {
                 verifier,
                 challenge: String::new(),
@@ -44,7 +44,7 @@ pub async fn token_exchange(
                 Err(e) => Err(e.to_string()),
             }
         }
-        zdx_core::providers::ProviderKind::GeminiCli => {
+        zdx_engine::providers::ProviderKind::GeminiCli => {
             let pkce = gemini_cli::Pkce {
                 verifier,
                 challenge: String::new(),
@@ -73,22 +73,22 @@ pub async fn token_exchange(
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
 pub async fn local_auth_callback(
-    provider: zdx_core::providers::ProviderKind,
+    provider: zdx_engine::providers::ProviderKind,
     state: Option<String>,
     port: Option<u16>,
 ) -> UiEvent {
     tokio::task::yield_now().await;
     let code = match provider {
-        zdx_core::providers::ProviderKind::ClaudeCli => {
-            use zdx_core::providers::oauth::claude_cli;
+        zdx_engine::providers::ProviderKind::ClaudeCli => {
+            use zdx_engine::providers::oauth::claude_cli;
             port.and_then(|port| {
                 wait_for_local_code(port, claude_cli::LOCAL_CALLBACK_PATH, state.as_deref())
             })
         }
-        zdx_core::providers::ProviderKind::OpenAICodex => {
+        zdx_engine::providers::ProviderKind::OpenAICodex => {
             wait_for_local_code(1455, "/auth/callback", state.as_deref())
         }
-        zdx_core::providers::ProviderKind::GeminiCli => {
+        zdx_engine::providers::ProviderKind::GeminiCli => {
             wait_for_local_code(8085, "/oauth2callback", state.as_deref())
         }
         _ => None,

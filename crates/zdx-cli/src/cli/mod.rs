@@ -4,9 +4,9 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use zdx_core::config;
-use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::core::{interrupt, worktree};
+use zdx_engine::config;
+use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::core::{interrupt, worktree};
 
 mod commands;
 
@@ -595,7 +595,9 @@ pub fn run() -> Result<()> {
     // `threads resume`), so warn-level logs don't bleed onto the rendered UI.
     let is_tui = cli_enters_alt_screen(&cli);
     let _tracing_guards =
-        zdx_core::tracing_init::init(&zdx_core::tracing_init::TracingOptions { stderr: !is_tui });
+        zdx_engine::tracing_init::init(&zdx_engine::tracing_init::TracingOptions {
+            stderr: !is_tui,
+        });
 
     // one tokio runtime for everything
     let rt = tokio::runtime::Runtime::new().context("create tokio runtime")?;
