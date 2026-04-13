@@ -4,57 +4,38 @@
 
 use std::borrow::Cow;
 
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
-/// Variation Selector 16 (VS16) — forces emoji presentation.
-const VS16: char = '\u{FE0F}';
-
-/// Calculates the terminal display width of a string, accounting for emoji
-/// presentation sequences (VS16).
+/// Calculates the terminal display width of a string, operating on grapheme
+/// clusters for correct handling of multi-codepoint emoji sequences (ZWJ
+/// sequences like 👩‍🚀, skin-tone modifiers, flag sequences, VS16).
 ///
-/// `unicode-width` reports width based on East Asian Width properties, but
-/// terminals render characters followed by U+FE0F (VS16) as 2-cell-wide emoji.
-/// For example, `⚠️` (U+26A0 + U+FE0F) is reported as width 1 by `unicode-width`
-/// but rendered as 2 cells by most modern terminals.
-///
-/// This function corrects for that discrepancy.
+/// `UnicodeWidthStr::width()` handles most sequences correctly, but terminals
+/// render characters followed by U+FE0F (VS16) as 2-cell-wide emoji even when
+/// `unicode-width` reports them as 1. This function corrects for that.
 pub fn terminal_display_width(s: &str) -> usize {
-    let chars: Vec<char> = s.chars().collect();
-    let mut width = 0;
-    let mut i = 0;
-
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == VS16 {
-            // VS16 itself has 0 width, but we already accounted for the
-            // emoji-presentation upgrade on the previous character.
-            i += 1;
-            continue;
-        }
-
-        let ch_width = ch.width().unwrap_or(0);
-
-        // Check if next char is VS16 → emoji presentation → 2 cells minimum
-        let next_is_vs16 = i + 1 < chars.len() && chars[i + 1] == VS16;
-        if next_is_vs16 && ch_width < 2 {
-            width += 2;
-            i += 2; // skip VS16
-        } else {
-            width += ch_width;
-            i += 1;
-        }
-    }
-
-    width
+    s.graphemes(true).map(grapheme_width).sum()
 }
 
-/// Truncates a string to fit within `max_width` terminal columns, accounting
-/// for emoji presentation sequences (VS16). Appends `…` when truncated.
+/// Returns the terminal display width of a single grapheme cluster.
 ///
-/// This is the VS16-aware counterpart of [`truncate_with_ellipsis`].
+/// For graphemes containing VS16 (U+FE0F) whose `UnicodeWidthStr` width is < 2,
+/// we return 2 because terminals render VS16-qualified emoji at full emoji width.
+fn grapheme_width(g: &str) -> usize {
+    let w = g.width();
+    // If the grapheme contains VS16 and unicode-width under-reports it, correct to 2.
+    if w < 2 && g.contains('\u{FE0F}') {
+        2
+    } else {
+        w
+    }
+}
+
+/// Truncates a string to fit within `max_width` terminal columns, operating on
+/// grapheme clusters. Appends `…` when truncated.
 pub fn terminal_truncate(s: &str, max_width: usize) -> String {
-    let actual = terminal_display_width(s);
-    if actual <= max_width {
+    if terminal_display_width(s) <= max_width {
         return s.to_string();
     }
     if max_width <= 1 {
@@ -62,39 +43,16 @@ pub fn terminal_truncate(s: &str, max_width: usize) -> String {
     }
 
     let target = max_width - 1; // reserve 1 column for ellipsis
-    let chars: Vec<char> = s.chars().collect();
     let mut result = String::new();
     let mut width = 0;
-    let mut i = 0;
 
-    while i < chars.len() {
-        let ch = chars[i];
-        if ch == VS16 {
-            // VS16 was already accounted for by the previous char handling
-            i += 1;
-            continue;
-        }
-
-        let ch_width = ch.width().unwrap_or(0);
-        let next_is_vs16 = i + 1 < chars.len() && chars[i + 1] == VS16;
-        let effective_width = if next_is_vs16 && ch_width < 2 {
-            2
-        } else {
-            ch_width
-        };
-
-        if width + effective_width > target {
+    for g in s.graphemes(true) {
+        let gw = grapheme_width(g);
+        if width + gw > target {
             break;
         }
-
-        result.push(ch);
-        if next_is_vs16 && ch_width < 2 {
-            result.push(VS16);
-            i += 2;
-        } else {
-            i += 1;
-        }
-        width += effective_width;
+        result.push_str(g);
+        width += gw;
     }
 
     result.push('…');
@@ -337,6 +295,33 @@ mod tests {
         assert_eq!(terminal_display_width("✅ Ship"), 7);
         // "⚠️ Warn" = 2 + 1 + 4 = 7
         assert_eq!(terminal_display_width("⚠️ Warn"), 7);
+    }
+
+    #[test]
+    fn test_terminal_display_width_zwj_emoji() {
+        // ZWJ sequences should be treated as single grapheme clusters.
+        // 👩‍🚀 = U+1F469 U+200D U+1F680 (woman astronaut)
+        let astronaut = "👩\u{200D}🚀";
+        let w = terminal_display_width(astronaut);
+        // Most terminals render ZWJ emoji as 2 cells
+        assert_eq!(w, 2);
+    }
+
+    #[test]
+    fn test_terminal_truncate_grapheme_safe() {
+        // Truncation must not split a grapheme cluster.
+        // "⚠️ab" = 2 + 1 + 1 = 4 display width
+        let s = "⚠️ab";
+        assert_eq!(terminal_display_width(s), 4);
+        // Truncate to 4 → fits entirely
+        assert_eq!(terminal_truncate(s, 4), "⚠️ab");
+        // Truncate to 3 → "⚠️" (2) + "…" (1) = 3
+        assert_eq!(terminal_truncate(s, 3), "⚠️…");
+        // Truncate to 2 → only "…" fits if the emoji (2) + ellipsis (1) > 2
+        // target = 1, emoji width 2 > 1 → skip emoji, result = "…"
+        // Actually "a" (1) fits target=1, but emoji comes first...
+        // "⚠️" is the first grapheme (width 2), target=1, doesn't fit → "…"
+        assert_eq!(terminal_truncate(s, 2), "…");
     }
 
     #[test]

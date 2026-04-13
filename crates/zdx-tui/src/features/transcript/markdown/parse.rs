@@ -5,10 +5,11 @@
 )]
 
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::{WrapOptions, wrap_styled_spans};
-use crate::common::{sanitize_for_display, terminal_display_width, terminal_truncate};
+use crate::common::{sanitize_for_display, terminal_display_width};
 use crate::transcript::{Style, StyledLine, StyledSpan};
 
 /// Renders markdown text into styled lines.
@@ -82,10 +83,11 @@ impl TableBuffer {
         }
     }
 
-    /// Render the table using comfy-table and return plain text lines.
+    /// Render the table and return plain text lines.
     ///
     /// Uses `terminal_display_width` for column sizing to correctly handle
     /// emoji with variation selectors (e.g. ⚠️) that `unicode-width` under-counts.
+    /// Long cell content is word-wrapped across multiple lines within the row.
     fn render(&self, max_width: usize) -> Vec<String> {
         let all_rows: Vec<&Vec<String>> = if self.header.is_empty() {
             self.rows.iter().collect()
@@ -120,65 +122,73 @@ impl TableBuffer {
         }
 
         // Shrink columns if total width exceeds max_width.
-        // Overhead: "| " prefix per col + " |" suffix = 2*num_cols + 1 + (num_cols-1) for separators
-        // Actually: "| col1 | col2 |" → each col has "| " prefix (2) and last col has " |" suffix (2)
-        // Total overhead = 1 (leading |) + num_cols * 3 (space + content + space) - content + trailing |
-        // Let's just compute: borders = num_cols * 3 + 1 (for "| c | c |" pattern)
+        // Border overhead: "| c1 | c2 |" → 1 (leading |) + num_cols * 3 (space+space+|)
         let border_overhead = num_cols * 3 + 1;
         let content_budget = max_width.saturating_sub(border_overhead);
         let total_content: usize = col_widths.iter().sum();
 
         if total_content > content_budget && content_budget > 0 {
-            // Proportionally shrink columns
+            // Proportionally shrink columns, then trim excess to guarantee fit.
             let scale = content_budget as f64 / total_content as f64;
             for w in &mut col_widths {
                 *w = ((*w as f64 * scale).floor() as usize).max(1);
+            }
+            // Second pass: trim widest columns until sum fits the budget.
+            // The floor+max(1) can overshoot when many columns round up.
+            let mut total: usize = col_widths.iter().sum();
+            while total > content_budget {
+                // Find the widest column and shrink it by 1.
+                if let Some(widest) = col_widths.iter_mut().max() {
+                    if *widest <= 1 {
+                        break; // can't shrink further
+                    }
+                    *widest -= 1;
+                    total -= 1;
+                } else {
+                    break;
+                }
             }
         }
 
         let mut lines = Vec::new();
 
-        // Helper: build a separator line like "+------+------+"
-        let separator: String = {
-            let mut s = String::from("+");
-            for &w in &col_widths {
-                s.push_str(&"-".repeat(w + 2));
-                s.push('+');
-            }
-            s
-        };
-
-        // Helper: build a header separator line like "+=======+=======+"
-        let header_separator: String = {
-            let mut s = String::from("+");
-            for &w in &col_widths {
-                s.push_str(&"=".repeat(w + 2));
-                s.push('+');
-            }
-            s
-        };
+        // Build separator lines
+        let separator = build_separator(&col_widths, '-');
+        let header_separator = build_separator(&col_widths, '=');
 
         // Top border
         lines.push(separator.clone());
 
         for (row_idx, row) in all_rows.iter().enumerate() {
-            // Build row line: "| cell1 | cell2 |"
-            let mut line = String::from("|");
-            for (col_idx, col_w) in col_widths.iter().enumerate() {
-                let cell = row.get(col_idx).map_or("", String::as_str);
-                // Truncate cell content if it exceeds the column width
-                let cell = terminal_truncate(cell, *col_w);
-                let cell_width = terminal_display_width(&cell);
-                let padding = col_w.saturating_sub(cell_width);
-                line.push(' ');
-                line.push_str(&cell);
-                // Pad with spaces to fill the column
-                for _ in 0..padding {
+            // Word-wrap each cell into sub-lines that fit the column width.
+            let wrapped_cells: Vec<Vec<String>> = col_widths
+                .iter()
+                .enumerate()
+                .map(|(col_idx, &col_w)| {
+                    let cell = row.get(col_idx).map_or("", String::as_str);
+                    wrap_cell_text(cell, col_w)
+                })
+                .collect();
+
+            // Max sub-lines across all cells in this row.
+            let max_lines = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+
+            // Emit one terminal line per sub-line, padding shorter cells with spaces.
+            for sub in 0..max_lines {
+                let mut line = String::from("|");
+                for (col_idx, col_w) in col_widths.iter().enumerate() {
+                    let cell_text = wrapped_cells[col_idx].get(sub).map_or("", String::as_str);
+                    let cell_width = terminal_display_width(cell_text);
+                    let padding = col_w.saturating_sub(cell_width);
                     line.push(' ');
+                    line.push_str(cell_text);
+                    for _ in 0..padding {
+                        line.push(' ');
+                    }
+                    line.push_str(" |");
                 }
-                line.push_str(" |");
+                lines.push(line);
             }
-            lines.push(line);
 
             // After header row, use header separator; after other rows, normal separator
             if row_idx == 0 && !self.header.is_empty() {
@@ -189,6 +199,126 @@ impl TableBuffer {
         }
 
         lines
+    }
+}
+
+/// Builds a separator line like "+------+------+" or "+=======+=======+".
+fn build_separator(col_widths: &[usize], fill: char) -> String {
+    let mut s = String::from("+");
+    for &w in col_widths {
+        for _ in 0..w + 2 {
+            s.push(fill);
+        }
+        s.push('+');
+    }
+    s
+}
+
+/// Word-wraps `text` to fit within `max_width` terminal columns.
+///
+/// Strategy (inspired by comfy-table):
+/// 1. Split on spaces (word boundaries).
+/// 2. Greedily pack words onto the current line.
+/// 3. If a single word is wider than `max_width`, split at grapheme cluster boundaries.
+fn wrap_cell_text(text: &str, max_width: usize) -> Vec<String> {
+    if max_width == 0 {
+        return vec![String::new()];
+    }
+
+    if terminal_display_width(text) <= max_width {
+        return vec![text.to_string()];
+    }
+
+    let words: Vec<&str> = text.split(' ').collect();
+    let mut lines: Vec<String> = Vec::new();
+    let mut current_line = String::new();
+    let mut current_width: usize = 0;
+
+    for word in words {
+        let word_width = terminal_display_width(word);
+
+        if word_width > max_width {
+            // Word itself is too long — flush current line, then split the word.
+            if !current_line.is_empty() {
+                lines.push(std::mem::take(&mut current_line));
+                current_width = 0;
+            }
+            split_long_word(word, max_width, &mut lines);
+            continue;
+        }
+
+        if current_line.is_empty() {
+            // First word on this line.
+            current_line.push_str(word);
+            current_width = word_width;
+        } else if current_width + 1 + word_width <= max_width {
+            // Fits with a space separator.
+            current_line.push(' ');
+            current_line.push_str(word);
+            current_width += 1 + word_width;
+        } else {
+            // Doesn't fit — start a new line.
+            lines.push(std::mem::take(&mut current_line));
+            current_line.push_str(word);
+            current_width = word_width;
+        }
+    }
+
+    if !current_line.is_empty() {
+        lines.push(current_line);
+    }
+
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+
+    lines
+}
+
+/// Splits a word that is wider than `max_width` into multiple lines at
+/// grapheme cluster boundaries, using `terminal_display_width` for accurate
+/// sizing. Handles ZWJ sequences, skin-tone modifiers, and VS16 correctly
+/// by never splitting a grapheme cluster.
+fn split_long_word(word: &str, max_width: usize, lines: &mut Vec<String>) {
+    let mut current = String::new();
+    let mut current_width: usize = 0;
+
+    for g in word.graphemes(true) {
+        let gw = grapheme_width(g);
+
+        // If this grapheme alone is wider than max_width, emit it on its own
+        // line (unavoidable overflow for very narrow columns).
+        if gw > max_width {
+            if !current.is_empty() {
+                lines.push(std::mem::take(&mut current));
+                current_width = 0;
+            }
+            lines.push(g.to_string());
+            continue;
+        }
+
+        if current_width + gw > max_width {
+            lines.push(std::mem::take(&mut current));
+            current_width = 0;
+        }
+
+        current.push_str(g);
+        current_width += gw;
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+}
+
+/// Returns the terminal display width of a single grapheme cluster.
+/// Re-exported here for use in table rendering without importing from common.
+fn grapheme_width(g: &str) -> usize {
+    let w = g.width();
+    if w < 2 && g.contains('\u{FE0F}') {
+        2
+    } else {
+        w
     }
 }
 
@@ -858,7 +988,7 @@ mod tests {
     #[test]
     fn test_table_long_content_fits_max_width() {
         // Table with very long cell content must not exceed the given width.
-        let md = "| Col | Description |\n|---|---|\n| A | This is a very long description that should be truncated to fit within the table width |";
+        let md = "| Col | Description |\n|---|---|\n| A | This is a very long description that should be wrapped to fit within the table width |";
         let max_width = 50;
         let lines = render_markdown(md, max_width);
 
@@ -871,6 +1001,66 @@ mod tests {
                     span.text
                 );
             }
+        }
+
+        // Should have more lines than a 3-row table (header + 1 data row + separators)
+        // because the long cell wraps into multiple sub-lines.
+        let table_content_lines: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .filter(|s| s.starts_with('|'))
+            .collect();
+        assert!(
+            table_content_lines.len() > 2,
+            "Long cell should wrap into multiple sub-lines, got {} content lines",
+            table_content_lines.len()
+        );
+    }
+
+    #[test]
+    fn test_table_many_columns_shrink_fits() {
+        // Many columns that must shrink — total must not exceed max_width.
+        let md = "| A | B | C | D | E | F | G |\n|---|---|---|---|---|---|---|\n| 1 | 2 | 3 | 4 | 5 | 6 | 7 |";
+        let max_width = 30;
+        let lines = render_markdown(md, max_width);
+
+        for styled_line in &lines {
+            for span in &styled_line.spans {
+                let w = terminal_display_width(&span.text);
+                assert!(
+                    w <= max_width,
+                    "Line exceeds max_width ({w} > {max_width}): {:?}",
+                    span.text
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_table_zwj_emoji_alignment() {
+        // ZWJ emoji (👩‍🚀) must not break table alignment.
+        let md = "| Who | Role |\n|---|---|\n| 👩\u{200D}🚀 | Astronaut |\n| Bob | Engineer |";
+        let lines = render_markdown(md, 40);
+
+        let table_lines: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .filter(|s| s.contains('|'))
+            .collect();
+
+        let widths: Vec<usize> = table_lines
+            .iter()
+            .map(|l| terminal_display_width(l))
+            .collect();
+
+        assert!(!widths.is_empty());
+        let first = widths[0];
+        for (i, &w) in widths.iter().enumerate() {
+            assert_eq!(
+                w, first,
+                "Line {i} has display width {w}, expected {first}.\nLine: {:?}",
+                table_lines[i]
+            );
         }
     }
 }
