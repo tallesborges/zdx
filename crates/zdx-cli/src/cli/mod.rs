@@ -567,16 +567,15 @@ enum WorktreeCommands {
 /// the rendered UI. Keep this in sync with dispatch paths that call into
 /// the runtime terminal setup in `zdx-tui`.
 fn cli_enters_alt_screen(cli: &Cli) -> bool {
-    match &cli.command {
-        // `zdx` with no subcommand → interactive chat TUI
-        None => true,
-        Some(Commands::Monitor) => true,
-        // `zdx threads resume [ID]` → interactive chat TUI with history
-        Some(Commands::Threads {
-            command: ThreadCommands::Resume { .. },
-        }) => true,
-        _ => false,
-    }
+    matches!(
+        &cli.command,
+        None | Some(
+            Commands::Monitor
+                | Commands::Threads {
+                    command: ThreadCommands::Resume { .. },
+                }
+        )
+    )
 }
 
 pub fn run() -> Result<()> {

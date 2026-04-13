@@ -368,6 +368,7 @@ pub async fn thread_fork(
 }
 
 /// Starts a live BTW popup turn in a forked thread.
+#[allow(clippy::too_many_arguments)]
 pub fn spawn_btw_turn(
     mut config: Config,
     agent_opts: AgentOptions,
@@ -376,10 +377,10 @@ pub fn spawn_btw_turn(
     thread_handle: Option<tp::Thread>,
     messages: Vec<ChatMessage>,
     prompt: String,
-    model: String,
+    model: &str,
     thinking_level: ThinkingLevel,
 ) -> Result<UiEvent, String> {
-    config.model = model.clone();
+    config.model = model.to_string();
     config.thinking_level = thinking_level;
     let (thread_handle, messages) = prepare_btw_turn(
         base_messages,
@@ -387,7 +388,7 @@ pub fn spawn_btw_turn(
         messages,
         &prompt,
         &agent_opts.root,
-        &model,
+        model,
         thinking_level,
     )
     .map_err(|e| format!("Failed to start side thread: {e}"))?;
