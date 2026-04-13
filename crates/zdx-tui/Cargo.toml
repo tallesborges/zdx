@@ -16,7 +16,6 @@ zdx-engine = { path = "../zdx-engine" }
 anyhow.workspace = true
 base64.workspace = true
 chrono.workspace = true
-comfy-table.workspace = true
 cpal.workspace = true
 crossterm.workspace = true
 enum-map.workspace = true

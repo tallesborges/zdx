@@ -6,6 +6,101 @@ use std::borrow::Cow;
 
 use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
+/// Variation Selector 16 (VS16) — forces emoji presentation.
+const VS16: char = '\u{FE0F}';
+
+/// Calculates the terminal display width of a string, accounting for emoji
+/// presentation sequences (VS16).
+///
+/// `unicode-width` reports width based on East Asian Width properties, but
+/// terminals render characters followed by U+FE0F (VS16) as 2-cell-wide emoji.
+/// For example, `⚠️` (U+26A0 + U+FE0F) is reported as width 1 by `unicode-width`
+/// but rendered as 2 cells by most modern terminals.
+///
+/// This function corrects for that discrepancy.
+pub fn terminal_display_width(s: &str) -> usize {
+    let chars: Vec<char> = s.chars().collect();
+    let mut width = 0;
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == VS16 {
+            // VS16 itself has 0 width, but we already accounted for the
+            // emoji-presentation upgrade on the previous character.
+            i += 1;
+            continue;
+        }
+
+        let ch_width = ch.width().unwrap_or(0);
+
+        // Check if next char is VS16 → emoji presentation → 2 cells minimum
+        let next_is_vs16 = i + 1 < chars.len() && chars[i + 1] == VS16;
+        if next_is_vs16 && ch_width < 2 {
+            width += 2;
+            i += 2; // skip VS16
+        } else {
+            width += ch_width;
+            i += 1;
+        }
+    }
+
+    width
+}
+
+/// Truncates a string to fit within `max_width` terminal columns, accounting
+/// for emoji presentation sequences (VS16). Appends `…` when truncated.
+///
+/// This is the VS16-aware counterpart of [`truncate_with_ellipsis`].
+pub fn terminal_truncate(s: &str, max_width: usize) -> String {
+    let actual = terminal_display_width(s);
+    if actual <= max_width {
+        return s.to_string();
+    }
+    if max_width <= 1 {
+        return "…".to_string();
+    }
+
+    let target = max_width - 1; // reserve 1 column for ellipsis
+    let chars: Vec<char> = s.chars().collect();
+    let mut result = String::new();
+    let mut width = 0;
+    let mut i = 0;
+
+    while i < chars.len() {
+        let ch = chars[i];
+        if ch == VS16 {
+            // VS16 was already accounted for by the previous char handling
+            i += 1;
+            continue;
+        }
+
+        let ch_width = ch.width().unwrap_or(0);
+        let next_is_vs16 = i + 1 < chars.len() && chars[i + 1] == VS16;
+        let effective_width = if next_is_vs16 && ch_width < 2 {
+            2
+        } else {
+            ch_width
+        };
+
+        if width + effective_width > target {
+            break;
+        }
+
+        result.push(ch);
+        if next_is_vs16 && ch_width < 2 {
+            result.push(VS16);
+            i += 2;
+        } else {
+            i += 1;
+        }
+        width += effective_width;
+    }
+
+    result.push('…');
+    result
+}
+
 /// Truncates a string with ellipsis if it exceeds `max_width` (unicode-aware).
 ///
 /// Uses unicode width for accurate terminal column calculation, handling
@@ -214,6 +309,34 @@ mod tests {
         // With max_width=6, available = 5, "t中文" = 1 + 4 = 5, fits
         let result = truncate_start_with_ellipsis(text, 6);
         assert_eq!(result, "…t中文");
+    }
+
+    #[test]
+    fn test_terminal_display_width_plain() {
+        assert_eq!(terminal_display_width("hello"), 5);
+        assert_eq!(terminal_display_width(""), 0);
+    }
+
+    #[test]
+    fn test_terminal_display_width_wide_emoji() {
+        // ✅ (U+2705) is East Asian Width=W → 2 cells, no VS16 needed
+        assert_eq!(terminal_display_width("✅"), 2);
+    }
+
+    #[test]
+    fn test_terminal_display_width_vs16_emoji() {
+        // ⚠️ = U+26A0 + U+FE0F: base char is narrow (1) but VS16 forces emoji (2)
+        assert_eq!(terminal_display_width("⚠️"), 2);
+        // Without VS16: just the base character
+        assert_eq!(terminal_display_width("⚠"), 1);
+    }
+
+    #[test]
+    fn test_terminal_display_width_mixed() {
+        // "✅ Ship" = 2 + 1 + 4 = 7
+        assert_eq!(terminal_display_width("✅ Ship"), 7);
+        // "⚠️ Warn" = 2 + 1 + 4 = 7
+        assert_eq!(terminal_display_width("⚠️ Warn"), 7);
     }
 
     #[test]

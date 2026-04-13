@@ -4,12 +4,11 @@
     clippy::match_same_arms
 )]
 
-use comfy_table::{ContentArrangement, Table};
 use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 use unicode_width::UnicodeWidthStr;
 
 use super::wrap::{WrapOptions, wrap_styled_spans};
-use crate::common::sanitize_for_display;
+use crate::common::{sanitize_for_display, terminal_display_width, terminal_truncate};
 use crate::transcript::{Style, StyledLine, StyledSpan};
 
 /// Renders markdown text into styled lines.
@@ -40,7 +39,7 @@ pub fn render_markdown(text: &str, width: usize) -> Vec<StyledLine> {
     renderer.finish()
 }
 
-/// Simple table buffer using comfy-table for rendering.
+/// Simple table buffer for rendering markdown tables.
 #[derive(Debug, Clone, Default)]
 struct TableBuffer {
     /// Header row cells (plain text).
@@ -84,25 +83,112 @@ impl TableBuffer {
     }
 
     /// Render the table using comfy-table and return plain text lines.
+    ///
+    /// Uses `terminal_display_width` for column sizing to correctly handle
+    /// emoji with variation selectors (e.g. ⚠️) that `unicode-width` under-counts.
     fn render(&self, max_width: usize) -> Vec<String> {
-        let mut table = Table::new();
+        let all_rows: Vec<&Vec<String>> = if self.header.is_empty() {
+            self.rows.iter().collect()
+        } else {
+            std::iter::once(&self.header)
+                .chain(self.rows.iter())
+                .collect()
+        };
 
-        // Configure table width and arrangement
-        table.set_width(max_width as u16);
-        table.set_content_arrangement(ContentArrangement::Dynamic);
-
-        // Add header if present
-        if !self.header.is_empty() {
-            table.set_header(&self.header);
+        if all_rows.is_empty() {
+            return Vec::new();
         }
 
-        // Add data rows
-        for row in &self.rows {
-            table.add_row(row);
+        let num_cols = all_rows.iter().map(|r| r.len()).max().unwrap_or(0);
+        if num_cols == 0 {
+            return Vec::new();
         }
 
-        // Convert to lines
-        table.to_string().lines().map(String::from).collect()
+        // Calculate the max terminal display width for each column.
+        let mut col_widths: Vec<usize> = vec![0; num_cols];
+        for row in &all_rows {
+            for (i, cell) in row.iter().enumerate() {
+                col_widths[i] = col_widths[i].max(terminal_display_width(cell));
+            }
+        }
+
+        // Ensure minimum column width of 3 for readability.
+        for w in &mut col_widths {
+            if *w < 3 {
+                *w = 3;
+            }
+        }
+
+        // Shrink columns if total width exceeds max_width.
+        // Overhead: "| " prefix per col + " |" suffix = 2*num_cols + 1 + (num_cols-1) for separators
+        // Actually: "| col1 | col2 |" → each col has "| " prefix (2) and last col has " |" suffix (2)
+        // Total overhead = 1 (leading |) + num_cols * 3 (space + content + space) - content + trailing |
+        // Let's just compute: borders = num_cols * 3 + 1 (for "| c | c |" pattern)
+        let border_overhead = num_cols * 3 + 1;
+        let content_budget = max_width.saturating_sub(border_overhead);
+        let total_content: usize = col_widths.iter().sum();
+
+        if total_content > content_budget && content_budget > 0 {
+            // Proportionally shrink columns
+            let scale = content_budget as f64 / total_content as f64;
+            for w in &mut col_widths {
+                *w = ((*w as f64 * scale).floor() as usize).max(1);
+            }
+        }
+
+        let mut lines = Vec::new();
+
+        // Helper: build a separator line like "+------+------+"
+        let separator: String = {
+            let mut s = String::from("+");
+            for &w in &col_widths {
+                s.push_str(&"-".repeat(w + 2));
+                s.push('+');
+            }
+            s
+        };
+
+        // Helper: build a header separator line like "+=======+=======+"
+        let header_separator: String = {
+            let mut s = String::from("+");
+            for &w in &col_widths {
+                s.push_str(&"=".repeat(w + 2));
+                s.push('+');
+            }
+            s
+        };
+
+        // Top border
+        lines.push(separator.clone());
+
+        for (row_idx, row) in all_rows.iter().enumerate() {
+            // Build row line: "| cell1 | cell2 |"
+            let mut line = String::from("|");
+            for (col_idx, col_w) in col_widths.iter().enumerate() {
+                let cell = row.get(col_idx).map_or("", String::as_str);
+                // Truncate cell content if it exceeds the column width
+                let cell = terminal_truncate(cell, *col_w);
+                let cell_width = terminal_display_width(&cell);
+                let padding = col_w.saturating_sub(cell_width);
+                line.push(' ');
+                line.push_str(&cell);
+                // Pad with spaces to fill the column
+                for _ in 0..padding {
+                    line.push(' ');
+                }
+                line.push_str(" |");
+            }
+            lines.push(line);
+
+            // After header row, use header separator; after other rows, normal separator
+            if row_idx == 0 && !self.header.is_empty() {
+                lines.push(header_separator.clone());
+            } else {
+                lines.push(separator.clone());
+            }
+        }
+
+        lines
     }
 }
 
@@ -550,7 +636,7 @@ impl MarkdownRenderer {
     }
 
     fn flush_table(&mut self) {
-        // Use comfy-table to render, then convert to StyledLines
+        // Render table manually, then convert to StyledLines
         let table_lines = self.table_buffer.render(self.width);
 
         for line in table_lines {
@@ -734,5 +820,57 @@ mod tests {
         assert!(combined.contains('B'), "Table should contain header B");
         assert!(combined.contains('1'), "Table should contain cell 1");
         assert!(combined.contains('2'), "Table should contain cell 2");
+    }
+
+    #[test]
+    fn test_table_with_emoji_alignment() {
+        // Regression test: emojis with VS16 (like ⚠️) must not break table alignment.
+        let md = "| Fix | Verdict |\n|---|---|\n| #1 | ✅ Ship |\n| #2 | ⚠️ Needs change |";
+        let lines = render_markdown(md, 80);
+
+        // Extract table lines (non-empty, with pipe characters)
+        let table_lines: Vec<&str> = lines
+            .iter()
+            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
+            .filter(|s| s.contains('|'))
+            .collect();
+
+        // All border/content lines should have the same display width
+        let widths: Vec<usize> = table_lines
+            .iter()
+            .map(|l| terminal_display_width(l))
+            .collect();
+
+        assert!(
+            !widths.is_empty(),
+            "Table should have lines with pipe chars"
+        );
+        let first = widths[0];
+        for (i, &w) in widths.iter().enumerate() {
+            assert_eq!(
+                w, first,
+                "Line {i} has display width {w}, expected {first}.\nLine: {:?}",
+                table_lines[i]
+            );
+        }
+    }
+
+    #[test]
+    fn test_table_long_content_fits_max_width() {
+        // Table with very long cell content must not exceed the given width.
+        let md = "| Col | Description |\n|---|---|\n| A | This is a very long description that should be truncated to fit within the table width |";
+        let max_width = 50;
+        let lines = render_markdown(md, max_width);
+
+        for styled_line in &lines {
+            for span in &styled_line.spans {
+                let w = terminal_display_width(&span.text);
+                assert!(
+                    w <= max_width,
+                    "Line exceeds max_width ({w} > {max_width}): {:?}",
+                    span.text
+                );
+            }
+        }
     }
 }
