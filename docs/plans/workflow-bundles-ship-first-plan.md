@@ -31,7 +31,7 @@
 List capabilities that already exist and should not be rebuilt.
 
 ## Named subagents
-- What exists: `invoke_subagent`, the default `task` alias, and specialized built-ins such as `oracle`, `designer`, `finder`, and `librarian`.
+- What exists: `invoke_subagent`, the default `task` alias, and specialized built-ins such as `oracle`, `designer`, and `finder`.
 - ✅ Demo: `invoke_subagent(subagent: "oracle", prompt: "...")`
 - Gaps: no dedicated `reviewer` role yet.
 
