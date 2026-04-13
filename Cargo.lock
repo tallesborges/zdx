@@ -4421,10 +4421,14 @@ dependencies = [
  "uuid",
  "wiremock",
  "zdx-bot",
- "zdx-core",
+ "zdx-engine",
  "zdx-monitor",
  "zdx-tui",
 ]
+
+[[package]]
+name = "zdx-assets"
+version = "0.1.0"
 
 [[package]]
 name = "zdx-bot"
@@ -4441,31 +4445,26 @@ dependencies = [
  "tokio",
  "tokio-util",
  "tracing",
- "zdx-core",
+ "zdx-engine",
 ]
 
 [[package]]
-name = "zdx-core"
-version = "0.2.1"
+name = "zdx-engine"
+version = "0.1.0"
 dependencies = [
  "anyhow",
  "base64",
- "bytes",
  "chrono",
  "ctrlc",
- "eventsource-stream",
  "fast_image_resize",
  "futures-util",
  "globset",
- "grep-matcher",
  "grep-regex",
  "grep-searcher",
  "ignore",
  "image",
  "libc",
  "minijinja",
- "nucleo-matcher",
- "regex",
  "reqwest 0.12.28",
  "rmcp",
  "serde",
@@ -4482,6 +4481,10 @@ dependencies = [
  "tracing-subscriber",
  "url",
  "uuid",
+ "zdx-assets",
+ "zdx-providers",
+ "zdx-tools",
+ "zdx-types",
 ]
 
 [[package]]
@@ -4494,7 +4497,51 @@ dependencies = [
  "ratatui",
  "serde",
  "serde_json",
- "zdx-core",
+ "zdx-engine",
+]
+
+[[package]]
+name = "zdx-providers"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "base64",
+ "bytes",
+ "chrono",
+ "eventsource-stream",
+ "futures-util",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "sha2",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "url",
+ "uuid",
+ "zdx-assets",
+ "zdx-types",
+]
+
+[[package]]
+name = "zdx-tools"
+version = "0.1.0"
+dependencies = [
+ "base64",
+ "globset",
+ "grep-regex",
+ "grep-searcher",
+ "ignore",
+ "libc",
+ "regex",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "tracing",
+ "uuid",
+ "zdx-types",
 ]
 
 [[package]]
@@ -4526,7 +4573,16 @@ dependencies = [
  "unicode-width",
  "url",
  "uuid",
- "zdx-core",
+ "zdx-engine",
+]
+
+[[package]]
+name = "zdx-types"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

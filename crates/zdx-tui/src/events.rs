@@ -31,9 +31,9 @@ use std::sync::Arc;
 use crossterm::event::Event as CrosstermEvent;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use zdx_core::core::events::{AgentEvent, ToolOutput};
-use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage};
-use zdx_core::providers::ChatMessage;
+use zdx_engine::core::events::{AgentEvent, ToolOutput};
+use zdx_engine::core::thread_persistence::{Thread, ThreadSummary, Usage};
+use zdx_engine::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskStarted};
 use crate::transcript::HistoryCell;
@@ -65,7 +65,7 @@ pub enum ThreadUiEvent {
         thread_handle: Option<Thread>,
         title: Option<String>,
         model_override: Option<String>,
-        thinking_override: Option<zdx_core::config::ThinkingLevel>,
+        thinking_override: Option<zdx_engine::config::ThinkingLevel>,
         /// Restored token usage: (cumulative, latest)
         usage: (Usage, Usage),
     },
@@ -86,7 +86,7 @@ pub enum ThreadUiEvent {
     Created {
         thread_handle: Thread,
         context_paths: Vec<PathBuf>,
-        skills: Vec<zdx_core::skills::Skill>,
+        skills: Vec<zdx_engine::skills::Skill>,
     },
 
     /// Forked thread created successfully.

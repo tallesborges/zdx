@@ -10,16 +10,13 @@ use std::path::PathBuf;
 use anyhow::Result;
 use tokio::task::JoinHandle;
 use tracing::{info, warn};
-use zdx_core::config::Config;
-use zdx_core::core::agent::{AgentOptions, ToolConfig};
-use zdx_core::core::events::{AgentEvent, TurnStatus};
-use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
-use zdx_core::providers::ChatMessage;
+use zdx_engine::config::Config;
+use zdx_engine::core::agent::{AgentOptions, ToolConfig};
+use zdx_engine::core::events::{AgentEvent, TurnStatus};
+use zdx_engine::core::thread_persistence::{self, Thread, ThreadEvent};
+use zdx_engine::providers::ChatMessage;
 
-const EXEC_INSTRUCTION_LAYER: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/exec_instruction_layer.md"
-));
+const EXEC_INSTRUCTION_LAYER: &str = zdx_engine::prompts::EXEC_INSTRUCTION_LAYER;
 
 fn exec_instruction_layers() -> Vec<&'static str> {
     let trimmed_instruction_layer = EXEC_INSTRUCTION_LAYER.trim();
@@ -63,7 +60,7 @@ impl From<&ExecOptions> for AgentOptions {
 /// Returns the complete response text.
 ///
 /// Logs effective context info (project context files, skills) at startup.
-fn log_effective_context(effective: &zdx_core::core::context::EffectivePrompt) {
+fn log_effective_context(effective: &zdx_engine::core::context::EffectivePrompt) {
     if !effective.loaded_agents_paths.is_empty() {
         let paths_str: Vec<String> = effective
             .loaded_agents_paths
@@ -100,12 +97,12 @@ pub async fn run_exec(
     let thread_id_ref = thread.as_ref().map(|t| t.id.as_str());
 
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_core::core::context::set_runtime_env(config, thread_id_ref);
+    zdx_engine::core::context::set_runtime_env(config, thread_id_ref);
 
     let effective = if options.no_system_prompt {
         None
     } else if let Some(prompt) = options.effective_system_prompt.as_ref() {
-        Some(zdx_core::core::context::EffectivePrompt {
+        Some(zdx_engine::core::context::EffectivePrompt {
             prompt: Some(prompt.clone()),
             loaded_agents_paths: Vec::new(),
             scoped_context_paths: Vec::new(),
@@ -115,7 +112,7 @@ pub async fn run_exec(
     } else {
         let instruction_layers = exec_instruction_layers();
         Some(
-            zdx_core::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
+            zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
                 config,
                 &options.root,
                 &instruction_layers,
@@ -131,7 +128,7 @@ pub async fn run_exec(
     }
 
     // Emit config path info (only if config exists on disk).
-    let config_path = zdx_core::config::paths::config_path();
+    let config_path = zdx_engine::config::paths::config_path();
     if config_path.exists() {
         info!(path = %config_path.display(), "exec config file");
     }
@@ -157,8 +154,8 @@ pub async fn run_exec(
     let agent_opts = AgentOptions::from(options);
 
     // Create channels for broadcast
-    let (agent_tx, agent_rx) = zdx_core::core::agent::create_event_channel();
-    let (render_tx, render_rx) = zdx_core::core::agent::create_event_channel();
+    let (agent_tx, agent_rx) = zdx_engine::core::agent::create_event_channel();
+    let (render_tx, render_rx) = zdx_engine::core::agent::create_event_channel();
 
     // Spawn renderer task
     let renderer_handle =
@@ -167,24 +164,24 @@ pub async fn run_exec(
     // Spawn persist task if thread exists
     let thread_id = thread.as_ref().map(|t| t.id.clone());
     let persist_handle = if let Some(thread_handle) = thread.clone() {
-        let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
-        let broadcaster = zdx_core::core::agent::spawn_broadcaster_with_modes(
+        let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
+        let broadcaster = zdx_engine::core::agent::spawn_broadcaster_with_modes(
             agent_rx,
             vec![
-                (render_tx, zdx_core::core::agent::BroadcastMode::Ui),
-                (persist_tx, zdx_core::core::agent::BroadcastMode::Reliable),
+                (render_tx, zdx_engine::core::agent::BroadcastMode::Ui),
+                (persist_tx, zdx_engine::core::agent::BroadcastMode::Reliable),
             ],
         );
         let persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
         // No thread - just broadcast to renderer
-        let broadcaster = zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
+        let broadcaster = zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![render_tx]);
         Some((broadcaster, tokio::spawn(async {}))) // Dummy persist task
     };
 
     // Run the agent turn
-    let result = zdx_core::core::agent::run_turn(
+    let result = zdx_engine::core::agent::run_turn(
         messages,
         config,
         &agent_opts,
@@ -267,7 +264,7 @@ impl ExecRenderer {
 /// The task owns the `ExecRenderer` and processes events until the channel closes.
 /// Returns a `JoinHandle` that resolves when all events have been rendered.
 pub fn spawn_exec_renderer_task_with_filter(
-    mut rx: zdx_core::core::agent::AgentEventRx,
+    mut rx: zdx_engine::core::agent::AgentEventRx,
     event_filter: Vec<String>,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -309,7 +306,7 @@ fn sanitize_exec_event(event: &AgentEvent) -> Option<AgentEvent> {
         | AgentEvent::ToolInputDelta { .. }
         | AgentEvent::TurnFinished { .. } => None,
         AgentEvent::ReasoningCompleted { block } => {
-            let sanitized = zdx_core::providers::ReasoningBlock {
+            let sanitized = zdx_engine::providers::ReasoningBlock {
                 text: block.text.clone(),
                 replay: None,
             };
@@ -346,8 +343,8 @@ fn emit_final_turn_finished(final_text: &str, event_filter: &[String]) {
 
 #[cfg(test)]
 mod tests {
-    use zdx_core::core::events::AgentEvent;
-    use zdx_core::providers::{ReasoningBlock, ReplayToken};
+    use zdx_engine::core::events::AgentEvent;
+    use zdx_engine::providers::{ReasoningBlock, ReplayToken};
 
     use super::sanitize_exec_event;
 

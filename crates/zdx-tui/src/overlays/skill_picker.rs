@@ -756,11 +756,11 @@ fn load_installed_skills() -> HashSet<String> {
     }
 
     // Check ZDX_HOME/skills (respects ZDX_HOME env var)
-    let zdx_skills = zdx_core::config::paths::zdx_home().join("skills");
+    let zdx_skills = zdx_engine::config::paths::zdx_home().join("skills");
     add_installed_from_dir(&zdx_skills, &mut installed);
 
     // Also check ~/.codex/skills for Codex-installed skills
-    if let Some(home) = zdx_core::config::paths::home_dir() {
+    if let Some(home) = zdx_engine::config::paths::home_dir() {
         add_installed_from_dir(&home.join(".codex").join("skills"), &mut installed);
     }
 

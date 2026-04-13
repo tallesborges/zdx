@@ -7,7 +7,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
-use zdx_core::config;
+use zdx_engine::config;
 
 const MODELS_DEV_URL: &str = "https://models.dev/api.json";
 const OPENROUTER_MODELS_URL: &str = "https://openrouter.ai/api/v1/models";
@@ -464,7 +464,7 @@ fn select_meta_candidate_from_official_sources(
     api: &ApiResponse,
     pattern: &str,
 ) -> Option<ModelCandidate> {
-    use zdx_core::providers::resolve_provider;
+    use zdx_engine::providers::resolve_provider;
 
     let target_model = resolve_provider(pattern).model;
     let source_providers = official_source_provider_ids(&target_model);
@@ -727,11 +727,11 @@ fn is_meta_provider(provider_id: &str) -> bool {
 /// Looks up a model in the embedded `default_models.toml` by ID.
 /// Uses provider resolution to match models with different prefixes.
 fn lookup_default_model(full_id: &str) -> Option<ModelRecord> {
-    use zdx_core::providers::{ProviderKind, provider_kind_from_id, resolve_provider};
+    use zdx_engine::providers::{ProviderKind, provider_kind_from_id, resolve_provider};
 
     static DEFAULTS: OnceLock<Option<ModelsFile>> = OnceLock::new();
     let defaults = DEFAULTS.get_or_init(|| {
-        match toml::from_str::<ModelsFile>(zdx_core::models::default_models_toml()) {
+        match toml::from_str::<ModelsFile>(zdx_engine::models::default_models_toml()) {
             Ok(file) => Some(file),
             Err(e) => {
                 eprintln!("Warning: failed to parse default_models.toml: {e}");

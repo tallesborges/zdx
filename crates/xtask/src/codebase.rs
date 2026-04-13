@@ -5,7 +5,11 @@ use std::path::{Path, PathBuf};
 const INCLUDE_DIRS: &[&str] = &[
     "docs",
     "crates/zdx-cli/src",
-    "crates/zdx-core",
+    "crates/zdx-assets",
+    "crates/zdx-types",
+    "crates/zdx-providers",
+    "crates/zdx-tools",
+    "crates/zdx-engine",
     "crates/zdx-tui",
     "crates/xtask",
 ];

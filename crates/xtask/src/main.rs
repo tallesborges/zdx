@@ -28,7 +28,7 @@ enum CommandName {
     /// If no directory is specified, it includes all default directories.
     /// If directories are specified (e.g., "crates/zdx-tui"), it only includes those.
     Codebase {
-        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-core").
+        /// Directory paths to include (e.g., "crates/zdx-tui", "crates/zdx-engine").
         /// If not provided, defaults to all workspace directories.
         #[arg(value_name = "DIR")]
         dirs: Vec<String>,
@@ -74,7 +74,7 @@ fn update_default_models() -> Result<()> {
 
     let dest = root
         .join("crates")
-        .join("zdx-core")
+        .join("zdx-assets")
         .join("default_models.toml");
     fs::copy(&models_path, &dest)
         .with_context(|| format!("copy {} to {}", models_path.display(), dest.display()))?;
@@ -87,7 +87,7 @@ fn update_default_config() -> Result<()> {
     let root = project_root()?;
     let dest = root
         .join("crates")
-        .join("zdx-core")
+        .join("zdx-assets")
         .join("default_config.toml");
 
     let output = Command::new("cargo")

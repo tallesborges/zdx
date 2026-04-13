@@ -13,14 +13,13 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 - `src/cli/commands/mcp.rs`: MCP helper commands (`servers`, `tools`, `schema`, `call`)
 - `src/cli/commands/telegram.rs`: Telegram utility commands
 - `src/cli/commands/worktree.rs`: worktree command handler
-- `prompts/exec_instruction_layer.md`: exec/terminal-specific output rules
 - `src/modes/exec.rs`: non-interactive streaming mode
 - `src/modes/mod.rs`: mode exports (exec + feature-gated TUI)
 - `tests/`: CLI integration tests (`assert_cmd`, fixtures)
 
 ## Conventions
 
-- Keep CLI glue thin; shared behavior belongs in `zdx-core`.
+- Keep CLI glue thin; shared behavior belongs in `zdx-engine`.
 - Prefer integration tests in `crates/zdx-cli/tests/` for CLI behavior.
 
 ## Checks

@@ -5,12 +5,12 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use chrono::Utc;
-use zdx_core::config;
-use zdx_core::images::path_mime;
-use zdx_core::providers::gemini::{
+use zdx_engine::config;
+use zdx_engine::images::path_mime;
+use zdx_engine::providers::gemini::{
     GeminiClient, GeminiConfig, GeminiImageGenerationOptions, GeneratedImage, SourceImage,
 };
-use zdx_core::providers::{ProviderKind, resolve_provider};
+use zdx_engine::providers::{ProviderKind, resolve_provider};
 
 const DEFAULT_IMAGINE_MODEL: &str = "gemini:gemini-3.1-flash-image-preview";
 

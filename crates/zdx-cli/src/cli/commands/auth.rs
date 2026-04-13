@@ -5,7 +5,7 @@ use std::net::TcpListener;
 use std::time::Duration;
 
 use anyhow::Result;
-use zdx_core::providers::oauth::{
+use zdx_engine::providers::oauth::{
     OAuthCache, claude_cli as oauth_claude_cli, gemini_cli as oauth_gemini_cli,
     openai_codex as oauth_codex,
 };

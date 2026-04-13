@@ -5,9 +5,9 @@
 
 use std::path::PathBuf;
 
-use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_persistence::{Thread, Usage};
-use zdx_core::providers::ChatMessage;
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::core::thread_persistence::{Thread, Usage};
+use zdx_engine::providers::ChatMessage;
 
 use crate::input::HandoffState;
 use crate::transcript::{HistoryCell, ScrollMode};

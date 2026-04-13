@@ -242,7 +242,7 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 ### Provider-level config
 
 - Each provider may expose `base_url` and `tools` overrides under `[providers.<id>]` in config.
-- Provider implementations live in `zdx-core`; the models registry (`models.toml`) tracks available models per provider.
+- Provider implementations live in `zdx-providers`; the models registry (`models.toml`) tracks available models per provider.
 
 ---
 
@@ -253,7 +253,7 @@ These are the canonical source of truth for paths and session context — skills
 
 ### Mechanism
 
-`set_runtime_env()` in `zdx-core/src/core/context.rs` sets all `ZDX_*` env vars once at agent startup (TUI, exec, bot). Child processes (bash tool, subagents) inherit them automatically.
+`set_runtime_env()` in `zdx-engine/src/core/context.rs` sets all `ZDX_*` env vars once at agent startup (TUI, exec, bot). Child processes (bash tool, subagents) inherit them automatically.
 
 ### System prompt `<environment>` block
 
@@ -280,7 +280,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 ### Contracts
 
 - Config is the single source of truth for user preferences (model, tokens, timeouts, prompt customization, memory paths, skill sources, subagent settings).
-- Adding a new config key or provider section should not require a spec update — the config struct in code (`zdx-core`) is authoritative for the full schema.
+- Adding a new config key or provider section should not require a spec update — the config struct in code (`zdx-engine`) is authoritative for the full schema.
 - `max_tokens` is optional; when unset, providers that support omitted limits use provider defaults. Providers that require a limit use an internal fallback from model metadata.
 - Provider base URLs and tool overrides live under `[providers.<id>]`.
 
@@ -365,7 +365,7 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ### Discovery & sources
 
-- **Bundled skills:** ZDX includes built-in bundled skill fallbacks (currently `deepwiki-cli`, `memory`, `thread-tools`, `imagine`, and `skill-creator`) shipped inside the crate under `crates/zdx-core/bundled_skills/`. At build time, ZDX embeds every file under that tree into the binary. At runtime, it materializes the bundle on demand under `$ZDX_HOME/bundled-skills/` and rewrites that directory only when the materialized bundle stamp is missing or differs from the embedded bundled-skill manifest hash; it does not verify individual bundled files on each startup.
+- **Bundled skills:** ZDX includes built-in bundled skill fallbacks (currently `deepwiki-cli`, `memory`, `thread-tools`, `imagine`, and `skill-creator`) shipped inside the crate under `crates/zdx-assets/bundled_skills/`. At build time, ZDX embeds every file under that tree into the binary. At runtime, it materializes the bundle on demand under `$ZDX_HOME/bundled-skills/` and rewrites that directory only when the materialized bundle stamp is missing or differs from the embedded bundled-skill manifest hash; it does not verify individual bundled files on each startup.
 - **Recursive sources:** `~/.zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
 - **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
 - **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project → built-in (first wins on name collision, so user/project skills override bundled fallbacks).

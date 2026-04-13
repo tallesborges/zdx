@@ -2,12 +2,12 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::{Config, TextVerbosity};
-use zdx_core::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
-use zdx_core::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
-use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_persistence::{self, Thread, ThreadEvent};
-use zdx_core::providers::{ChatContentBlock, ChatMessage, MessageContent};
+use zdx_engine::config::{Config, TextVerbosity};
+use zdx_engine::core::agent::{self, AgentEventRx, AgentOptions, ToolConfig};
+use zdx_engine::core::context::{PromptContextInclusion, build_prompt_with_context_and_layers};
+use zdx_engine::core::events::AgentEvent;
+use zdx_engine::core::thread_persistence::{self, Thread, ThreadEvent};
+use zdx_engine::providers::{ChatContentBlock, ChatMessage, MessageContent};
 
 use crate::types::IncomingMessage;
 
@@ -144,7 +144,7 @@ pub(crate) fn spawn_agent_turn(
     tool_config: &ToolConfig,
 ) -> Result<AgentTurnHandle> {
     // Set runtime env vars before building prompt (Slice 1: env-vars-runtime-context)
-    zdx_core::core::context::set_runtime_env(config, Some(thread_id));
+    zdx_engine::core::context::set_runtime_env(config, Some(thread_id));
 
     let PreparedBotTurn {
         config: bot_config,
@@ -274,8 +274,8 @@ mod tests {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     use serde_json::json;
-    use zdx_core::config::{Config, SkillSourceToggles};
-    use zdx_core::core::events::{AgentEvent, ToolOutput};
+    use zdx_engine::config::{Config, SkillSourceToggles};
+    use zdx_engine::core::events::{AgentEvent, ToolOutput};
 
     use super::{
         STATUS_THINKING, STATUS_WAITING, STATUS_WRITING, event_to_status, prepare_bot_turn,

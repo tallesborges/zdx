@@ -36,11 +36,11 @@ use std::time::{Duration, Instant};
 
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::Config;
-use zdx_core::core::agent::{AgentOptions, ToolConfig};
-use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_persistence::Thread;
-use zdx_core::providers::{ChatContentBlock, ChatMessage};
+use zdx_engine::config::Config;
+use zdx_engine::core::agent::{AgentOptions, ToolConfig};
+use zdx_engine::core::events::AgentEvent;
+use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::providers::{ChatContentBlock, ChatMessage};
 
 use crate::auth::AuthState;
 use crate::common::{TaskSeq, Tasks};
@@ -168,7 +168,7 @@ pub struct TuiState {
     /// User/default model preference (without per-thread overrides applied).
     pub base_model: String,
     /// User/default thinking preference (without per-thread overrides applied).
-    pub base_thinking_level: zdx_core::config::ThinkingLevel,
+    pub base_thinking_level: zdx_engine::config::ThinkingLevel,
     /// Last selected skill repository in this session.
     pub last_skill_repo: Option<String>,
     /// Agent options (root path, etc).
@@ -279,7 +279,7 @@ impl TuiState {
     }
 
     pub fn snapshot_active_thread_ids(&mut self) -> HashSet<String> {
-        let registry: HashSet<String> = zdx_core::agent_activity::list_active()
+        let registry: HashSet<String> = zdx_engine::agent_activity::list_active()
             .into_iter()
             .filter_map(|run| run.thread_id)
             .collect();
@@ -293,7 +293,7 @@ impl TuiState {
     }
 
     pub fn active_thread_ids_view(&self) -> HashSet<String> {
-        let mut combined: HashSet<String> = zdx_core::agent_activity::list_active()
+        let mut combined: HashSet<String> = zdx_engine::agent_activity::list_active()
             .into_iter()
             .filter_map(|run| run.thread_id)
             .collect();
@@ -303,7 +303,7 @@ impl TuiState {
 
     /// Builds transcript cells from message history.
     fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
-        use zdx_core::providers::MessageContent;
+        use zdx_engine::providers::MessageContent;
 
         let mut transcript = Vec::new();
 
@@ -396,7 +396,7 @@ fn get_git_branch(root: &std::path::Path) -> Option<String> {
 fn shorten_path(path: &std::path::Path) -> String {
     // Canonicalize to resolve "." and ".." to absolute path
     let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    if let Some(home) = zdx_core::config::paths::home_dir()
+    if let Some(home) = zdx_engine::config::paths::home_dir()
         && let Ok(relative) = path.strip_prefix(&home)
     {
         let display = format!("~/{}", relative.display());

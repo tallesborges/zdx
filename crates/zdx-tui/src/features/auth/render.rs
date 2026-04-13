@@ -7,11 +7,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use zdx_core::providers::oauth::{claude_cli, gemini_cli, openai_codex};
+use zdx_engine::providers::oauth::{claude_cli, gemini_cli, openai_codex};
 
 use crate::overlays::LoginState;
 
-type LoadFn = fn() -> anyhow::Result<Option<zdx_core::providers::oauth::OAuthCredentials>>;
+type LoadFn = fn() -> anyhow::Result<Option<zdx_engine::providers::oauth::OAuthCredentials>>;
 
 /// Renders the login overlay.
 pub fn render_login_overlay(frame: &mut Frame, login_state: &LoginState, area: Rect) {
@@ -41,22 +41,22 @@ fn login_overlay_title(login_state: &LoginState) -> &'static str {
     match login_state.selected_provider() {
         None => "Choose Login Provider",
         Some(provider) => match provider {
-            zdx_core::providers::ProviderKind::Anthropic => "Anthropic API Key",
-            zdx_core::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
-            zdx_core::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
-            zdx_core::providers::ProviderKind::OpenAI => "OpenAI Login",
-            zdx_core::providers::ProviderKind::OpenRouter => "OpenRouter Login",
-            zdx_core::providers::ProviderKind::Xiomi => "Xiomi API Key",
-            zdx_core::providers::ProviderKind::Mistral => "Mistral API Key",
-            zdx_core::providers::ProviderKind::Moonshot => "Moonshot API Key",
-            zdx_core::providers::ProviderKind::Stepfun => "StepFun API Key",
-            zdx_core::providers::ProviderKind::Gemini => "Gemini Login",
-            zdx_core::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
-            zdx_core::providers::ProviderKind::Zen => "Zen API Key",
-            zdx_core::providers::ProviderKind::Apiyi => "APIYI API Key",
-            zdx_core::providers::ProviderKind::Minimax => "MiniMax API Key",
-            zdx_core::providers::ProviderKind::Zai => "Z.AI API Key",
-            zdx_core::providers::ProviderKind::Xai => "xAI API Key",
+            zdx_engine::providers::ProviderKind::Anthropic => "Anthropic API Key",
+            zdx_engine::providers::ProviderKind::ClaudeCli => "Claude CLI Login",
+            zdx_engine::providers::ProviderKind::OpenAICodex => "OpenAI Codex Login",
+            zdx_engine::providers::ProviderKind::OpenAI => "OpenAI Login",
+            zdx_engine::providers::ProviderKind::OpenRouter => "OpenRouter Login",
+            zdx_engine::providers::ProviderKind::Xiomi => "Xiomi API Key",
+            zdx_engine::providers::ProviderKind::Mistral => "Mistral API Key",
+            zdx_engine::providers::ProviderKind::Moonshot => "Moonshot API Key",
+            zdx_engine::providers::ProviderKind::Stepfun => "StepFun API Key",
+            zdx_engine::providers::ProviderKind::Gemini => "Gemini Login",
+            zdx_engine::providers::ProviderKind::GeminiCli => "Gemini CLI Login",
+            zdx_engine::providers::ProviderKind::Zen => "Zen API Key",
+            zdx_engine::providers::ProviderKind::Apiyi => "APIYI API Key",
+            zdx_engine::providers::ProviderKind::Minimax => "MiniMax API Key",
+            zdx_engine::providers::ProviderKind::Zai => "Z.AI API Key",
+            zdx_engine::providers::ProviderKind::Xai => "xAI API Key",
         },
     }
 }

@@ -11,9 +11,9 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use zdx_core::config::ThinkingLevel;
-use zdx_core::core::thread_persistence::{Thread, ThreadSummary, Usage, short_thread_id};
-use zdx_core::providers::ChatMessage;
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::core::thread_persistence::{Thread, ThreadSummary, Usage, short_thread_id};
+use zdx_engine::providers::ChatMessage;
 
 use crate::effects::UiEffect;
 use crate::events::ThreadUiEvent;
@@ -301,7 +301,7 @@ fn handle_thread_preview_loaded(cells: Vec<HistoryCell>, mutations: &mut Vec<Sta
 fn handle_thread_created(
     thread_handle: Thread,
     context_paths: Vec<PathBuf>,
-    skills: Vec<zdx_core::skills::Skill>,
+    skills: Vec<zdx_engine::skills::Skill>,
     mutations: &mut Vec<StateMutation>,
 ) {
     let startup_messages =

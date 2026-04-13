@@ -6,11 +6,11 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
-use zdx_core::config::{ProvidersConfig, ThinkingLevel};
-use zdx_core::core::events::AgentEvent;
-use zdx_core::core::thread_persistence::Thread;
-use zdx_core::models::{ModelOption, available_models, model_supports_reasoning};
-use zdx_core::providers::{ChatMessage, ProviderKind, resolve_provider};
+use zdx_engine::config::{ProvidersConfig, ThinkingLevel};
+use zdx_engine::core::events::AgentEvent;
+use zdx_engine::core::thread_persistence::Thread;
+use zdx_engine::models::{ModelOption, available_models, model_supports_reasoning};
+use zdx_engine::providers::{ChatMessage, ProviderKind, resolve_provider};
 
 use super::OverlayUpdate;
 use crate::effects::UiEffect;
@@ -48,6 +48,8 @@ pub struct BtwState {
 }
 
 impl BtwState {
+    /// # Errors
+    /// Returns an error if `base_messages` is empty.
     pub fn open(
         base_messages: Vec<ChatMessage>,
         current_model: &str,
@@ -128,11 +130,11 @@ impl BtwState {
 
         match key.code {
             KeyCode::Esc => {
-                if !text_value(&self.input).is_empty() {
+                if text_value(&self.input).is_empty() {
+                    OverlayUpdate::close()
+                } else {
                     self.input = TextBuffer::default();
                     OverlayUpdate::stay()
-                } else {
-                    OverlayUpdate::close()
                 }
             }
             KeyCode::Char('c') if ctrl => {
@@ -196,11 +198,14 @@ impl BtwState {
 
     fn handle_picker_key(&mut self, key: KeyEvent, ctrl: bool) -> OverlayUpdate {
         match (&mut self.picker_mode, key.code) {
-            (_, KeyCode::Esc) | (_, KeyCode::Char('c')) if ctrl => {
+            (_, KeyCode::Esc | KeyCode::Char('c')) if ctrl => {
                 self.picker_mode = BtwPickerMode::None;
                 OverlayUpdate::stay()
             }
-            (BtwPickerMode::Model { selected }, KeyCode::Up) => {
+            (
+                BtwPickerMode::Model { selected } | BtwPickerMode::Thinking { selected },
+                KeyCode::Up,
+            ) => {
                 *selected = selected.saturating_sub(1);
                 OverlayUpdate::stay()
             }
@@ -217,10 +222,6 @@ impl BtwState {
                     }
                 }
                 self.picker_mode = BtwPickerMode::None;
-                OverlayUpdate::stay()
-            }
-            (BtwPickerMode::Thinking { selected }, KeyCode::Up) => {
-                *selected = selected.saturating_sub(1);
                 OverlayUpdate::stay()
             }
             (BtwPickerMode::Thinking { selected }, KeyCode::Down) => {
@@ -294,6 +295,7 @@ impl BtwState {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn render_btw_overlay(frame: &mut Frame, state: &BtwState, area: Rect, input_top_y: u16) {
     use super::render_utils::{InputHint, OverlayConfig, render_overlay, render_separator};
 
@@ -332,7 +334,7 @@ fn render_btw_overlay(frame: &mut Frame, state: &BtwState, area: Rect, input_top
             border_color: Color::Cyan,
             width: OVERLAY_WIDTH,
             height: OVERLAY_HEIGHT,
-            hints: &hints,
+            hints,
         },
     );
 
@@ -369,10 +371,10 @@ fn render_btw_overlay(frame: &mut Frame, state: &BtwState, area: Rect, input_top
             areas.transcript,
         ),
         BtwPickerMode::Model { selected } => {
-            render_model_list(frame, state, areas.transcript, selected)
+            render_model_list(frame, state, areas.transcript, selected);
         }
         BtwPickerMode::Thinking { selected } => {
-            render_thinking_list(frame, areas.transcript, selected)
+            render_thinking_list(frame, areas.transcript, selected);
         }
     }
 
@@ -553,14 +555,16 @@ fn display_model_label(state: &BtwState) -> String {
         .enabled_models
         .iter()
         .find(|model| model.provider == current.kind.id() && model.id == current.model)
-        .map(|model| {
-            format!(
-                "{} · {}",
-                provider_label(model.provider),
-                cleaned_display_name(model, model.provider)
-            )
-        })
-        .unwrap_or_else(|| state.model.clone())
+        .map_or_else(
+            || state.model.clone(),
+            |model| {
+                format!(
+                    "{} · {}",
+                    provider_label(model.provider),
+                    cleaned_display_name(model, model.provider)
+                )
+            },
+        )
 }
 
 fn collect_enabled_models(providers: &ProvidersConfig) -> Vec<&'static ModelOption> {
@@ -592,26 +596,32 @@ fn map_style(style: crate::transcript::Style) -> Style {
     use crate::transcript::Style as TranscriptStyle;
 
     match style {
-        TranscriptStyle::Plain | TranscriptStyle::Assistant => Style::default().fg(Color::White),
+        TranscriptStyle::Plain | TranscriptStyle::Assistant | TranscriptStyle::ToolOutput => {
+            Style::default().fg(Color::White)
+        }
         TranscriptStyle::UserPrefix | TranscriptStyle::User => Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::ITALIC),
-        TranscriptStyle::StreamingCursor => Style::default().fg(Color::Cyan),
-        TranscriptStyle::SystemPrefix | TranscriptStyle::System | TranscriptStyle::Timing => {
-            Style::default().fg(Color::DarkGray)
+        TranscriptStyle::StreamingCursor | TranscriptStyle::Link => {
+            Style::default().fg(Color::Cyan)
         }
+        TranscriptStyle::SystemPrefix
+        | TranscriptStyle::System
+        | TranscriptStyle::Timing
+        | TranscriptStyle::ToolCancelled
+        | TranscriptStyle::Interrupted
+        | TranscriptStyle::ListBullet
+        | TranscriptStyle::ListNumber
+        | TranscriptStyle::BlockQuote => Style::default().fg(Color::DarkGray),
         TranscriptStyle::ToolBracket | TranscriptStyle::ToolStatus => {
             Style::default().fg(Color::Blue)
         }
         TranscriptStyle::ToolError => Style::default().fg(Color::Red),
-        TranscriptStyle::ToolRunning => Style::default().fg(Color::Yellow),
+        TranscriptStyle::ToolRunning
+        | TranscriptStyle::ToolTruncation
+        | TranscriptStyle::ThinkingPrefix
+        | TranscriptStyle::ImagePlaceholder => Style::default().fg(Color::Yellow),
         TranscriptStyle::ToolSuccess => Style::default().fg(Color::Green),
-        TranscriptStyle::ToolCancelled | TranscriptStyle::Interrupted => {
-            Style::default().fg(Color::DarkGray)
-        }
-        TranscriptStyle::ToolOutput => Style::default().fg(Color::White),
-        TranscriptStyle::ToolTruncation => Style::default().fg(Color::Yellow),
-        TranscriptStyle::ThinkingPrefix => Style::default().fg(Color::Yellow),
         TranscriptStyle::Thinking => Style::default()
             .fg(Color::DarkGray)
             .add_modifier(Modifier::ITALIC),
@@ -623,12 +633,6 @@ fn map_style(style: crate::transcript::Style) -> Style {
         TranscriptStyle::H1 | TranscriptStyle::H2 | TranscriptStyle::H3 => Style::default()
             .fg(Color::Magenta)
             .add_modifier(Modifier::BOLD),
-        TranscriptStyle::Link => Style::default().fg(Color::Cyan),
-        TranscriptStyle::BlockQuote => Style::default().fg(Color::DarkGray),
-        TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
-            Style::default().fg(Color::DarkGray)
-        }
-        TranscriptStyle::ImagePlaceholder => Style::default().fg(Color::Yellow),
     }
 }
 
