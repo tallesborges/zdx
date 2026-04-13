@@ -142,7 +142,7 @@ pub enum Overlay {
     ModelPicker(ModelPickerState),
     SkillPicker(SkillPickerState),
     ThinkingPicker(ThinkingPickerState),
-    Btw(BtwState),
+    Btw(Box<BtwState>),
     ThreadPicker(ThreadPickerState),
     Login(LoginState),
     FilePicker(FilePickerState),

@@ -5,12 +5,19 @@ zdx is a terminal-based AI coding assistant built in Rust, featuring a non-inter
 ## Workspace Layout
 
 - **zdx (binary):** CLI + exec mode, routes to the TUI when the `tui` feature is enabled.
-- **zdx-core:** engine, config, providers, tools, thread persistence, and agent runtime (UI-agnostic).
-- **zdx-tui:** full-screen TUI (Elm/MVU), depends on zdx-core.
+- **zdx-types:** Pure shared value types (DTOs/enums) used across providers, tools, and events. No runtime deps.
+- **zdx-assets:** Embedded asset content (prompts, instruction layers, default TOMLs, bundled skills, built-in subagents). No runtime deps.
+- **zdx-providers:** LLM provider implementations (Anthropic, OpenAI, Gemini, etc.). Depends on zdx-types and zdx-assets.
+- **zdx-tools:** Leaf tool implementations (bash, edit, read, write, glob, grep, etc.) with a minimal ToolContext. Depends on zdx-types.
+- **zdx-engine:** Runtime engine: config, agent orchestration, thread persistence, skills, subagents, MCP, engine-backed tools, and all remaining runtime modules. Depends on zdx-types, zdx-assets, zdx-providers, zdx-tools.
+- **zdx-core:** Compatibility facade — re-exports everything from zdx-engine. Surface crates depend on this for backward compatibility.
+- **zdx-tui:** Full-screen TUI (Elm/MVU), depends on zdx-core.
+- **zdx-bot:** Telegram bot surface.
+- **zdx-monitor:** Service dashboard TUI.
 
 ## MCP Internal Engine
 
-MCP support lives in `zdx-core/src/mcp.rs` as an internal engine. The primary product surface is the helper CLI (`zdx mcp ...`), not automatic model-visible tool exposure.
+MCP support lives in `zdx-engine/src/mcp.rs` as an internal engine. The primary product surface is the helper CLI (`zdx mcp ...`), not automatic model-visible tool exposure.
 
 - **Config source:** project-local `.mcp.json` using the standard `mcpServers` JSON shape.
 - **Workspace/runtime:** `load_workspace(root)` initializes configured servers, resolves cached HTTP MCP OAuth credentials, captures per-server status/diagnostics, lists tools, exposes schemas, and supports direct MCP `tools/call` execution.
@@ -26,7 +33,7 @@ This keeps provider integration unchanged for normal agent turns: providers stil
 
 ## Prompt Architecture
 
-Prompt assembly is layered in `zdx-core`:
+Prompt assembly is layered in `zdx-engine` (assets come from `zdx-assets`):
 
 - **Base system prompt:** `prompts/system_prompt_template.md` is the canonical default prompt.
 - **Prompt layers:** additive prompt fragments appended after the base prompt. These are used for surface/runtime constraints (for example Telegram or exec output guidance) and behavior harnesses (for example automation/headless execution).

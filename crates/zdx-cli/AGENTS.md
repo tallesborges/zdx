@@ -20,7 +20,7 @@ Scope: CLI argument parsing/router, subcommands, and interactive/exec mode entry
 
 ## Conventions
 
-- Keep CLI glue thin; shared behavior belongs in `zdx-core`.
+- Keep CLI glue thin; shared behavior belongs in `zdx-engine` (accessed via `zdx-core` facade).
 - Prefer integration tests in `crates/zdx-cli/tests/` for CLI behavior.
 
 ## Checks

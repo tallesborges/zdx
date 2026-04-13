@@ -532,7 +532,7 @@ impl TuiRuntime {
                     thread_handle,
                     messages,
                     prompt,
-                    model,
+                    &model,
                     thinking_level,
                 ) {
                     Ok(event) => self.dispatch_event(event),

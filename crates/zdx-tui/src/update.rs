@@ -665,7 +665,7 @@ fn apply_mutations(tui: &mut TuiState, mutations: Vec<StateMutation>) {
 fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
     match mutation {
         ConfigMutation::SetModel(model) => {
-            tui.base_model = model.clone();
+            tui.base_model.clone_from(&model);
             tui.config.model = model;
         }
         ConfigMutation::SetThinkingLevel(level) => {
@@ -785,7 +785,7 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
                 &app.tui.config.providers,
             ) {
                 Ok((state, effects)) => {
-                    app.overlay = Some(overlays::Overlay::Btw(state));
+                    app.overlay = Some(overlays::Overlay::Btw(Box::new(state)));
                     effects
                 }
                 Err(error) => {
