@@ -4,7 +4,6 @@ members = [
     "crates/xtask",
     "crates/zdx-assets",
     "crates/zdx-types",
-    "crates/zdx-core",
     "crates/zdx-engine",
     "crates/zdx-tui",
     "crates/zdx-bot",

@@ -10,7 +10,7 @@ use image::{GenericImageView, ImageReader};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use zdx_core::config::{Config, ResolvedTelegramRuntime};
+use zdx_engine::config::{Config, ResolvedTelegramRuntime};
 
 mod types;
 

@@ -4,8 +4,8 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use tokio::sync::Mutex;
-use zdx_core::config::Config;
-use zdx_core::core::agent::ToolConfig;
+use zdx_engine::config::Config;
+use zdx_engine::core::agent::ToolConfig;
 
 use crate::bot::queue::ChatQueueMap;
 use crate::bot::{
@@ -24,10 +24,7 @@ mod topic_title;
 mod transcribe;
 mod types;
 
-const TELEGRAM_INSTRUCTION_LAYER: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/prompts/telegram_instruction_layer.md"
-));
+const TELEGRAM_INSTRUCTION_LAYER: &str = zdx_engine::prompts::TELEGRAM_INSTRUCTION_LAYER;
 const MEDIA_GROUP_DEBOUNCE: Duration = Duration::from_millis(1500);
 
 type MediaGroupKey = (i64, Option<i64>, i64, String);
@@ -72,11 +69,11 @@ pub async fn run_named_with_config_and_root(
     config.model.clone_from(&config.telegram.model);
     config.thinking_level = config.telegram.thinking_level;
     let settings = TelegramSettings::from_config(&config)?;
-    zdx_core::pidfile::ensure_unique(service_name)
+    zdx_engine::pidfile::ensure_unique(service_name)
         .with_context(|| format!("ensure unique PID for {service_name}"))?;
-    let _pid_guard = zdx_core::pidfile::write(service_name)
+    let _pid_guard = zdx_engine::pidfile::write(service_name)
         .with_context(|| format!("write {service_name} PID file"))?;
-    let config_path = zdx_core::config::paths::config_path();
+    let config_path = zdx_engine::config::paths::config_path();
     if config_path.exists() {
         tracing::info!(path = %config_path.display(), "Config file");
     }
@@ -344,7 +341,7 @@ fn telegram_thread_id(chat_id: i64, thread_id: Option<i64>) -> String {
 
 fn current_topic_model(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
     let config = context.config();
-    zdx_core::core::thread_persistence::read_thread_model_override(&telegram_thread_id(
+    zdx_engine::core::thread_persistence::read_thread_model_override(&telegram_thread_id(
         chat_id, thread_id,
     ))
     .ok()
@@ -356,9 +353,9 @@ fn current_topic_thinking(
     context: &BotContext,
     chat_id: i64,
     thread_id: Option<i64>,
-) -> zdx_core::config::ThinkingLevel {
+) -> zdx_engine::config::ThinkingLevel {
     let config = context.config();
-    zdx_core::core::thread_persistence::read_thread_thinking_override(&telegram_thread_id(
+    zdx_engine::core::thread_persistence::read_thread_thinking_override(&telegram_thread_id(
         chat_id, thread_id,
     ))
     .ok()
@@ -367,7 +364,7 @@ fn current_topic_thinking(
 }
 
 fn set_topic_model(chat_id: i64, thread_id: Option<i64>, model_id: &str) -> String {
-    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+    match zdx_engine::core::thread_persistence::Thread::with_id(telegram_thread_id(
         chat_id, thread_id,
     )) {
         Ok(mut thread) => match thread.set_model_override(Some(model_id.to_string())) {
@@ -381,9 +378,9 @@ fn set_topic_model(chat_id: i64, thread_id: Option<i64>, model_id: &str) -> Stri
 fn set_topic_thinking(
     chat_id: i64,
     thread_id: Option<i64>,
-    level: zdx_core::config::ThinkingLevel,
+    level: zdx_engine::config::ThinkingLevel,
 ) -> String {
-    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+    match zdx_engine::core::thread_persistence::Thread::with_id(telegram_thread_id(
         chat_id, thread_id,
     )) {
         Ok(mut thread) => match thread.set_thinking_override(Some(level)) {
@@ -399,7 +396,7 @@ fn set_topic_thinking(
 
 fn reset_topic_thinking(context: &BotContext, chat_id: i64, thread_id: Option<i64>) -> String {
     let config = context.config();
-    match zdx_core::core::thread_persistence::Thread::with_id(telegram_thread_id(
+    match zdx_engine::core::thread_persistence::Thread::with_id(telegram_thread_id(
         chat_id, thread_id,
     )) {
         Ok(mut thread) => match thread.set_thinking_override(None) {
@@ -423,7 +420,7 @@ fn model_picker_header(
     if is_general {
         format!("Current model: <code>{}</code>", config.model)
     } else {
-        let override_info = zdx_core::core::thread_persistence::read_thread_model_override(
+        let override_info = zdx_engine::core::thread_persistence::read_thread_model_override(
             &telegram_thread_id(chat_id, thread_id),
         )
         .ok()
@@ -569,12 +566,12 @@ async fn handle_thinking_callback(
         };
         let is_general = scope == "general";
         let level = match level_str {
-            "off" => zdx_core::config::ThinkingLevel::Off,
-            "minimal" => zdx_core::config::ThinkingLevel::Minimal,
-            "low" => zdx_core::config::ThinkingLevel::Low,
-            "medium" => zdx_core::config::ThinkingLevel::Medium,
-            "high" => zdx_core::config::ThinkingLevel::High,
-            "xhigh" => zdx_core::config::ThinkingLevel::XHigh,
+            "off" => zdx_engine::config::ThinkingLevel::Off,
+            "minimal" => zdx_engine::config::ThinkingLevel::Minimal,
+            "low" => zdx_engine::config::ThinkingLevel::Low,
+            "medium" => zdx_engine::config::ThinkingLevel::Medium,
+            "high" => zdx_engine::config::ThinkingLevel::High,
+            "xhigh" => zdx_engine::config::ThinkingLevel::XHigh,
             _ => {
                 let _ = client
                     .answer_callback_query(&callback.id, Some("Unknown thinking level"))

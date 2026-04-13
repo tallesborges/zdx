@@ -5,11 +5,11 @@ use std::process::Command;
 
 use anyhow::{Context, Result};
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::ThinkingLevel;
-use zdx_core::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
-use zdx_core::core::{thread_persistence, worktree};
-use zdx_core::models::{ModelOption, ModelPricing};
-use zdx_core::providers::{ProviderAuthMode, provider_for_model};
+use zdx_engine::config::ThinkingLevel;
+use zdx_engine::core::events::{AgentEvent, TurnStatus as AgentTurnStatus};
+use zdx_engine::core::{thread_persistence, worktree};
+use zdx_engine::models::{ModelOption, ModelPricing};
+use zdx_engine::providers::{ProviderAuthMode, provider_for_model};
 
 use crate::bot::context::BotContext;
 use crate::commands::{BotCommand, ModelSubcommand, ThinkingSubcommand, parse_command};
@@ -96,7 +96,7 @@ pub(crate) async fn handle_message(context: &BotContext, message: Message) -> Re
 async fn parse_message_with_status(
     context: &BotContext,
     allowlist: AllowlistConfig<'_>,
-    bot_config: &zdx_core::config::Config,
+    bot_config: &zdx_engine::config::Config,
     message: Message,
     provisional_status: Option<&TurnStatus>,
 ) -> Result<Option<crate::types::IncomingMessage>> {
@@ -238,9 +238,9 @@ struct TurnResult {
 struct SpawnRequest<'a> {
     worktree_root: &'a std::path::Path,
     thread_id: &'a str,
-    thread: &'a zdx_core::core::thread_persistence::Thread,
-    messages: Vec<zdx_core::providers::ChatMessage>,
-    config: &'a zdx_core::config::Config,
+    thread: &'a zdx_engine::core::thread_persistence::Thread,
+    messages: Vec<zdx_engine::providers::ChatMessage>,
+    config: &'a zdx_engine::config::Config,
 }
 
 struct StatusSnapshot<'a> {
@@ -410,7 +410,7 @@ async fn handle_model_command(
             let override_model = if is_general {
                 None
             } else {
-                zdx_core::core::thread_persistence::read_thread_model_override(thread_id)?
+                zdx_engine::core::thread_persistence::read_thread_model_override(thread_id)?
             };
             let current = override_model.as_deref().unwrap_or(&bot_config.model);
 
@@ -442,7 +442,7 @@ async fn handle_model_command(
                     "Unknown model: <code>{model_id}</code>\n\nUse /model list to see available models."
                 )
             } else if is_general {
-                zdx_core::config::Config::save_telegram_model(&model_id)?;
+                zdx_engine::config::Config::save_telegram_model(&model_id)?;
                 context.update_config(|cfg| {
                     cfg.telegram.model.clone_from(&model_id);
                     cfg.model.clone_from(&model_id);
@@ -450,7 +450,7 @@ async fn handle_model_command(
                 format!("✅ Default model set to <code>{model_id}</code>.")
             } else {
                 let mut thread =
-                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
                         .context("open thread")?;
                 thread.set_model_override(Some(model_id.clone()))?;
                 format!("✅ Model set to <code>{model_id}</code> for this topic.")
@@ -468,7 +468,7 @@ async fn handle_model_command(
                 )
             } else {
                 let mut thread =
-                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
                         .context("open thread")?;
                 thread.set_model_override(None)?;
                 format!(
@@ -550,7 +550,7 @@ async fn handle_thinking_command(
         }
         ThinkingSubcommand::Set(level) => {
             if is_general {
-                zdx_core::config::Config::save_telegram_thinking_level(level)?;
+                zdx_engine::config::Config::save_telegram_thinking_level(level)?;
                 context.update_config(|cfg| {
                     cfg.telegram.thinking_level = level;
                     cfg.thinking_level = level;
@@ -561,7 +561,7 @@ async fn handle_thinking_command(
                 )
             } else {
                 let mut thread =
-                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
                         .context("open thread")?;
                 thread.set_thinking_override(Some(level))?;
                 format!(
@@ -578,7 +578,7 @@ async fn handle_thinking_command(
                 )
             } else {
                 let mut thread =
-                    zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+                    zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
                         .context("open thread")?;
                 thread.set_thinking_override(None)?;
                 format!(
@@ -854,7 +854,7 @@ async fn handle_thread_commands(
         }
     };
 
-    let mut thread = zdx_core::core::thread_persistence::Thread::with_id(thread_id.to_string())
+    let mut thread = zdx_engine::core::thread_persistence::Thread::with_id(thread_id.to_string())
         .context("open thread log")?;
     if let Err(err) = thread.set_root_path(&worktree_root) {
         context
@@ -1247,7 +1247,7 @@ async fn finalize_turn(
     context: &BotContext,
     incoming: &crate::types::IncomingMessage,
     reply_ctx: &ReplyContext,
-    _thread: &mut zdx_core::core::thread_persistence::Thread,
+    _thread: &mut zdx_engine::core::thread_persistence::Thread,
     status: &TurnStatus,
     result: TurnResult,
 ) -> Result<()> {

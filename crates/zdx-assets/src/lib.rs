@@ -24,6 +24,18 @@ pub const SYSTEM_PROMPT_TEMPLATE: &str = include_str!("../prompts/system_prompt_
 pub const AUTOMATION_HARNESS_INSTRUCTION_LAYER: &str =
     include_str!("../instruction_layers/automation_harness.md");
 
+/// Instruction layer for non-interactive exec mode.
+pub const EXEC_INSTRUCTION_LAYER: &str =
+    include_str!("../instruction_layers/exec_instruction_layer.md");
+
+/// Instruction layer for interactive TUI chat.
+pub const CHAT_INSTRUCTION_LAYER: &str =
+    include_str!("../instruction_layers/chat_instruction_layer.md");
+
+/// Instruction layer for Telegram bot.
+pub const TELEGRAM_INSTRUCTION_LAYER: &str =
+    include_str!("../instruction_layers/telegram_instruction_layer.md");
+
 /// Prompt template for read thread tool (shared with tool execution).
 pub const READ_THREAD_PROMPT_TEMPLATE: &str = include_str!("../prompts/read_thread_prompt.md");
 

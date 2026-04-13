@@ -8,10 +8,10 @@ use std::time::Instant;
 use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::{Deserialize, Serialize};
-use zdx_core::automations::{self, AutomationDefinition};
-use zdx_core::core::context::PromptContextInclusion;
-use zdx_core::core::thread_persistence::ThreadPersistenceOptions;
-use zdx_core::{config, prompts, subagents};
+use zdx_engine::automations::{self, AutomationDefinition};
+use zdx_engine::core::context::PromptContextInclusion;
+use zdx_engine::core::thread_persistence::ThreadPersistenceOptions;
+use zdx_engine::{config, prompts, subagents};
 
 use super::exec;
 
@@ -342,7 +342,7 @@ fn prepare_automation_run(
         }
     }
 
-    let effective = zdx_core::core::context::build_prompt_with_context_and_layers(
+    let effective = zdx_engine::core::context::build_prompt_with_context_and_layers(
         &run_config,
         root,
         &chosen_model,
@@ -510,8 +510,8 @@ fn read_run_records(path: &Path) -> Result<Vec<AutomationRunRecord>> {
 mod tests {
     use chrono::TimeZone;
     use tempfile::tempdir;
-    use zdx_core::automations::AutomationSource;
-    use zdx_core::config::{Config, SkillSourceToggles, ThinkingLevel};
+    use zdx_engine::automations::AutomationSource;
+    use zdx_engine::config::{Config, SkillSourceToggles, ThinkingLevel};
 
     use super::*;
 

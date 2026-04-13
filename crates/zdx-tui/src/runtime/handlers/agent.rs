@@ -1,5 +1,5 @@
 use tokio_util::sync::CancellationToken;
-use zdx_core::core::thread_persistence;
+use zdx_engine::core::thread_persistence;
 
 use crate::events::UiEvent;
 use crate::state::TuiState;
@@ -13,7 +13,7 @@ pub fn interrupt_agent(tui: &TuiState) {
 
 /// Spawns an agent turn.
 pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
-    let (agent_tx, agent_rx) = zdx_core::core::agent::create_event_channel();
+    let (agent_tx, agent_rx) = zdx_engine::core::agent::create_event_channel();
     let cancel = CancellationToken::new();
     let run_cancel = cancel.clone();
 
@@ -23,15 +23,15 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
     let system_prompt = tui.system_prompt.clone();
     let thread_id = tui.thread.thread_handle.as_ref().map(|h| h.id.clone());
 
-    let (tui_tx, tui_rx) = zdx_core::core::agent::create_event_channel();
+    let (tui_tx, tui_rx) = zdx_engine::core::agent::create_event_channel();
 
     if let Some(thread_handle) = tui.thread.thread_handle.clone() {
-        let (persist_tx, persist_rx) = zdx_core::core::agent::create_event_channel();
-        let _broadcaster = zdx_core::core::agent::spawn_broadcaster_with_modes(
+        let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
+        let _broadcaster = zdx_engine::core::agent::spawn_broadcaster_with_modes(
             agent_rx,
             vec![
-                (tui_tx, zdx_core::core::agent::BroadcastMode::Ui),
-                (persist_tx, zdx_core::core::agent::BroadcastMode::Reliable),
+                (tui_tx, zdx_engine::core::agent::BroadcastMode::Ui),
+                (persist_tx, zdx_engine::core::agent::BroadcastMode::Reliable),
             ],
         );
         let _persist = thread_persistence::spawn_thread_persist_task_with_completed_messages(
@@ -40,12 +40,12 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
             true,
         );
     } else {
-        let _broadcaster = zdx_core::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
+        let _broadcaster = zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx]);
     }
 
     // Spawn the agent task - it will send TurnFinished when done
     tokio::spawn(async move {
-        let _ = zdx_core::core::agent::run_turn_with_cancel(
+        let _ = zdx_engine::core::agent::run_turn_with_cancel(
             messages,
             &config,
             &agent_opts,

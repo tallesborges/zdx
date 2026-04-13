@@ -8,6 +8,9 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `build.rs`: generates the bundled-skill asset manifest from `bundled_skills/`
 - `prompts/`: shared prompt templates (identity, system, handoff, thread title, read_thread)
 - `instruction_layers/automation_harness.md`: built-in automation harness instruction layer
+- `instruction_layers/exec_instruction_layer.md`: exec/terminal-specific output rules
+- `instruction_layers/chat_instruction_layer.md`: interactive TUI chat output rules
+- `instruction_layers/telegram_instruction_layer.md`: Telegram bot output rules
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree

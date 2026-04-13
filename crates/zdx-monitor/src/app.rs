@@ -10,8 +10,8 @@ use crossterm::execute;
 use crossterm::terminal::{self, EnterAlternateScreen, LeaveAlternateScreen};
 use ratatui::prelude::*;
 use serde_json::Value;
-use zdx_core::config::{self, paths};
-use zdx_core::{agent_activity, automations, pidfile};
+use zdx_engine::config::{self, paths};
+use zdx_engine::{agent_activity, automations, pidfile};
 
 use crate::ui;
 

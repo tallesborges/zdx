@@ -10,7 +10,6 @@ This monorepo now uses scoped `AGENTS.md` files per crate.
 - `crates/zdx-assets/AGENTS.md`: embedded assets (prompts, default TOMLs, bundled skills, built-in subagents)
 - `crates/zdx-types/AGENTS.md`: pure shared value types and pure helper logic for providers, tools, events
 - `crates/zdx-providers/AGENTS.md`: LLM provider implementations (Anthropic, OpenAI, Gemini, etc.)
-- `crates/zdx-core/AGENTS.md`: compatibility facade (re-exports zdx-engine)
 - `crates/zdx-engine/AGENTS.md`: core engine — runtime, config, agent orchestration, tools
 - `crates/zdx-tui/AGENTS.md`: TUI architecture map + runtime/features conventions
 - `crates/zdx-tools/AGENTS.md`: leaf tool implementations (bash, edit, read, write, glob, grep, web_search, fetch_webpage, apply_patch)

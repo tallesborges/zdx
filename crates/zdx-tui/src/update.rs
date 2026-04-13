@@ -77,7 +77,7 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
                 let finished = matches!(
                     agent_event,
-                    zdx_core::core::events::AgentEvent::TurnFinished { .. }
+                    zdx_engine::core::events::AgentEvent::TurnFinished { .. }
                 );
                 let thread_id = state.thread_handle.as_ref().map(|thread| thread.id.clone());
                 state.handle_agent_event(&agent_event);
@@ -245,7 +245,7 @@ fn handle_voice_transcribed(
 
 fn handle_agent_event(
     app: &mut AppState,
-    agent_event: &zdx_core::core::events::AgentEvent,
+    agent_event: &zdx_engine::core::events::AgentEvent,
 ) -> Vec<UiEffect> {
     let has_thread = app.tui.thread.thread_handle.is_some();
     let (mut effects, mutations) = transcript::handle_agent_event(
@@ -258,14 +258,14 @@ fn handle_agent_event(
 
     if matches!(
         agent_event,
-        zdx_core::core::events::AgentEvent::ToolRequested { .. }
+        zdx_engine::core::events::AgentEvent::ToolRequested { .. }
     ) {
         app.tui.status_line.mark_tool_used();
     }
 
     let should_dequeue = matches!(
         agent_event,
-        zdx_core::core::events::AgentEvent::TurnFinished { .. }
+        zdx_engine::core::events::AgentEvent::TurnFinished { .. }
     );
     if should_dequeue
         && let Some(thread_id) = app
@@ -332,7 +332,7 @@ fn handle_login_result_event(app: &mut AppState, result: Result<(), String>) -> 
         Some(overlays::Overlay::Login(overlays::LoginState::AwaitingCode { provider, .. })) => {
             *provider
         }
-        _ => zdx_core::providers::provider_for_model(&app.tui.config.model),
+        _ => zdx_engine::providers::provider_for_model(&app.tui.config.model),
     };
     let (mutations, overlay_action) =
         auth::handle_login_result(&mut app.tui.auth, result, provider);
@@ -372,9 +372,9 @@ fn process_login_callback(
     } = login_state
         && matches!(
             *provider,
-            zdx_core::providers::ProviderKind::ClaudeCli
-                | zdx_core::providers::ProviderKind::OpenAICodex
-                | zdx_core::providers::ProviderKind::GeminiCli
+            zdx_engine::providers::ProviderKind::ClaudeCli
+                | zdx_engine::providers::ProviderKind::OpenAICodex
+                | zdx_engine::providers::ProviderKind::GeminiCli
         )
     {
         match code {
@@ -382,13 +382,13 @@ fn process_login_callback(
                 *error = None;
                 let verifier = pkce_verifier.clone();
                 let provider = *provider;
-                let code = if provider == zdx_core::providers::ProviderKind::ClaudeCli {
+                let code = if provider == zdx_engine::providers::ProviderKind::ClaudeCli {
                     let state = oauth_state.clone().unwrap_or_else(|| verifier.clone());
                     format!("{code}#{state}")
                 } else {
                     code
                 };
-                let redirect_uri = if provider == zdx_core::providers::ProviderKind::ClaudeCli {
+                let redirect_uri = if provider == zdx_engine::providers::ProviderKind::ClaudeCli {
                     redirect_uri.clone()
                 } else {
                     None
@@ -518,7 +518,7 @@ fn handle_bash_executed_event(
     app: &mut AppState,
     id: &str,
     command: &str,
-    result: &zdx_core::core::events::ToolOutput,
+    result: &zdx_engine::core::events::ToolOutput,
 ) -> Vec<UiEffect> {
     app.tui.transcript.set_tool_result_for(id, result.clone());
     if app.tui.thread.thread_handle.is_none() {
@@ -533,9 +533,9 @@ fn handle_bash_executed_event(
     app.tui
         .thread
         .messages
-        .push(zdx_core::providers::ChatMessage::user(&user_message));
+        .push(zdx_engine::providers::ChatMessage::user(&user_message));
     vec![UiEffect::SaveThread {
-        event: zdx_core::core::thread_persistence::ThreadEvent::user_message(&user_message),
+        event: zdx_engine::core::thread_persistence::ThreadEvent::user_message(&user_message),
     }]
 }
 
@@ -677,7 +677,7 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
 
 fn push_token_exchange(
     effects: &mut Vec<UiEffect>,
-    provider: zdx_core::providers::ProviderKind,
+    provider: zdx_engine::providers::ProviderKind,
     code: String,
     verifier: String,
     redirect_uri: Option<String>,
@@ -745,7 +745,7 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
 fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
         overlays::OverlayRequest::CommandPalette => {
-            let provider = zdx_core::providers::provider_for_model(&app.tui.config.model);
+            let provider = zdx_engine::providers::provider_for_model(&app.tui.config.model);
             let (state, effects) =
                 overlays::CommandPaletteState::open(provider, app.tui.config.model.clone());
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
@@ -768,7 +768,7 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             effects
         }
         overlays::OverlayRequest::ThinkingPicker => {
-            if !zdx_core::models::model_supports_reasoning(&app.tui.config.model) {
+            if !zdx_engine::models::model_supports_reasoning(&app.tui.config.model) {
                 return vec![];
             }
             let (state, effects) =
@@ -844,7 +844,7 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
     }
 }
 
-fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_core::providers::ChatMessage> {
+fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_engine::providers::ChatMessage> {
     let mut messages = tui.thread.messages.clone();
     let has_in_flight_turn = tui.agent_state.is_running() || tui.transcript.has_pending_user_cell();
     if has_in_flight_turn
@@ -1013,14 +1013,14 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 mod tests {
     use std::path::PathBuf;
 
-    use zdx_core::core::events::AgentEvent;
+    use zdx_engine::core::events::AgentEvent;
 
     use super::*;
     use crate::transcript::{HistoryCell, ScrollMode};
 
     #[test]
     fn test_scroll_to_top() {
-        let config = zdx_core::config::Config::default();
+        let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
 
         app.tui.transcript.scroll_to_top();
@@ -1033,7 +1033,7 @@ mod tests {
 
     #[test]
     fn test_scroll_to_bottom() {
-        let config = zdx_core::config::Config::default();
+        let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll_to_top(); // Start from top
 
@@ -1047,7 +1047,7 @@ mod tests {
 
     #[test]
     fn test_scroll_up_and_down() {
-        let config = zdx_core::config::Config::default();
+        let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll.update_line_count(100);
 
@@ -1068,7 +1068,7 @@ mod tests {
 
     #[test]
     fn test_apply_scroll_delta_with_acceleration() {
-        let config = zdx_core::config::Config::default();
+        let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.transcript.scroll.update_line_count(100);
         app.tui.transcript.viewport_height = 20;
@@ -1090,14 +1090,14 @@ mod tests {
 
     #[test]
     fn test_queue_drains_on_turn_finished() {
-        let config = zdx_core::config::Config::default();
+        let config = zdx_engine::config::Config::default();
         let mut app = AppState::new(config, PathBuf::new(), None, None);
         app.tui.input.enqueue_prompt("queued prompt".to_string());
 
         let effects = update(
             &mut app,
             UiEvent::Agent(AgentEvent::TurnFinished {
-                status: zdx_core::core::events::TurnStatus::Completed,
+                status: zdx_engine::core::events::TurnStatus::Completed,
                 final_text: String::new(),
                 messages: Vec::new(),
             }),

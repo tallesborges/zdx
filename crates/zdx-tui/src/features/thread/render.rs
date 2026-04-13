@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthStr;
-use zdx_core::core::thread_persistence::{self, short_thread_id};
+use zdx_engine::core::thread_persistence::{self, short_thread_id};
 
 use crate::common::truncate_with_ellipsis;
 use crate::overlays::{ThreadPickerState, ThreadScope};

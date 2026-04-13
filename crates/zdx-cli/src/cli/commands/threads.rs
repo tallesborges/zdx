@@ -4,8 +4,8 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result};
 use chrono::NaiveDate;
-use zdx_core::config;
-use zdx_core::core::thread_persistence;
+use zdx_engine::config;
+use zdx_engine::core::thread_persistence;
 
 use crate::modes;
 

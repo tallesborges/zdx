@@ -20,13 +20,13 @@ use crate::state::TuiState;
 pub struct CommandPaletteState {
     pub filter: String,
     pub selected: usize,
-    pub provider: zdx_core::providers::ProviderKind,
+    pub provider: zdx_engine::providers::ProviderKind,
     pub model_id: String,
 }
 
 impl CommandPaletteState {
     pub fn open(
-        provider: zdx_core::providers::ProviderKind,
+        provider: zdx_engine::providers::ProviderKind,
         model_id: String,
     ) -> (Self, Vec<UiEffect>) {
         (
@@ -258,16 +258,16 @@ fn execute_command(
 }
 
 fn execute_logout(tui: &TuiState) -> (Vec<UiEffect>, Vec<StateMutation>) {
-    use zdx_core::providers::oauth::{claude_cli, openai_codex};
-    use zdx_core::providers::provider_for_model;
+    use zdx_engine::providers::oauth::{claude_cli, openai_codex};
+    use zdx_engine::providers::provider_for_model;
 
     let mut mutations = Vec::new();
     let provider = provider_for_model(&tui.config.model);
     let result = match provider {
-        zdx_core::providers::ProviderKind::ClaudeCli => {
+        zdx_engine::providers::ProviderKind::ClaudeCli => {
             claude_cli::clear_credentials().map(|had| (had, "Claude CLI"))
         }
-        zdx_core::providers::ProviderKind::OpenAICodex => {
+        zdx_engine::providers::ProviderKind::OpenAICodex => {
             openai_codex::clear_credentials().map(|had| (had, "OpenAI Codex"))
         }
         _ => {
@@ -587,7 +587,7 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
         let (state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         let filtered = state.filtered_commands();
@@ -599,7 +599,7 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
         let (mut state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         state.filter = "ne".to_string();
@@ -614,9 +614,9 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_respects_reasoning_support() {
         let model_id = "openai:gpt-4.1";
-        let supports_reasoning = zdx_core::models::model_supports_reasoning(model_id);
+        let supports_reasoning = zdx_engine::models::model_supports_reasoning(model_id);
         let (state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::OpenAI,
+            zdx_engine::providers::ProviderKind::OpenAI,
             model_id.to_string(),
         );
         let filtered = state.filtered_commands();
@@ -627,7 +627,7 @@ mod tests {
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
         let (mut state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         state.filter = "xyz".to_string();
@@ -638,7 +638,7 @@ mod tests {
     #[test]
     fn test_palette_state_clamp_selection() {
         let (mut state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         state.selected = COMMANDS.len() + 10;
@@ -649,7 +649,7 @@ mod tests {
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
         let (mut state, _) = CommandPaletteState::open(
-            zdx_core::providers::ProviderKind::Anthropic,
+            zdx_engine::providers::ProviderKind::Anthropic,
             "claude-haiku-4-5".to_string(),
         );
         state.filter = "xyz".to_string();

@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use zdx_core::core::{thread_persistence, title_generation};
+use zdx_engine::core::{thread_persistence, title_generation};
 
 use crate::events::{ThreadUiEvent, UiEvent};
 

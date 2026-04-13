@@ -4,9 +4,9 @@
 //! All state mutations for input-related events happen here.
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
-use zdx_core::agent_activity;
-use zdx_core::core::thread_persistence::ThreadEvent;
-use zdx_core::providers::ChatMessage;
+use zdx_engine::agent_activity;
+use zdx_engine::core::thread_persistence::ThreadEvent;
+use zdx_engine::providers::ChatMessage;
 
 use super::CursorMove;
 use super::state::{
@@ -477,7 +477,7 @@ fn handle_overlays(
         }
         // Ctrl+T: open thinking picker (if model supports reasoning)
         KeyCode::Char('t') if mods.only_ctrl() => {
-            if zdx_core::models::model_supports_reasoning(model_id) {
+            if zdx_engine::models::model_supports_reasoning(model_id) {
                 Some((vec![], vec![], Some(OverlayRequest::ThinkingPicker)))
             } else {
                 Some((vec![], vec![], None))

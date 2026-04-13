@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use anyhow::{Context, Result, anyhow};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use tokio_util::sync::CancellationToken;
-use zdx_core::config::Config;
+use zdx_engine::config::Config;
 
 use crate::events::{RecordedAudio, UiEvent};
 
@@ -28,7 +28,7 @@ pub async fn voice_transcribe(
     cancel: Option<CancellationToken>,
 ) -> UiEvent {
     let transcription = config.transcription.clone();
-    let result = zdx_core::audio::transcribe::transcribe_audio_if_configured(
+    let result = zdx_engine::audio::transcribe::transcribe_audio_if_configured(
         &config,
         &transcription,
         audio.bytes,
