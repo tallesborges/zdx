@@ -106,7 +106,7 @@ pub enum AgentState {
     /// Streaming response in progress.
     Streaming {
         /// Receiver for agent events.
-        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
         /// Cancellation token for this run.
         cancel: CancellationToken,
         /// ID of the streaming assistant cell in transcript.
@@ -117,7 +117,7 @@ pub enum AgentState {
     /// Waiting for first response.
     Waiting {
         /// Receiver for agent events.
-        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
         /// Cancellation token for this run.
         cancel: CancellationToken,
     },

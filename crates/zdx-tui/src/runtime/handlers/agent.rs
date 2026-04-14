@@ -27,13 +27,8 @@ pub fn spawn_agent_turn(tui: &TuiState) -> UiEvent {
 
     if let Some(thread_handle) = tui.thread.thread_handle.clone() {
         let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
-        let _broadcaster = zdx_engine::core::agent::spawn_broadcaster_with_modes(
-            agent_rx,
-            vec![
-                (tui_tx, zdx_engine::core::agent::BroadcastMode::Ui),
-                (persist_tx, zdx_engine::core::agent::BroadcastMode::Reliable),
-            ],
-        );
+        let _broadcaster =
+            zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
         let _persist = thread_persistence::spawn_thread_persist_task_with_completed_messages(
             thread_handle,
             persist_rx,

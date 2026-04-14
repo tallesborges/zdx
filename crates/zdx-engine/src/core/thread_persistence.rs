@@ -2993,7 +2993,6 @@ mod tests {
             cache_read_input_tokens: 20,
             cache_creation_input_tokens: 5,
         }))
-        .await
         .unwrap();
         tx.send(Arc::new(AgentEvent::UsageUpdate {
             input_tokens: 0,
@@ -3001,14 +3000,12 @@ mod tests {
             cache_read_input_tokens: 0,
             cache_creation_input_tokens: 0,
         }))
-        .await
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
             status: TurnStatus::Completed,
             final_text: "done".to_string(),
             messages: Vec::new(),
         }))
-        .await
         .unwrap();
         drop(tx);
 
@@ -3041,14 +3038,12 @@ mod tests {
             cache_read_input_tokens: 100,
             cache_creation_input_tokens: 25,
         }))
-        .await
         .unwrap();
         tx.send(Arc::new(AgentEvent::TurnFinished {
             status: TurnStatus::Interrupted,
             final_text: "partial".to_string(),
             messages: Vec::new(),
         }))
-        .await
         .unwrap();
         drop(tx);
 
@@ -3081,7 +3076,6 @@ mod tests {
             cache_read_input_tokens: 45,
             cache_creation_input_tokens: 6,
         }))
-        .await
         .unwrap();
         drop(tx);
 

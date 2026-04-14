@@ -104,26 +104,23 @@ fn build_section_lines(section_obj: &serde_json::Map<String, Value>) -> Vec<Conf
     let mut first_group = true;
 
     for (key, val) in section_obj {
-        match val {
-            Value::Object(nested) => {
-                if !first_group {
-                    lines.push(ConfigLine::Separator);
-                }
-                first_group = false;
-                let mut rows = Vec::new();
-                flatten_object(nested, key, &mut rows);
-                for (k, v) in rows {
-                    lines.push(ConfigLine::Row(k, v));
-                }
+        if let Value::Object(nested) = val {
+            if !first_group {
+                lines.push(ConfigLine::Separator);
             }
-            _ => {
-                let display = if is_sensitive(key) && !matches!(val, Value::Null) {
-                    "***".to_string()
-                } else {
-                    format_json_scalar(val)
-                };
-                lines.push(ConfigLine::Row(key.clone(), display));
+            first_group = false;
+            let mut rows = Vec::new();
+            flatten_object(nested, key, &mut rows);
+            for (k, v) in rows {
+                lines.push(ConfigLine::Row(k, v));
             }
+        } else {
+            let display = if is_sensitive(key) && !matches!(val, Value::Null) {
+                "***".to_string()
+            } else {
+                format_json_scalar(val)
+            };
+            lines.push(ConfigLine::Row(key.clone(), display));
         }
     }
 
@@ -284,7 +281,7 @@ impl MonitorApp {
     }
 }
 
-/// Number of lines render_config will produce for these lines
+/// Number of lines `render_config` will produce for these lines
 /// (sections get a blank spacer before them, except the first).
 fn rendered_line_count(config_lines: &[ConfigLine]) -> usize {
     let sections = config_lines
@@ -303,8 +300,7 @@ fn config_page_size(app: &MonitorApp) -> usize {
 
 /// Maximum valid scroll offset so the last line stays visible.
 fn config_max_scroll(app: &MonitorApp) -> usize {
-    app.config_line_count
-        .saturating_sub(config_page_size(app))
+    app.config_line_count.saturating_sub(config_page_size(app))
 }
 
 fn build_app(root: &Path) -> Result<MonitorApp> {
@@ -334,8 +330,7 @@ fn build_app(root: &Path) -> Result<MonitorApp> {
 fn setup_terminal() -> Result<Terminal<CrosstermBackend<io::Stdout>>> {
     terminal::enable_raw_mode().context("enable raw mode")?;
     let mut stdout = io::stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture)
-        .context("enter alternate screen")?;
+    execute!(stdout, EnterAlternateScreen, EnableMouseCapture).context("enter alternate screen")?;
     let backend = CrosstermBackend::new(stdout);
     Terminal::new(backend).context("create terminal")
 }
@@ -399,26 +394,24 @@ fn handle_key_event(app: &mut MonitorApp, key: KeyCode) {
 
 fn handle_mouse_event(app: &mut MonitorApp, kind: MouseEventKind) {
     match kind {
-        MouseEventKind::ScrollDown => match app.active_section {
-            Section::Config => {
+        MouseEventKind::ScrollDown => {
+            if app.active_section == Section::Config {
                 let max = config_max_scroll(app);
                 app.config_scroll = app.config_scroll.saturating_add(1).min(max);
-            }
-            _ => {
+            } else {
                 let count = app.item_count();
                 if count > 0 {
                     app.selected_index = (app.selected_index + 1).min(count - 1);
                 }
             }
-        },
-        MouseEventKind::ScrollUp => match app.active_section {
-            Section::Config => {
+        }
+        MouseEventKind::ScrollUp => {
+            if app.active_section == Section::Config {
                 app.config_scroll = app.config_scroll.saturating_sub(1);
-            }
-            _ => {
+            } else {
                 app.selected_index = app.selected_index.saturating_sub(1);
             }
-        },
+        }
         _ => {}
     }
 }

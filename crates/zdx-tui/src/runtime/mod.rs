@@ -42,6 +42,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::Config;
+use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::interrupt;
 use zdx_engine::core::thread_persistence::Thread;
 use zdx_engine::providers::ChatMessage;
@@ -408,31 +409,17 @@ impl TuiRuntime {
     }
 
     /// Collects agent events from the channel.
+    ///
+    /// Folds consecutive `AssistantDelta` and `ReasoningDelta` events into
+    /// single events to reduce per-frame allocations when the LLM is producing
+    /// output faster than the TUI renders. Lifecycle events (tool lifecycle,
+    /// `TurnFinished`, errors, usage) always flush any pending delta and are
+    /// always delivered.
     fn collect_agent_events(&mut self, events: &mut Vec<UiEvent>) {
-        while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } =
-            &mut self.state.tui.agent_state
-        {
-            let event = match rx.try_recv() {
-                Ok(ev) => ev,
-                Err(mpsc::error::TryRecvError::Empty) => break,
-                Err(mpsc::error::TryRecvError::Disconnected) => break,
-            };
-
-            events.push(UiEvent::Agent((*event).clone()));
-        }
+        drain_agent_rx(&mut self.state.tui.agent_state, events, UiEvent::Agent);
 
         if let Some(crate::overlays::Overlay::Btw(state)) = &mut self.state.overlay {
-            while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } =
-                &mut state.agent_state
-            {
-                let event = match rx.try_recv() {
-                    Ok(ev) => ev,
-                    Err(mpsc::error::TryRecvError::Empty) => break,
-                    Err(mpsc::error::TryRecvError::Disconnected) => break,
-                };
-
-                events.push(UiEvent::BtwAgent((*event).clone()));
-            }
+            drain_agent_rx(&mut state.agent_state, events, UiEvent::BtwAgent);
         }
     }
 
@@ -988,6 +975,79 @@ impl TuiRuntime {
     }
 }
 
+/// Drains agent events from an [`AgentState`] channel into `events`,
+/// folding consecutive delta events to reduce per-frame allocations.
+///
+/// `AssistantDelta` and `ReasoningDelta` runs are folded into a single event
+/// each so that a burst of 200 tiny text chunks becomes one event by the time
+/// the reducer sees it. Lifecycle events (`ToolStarted`, `ToolCompleted`,
+/// `TurnFinished`, errors, usage, …) always flush any accumulated delta first
+/// and are always delivered individually.
+///
+/// `wrap` converts an [`AgentEvent`] into the correct [`UiEvent`] variant
+/// (`UiEvent::Agent` for the main session, `UiEvent::BtwAgent` for the BTW
+/// popup).
+fn drain_agent_rx<F>(agent_state: &mut AgentState, events: &mut Vec<UiEvent>, wrap: F)
+where
+    F: Fn(AgentEvent) -> UiEvent,
+{
+    let mut assistant_delta = String::new();
+    let mut reasoning_delta = String::new();
+
+    while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } = agent_state {
+        let Ok(event) = rx.try_recv() else { break };
+
+        match &*event {
+            AgentEvent::AssistantDelta { text } => {
+                // Flush pending reasoning before switching delta type.
+                if !reasoning_delta.is_empty() {
+                    events.push(wrap(AgentEvent::ReasoningDelta {
+                        text: std::mem::take(&mut reasoning_delta),
+                    }));
+                }
+                assistant_delta.push_str(text);
+            }
+            AgentEvent::ReasoningDelta { text } => {
+                // Flush pending assistant text before switching delta type.
+                if !assistant_delta.is_empty() {
+                    events.push(wrap(AgentEvent::AssistantDelta {
+                        text: std::mem::take(&mut assistant_delta),
+                    }));
+                }
+                reasoning_delta.push_str(text);
+            }
+            _ => {
+                // Lifecycle event: flush any pending deltas first so ordering
+                // is preserved (e.g. AssistantCompleted always follows the
+                // last AssistantDelta).
+                if !assistant_delta.is_empty() {
+                    events.push(wrap(AgentEvent::AssistantDelta {
+                        text: std::mem::take(&mut assistant_delta),
+                    }));
+                }
+                if !reasoning_delta.is_empty() {
+                    events.push(wrap(AgentEvent::ReasoningDelta {
+                        text: std::mem::take(&mut reasoning_delta),
+                    }));
+                }
+                events.push(wrap((*event).clone()));
+            }
+        }
+    }
+
+    // Flush any delta that was still accumulating when the loop ended.
+    if !assistant_delta.is_empty() {
+        events.push(wrap(AgentEvent::AssistantDelta {
+            text: assistant_delta,
+        }));
+    }
+    if !reasoning_delta.is_empty() {
+        events.push(wrap(AgentEvent::ReasoningDelta {
+            text: reasoning_delta,
+        }));
+    }
+}
+
 impl Drop for TuiRuntime {
     fn drop(&mut self) {
         let _ = terminal::restore_terminal();
@@ -1111,5 +1171,89 @@ fn open_in_editor(path: &Path) -> std::io::Result<()> {
             cmd.status().map(|_| ())
         }
         _ => open::that(path),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use serde_json::json;
+    use tokio::sync::mpsc;
+    use tokio_util::sync::CancellationToken;
+    use zdx_engine::core::events::TurnStatus;
+
+    use super::*;
+
+    #[test]
+    fn drain_agent_rx_folds_deltas_and_preserves_lifecycle_order() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut agent_state = AgentState::Waiting {
+            rx,
+            cancel: CancellationToken::new(),
+        };
+
+        tx.send(Arc::new(AgentEvent::AssistantDelta {
+            text: "hel".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::AssistantDelta {
+            text: "lo".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::ToolRequested {
+            id: "tool-1".to_string(),
+            name: "read".to_string(),
+            input: json!({}),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::ReasoningDelta {
+            text: "a".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::ReasoningDelta {
+            text: "b".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::AssistantDelta {
+            text: "!".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "hello!".to_string(),
+            messages: Vec::new(),
+        }))
+        .unwrap();
+
+        let mut events = Vec::new();
+        drain_agent_rx(&mut agent_state, &mut events, UiEvent::Agent);
+
+        assert_eq!(events.len(), 5);
+        assert!(matches!(
+            &events[0],
+            UiEvent::Agent(AgentEvent::AssistantDelta { text }) if text == "hello"
+        ));
+        assert!(matches!(
+            &events[1],
+            UiEvent::Agent(AgentEvent::ToolRequested { id, name, .. })
+                if id == "tool-1" && name == "read"
+        ));
+        assert!(matches!(
+            &events[2],
+            UiEvent::Agent(AgentEvent::ReasoningDelta { text }) if text == "ab"
+        ));
+        assert!(matches!(
+            &events[3],
+            UiEvent::Agent(AgentEvent::AssistantDelta { text }) if text == "!"
+        ));
+        assert!(matches!(
+            &events[4],
+            UiEvent::Agent(AgentEvent::TurnFinished {
+                status: TurnStatus::Completed,
+                final_text,
+                messages,
+            }) if final_text == "hello!" && messages.is_empty()
+        ));
     }
 }
