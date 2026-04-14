@@ -165,13 +165,7 @@ pub(crate) fn spawn_agent_turn(
     let (bot_tx, bot_rx) = agent::create_event_channel();
     let (persist_tx, persist_rx) = agent::create_event_channel();
 
-    agent::spawn_broadcaster_with_modes(
-        agent_rx,
-        vec![
-            (bot_tx, agent::BroadcastMode::Ui),
-            (persist_tx, agent::BroadcastMode::Reliable),
-        ],
-    );
+    agent::spawn_broadcaster(agent_rx, vec![bot_tx, persist_tx]);
     thread_persistence::spawn_thread_persist_task_with_completed_messages(
         thread.clone(),
         persist_rx,

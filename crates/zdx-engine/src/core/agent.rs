@@ -12,7 +12,6 @@ use anyhow::{Result, anyhow};
 use futures_util::StreamExt;
 use serde_json::Value;
 use tokio::sync::mpsc;
-use tokio::sync::mpsc::error::TrySendError;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
@@ -111,30 +110,21 @@ impl Default for ToolSelection {
     }
 }
 
-/// Channel-based event sender (async, bounded).
+/// Channel-based event sender (unbounded).
 ///
 /// Used with `run_turn` for concurrent rendering and thread persistence.
 /// Events are wrapped in `Arc` for efficient cloning to multiple consumers.
-pub type AgentEventTx = mpsc::Sender<Arc<AgentEvent>>;
+pub type AgentEventTx = mpsc::UnboundedSender<Arc<AgentEvent>>;
 
-/// Channel-based event receiver (async, bounded).
-pub type AgentEventRx = mpsc::Receiver<Arc<AgentEvent>>;
+/// Channel-based event receiver (unbounded).
+pub type AgentEventRx = mpsc::UnboundedReceiver<Arc<AgentEvent>>;
 
-/// Default channel capacity for event streams.
-///
-/// Set higher (128) to accommodate best-effort delta sends without blocking.
-pub const DEFAULT_EVENT_CHANNEL_CAPACITY: usize = 128;
-
-/// Creates a bounded event channel with the default capacity.
+/// Creates an unbounded event channel.
 pub fn create_event_channel() -> (AgentEventTx, AgentEventRx) {
-    mpsc::channel(DEFAULT_EVENT_CHANNEL_CAPACITY)
+    mpsc::unbounded_channel()
 }
 
-/// Event sender wrapper that provides best-effort and reliable send modes.
-///
-/// Use `send_delta()` for high-volume events (`TextDelta`) that can be dropped
-/// if the consumer is slow. Use `send_important()` for events that must be
-/// delivered (`ToolStarted`, `ToolCompleted`, Completed, Error, Interrupted).
+/// Event sender wrapper with a single reliable send operation.
 #[derive(Clone)]
 pub struct EventSender {
     tx: AgentEventTx,
@@ -146,16 +136,9 @@ impl EventSender {
         Self { tx }
     }
 
-    /// Best-effort send: never awaits, drops if channel is full.
-    /// Use for high-volume events like `TextDelta` that can afford loss.
-    pub fn send_delta(&self, ev: AgentEvent) {
-        let _ = self.tx.try_send(Arc::new(ev));
-    }
-
-    /// Reliable send: awaits delivery.
-    /// Use for important events (tool lifecycle, final, errors).
-    pub async fn send_important(&self, ev: AgentEvent) {
-        let _ = self.tx.send(Arc::new(ev)).await;
+    /// Sends an event. Never blocks; ignored silently if the receiver has dropped.
+    pub fn send(&self, ev: AgentEvent) {
+        let _ = self.tx.send(Arc::new(ev));
     }
 }
 
@@ -240,9 +223,8 @@ impl ProviderClient {
 
 /// Spawns a broadcast task that distributes events to multiple consumers.
 ///
-/// Uses `try_send` (best-effort) to prevent slow consumers from blocking
-/// others. Events are dropped if a consumer's channel is full. Closed
-/// channels are automatically removed.
+/// Each event is cloned (cheaply, via `Arc`) and sent to all subscribers.
+/// Closed channels are automatically removed.
 ///
 /// The task exits when the source channel closes.
 ///
@@ -259,54 +241,12 @@ impl ProviderClient {
 /// // Renderer receives from render_rx
 /// // Persister receives from persist_rx
 /// ```
-pub fn spawn_broadcaster(rx: AgentEventRx, mut subscribers: Vec<AgentEventTx>) -> JoinHandle<()> {
-    let subscribers = subscribers
-        .drain(..)
-        .map(|tx| (tx, BroadcastMode::BestEffort))
-        .collect();
-    spawn_broadcaster_with_modes(rx, subscribers)
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BroadcastMode {
-    BestEffort,
-    Ui,
-    Reliable,
-}
-
-pub fn spawn_broadcaster_with_modes(
-    rx: AgentEventRx,
-    mut subscribers: Vec<(AgentEventTx, BroadcastMode)>,
-) -> JoinHandle<()> {
+pub fn spawn_broadcaster(rx: AgentEventRx, subscribers: Vec<AgentEventTx>) -> JoinHandle<()> {
     tokio::spawn(async move {
         let mut rx = rx;
+        let mut subscribers = subscribers;
         while let Some(event) = rx.recv().await {
-            let mut kept = Vec::with_capacity(subscribers.len());
-            for (tx, mode) in subscribers.drain(..) {
-                let keep = match mode {
-                    BroadcastMode::BestEffort => match tx.try_send(Arc::clone(&event)) {
-                        Ok(()) | Err(TrySendError::Full(_)) => true,
-                        Err(TrySendError::Closed(_)) => false,
-                    },
-                    BroadcastMode::Ui => match &*event {
-                        AgentEvent::AssistantDelta { .. }
-                        | AgentEvent::ReasoningDelta { .. }
-                        | AgentEvent::ToolInputDelta { .. }
-                        | AgentEvent::ToolOutputDelta { .. } => {
-                            match tx.try_send(Arc::clone(&event)) {
-                                Ok(()) | Err(TrySendError::Full(_)) => true,
-                                Err(TrySendError::Closed(_)) => false,
-                            }
-                        }
-                        _ => tx.send(Arc::clone(&event)).await.is_ok(),
-                    },
-                    BroadcastMode::Reliable => tx.send(Arc::clone(&event)).await.is_ok(),
-                };
-                if keep {
-                    kept.push((tx, mode));
-                }
-            }
-            subscribers = kept;
+            subscribers.retain(|tx| tx.send(Arc::clone(&event)).is_ok());
         }
     })
 }
@@ -569,7 +509,7 @@ impl TurnError {
     }
 }
 
-async fn emit_turn_error_async(err: &TurnError, sender: &EventSender) {
+fn emit_turn_error(err: &TurnError, sender: &EventSender) {
     match err {
         TurnError::Interrupted {
             partial_content,
@@ -584,96 +524,77 @@ async fn emit_turn_error_async(err: &TurnError, sender: &EventSender) {
                 .as_ref()
                 .map(|turn| turn.messages.clone())
                 .unwrap_or_default();
-            sender
-                .send_important(AgentEvent::TurnFinished {
-                    status: TurnStatus::Interrupted,
-                    final_text,
-                    messages,
-                })
-                .await;
+            sender.send(AgentEvent::TurnFinished {
+                status: TurnStatus::Interrupted,
+                final_text,
+                messages,
+            });
         }
         TurnError::Provider(provider_err) => {
-            sender
-                .send_important(AgentEvent::TurnFinished {
-                    status: TurnStatus::Failed {
-                        kind: provider_err.kind.clone().into(),
-                        message: provider_err.message.clone(),
-                        details: provider_err.details.clone(),
-                    },
-                    final_text: String::new(),
-                    messages: Vec::new(),
-                })
-                .await;
+            sender.send(AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: provider_err.kind.clone().into(),
+                    message: provider_err.message.clone(),
+                    details: provider_err.details.clone(),
+                },
+                final_text: String::new(),
+                messages: Vec::new(),
+            });
         }
         TurnError::Parse { message, details } => {
-            sender
-                .send_important(AgentEvent::TurnFinished {
-                    status: TurnStatus::Failed {
-                        kind: ErrorKind::Parse,
-                        message: message.clone(),
-                        details: details.clone(),
-                    },
-                    final_text: String::new(),
-                    messages: Vec::new(),
-                })
-                .await;
+            sender.send(AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: ErrorKind::Parse,
+                    message: message.clone(),
+                    details: details.clone(),
+                },
+                final_text: String::new(),
+                messages: Vec::new(),
+            });
         }
         TurnError::Internal(err) => {
-            sender
-                .send_important(AgentEvent::TurnFinished {
-                    status: TurnStatus::Failed {
-                        kind: ErrorKind::Internal,
-                        message: err.to_string(),
-                        details: None,
-                    },
-                    final_text: String::new(),
-                    messages: Vec::new(),
-                })
-                .await;
+            sender.send(AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: ErrorKind::Internal,
+                    message: err.to_string(),
+                    details: None,
+                },
+                final_text: String::new(),
+                messages: Vec::new(),
+            });
         }
     }
 }
 
-/// Emits a `TurnError` with optional committed messages for context preservation.
-/// Used by `run_turn` to include messages in Failed turns so that manual "continue"
-/// can resume from the correct state.
-async fn emit_turn_error_with_messages_async(
-    err: &TurnError,
-    messages: &[ChatMessage],
-    sender: &EventSender,
-) {
+fn emit_turn_error_with_messages(err: &TurnError, messages: &[ChatMessage], sender: &EventSender) {
     match err {
         TurnError::Provider(provider_err) => {
-            sender
-                .send_important(AgentEvent::TurnFinished {
-                    status: TurnStatus::Failed {
-                        kind: provider_err.kind.clone().into(),
-                        message: provider_err.message.clone(),
-                        details: provider_err.details.clone(),
-                    },
-                    final_text: String::new(),
-                    messages: messages.to_vec(),
-                })
-                .await;
+            sender.send(AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: provider_err.kind.clone().into(),
+                    message: provider_err.message.clone(),
+                    details: provider_err.details.clone(),
+                },
+                final_text: String::new(),
+                messages: messages.to_vec(),
+            });
         }
         other => {
             // For non-Provider errors, fall back to default behavior (no messages)
-            emit_turn_error_async(other, sender).await;
+            emit_turn_error(other, sender);
         }
     }
 }
 
-async fn emit_turn_diagnostics_async(diagnostics: &[TurnDiagnostic], sender: &EventSender) {
+fn emit_turn_diagnostics(diagnostics: &[TurnDiagnostic], sender: &EventSender) {
     for diagnostic in diagnostics {
         match diagnostic {
             TurnDiagnostic::Parse { message, details } => {
-                sender
-                    .send_important(AgentEvent::Error {
-                        kind: ErrorKind::Parse,
-                        message: message.clone(),
-                        details: details.clone(),
-                    })
-                    .await;
+                sender.send(AgentEvent::Error {
+                    kind: ErrorKind::Parse,
+                    message: message.clone(),
+                    details: details.clone(),
+                });
             }
         }
     }
@@ -778,9 +699,9 @@ pub async fn run_turn_with_cancel(
         Ok(result) => Ok(result),
         Err((err, committed_messages)) => {
             if committed_messages.is_empty() {
-                emit_turn_error_async(&err, &sender).await;
+                emit_turn_error(&err, &sender);
             } else {
-                emit_turn_error_with_messages_async(&err, &committed_messages, &sender).await;
+                emit_turn_error_with_messages(&err, &committed_messages, &sender);
             }
             Err(err.into_anyhow())
         }
@@ -839,16 +760,14 @@ async fn run_turn_inner(
                     // Surface the retry in the transcript so TUI/bot users
                     // can see that we're backing off instead of staring at
                     // a frozen spinner. Non-fatal: the turn continues.
-                    sender
-                        .send_important(AgentEvent::ProviderRetry {
-                            kind: ErrorKind::from(current_err.kind.clone()),
-                            message: current_err.message.clone(),
-                            details: current_err.details.clone(),
-                            attempt,
-                            max_retries: MAX_RETRIES,
-                            delay_ms: delay,
-                        })
-                        .await;
+                    sender.send(AgentEvent::ProviderRetry {
+                        kind: ErrorKind::from(current_err.kind.clone()),
+                        message: current_err.message.clone(),
+                        details: current_err.details.clone(),
+                        attempt,
+                        max_retries: MAX_RETRIES,
+                        delay_ms: delay,
+                    });
                     tokio::time::sleep(Duration::from_millis(delay)).await;
                     ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
                     match request_stream(
@@ -910,9 +829,11 @@ async fn run_turn_inner(
             continue;
         }
 
-        return finalize_non_tool_turn(&mut messages, stream_state.turn, sender)
-            .await
-            .map_err(|e| (e, messages.clone()));
+        return Ok(finalize_non_tool_turn(
+            &mut messages,
+            stream_state.turn,
+            sender,
+        ));
     }
 }
 
@@ -1489,11 +1410,11 @@ async fn consume_stream(
             Ok(None) => return Ok(state),
             Err(_) => continue,
         };
-        handle_stream_event(event, sender, &mut state).await?;
+        handle_stream_event(event, sender, &mut state)?;
     }
 }
 
-async fn handle_stream_event(
+fn handle_stream_event(
     event: StreamEvent,
     sender: &EventSender,
     state: &mut StreamState,
@@ -1501,7 +1422,7 @@ async fn handle_stream_event(
     match event {
         StreamEvent::TextDelta { text, .. } if !text.is_empty() => {
             state.turn.text.push_str(&text);
-            sender.send_delta(AgentEvent::AssistantDelta { text });
+            sender.send(AgentEvent::AssistantDelta { text });
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1509,7 +1430,7 @@ async fn handle_stream_event(
             id,
             name,
         } => {
-            handle_tool_content_start(index, id, name, sender, &mut state.turn).await;
+            handle_tool_content_start(index, id, name, sender, &mut state.turn);
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1528,14 +1449,14 @@ async fn handle_stream_event(
         StreamEvent::InputJsonDelta {
             index,
             partial_json,
-        } => handle_input_json_delta(index, partial_json, sender, &mut state.turn).await,
+        } => handle_input_json_delta(index, &partial_json, sender, &mut state.turn),
         StreamEvent::ReasoningDelta { index, reasoning } => {
             if let Some(tb) = state.turn.find_thinking_mut(index) {
                 if !reasoning.is_empty() {
                     tb.had_delta = true;
                 }
                 tb.text.push_str(&reasoning);
-                sender.send_delta(AgentEvent::ReasoningDelta { text: reasoning });
+                sender.send(AgentEvent::ReasoningDelta { text: reasoning });
             }
         }
         StreamEvent::ReasoningSignatureDelta {
@@ -1549,12 +1470,12 @@ async fn handle_stream_event(
             }
         }
         StreamEvent::ContentBlockCompleted { index } => {
-            emit_reasoning_completion(sender, &mut state.turn, index).await;
-            emit_tool_input_completion(sender, &state.turn, index).await;
+            emit_reasoning_completion(sender, &mut state.turn, index);
+            emit_tool_input_completion(sender, &state.turn, index);
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
             state.stop_reason = stop_reason;
-            emit_message_delta_usage(sender, usage).await;
+            emit_message_delta_usage(sender, usage);
         }
         StreamEvent::Error {
             error_type,
@@ -1565,7 +1486,7 @@ async fn handle_stream_event(
                 &message,
             )));
         }
-        StreamEvent::MessageStart { usage, .. } => emit_message_start_usage(sender, usage).await,
+        StreamEvent::MessageStart { usage, .. } => emit_message_start_usage(sender, &usage),
         StreamEvent::ReasoningCompleted {
             index,
             id,
@@ -1583,7 +1504,7 @@ async fn handle_stream_event(
     Ok(())
 }
 
-async fn handle_tool_content_start(
+fn handle_tool_content_start(
     index: usize,
     id: Option<String>,
     name: Option<String>,
@@ -1592,13 +1513,11 @@ async fn handle_tool_content_start(
 ) {
     let tool_id = id.unwrap_or_default();
     let tool_name = name.unwrap_or_default().to_ascii_lowercase();
-    sender
-        .send_important(AgentEvent::ToolRequested {
-            id: tool_id.clone(),
-            name: tool_name.clone(),
-            input: serde_json::json!({}),
-        })
-        .await;
+    sender.send(AgentEvent::ToolRequested {
+        id: tool_id.clone(),
+        name: tool_name.clone(),
+        input: serde_json::json!({}),
+    });
     turn.tool_uses.push(ToolUseBuilder {
         index,
         id: tool_id,
@@ -1608,52 +1527,46 @@ async fn handle_tool_content_start(
     });
 }
 
-async fn handle_input_json_delta(
+fn handle_input_json_delta(
     index: usize,
-    partial_json: String,
+    partial_json: &str,
     sender: &EventSender,
     turn: &mut AssistantTurnBuilder,
 ) {
     if let Some(tu) = turn.find_tool_use_mut(index) {
-        tu.input_json.push_str(&partial_json);
+        tu.input_json.push_str(partial_json);
         if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
             && !delta.is_empty()
             && delta.len() > tu.input_preview_len
         {
             tu.input_preview_len = delta.len();
-            sender
-                .send_important(AgentEvent::ToolInputDelta {
-                    id: tu.id.clone(),
-                    name: tu.name.clone(),
-                    delta,
-                })
-                .await;
+            sender.send(AgentEvent::ToolInputDelta {
+                id: tu.id.clone(),
+                name: tu.name.clone(),
+                delta,
+            });
         }
     }
 }
 
-async fn emit_message_delta_usage(sender: &EventSender, usage: Option<crate::providers::Usage>) {
+fn emit_message_delta_usage(sender: &EventSender, usage: Option<crate::providers::Usage>) {
     if let Some(u) = usage {
-        sender
-            .send_important(AgentEvent::UsageUpdate {
-                input_tokens: 0,
-                output_tokens: u.output_tokens,
-                cache_read_input_tokens: 0,
-                cache_creation_input_tokens: 0,
-            })
-            .await;
+        sender.send(AgentEvent::UsageUpdate {
+            input_tokens: 0,
+            output_tokens: u.output_tokens,
+            cache_read_input_tokens: 0,
+            cache_creation_input_tokens: 0,
+        });
     }
 }
 
-async fn emit_message_start_usage(sender: &EventSender, usage: crate::providers::Usage) {
-    sender
-        .send_important(AgentEvent::UsageUpdate {
-            input_tokens: usage.input_tokens,
-            output_tokens: 0,
-            cache_read_input_tokens: usage.cache_read_input_tokens,
-            cache_creation_input_tokens: usage.cache_creation_input_tokens,
-        })
-        .await;
+fn emit_message_start_usage(sender: &EventSender, usage: &crate::providers::Usage) {
+    sender.send(AgentEvent::UsageUpdate {
+        input_tokens: usage.input_tokens,
+        output_tokens: 0,
+        cache_read_input_tokens: usage.cache_read_input_tokens,
+        cache_creation_input_tokens: usage.cache_creation_input_tokens,
+    });
 }
 
 fn apply_openai_reasoning_completion(
@@ -1677,11 +1590,7 @@ fn apply_openai_reasoning_completion(
     }
 }
 
-async fn emit_reasoning_completion(
-    sender: &EventSender,
-    turn: &mut AssistantTurnBuilder,
-    index: usize,
-) {
+fn emit_reasoning_completion(sender: &EventSender, turn: &mut AssistantTurnBuilder, index: usize) {
     if let Some(tb) = turn.find_thinking_mut(index) {
         if tb.replay.is_none()
             && !tb.signature.is_empty()
@@ -1700,27 +1609,19 @@ async fn emit_reasoning_completion(
             text: (!tb.text.is_empty()).then(|| tb.text.clone()),
             replay: tb.replay.clone(),
         };
-        sender
-            .send_important(AgentEvent::ReasoningCompleted { block })
-            .await;
+        sender.send(AgentEvent::ReasoningCompleted { block });
     }
 }
 
-async fn emit_tool_input_completion(
-    sender: &EventSender,
-    turn: &AssistantTurnBuilder,
-    index: usize,
-) {
+fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder, index: usize) {
     if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
         let input: Value =
             serde_json::from_str(&tu.input_json).unwrap_or_else(|_| serde_json::json!({}));
-        sender
-            .send_important(AgentEvent::ToolInputCompleted {
-                id: tu.id.clone(),
-                name: tu.name.clone(),
-                input,
-            })
-            .await;
+        sender.send(AgentEvent::ToolInputCompleted {
+            id: tu.id.clone(),
+            name: tu.name.clone(),
+            input,
+        });
     }
 }
 
@@ -1747,9 +1648,9 @@ async fn process_tool_turn(
     let outcome = finalize_tool_calls(turn);
     let executable_count = outcome.executable.len();
     let malformed_count = outcome.malformed_results.len();
-    emit_assistant_completed_if_present(sender, &turn.text).await;
-    emit_turn_diagnostics_async(&outcome.diagnostics, sender).await;
-    emit_malformed_tool_events(sender, outcome.malformed_tools).await;
+    emit_assistant_completed_if_present(sender, &turn.text);
+    emit_turn_diagnostics(&outcome.diagnostics, sender);
+    emit_malformed_tool_events(sender, outcome.malformed_tools);
 
     let turn_text = turn.text.clone();
     messages.push(ChatMessage::assistant_blocks(
@@ -1782,25 +1683,23 @@ async fn process_tool_turn(
     })
 }
 
-async fn finalize_non_tool_turn(
+fn finalize_non_tool_turn(
     messages: &mut Vec<ChatMessage>,
     turn: AssistantTurnBuilder,
     sender: &EventSender,
-) -> TurnResult<(String, Vec<ChatMessage>)> {
+) -> (String, Vec<ChatMessage>) {
     let final_text = turn.text.clone();
-    emit_assistant_completed_if_present(sender, &final_text).await;
+    emit_assistant_completed_if_present(sender, &final_text);
     let assistant_blocks = turn.into_blocks(Vec::new());
     if !assistant_blocks.is_empty() {
         messages.push(ChatMessage::assistant_blocks(assistant_blocks));
     }
-    sender
-        .send_important(AgentEvent::TurnFinished {
-            status: TurnStatus::Completed,
-            final_text: final_text.clone(),
-            messages: messages.clone(),
-        })
-        .await;
-    Ok((final_text, messages.clone()))
+    sender.send(AgentEvent::TurnFinished {
+        status: TurnStatus::Completed,
+        final_text: final_text.clone(),
+        messages: messages.clone(),
+    });
+    (final_text, messages.clone())
 }
 
 fn interrupted_turn_from_stream(
@@ -1867,33 +1766,27 @@ fn build_interrupted_messages(
     messages
 }
 
-async fn emit_assistant_completed_if_present(sender: &EventSender, text: &str) {
+fn emit_assistant_completed_if_present(sender: &EventSender, text: &str) {
     if !text.is_empty() {
-        sender
-            .send_important(AgentEvent::AssistantCompleted {
-                text: text.to_string(),
-            })
-            .await;
+        sender.send(AgentEvent::AssistantCompleted {
+            text: text.to_string(),
+        });
     }
 }
 
-async fn emit_malformed_tool_events(
+fn emit_malformed_tool_events(
     sender: &EventSender,
     malformed_tools: Vec<(String, String, ToolOutput)>,
 ) {
     for (id, name, error_output) in malformed_tools {
-        sender
-            .send_important(AgentEvent::ToolStarted {
-                id: id.clone(),
-                name,
-            })
-            .await;
-        sender
-            .send_important(AgentEvent::ToolCompleted {
-                id,
-                result: error_output,
-            })
-            .await;
+        sender.send(AgentEvent::ToolStarted {
+            id: id.clone(),
+            name,
+        });
+        sender.send(AgentEvent::ToolCompleted {
+            id,
+            result: error_output,
+        });
     }
 }
 
@@ -1991,7 +1884,7 @@ async fn execute_tools_async(
             .any(|tool| tool.to_ascii_lowercase() == name_lower)
     };
 
-    emit_tool_started_events(tool_uses, sender).await;
+    emit_tool_started_events(tool_uses, sender);
 
     // Execute todo_write calls in order so later calls in the same turn can see
     // earlier mutations without waiting for thread persistence. Spawn everything
@@ -2015,8 +1908,7 @@ async fn execute_tools_async(
                 tu.id.clone(),
                 output,
                 result,
-            )
-            .await;
+            );
             continue;
         }
 
@@ -2045,8 +1937,7 @@ async fn execute_tools_async(
                     &mut results,
                     tool_uses,
                     sender,
-                )
-                .await;
+                );
                 break;
             }
             () = wait_for_cancel(cancel) => {
@@ -2056,8 +1947,7 @@ async fn execute_tools_async(
                     &mut results,
                     tool_uses,
                     sender,
-                )
-                .await;
+                );
                 break;
             }
             task_result = join_set.join_next() => {
@@ -2071,8 +1961,7 @@ async fn execute_tools_async(
                             id,
                             output,
                             result,
-                        )
-                        .await;
+                        );
                     }
                     Some(Err(e)) => {
                         // JoinError: panic or cancellation
@@ -2102,18 +1991,16 @@ async fn wait_for_cancel(cancel: Option<&CancellationToken>) {
     }
 }
 
-async fn emit_tool_started_events(tool_uses: &[ToolUse], sender: &EventSender) {
+fn emit_tool_started_events(tool_uses: &[ToolUse], sender: &EventSender) {
     for tu in tool_uses {
-        sender
-            .send_important(AgentEvent::ToolStarted {
-                id: tu.id.clone(),
-                name: tu.name.clone(),
-            })
-            .await;
+        sender.send(AgentEvent::ToolStarted {
+            id: tu.id.clone(),
+            name: tu.name.clone(),
+        });
     }
 }
 
-async fn record_tool_completion(
+fn record_tool_completion(
     sender: &EventSender,
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
@@ -2123,16 +2010,14 @@ async fn record_tool_completion(
     result: ToolResult,
 ) {
     completed.insert(idx);
-    sender
-        .send_important(AgentEvent::ToolCompleted {
-            id,
-            result: output.clone(),
-        })
-        .await;
+    sender.send(AgentEvent::ToolCompleted {
+        id,
+        result: output.clone(),
+    });
     results[idx] = Some((output, result));
 }
 
-async fn handle_tool_interrupt(
+fn handle_tool_interrupt(
     join_set: &mut JoinSet<(usize, String, ToolOutput, ToolResult)>,
     completed: &mut HashSet<usize>,
     results: &mut [Option<(ToolOutput, ToolResult)>],
@@ -2145,7 +2030,7 @@ async fn handle_tool_interrupt(
         if let Ok((idx, id, output, result)) = task_result
             && !completed.contains(&idx)
         {
-            record_tool_completion(sender, completed, results, idx, id, output, result).await;
+            record_tool_completion(sender, completed, results, idx, id, output, result);
         }
     }
 
@@ -2161,8 +2046,7 @@ async fn handle_tool_interrupt(
                 tu.id.clone(),
                 abort_output,
                 abort_result,
-            )
-            .await;
+            );
         }
     }
 }
@@ -2339,7 +2223,6 @@ mod tests {
         tx.send(Arc::new(AgentEvent::AssistantDelta {
             text: "hello".to_string(),
         }))
-        .await
         .unwrap();
         drop(tx);
 
@@ -2354,30 +2237,33 @@ mod tests {
         assert!(rx.recv().await.is_none());
     }
 
-    /// Verifies `EventSender` `send_delta()` is best-effort (doesn't block on full channel).
+    /// Verifies `EventSender::send` delivers events reliably via unbounded channel.
     #[tokio::test]
-    async fn test_event_sender_send_delta_is_best_effort() {
-        // Create a tiny channel that will fill up quickly
-        let (tx, _rx) = tokio::sync::mpsc::channel(1);
+    async fn test_event_sender_send_delivers_all_events() {
+        let (tx, mut rx) = create_event_channel();
         let sender = EventSender::new(tx);
 
-        // This should not block even though channel is tiny
         for i in 0..100 {
-            sender.send_delta(AgentEvent::AssistantDelta {
+            sender.send(AgentEvent::AssistantDelta {
                 text: format!("chunk {i}"),
             });
         }
-        // If we got here without blocking, the test passes
+
+        let mut count = 0;
+        while rx.try_recv().is_ok() {
+            count += 1;
+        }
+        assert_eq!(count, 100, "all 100 events should be delivered");
     }
 
     /// Verifies provider failures are rendered as a failed terminal event.
     #[tokio::test]
-    async fn test_emit_turn_error_async_provider_emits_failed_turn_finished() {
+    async fn test_emit_turn_error_provider_emits_failed_turn_finished() {
         let (tx, mut rx) = create_event_channel();
         let sender = EventSender::new(tx);
 
         let err = TurnError::Provider(ProviderError::api_error("overloaded_error", "HTTP 502"));
-        emit_turn_error_async(&err, &sender).await;
+        emit_turn_error(&err, &sender);
 
         let event = timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -2402,7 +2288,7 @@ mod tests {
 
     /// Verifies non-fatal diagnostics are emitted through the centralized helper.
     #[tokio::test]
-    async fn test_emit_turn_diagnostics_async_parse_emits_error_event() {
+    async fn test_emit_turn_diagnostics_parse_emits_error_event() {
         let (tx, mut rx) = create_event_channel();
         let sender = EventSender::new(tx);
         let diagnostics = vec![TurnDiagnostic::Parse {
@@ -2410,7 +2296,7 @@ mod tests {
             details: Some("{bad json}".to_string()),
         }];
 
-        emit_turn_diagnostics_async(&diagnostics, &sender).await;
+        emit_turn_diagnostics(&diagnostics, &sender);
 
         let event = timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -2430,7 +2316,7 @@ mod tests {
 
     /// Verifies interrupted turns emit a single interrupted terminal event.
     #[tokio::test]
-    async fn test_emit_turn_error_async_interrupted_emits_turn_finished() {
+    async fn test_emit_turn_error_interrupted_emits_turn_finished() {
         let (tx, mut rx) = create_event_channel();
         let sender = EventSender::new(tx);
         let messages = vec![ChatMessage::assistant_text("partial", None)];
@@ -2440,7 +2326,7 @@ mod tests {
             "partial".to_string(),
             messages.clone(),
         );
-        emit_turn_error_async(&err, &sender).await;
+        emit_turn_error(&err, &sender);
 
         let event = timeout(Duration::from_secs(1), rx.recv())
             .await
@@ -2568,7 +2454,6 @@ mod tests {
             .send(Arc::new(AgentEvent::AssistantDelta {
                 text: "test".to_string(),
             }))
-            .await
             .unwrap();
 
         // out1 should receive it

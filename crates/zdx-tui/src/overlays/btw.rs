@@ -263,7 +263,7 @@ impl BtwState {
         thread_handle: Thread,
         prompt: String,
         messages: Vec<ChatMessage>,
-        rx: tokio::sync::mpsc::Receiver<std::sync::Arc<AgentEvent>>,
+        rx: tokio::sync::mpsc::UnboundedReceiver<std::sync::Arc<AgentEvent>>,
         cancel: tokio_util::sync::CancellationToken,
     ) {
         self.thread_handle = Some(thread_handle);

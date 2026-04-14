@@ -225,7 +225,7 @@ pub enum UiEvent {
 
     /// Agent turn spawned; reducer should set agent state to Waiting.
     AgentSpawned {
-        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
         cancel: CancellationToken,
     },
 
@@ -234,7 +234,7 @@ pub enum UiEvent {
         thread_handle: Thread,
         prompt: String,
         messages: Vec<ChatMessage>,
-        rx: mpsc::Receiver<Arc<AgentEvent>>,
+        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
         cancel: CancellationToken,
     },
 

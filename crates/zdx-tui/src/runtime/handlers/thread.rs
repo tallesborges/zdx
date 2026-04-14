@@ -399,13 +399,7 @@ pub fn spawn_btw_turn(
     let run_cancel = cancel.clone();
     let (tui_tx, tui_rx) = agent::create_event_channel();
     let (persist_tx, persist_rx) = agent::create_event_channel();
-    let _broadcaster = agent::spawn_broadcaster_with_modes(
-        agent_rx,
-        vec![
-            (tui_tx, agent::BroadcastMode::Ui),
-            (persist_tx, agent::BroadcastMode::Reliable),
-        ],
-    );
+    let _broadcaster = agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
     let _persist = tp::spawn_thread_persist_task_with_completed_messages(
         thread_handle.clone(),
         persist_rx,

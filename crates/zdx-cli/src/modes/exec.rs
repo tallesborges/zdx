@@ -165,13 +165,8 @@ pub async fn run_exec(
     let thread_id = thread.as_ref().map(|t| t.id.clone());
     let persist_handle = if let Some(thread_handle) = thread.clone() {
         let (persist_tx, persist_rx) = zdx_engine::core::agent::create_event_channel();
-        let broadcaster = zdx_engine::core::agent::spawn_broadcaster_with_modes(
-            agent_rx,
-            vec![
-                (render_tx, zdx_engine::core::agent::BroadcastMode::Ui),
-                (persist_tx, zdx_engine::core::agent::BroadcastMode::Reliable),
-            ],
-        );
+        let broadcaster =
+            zdx_engine::core::agent::spawn_broadcaster(agent_rx, vec![render_tx, persist_tx]);
         let persist = thread_persistence::spawn_thread_persist_task(thread_handle, persist_rx);
         Some((broadcaster, persist))
     } else {
