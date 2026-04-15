@@ -96,7 +96,7 @@ struct ThreadSearchInput {
 }
 
 /// Executes the thread search tool and returns matching thread results.
-pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
+pub fn execute(input: &Value, ctx: &ToolContext) -> ToolOutput {
     let input: ThreadSearchInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -139,6 +139,7 @@ pub fn execute(input: &Value, _ctx: &ToolContext) -> ToolOutput {
         date_start,
         date_end,
         limit: input.limit.unwrap_or(DEFAULT_LIMIT).max(1),
+        exclude_thread_id: ctx.current_thread_id.clone(),
     };
 
     match tp::search_threads(&options) {
@@ -243,5 +244,60 @@ mod tests {
             payload["error"]["message"],
             "date_start must be on or before date_end"
         );
+    }
+
+    #[test]
+    fn test_execute_excludes_current_thread() {
+        use std::sync::OnceLock;
+
+        use tempfile::TempDir;
+
+        use crate::core::thread_persistence::{Thread, ThreadEvent};
+
+        static ZDX_HOME: OnceLock<TempDir> = OnceLock::new();
+        let temp = ZDX_HOME.get_or_init(|| {
+            let t = TempDir::new().unwrap();
+            unsafe { std::env::set_var("ZDX_HOME", t.path()) };
+            t
+        });
+        let _ = temp;
+
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        let current_id = format!("tool-current-{nanos}");
+        let other_id = format!("tool-other-{nanos}");
+        // Unique marker scoped to this test run so other threads don't match.
+        let marker = format!("tool-excl-marker-{nanos}");
+
+        // Create other first so current_id is newest (first candidate).
+        let mut other = Thread::with_id(other_id.clone()).unwrap();
+        other.append(&ThreadEvent::user_message(&marker)).unwrap();
+
+        let mut current = Thread::with_id(current_id.clone()).unwrap();
+        current.append(&ThreadEvent::user_message(&marker)).unwrap();
+
+        let ctx =
+            ToolContext::new(PathBuf::from("."), None).with_current_thread_id(Some(&current_id));
+
+        let output = execute(&json!({"query": marker}), &ctx);
+        assert!(output.is_ok());
+
+        let results = output.data().unwrap().as_array().unwrap();
+        let ids: Vec<&str> = results
+            .iter()
+            .map(|r| r["thread_id"].as_str().unwrap())
+            .collect();
+
+        assert!(
+            !ids.contains(&current_id.as_str()),
+            "current thread must be excluded from tool output"
+        );
+        assert!(
+            ids.contains(&other_id.as_str()),
+            "other thread must appear in tool output"
+        );
+        assert_eq!(ids.len(), 1, "exactly one result expected");
     }
 }

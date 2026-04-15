@@ -125,6 +125,7 @@ pub fn search(options: SearchCommandOptions) -> Result<()> {
         date_start,
         date_end,
         limit: options.limit.max(1),
+        exclude_thread_id: None,
     };
 
     let results = thread_persistence::search_threads(&search_options).context("search threads")?;
