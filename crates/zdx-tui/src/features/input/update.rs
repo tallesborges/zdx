@@ -471,8 +471,8 @@ fn handle_overlays(
         KeyCode::Char('o') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::CommandPalette)))
         }
-        // Ctrl+P: open model picker (`Ctrl+M` usually arrives as Enter in terminals)
-        KeyCode::Char('p') if mods.only_ctrl() => {
+        // Ctrl+L: open model picker
+        KeyCode::Char('l') if mods.only_ctrl() => {
             Some((vec![], vec![], Some(OverlayRequest::ModelPicker)))
         }
         // Ctrl+T: open thinking picker (if model supports reasoning)
