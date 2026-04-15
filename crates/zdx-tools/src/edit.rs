@@ -8,7 +8,8 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use super::{
-    ToolContext, ToolDefinition, ToolOutput, insert_file_path_fields, resolve_existing_path,
+    ToolContext, ToolDefinition, ToolOutput, i64_or_string, insert_file_path_fields,
+    resolve_existing_path,
 };
 
 /// Returns the tool definition for the edit tool.
@@ -49,7 +50,7 @@ struct EditInput {
     file_path: String,
     old_string: String,
     new_string: String,
-    #[serde(default = "default_expected_replacements")]
+    #[serde(default = "default_expected_replacements", deserialize_with = "i64_or_string::deserialize")]
     expected_replacements: i64,
 }
 
@@ -335,6 +336,22 @@ mod tests {
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
         assert_eq!(payload["error"]["message"], "file_path cannot be empty");
+    }
+
+    #[test]
+    fn test_edit_expected_replacements_as_string() {
+        let temp = TempDir::new().unwrap();
+        let file_path = temp.path().join("test.txt");
+        fs::write(&file_path, "foo bar foo baz foo").unwrap();
+
+        let ctx = ToolContext::new(temp.path().to_path_buf(), None);
+        // expected_replacements passed as a string — must be coerced to i64
+        let input = json!({"file_path": "test.txt", "old_string": "foo", "new_string": "qux", "expected_replacements": "3"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok());
+        let content = fs::read_to_string(&file_path).unwrap();
+        assert_eq!(content, "qux bar qux baz qux");
     }
 
     #[test]
