@@ -549,7 +549,7 @@ impl TranscriptState {
     pub fn finalize_last_thinking_cell(
         &mut self,
         replay: Option<zdx_engine::providers::ReplayToken>,
-    ) {
+    ) -> bool {
         if let Some(cell) = self.cells.iter_mut().rev().find(|c| {
             matches!(
                 c,
@@ -561,6 +561,9 @@ impl TranscriptState {
         }) {
             cell.finalize_thinking(replay);
             self.invalidate_line_info();
+            true
+        } else {
+            false
         }
     }
 

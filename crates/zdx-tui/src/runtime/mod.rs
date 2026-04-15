@@ -42,7 +42,7 @@ use ratatui::backend::CrosstermBackend;
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::Config;
-use zdx_engine::core::events::AgentEvent;
+use zdx_engine::core::events::{AgentEvent, ErrorKind, TurnStatus};
 use zdx_engine::core::interrupt;
 use zdx_engine::core::thread_persistence::Thread;
 use zdx_engine::providers::ChatMessage;
@@ -995,7 +995,32 @@ where
     let mut reasoning_delta = String::new();
 
     while let AgentState::Waiting { rx, .. } | AgentState::Streaming { rx, .. } = agent_state {
-        let Ok(event) = rx.try_recv() else { break };
+        let event = match rx.try_recv() {
+            Ok(event) => event,
+            Err(mpsc::error::TryRecvError::Empty) => break,
+            Err(mpsc::error::TryRecvError::Disconnected) => {
+                if !assistant_delta.is_empty() {
+                    events.push(wrap(AgentEvent::AssistantDelta {
+                        text: std::mem::take(&mut assistant_delta),
+                    }));
+                }
+                if !reasoning_delta.is_empty() {
+                    events.push(wrap(AgentEvent::ReasoningDelta {
+                        text: std::mem::take(&mut reasoning_delta),
+                    }));
+                }
+                events.push(wrap(AgentEvent::TurnFinished {
+                    status: TurnStatus::Failed {
+                        kind: ErrorKind::Internal,
+                        message: "Agent event stream disconnected unexpectedly".to_string(),
+                        details: None,
+                    },
+                    final_text: String::new(),
+                    messages: Vec::new(),
+                }));
+                break;
+            }
+        };
 
         match &*event {
             AgentEvent::AssistantDelta { text } => {
@@ -1254,6 +1279,44 @@ mod tests {
                 final_text,
                 messages,
             }) if final_text == "hello!" && messages.is_empty()
+        ));
+    }
+
+    #[test]
+    fn drain_agent_rx_emits_failed_turn_when_channel_disconnects() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut agent_state = AgentState::Waiting {
+            rx,
+            cancel: CancellationToken::new(),
+        };
+
+        tx.send(Arc::new(AgentEvent::AssistantDelta {
+            text: "partial".to_string(),
+        }))
+        .unwrap();
+        drop(tx);
+
+        let mut events = Vec::new();
+        drain_agent_rx(&mut agent_state, &mut events, UiEvent::Agent);
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            UiEvent::Agent(AgentEvent::AssistantDelta { text }) if text == "partial"
+        ));
+        assert!(matches!(
+            &events[1],
+            UiEvent::Agent(AgentEvent::TurnFinished {
+                status: TurnStatus::Failed {
+                    kind: ErrorKind::Internal,
+                    message,
+                    details: None,
+                },
+                final_text,
+                messages,
+            }) if message == "Agent event stream disconnected unexpectedly"
+                && final_text.is_empty()
+                && messages.is_empty()
         ));
     }
 }

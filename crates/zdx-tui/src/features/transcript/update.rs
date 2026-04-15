@@ -150,7 +150,7 @@ pub fn handle_agent_event(
             vec![]
         }
         AgentEvent::ReasoningCompleted { block } => {
-            transcript.finalize_last_thinking_cell(block.replay.clone());
+            handle_reasoning_completed(transcript, block);
             vec![]
         }
         AgentEvent::UsageUpdate {
@@ -321,6 +321,25 @@ fn handle_thinking_delta(
     } else {
         // Append to the existing streaming thinking cell
         transcript.append_thinking_delta_to_last(text);
+    }
+}
+
+/// Finalizes the current streaming thinking cell, or creates a finalized one
+/// from the completed reasoning block when no streaming thinking cell exists.
+fn handle_reasoning_completed(
+    transcript: &mut TranscriptState,
+    block: &zdx_engine::providers::ReasoningBlock,
+) {
+    if transcript.finalize_last_thinking_cell(block.replay.clone()) {
+        return;
+    }
+
+    if let Some(text) = block.text.as_deref()
+        && !text.is_empty()
+    {
+        let mut cell = HistoryCell::thinking_streaming(text);
+        cell.finalize_thinking(block.replay.clone());
+        transcript.push_cell(cell);
     }
 }
 
@@ -658,6 +677,8 @@ pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
 
 #[cfg(test)]
 mod tests {
+    use zdx_engine::providers::{ReasoningBlock, ReplayToken};
+
     use super::*;
 
     #[test]
@@ -716,5 +737,33 @@ mod tests {
         let content = "[Image\u{00A0}5] test [Image\u{00A0}6]";
         assert_eq!(find_local_image_index(content, 5), Some(0));
         assert_eq!(find_local_image_index(content, 6), Some(1));
+    }
+
+    #[test]
+    fn reasoning_completed_creates_finalized_thinking_cell_without_live_delta() {
+        let mut transcript = TranscriptState::new();
+        let replay = ReplayToken::Anthropic {
+            signature: "sig-123".to_string(),
+        };
+
+        handle_reasoning_completed(
+            &mut transcript,
+            &ReasoningBlock {
+                text: Some("Condensed reasoning summary".to_string()),
+                replay: Some(replay.clone()),
+            },
+        );
+
+        assert_eq!(transcript.cells().len(), 1);
+        assert!(matches!(
+            transcript.cells().last(),
+            Some(HistoryCell::Thinking {
+                content,
+                replay: Some(cell_replay),
+                is_streaming: false,
+                is_interrupted: false,
+                ..
+            }) if content == "Condensed reasoning summary" && cell_replay == &replay
+        ));
     }
 }
