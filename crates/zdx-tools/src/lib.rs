@@ -156,6 +156,35 @@ pub mod bool_or_string {
     }
 }
 
+pub mod i64_or_string {
+    use serde::{Deserialize, Deserializer, de};
+
+    /// Deserializes an `i64` that also accepts a numeric string like `"2"`.
+    ///
+    /// # Errors
+    /// Returns an error if the value cannot be parsed as an integer.
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<i64, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum I64OrString {
+            Int(i64),
+            String(String),
+        }
+
+        match I64OrString::deserialize(deserializer)? {
+            I64OrString::Int(v) => Ok(v),
+            I64OrString::String(raw) => raw.trim().parse::<i64>().map_err(|_| {
+                de::Error::custom(format!(
+                    "expected integer or integer string, got '{raw}'"
+                ))
+            }),
+        }
+    }
+}
+
 // ============================================================================
 // Path Resolution Helpers
 // ============================================================================
