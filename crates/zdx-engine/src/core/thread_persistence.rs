@@ -1103,6 +1103,8 @@ pub struct ThreadSearchOptions {
     pub date_start: Option<NaiveDate>,
     pub date_end: Option<NaiveDate>,
     pub limit: usize,
+    /// Thread ID to exclude from results (e.g. the current active thread).
+    pub exclude_thread_id: Option<String>,
 }
 
 impl Default for ThreadSearchOptions {
@@ -1113,6 +1115,7 @@ impl Default for ThreadSearchOptions {
             date_start: None,
             date_end: None,
             limit: 20,
+            exclude_thread_id: None,
         }
     }
 }
@@ -1220,6 +1223,13 @@ pub fn search_threads(options: &ThreadSearchOptions) -> Result<Vec<ThreadSearchR
 
     // list_threads() is already sorted by modified time (newest first).
     for summary in list_threads()? {
+        // Skip the current active thread if one is specified.
+        if let Some(ref excluded) = options.exclude_thread_id
+            && &summary.id == excluded
+        {
+            continue;
+        }
+
         // Fast grep pre-filter: check title first (already in memory from
         // list_threads), then scan the raw JSONL file for query terms.
         // Threads that can't possibly match are skipped before deserialising.
@@ -3326,5 +3336,85 @@ mod tests {
 
         // New user message
         assert_eq!(messages[5].role, "user");
+    }
+
+    #[test]
+    fn test_search_threads_excludes_specified_thread_id() {
+        let _temp = setup_temp_zdx_home();
+
+        let current_id = unique_thread_id("excl-current");
+        let other_id = unique_thread_id("excl-other");
+        // Use the thread IDs as part of the query so results are scoped to
+        // these two threads only, avoiding interference from other test threads.
+        let marker = format!("excl-marker-{current_id}");
+
+        let mut other = Thread::with_id(other_id.clone()).unwrap();
+        other.append(&ThreadEvent::user_message(&marker)).unwrap();
+
+        // Create "current" last so it is newest and first in list_threads().
+        let mut current = Thread::with_id(current_id.clone()).unwrap();
+        current.append(&ThreadEvent::user_message(&marker)).unwrap();
+
+        let options = ThreadSearchOptions {
+            query: Some(marker),
+            exclude_thread_id: Some(current_id.clone()),
+            limit: 20,
+            ..ThreadSearchOptions::default()
+        };
+
+        let results = search_threads(&options).unwrap();
+        let ids: Vec<&str> = results.iter().map(|r| r.thread_id.as_str()).collect();
+
+        assert!(
+            !ids.contains(&current_id.as_str()),
+            "current thread must be excluded"
+        );
+        assert!(
+            ids.contains(&other_id.as_str()),
+            "other thread must be present"
+        );
+        assert_eq!(ids.len(), 1, "exactly one result expected");
+    }
+
+    #[test]
+    fn test_search_threads_exclusion_does_not_underfill_limit() {
+        let _temp = setup_temp_zdx_home();
+
+        let a_id = unique_thread_id("underfill-a");
+        let b_id = unique_thread_id("underfill-b");
+        // Create a and b first so current_id ends up newest (first candidate).
+        let current_id = unique_thread_id("underfill-current");
+        let marker = format!("underfill-marker-{current_id}");
+
+        for (id, msg) in [
+            (&a_id, marker.as_str()),
+            (&b_id, marker.as_str()),
+            // current_id is created last → newest → first candidate hit by
+            // list_threads(). A buggy post-filter would stop at limit=2 before
+            // reaching a_id and b_id, then strip current_id, returning only 1.
+            (&current_id, marker.as_str()),
+        ] {
+            let mut t = Thread::with_id(id.clone()).unwrap();
+            t.append(&ThreadEvent::user_message(msg)).unwrap();
+        }
+
+        // limit=2 with current excluded must still yield 2 results.
+        let options = ThreadSearchOptions {
+            query: Some(marker),
+            exclude_thread_id: Some(current_id.clone()),
+            limit: 2,
+            ..ThreadSearchOptions::default()
+        };
+
+        let results = search_threads(&options).unwrap();
+        assert_eq!(
+            results.len(),
+            2,
+            "limit must be filled even when the excluded thread is the newest candidate"
+        );
+        assert!(
+            results.iter().all(|r| r.thread_id != current_id),
+            "current thread must not appear in results"
+        );
     }
 }
