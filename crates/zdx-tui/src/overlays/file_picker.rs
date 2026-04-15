@@ -139,7 +139,7 @@ impl FilePickerState {
         let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
             KeyCode::Esc | KeyCode::Enter | KeyCode::Tab | KeyCode::Up | KeyCode::Down => false,
-            KeyCode::Char('p') if ctrl => false,
+            KeyCode::Char('l') if ctrl => false,
             KeyCode::Char('n') if ctrl => false,
             _ => true,
         }

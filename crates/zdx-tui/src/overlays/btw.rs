@@ -301,14 +301,14 @@ fn render_btw_overlay(frame: &mut Frame, state: &BtwState, area: Rect, input_top
 
     let idle_hints = [
         InputHint::new("Enter", "send"),
-        InputHint::new("Ctrl+P", "model"),
+        InputHint::new("Ctrl+L", "model"),
         InputHint::new("Ctrl+T", "thinking"),
         InputHint::new("PgUp/PgDn", "scroll"),
         InputHint::new("Esc", "clear/close"),
     ];
     let running_hints = [
         InputHint::new("Ctrl+C", "stop"),
-        InputHint::new("Ctrl+P", "model"),
+        InputHint::new("Ctrl+L", "model"),
         InputHint::new("Ctrl+T", "thinking"),
         InputHint::new("PgUp/PgDn", "scroll"),
         InputHint::new("Esc", "close"),
