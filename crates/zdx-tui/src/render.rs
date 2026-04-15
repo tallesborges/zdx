@@ -17,7 +17,6 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::common::text::truncate_with_ellipsis;
 use crate::common::{Scrollbar, TaskKind};
 use crate::input;
-use crate::overlays::OverlayExt;
 use crate::state::{AgentState, AppState, TuiState};
 use crate::statusline::render_debug_status_line;
 use crate::transcript::{self, CellId};
@@ -98,7 +97,24 @@ pub fn render(app: &AppState, frame: &mut Frame) {
     }
 
     // Render overlay (last, so it appears on top)
-    app.overlay.render(frame, area, chunks[2].y, &app.tui.tasks);
+    // ToolDetail needs special handling: it looks up the live cell from transcript
+    if let Some(ref overlay) = app.overlay {
+        match overlay {
+            crate::overlays::Overlay::ToolDetail(state) => {
+                let cell = app.tui.transcript.cells().iter().find(|c| {
+                    matches!(
+                        c,
+                        transcript::HistoryCell::Tool { tool_use_id, .. }
+                            if *tool_use_id == state.tool_use_id
+                    )
+                });
+                state.render(frame, area, cell, app.tui.spinner_frame);
+            }
+            _ => {
+                overlay.render(frame, area, chunks[2].y, &app.tui.tasks);
+            }
+        }
+    }
 }
 
 struct RenderMetrics {

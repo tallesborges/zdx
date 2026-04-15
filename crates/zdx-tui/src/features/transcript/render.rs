@@ -242,29 +242,34 @@ fn convert_styled_line(styled_line: StyledLine) -> Line<'static> {
 }
 
 fn detect_line_interaction(styled_line: &StyledLine) -> Option<LineInteraction> {
-    let has_args_label = styled_line
+    // Detect tool header lines: must have both an icon span (state style) AND
+    // a name span (ToolStatus). Error detail lines use ToolError but lack ToolStatus,
+    // so checking both avoids false positives.
+    let has_tool_icon = styled_line.spans.iter().any(|span| {
+        !span.text.is_empty()
+            && matches!(
+                span.style,
+                TranscriptStyle::ToolRunning
+                    | TranscriptStyle::ToolSuccess
+                    | TranscriptStyle::ToolError
+                    | TranscriptStyle::ToolCancelled
+            )
+    });
+    let has_tool_name = styled_line
         .spans
         .iter()
-        .any(|span| span.text == "args (json) ");
-    let has_output_label = styled_line
-        .spans
-        .iter()
-        .any(|span| span.text.starts_with("─ output ─"));
-    let has_disclosure = styled_line
-        .spans
-        .iter()
-        .any(|span| span.text == "▶" || span.text == "▼");
+        .any(|span| !span.text.is_empty() && span.style == TranscriptStyle::ToolStatus);
+
+    if has_tool_icon && has_tool_name {
+        return Some(LineInteraction::OpenToolDetail);
+    }
 
     let has_image_placeholder = styled_line
         .spans
         .iter()
         .any(|span| matches!(span.style, TranscriptStyle::ImagePlaceholder));
 
-    if has_args_label && has_disclosure {
-        Some(LineInteraction::ToggleToolArgs)
-    } else if has_output_label && has_disclosure {
-        Some(LineInteraction::ToggleToolOutput)
-    } else if has_image_placeholder {
+    if has_image_placeholder {
         Some(LineInteraction::ImagePlaceholder)
     } else {
         None
