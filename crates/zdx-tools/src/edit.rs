@@ -50,7 +50,10 @@ struct EditInput {
     file_path: String,
     old_string: String,
     new_string: String,
-    #[serde(default = "default_expected_replacements", deserialize_with = "i64_or_string::deserialize")]
+    #[serde(
+        default = "default_expected_replacements",
+        deserialize_with = "i64_or_string::deserialize"
+    )]
     expected_replacements: i64,
 }
 

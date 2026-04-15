@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 use super::CellId;
-use super::selection::{LineInteraction, PositionMap, SelectionState, VisualPosition};
+use super::selection::{PositionMap, SelectionState, VisualPosition};
 use crate::mutations::TranscriptMutation;
 
 const DOUBLE_CLICK_MAX_DELAY: Duration = Duration::from_millis(400);
@@ -822,60 +822,6 @@ impl TranscriptState {
         true
     }
 
-    /// Toggles tool args details for the tool cell rendered at `line`, if the
-    /// clicked line is the args disclosure row.
-    pub fn toggle_tool_args_for_line(&mut self, line: usize) -> bool {
-        let Some(mapping) = self.position_map.get_by_global_line(line) else {
-            return false;
-        };
-
-        if !matches!(mapping.interaction, Some(LineInteraction::ToggleToolArgs)) {
-            return false;
-        }
-
-        let Some(cell_idx) = self.scroll.cell_index_for_line(line) else {
-            return false;
-        };
-        let Some(cell) = self.cells.get_mut(cell_idx) else {
-            return false;
-        };
-
-        if cell.toggle_tool_args_expanded() {
-            self.wrap_cache.clear();
-            self.invalidate_line_info();
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Toggles tool output details for the tool cell rendered at `line`, if the
-    /// clicked line is the output disclosure row.
-    pub fn toggle_tool_output_for_line(&mut self, line: usize) -> bool {
-        let Some(mapping) = self.position_map.get_by_global_line(line) else {
-            return false;
-        };
-
-        if !matches!(mapping.interaction, Some(LineInteraction::ToggleToolOutput)) {
-            return false;
-        }
-
-        let Some(cell_idx) = self.scroll.cell_index_for_line(line) else {
-            return false;
-        };
-        let Some(cell) = self.cells.get_mut(cell_idx) else {
-            return false;
-        };
-
-        if cell.toggle_tool_output_expanded() {
-            self.wrap_cache.clear();
-            self.invalidate_line_info();
-            true
-        } else {
-            false
-        }
-    }
-
     fn clamp_selection_column(&self, line: usize, column: usize) -> usize {
         self.position_map
             .get_by_global_line(line)
@@ -1057,96 +1003,6 @@ mod tests {
         assert_eq!(scroll.cell_index_for_line(5), Some(2));
         assert_eq!(scroll.cell_index_for_line(8), Some(2));
         assert_eq!(scroll.cell_index_for_line(9), None);
-    }
-
-    #[test]
-    fn test_toggle_tool_args_for_line() {
-        let tool = HistoryCell::tool_running(
-            "tool-1",
-            "apply_patch",
-            serde_json::json!({
-                "patch": "*** Begin Patch\n*** End Patch",
-                "metadata": {"author": "zdx"}
-            }),
-        );
-        let tool_id = tool.id();
-
-        let mut transcript = TranscriptState::with_cells(vec![tool]);
-        transcript.position_map.clear();
-        transcript.position_map.push(LineMapping::new(
-            "  args (json) ▶".to_string(),
-            Some(LineInteraction::ToggleToolArgs),
-        ));
-        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
-
-        assert!(transcript.toggle_tool_args_for_line(0));
-
-        let all_text: String = transcript.cells()[0]
-            .display_lines(80, 0)
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
-            .collect();
-        assert!(all_text.contains("args (json) ▼"));
-        assert!(all_text.contains("\"metadata\""));
-    }
-
-    #[test]
-    fn test_toggle_tool_args_for_line_ignores_non_header_lines() {
-        let tool =
-            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
-        let tool_id = tool.id();
-        let mut transcript = TranscriptState::with_cells(vec![tool]);
-
-        transcript.position_map.clear();
-        transcript
-            .position_map
-            .push(LineMapping::new("read: a".to_string(), None));
-        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
-
-        assert!(!transcript.toggle_tool_args_for_line(0));
-    }
-
-    #[test]
-    fn test_toggle_tool_output_for_line() {
-        let mut tool =
-            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
-        tool.set_tool_result(ToolOutput::success(serde_json::json!({
-            "content": "line1\nline2"
-        })));
-        let tool_id = tool.id();
-
-        let mut transcript = TranscriptState::with_cells(vec![tool]);
-        transcript.position_map.clear();
-        transcript.position_map.push(LineMapping::new(
-            "─ output ─ ▶".to_string(),
-            Some(LineInteraction::ToggleToolOutput),
-        ));
-        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
-
-        assert!(transcript.toggle_tool_output_for_line(0));
-
-        let all_text: String = transcript.cells()[0]
-            .display_lines(80, 0)
-            .iter()
-            .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
-            .collect();
-        assert!(all_text.contains("─ output ─ ▼"));
-    }
-
-    #[test]
-    fn test_toggle_tool_output_for_line_ignores_non_header_lines() {
-        let tool =
-            HistoryCell::tool_running("tool-1", "read", serde_json::json!({"file_path": "a"}));
-        let tool_id = tool.id();
-        let mut transcript = TranscriptState::with_cells(vec![tool]);
-
-        transcript.position_map.clear();
-        transcript
-            .position_map
-            .push(LineMapping::new("output line".to_string(), None));
-        transcript.scroll.update_cell_line_info(vec![(tool_id, 1)]);
-
-        assert!(!transcript.toggle_tool_output_for_line(0));
     }
 
     #[test]

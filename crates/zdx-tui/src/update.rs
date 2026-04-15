@@ -841,6 +841,11 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
                 image_path: image_path.clone(),
             }]
         }
+        overlays::OverlayRequest::ToolDetail { tool_use_id } => {
+            let state = overlays::ToolDetailState::open(tool_use_id.clone());
+            app.overlay = Some(overlays::Overlay::ToolDetail(state));
+            vec![]
+        }
     }
 }
 
@@ -898,6 +903,19 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
     match event {
         Event::Key(key) => handle_key(app, key),
         Event::Mouse(mouse) => {
+            if let Some(overlays::Overlay::ToolDetail(state)) = &mut app.overlay {
+                // ToolDetail overlay consumes all mouse events while open
+                match mouse.kind {
+                    crossterm::event::MouseEventKind::ScrollUp => {
+                        state.scroll_up(3);
+                    }
+                    crossterm::event::MouseEventKind::ScrollDown => {
+                        state.scroll_down(3);
+                    }
+                    _ => {}
+                }
+                return vec![];
+            }
             if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
                 let (width, height) = app.tui.transcript.terminal_size;
                 let area = ratatui::layout::Rect::new(0, 0, width, height);

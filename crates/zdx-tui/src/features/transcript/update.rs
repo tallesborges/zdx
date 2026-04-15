@@ -12,7 +12,7 @@ use zdx_engine::core::interrupt;
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};
 use crate::state::AgentState;
-use crate::transcript::{HistoryCell, TranscriptState};
+use crate::transcript::{HistoryCell, LineInteraction, TranscriptState};
 
 /// Lines to scroll per mouse wheel tick.
 const MOUSE_SCROLL_LINES: usize = 1;
@@ -382,12 +382,16 @@ pub fn handle_mouse(
                     return Some(request);
                 }
 
-                // If user clicks on tool output/args disclosure rows, toggle expand/collapse
-                // and skip selection behavior.
-                if transcript.toggle_tool_output_for_line(line)
-                    || transcript.toggle_tool_args_for_line(line)
+                // If user clicks on tool header, open tool detail popup
+                if let Some(mapping) = transcript.position_map.get_by_global_line(line)
+                    && matches!(mapping.interaction, Some(LineInteraction::OpenToolDetail))
+                    && let Some(cell_idx) = transcript.scroll.cell_index_for_line(line)
+                    && let Some(HistoryCell::Tool { tool_use_id, .. }) =
+                        transcript.cells().get(cell_idx)
                 {
-                    return None;
+                    return Some(crate::overlays::OverlayRequest::ToolDetail {
+                        tool_use_id: tool_use_id.clone(),
+                    });
                 }
 
                 if transcript.register_click(line, col) {
@@ -429,8 +433,6 @@ fn check_image_click(
     line: usize,
     col: usize,
 ) -> Option<crate::overlays::OverlayRequest> {
-    use crate::transcript::LineInteraction;
-
     let mapping = transcript.position_map.get_by_global_line(line)?;
     if !matches!(mapping.interaction, Some(LineInteraction::ImagePlaceholder)) {
         return None;

@@ -177,9 +177,7 @@ pub mod i64_or_string {
         match I64OrString::deserialize(deserializer)? {
             I64OrString::Int(v) => Ok(v),
             I64OrString::String(raw) => raw.trim().parse::<i64>().map_err(|_| {
-                de::Error::custom(format!(
-                    "expected integer or integer string, got '{raw}'"
-                ))
+                de::Error::custom(format!("expected integer or integer string, got '{raw}'"))
             }),
         }
     }

@@ -34,6 +34,7 @@ pub mod skill_picker;
 pub mod thinking_picker;
 pub mod thread_picker;
 pub mod timeline;
+pub mod tool_detail;
 mod update;
 
 pub use btw::BtwState;
@@ -50,6 +51,7 @@ pub use skill_picker::SkillPickerState;
 pub use thinking_picker::ThinkingPickerState;
 pub use thread_picker::{ThreadPickerMode, ThreadPickerState, ThreadScope};
 pub use timeline::TimelineState;
+pub use tool_detail::ToolDetailState;
 // Re-export update functions
 pub use update::{handle_files_discovered, handle_overlay_key};
 
@@ -79,6 +81,9 @@ pub enum OverlayRequest {
     ImagePreview {
         image_path: String,
         image_index: usize,
+    },
+    ToolDetail {
+        tool_use_id: String,
     },
 }
 
@@ -149,6 +154,7 @@ pub enum Overlay {
     Timeline(TimelineState),
     Rename(RenameState),
     ImagePreview(ImagePreviewState),
+    ToolDetail(ToolDetailState),
 }
 
 impl Overlay {
@@ -170,6 +176,7 @@ impl Overlay {
                 input_y,
                 tasks.state(TaskKind::ImageDecode).is_running(),
             ),
+            Overlay::ToolDetail(_) => {} // Rendered separately in render.rs with live cell lookup
         }
     }
 
@@ -186,6 +193,7 @@ impl Overlay {
             Overlay::Timeline(t) => t.handle_key(tui, key),
             Overlay::Rename(r) => r.handle_key(tui, key),
             Overlay::ImagePreview(p) => p.handle_key(tui, key),
+            Overlay::ToolDetail(t) => t.handle_key(key),
         }
     }
 

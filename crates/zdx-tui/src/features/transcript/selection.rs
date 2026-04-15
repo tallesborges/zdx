@@ -57,8 +57,7 @@ impl PartialOrd for VisualPosition {
 /// Built during rendering to enable selection position mapping.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LineInteraction {
-    ToggleToolArgs,
-    ToggleToolOutput,
+    OpenToolDetail,
     ImagePlaceholder,
 }
 
