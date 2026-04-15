@@ -1041,6 +1041,20 @@ where
                 }
                 reasoning_delta.push_str(text);
             }
+            AgentEvent::TurnFinished { .. } => {
+                if !assistant_delta.is_empty() {
+                    events.push(wrap(AgentEvent::AssistantDelta {
+                        text: std::mem::take(&mut assistant_delta),
+                    }));
+                }
+                if !reasoning_delta.is_empty() {
+                    events.push(wrap(AgentEvent::ReasoningDelta {
+                        text: std::mem::take(&mut reasoning_delta),
+                    }));
+                }
+                events.push(wrap((*event).clone()));
+                break;
+            }
             _ => {
                 // Lifecycle event: flush any pending deltas first so ordering
                 // is preserved (e.g. AssistantCompleted always follows the
@@ -1317,6 +1331,44 @@ mod tests {
             }) if message == "Agent event stream disconnected unexpectedly"
                 && final_text.is_empty()
                 && messages.is_empty()
+        ));
+    }
+
+    #[test]
+    fn drain_agent_rx_does_not_emit_false_disconnect_after_real_turn_finished() {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let mut agent_state = AgentState::Waiting {
+            rx,
+            cancel: CancellationToken::new(),
+        };
+
+        tx.send(Arc::new(AgentEvent::AssistantDelta {
+            text: "done".to_string(),
+        }))
+        .unwrap();
+        tx.send(Arc::new(AgentEvent::TurnFinished {
+            status: TurnStatus::Completed,
+            final_text: "done".to_string(),
+            messages: Vec::new(),
+        }))
+        .unwrap();
+        drop(tx);
+
+        let mut events = Vec::new();
+        drain_agent_rx(&mut agent_state, &mut events, UiEvent::Agent);
+
+        assert_eq!(events.len(), 2);
+        assert!(matches!(
+            &events[0],
+            UiEvent::Agent(AgentEvent::AssistantDelta { text }) if text == "done"
+        ));
+        assert!(matches!(
+            &events[1],
+            UiEvent::Agent(AgentEvent::TurnFinished {
+                status: TurnStatus::Completed,
+                final_text,
+                messages,
+            }) if final_text == "done" && messages.is_empty()
         ));
     }
 }
