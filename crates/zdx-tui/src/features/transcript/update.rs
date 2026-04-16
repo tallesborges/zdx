@@ -9,6 +9,7 @@ use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
 use zdx_engine::core::events::{AgentEvent, TurnStatus};
 use zdx_engine::core::interrupt;
 
+use super::reasoning::reasoning_display_text;
 use crate::effects::UiEffect;
 use crate::mutations::{StateMutation, ThreadMutation};
 use crate::state::AgentState;
@@ -332,6 +333,11 @@ fn handle_thinking_delta(
 
 /// Finalizes the current streaming thinking cell, or creates a finalized one
 /// from the completed reasoning block when no streaming thinking cell exists.
+///
+/// When no streaming thinking cell exists, uses `reasoning_display_text` to
+/// pick the visible content: visible text if present, otherwise the
+/// `[redacted reasoning]` placeholder for Anthropic `redacted_thinking`
+/// blocks. Reasoning blocks with no text and no redacted replay are skipped.
 fn handle_reasoning_completed(
     transcript: &mut TranscriptState,
     block: &zdx_engine::providers::ReasoningBlock,
@@ -340,10 +346,8 @@ fn handle_reasoning_completed(
         return;
     }
 
-    if let Some(text) = block.text.as_deref()
-        && !text.is_empty()
-    {
-        let mut cell = HistoryCell::thinking_streaming(text);
+    if let Some(display) = reasoning_display_text(block.text.as_deref(), block.replay.as_ref()) {
+        let mut cell = HistoryCell::thinking_streaming(display);
         cell.finalize_thinking(block.replay.clone());
         transcript.push_cell(cell);
     }
@@ -773,5 +777,87 @@ mod tests {
                 ..
             }) if content == "Condensed reasoning summary" && cell_replay == &replay
         ));
+    }
+
+    #[test]
+    fn reasoning_completed_redacted_creates_placeholder_cell() {
+        // A `redacted_thinking` block completes with no prior `ReasoningDelta`
+        // (nothing was streamed) and must still appear as a visible cell
+        // anchored to the redacted replay token.
+        let mut transcript = TranscriptState::new();
+        let replay = ReplayToken::AnthropicRedacted {
+            data: "blob".to_string(),
+        };
+
+        handle_reasoning_completed(
+            &mut transcript,
+            &ReasoningBlock {
+                text: None,
+                replay: Some(replay.clone()),
+            },
+        );
+
+        assert_eq!(transcript.cells().len(), 1);
+        assert!(matches!(
+            transcript.cells().last(),
+            Some(HistoryCell::Thinking {
+                content,
+                replay: Some(cell_replay),
+                is_streaming: false,
+                is_interrupted: false,
+                ..
+            }) if content == "[redacted reasoning]" && cell_replay == &replay
+        ));
+    }
+
+    #[test]
+    fn reasoning_completed_preserves_streamed_text_under_redacted_replay() {
+        // Edge case #1: a streaming thinking cell already accumulated visible
+        // text, and the completion event carries a redacted replay token.
+        // The cell must be finalized with the redacted replay but KEEP the
+        // streamed text — we must not overwrite visible content with the
+        // placeholder.
+        let mut transcript = TranscriptState::new();
+        transcript.push_cell(HistoryCell::thinking_streaming("already streamed"));
+
+        let replay = ReplayToken::AnthropicRedacted {
+            data: "blob".to_string(),
+        };
+
+        handle_reasoning_completed(
+            &mut transcript,
+            &ReasoningBlock {
+                text: None,
+                replay: Some(replay.clone()),
+            },
+        );
+
+        assert_eq!(transcript.cells().len(), 1);
+        assert!(matches!(
+            transcript.cells().last(),
+            Some(HistoryCell::Thinking {
+                content,
+                replay: Some(cell_replay),
+                is_streaming: false,
+                ..
+            }) if content == "already streamed" && cell_replay == &replay
+        ));
+    }
+
+    #[test]
+    fn reasoning_completed_skips_when_no_text_and_no_redacted_replay() {
+        // Preserves previous behavior: a completion with no visible text and
+        // no redacted replay token produces no cell.
+        let mut transcript = TranscriptState::new();
+
+        handle_reasoning_completed(
+            &mut transcript,
+            &ReasoningBlock {
+                text: None,
+                replay: None,
+            },
+        );
+
+        assert!(transcript.cells().is_empty());
     }
 }

@@ -47,7 +47,7 @@ use crate::common::{TaskSeq, Tasks};
 use crate::input::InputState;
 use crate::overlays::Overlay;
 use crate::thread::ThreadState;
-use crate::transcript::{CellId, HistoryCell, TranscriptState};
+use crate::transcript::{CellId, HistoryCell, TranscriptState, reasoning_display_text};
 
 // ============================================================================
 // AppState (Combined State)
@@ -334,10 +334,11 @@ impl TuiState {
                             match block {
                                 ChatContentBlock::Reasoning(reasoning) => {
                                     flush_text(&mut transcript, &mut text_buffer);
-                                    if let Some(text) = &reasoning.text
-                                        && !text.is_empty()
-                                    {
-                                        let mut cell = HistoryCell::thinking_streaming(text);
+                                    if let Some(display) = reasoning_display_text(
+                                        reasoning.text.as_deref(),
+                                        reasoning.replay.as_ref(),
+                                    ) {
+                                        let mut cell = HistoryCell::thinking_streaming(display);
                                         cell.finalize_thinking(reasoning.replay.clone());
                                         transcript.push(cell);
                                     }
