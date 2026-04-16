@@ -1617,8 +1617,18 @@ fn emit_reasoning_completion(sender: &EventSender, turn: &mut AssistantTurnBuild
 
 fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder, index: usize) {
     if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
-        let input: Value =
-            serde_json::from_str(&tu.input_json).unwrap_or_else(|_| serde_json::json!({}));
+        // With fine-grained tool streaming (`eager_input_streaming: true`),
+        // Anthropic may legitimately deliver partial/invalid JSON if a tool
+        // call is truncated (e.g. `max_tokens` reached). Preserve the raw
+        // payload under a sentinel field so persistence and downstream
+        // diagnostics can still see what was emitted, instead of silently
+        // collapsing to `{}` and discarding the evidence.
+        let input: Value = serde_json::from_str(&tu.input_json).unwrap_or_else(|_| {
+            serde_json::json!({
+                "__zdx_invalid_json__": true,
+                "raw": tu.input_json,
+            })
+        });
         sender.send(AgentEvent::ToolInputCompleted {
             id: tu.id.clone(),
             name: tu.name.clone(),
@@ -2124,7 +2134,10 @@ mod tests {
     #[test]
     fn anthropic_effort_opus_47_uses_one_to_one_shift_with_xhigh() {
         let m = "claude-opus-4-7";
-        assert_eq!(map_thinking_to_anthropic_effort(ThinkingLevel::Off, m), None);
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Off, m),
+            None
+        );
         assert_eq!(
             map_thinking_to_anthropic_effort(ThinkingLevel::Minimal, m),
             Some(AnthropicEffortLevel::Low)
@@ -2177,18 +2190,12 @@ mod tests {
     fn anthropic_effort_normalizes_provider_prefixed_model_id() {
         // claude-cli:claude-opus-4-7 should still hit the 4.7 branch.
         assert_eq!(
-            map_thinking_to_anthropic_effort(
-                ThinkingLevel::High,
-                "claude-cli:claude-opus-4-7"
-            ),
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, "claude-cli:claude-opus-4-7"),
             Some(AnthropicEffortLevel::XHigh)
         );
         // And 4.6 should still collapse High → high under the cli prefix.
         assert_eq!(
-            map_thinking_to_anthropic_effort(
-                ThinkingLevel::High,
-                "claude-cli:claude-opus-4-6"
-            ),
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, "claude-cli:claude-opus-4-6"),
             Some(AnthropicEffortLevel::High)
         );
     }
@@ -2234,6 +2241,65 @@ mod tests {
         emit_stop_reason_notice(Some("tool_use"), &sender);
         emit_stop_reason_notice(None, &sender);
         assert!(rx.try_recv().is_err(), "no event should be emitted");
+    }
+
+    #[test]
+    fn emit_tool_input_completion_preserves_malformed_json_under_sentinel() {
+        // With eager_input_streaming GA, Anthropic may legitimately emit
+        // truncated/invalid JSON when max_tokens is reached mid-tool.
+        // We must not silently collapse the payload to `{}` and lose the
+        // raw evidence — persistence and diagnostics need to see it.
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+
+        let mut turn = AssistantTurnBuilder::new();
+        turn.tool_uses.push(ToolUseBuilder {
+            index: 0,
+            id: "toolu_xyz".to_string(),
+            name: "write".to_string(),
+            input_json: "{\"path\":\"a.txt\",\"content\":\"hel".to_string(), // truncated
+            input_preview_len: 0,
+        });
+
+        emit_tool_input_completion(&sender, &turn, 0);
+        let evt = rx.try_recv().expect("expected event");
+        match &*evt {
+            AgentEvent::ToolInputCompleted { id, name, input } => {
+                assert_eq!(id, "toolu_xyz");
+                assert_eq!(name, "write");
+                assert_eq!(input["__zdx_invalid_json__"], serde_json::json!(true));
+                assert_eq!(
+                    input["raw"],
+                    serde_json::json!("{\"path\":\"a.txt\",\"content\":\"hel")
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn emit_tool_input_completion_passes_through_valid_json() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+
+        let mut turn = AssistantTurnBuilder::new();
+        turn.tool_uses.push(ToolUseBuilder {
+            index: 0,
+            id: "toolu_ok".to_string(),
+            name: "read".to_string(),
+            input_json: "{\"path\":\"a.txt\"}".to_string(),
+            input_preview_len: 0,
+        });
+
+        emit_tool_input_completion(&sender, &turn, 0);
+        let evt = rx.try_recv().expect("expected event");
+        match &*evt {
+            AgentEvent::ToolInputCompleted { input, .. } => {
+                assert_eq!(input["path"], serde_json::json!("a.txt"));
+                assert!(input.get("__zdx_invalid_json__").is_none());
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
     }
 
     #[test]
