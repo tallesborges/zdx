@@ -8,6 +8,7 @@ use zdx_engine::core::events::ToolOutput;
 use zdx_engine::core::thread_persistence::ThreadEvent;
 
 use super::HistoryCell;
+use super::reasoning::reasoning_display_text;
 
 /// Builds transcript cells from thread events.
 ///
@@ -38,8 +39,8 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 cells.push(cell);
             }
             ThreadEvent::Reasoning { text, replay, .. } => {
-                if let Some(content) = text {
-                    let mut cell = HistoryCell::thinking_streaming(content);
+                if let Some(display) = reasoning_display_text(text.as_deref(), replay.as_ref()) {
+                    let mut cell = HistoryCell::thinking_streaming(display);
                     cell.finalize_thinking(replay.clone());
                     cells.push(cell);
                 }
@@ -318,5 +319,87 @@ mod tests {
             matches!(&cells[1], HistoryCell::System { .. }),
             "notice should render as a system cell"
         );
+    }
+
+    #[test]
+    fn test_build_transcript_from_events_redacted_reasoning_placeholder() {
+        // Redacted reasoning arrives with no plain text but a replay token
+        // carrying the opaque encrypted blob. The transcript must surface a
+        // visible placeholder cell so the block is not silently dropped on
+        // reload.
+        let events = vec![ThreadEvent::Reasoning {
+            text: None,
+            replay: Some(zdx_engine::providers::ReplayToken::AnthropicRedacted {
+                data: "blob".to_string(),
+            }),
+            ts: "2026-04-16T00:00:01Z".to_string(),
+        }];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 1);
+
+        match &cells[0] {
+            HistoryCell::Thinking {
+                content,
+                replay,
+                is_streaming,
+                ..
+            } => {
+                assert_eq!(content, "[redacted reasoning]");
+                assert!(!*is_streaming);
+                assert!(matches!(
+                    replay,
+                    Some(zdx_engine::providers::ReplayToken::AnthropicRedacted { data })
+                        if data == "blob"
+                ));
+            }
+            _ => panic!("Expected Thinking cell for redacted reasoning"),
+        }
+    }
+
+    #[test]
+    fn test_build_transcript_from_events_redacted_reasoning_with_visible_text_shows_text() {
+        // When Anthropic emits BOTH a visible summary AND a redacted replay
+        // token on a reasoning block (edge case), the transcript must show the
+        // visible text — the placeholder is a fallback only.
+        let events = vec![ThreadEvent::Reasoning {
+            text: Some("still visible".to_string()),
+            replay: Some(zdx_engine::providers::ReplayToken::AnthropicRedacted {
+                data: "blob".to_string(),
+            }),
+            ts: "2026-04-16T00:00:02Z".to_string(),
+        }];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 1);
+
+        match &cells[0] {
+            HistoryCell::Thinking {
+                content, replay, ..
+            } => {
+                assert_eq!(content, "still visible");
+                assert!(matches!(
+                    replay,
+                    Some(zdx_engine::providers::ReplayToken::AnthropicRedacted { data })
+                        if data == "blob"
+                ));
+            }
+            _ => panic!("Expected Thinking cell"),
+        }
+    }
+
+    #[test]
+    fn test_build_transcript_from_events_reasoning_without_text_or_redacted_replay_is_skipped() {
+        // A reasoning event with no text and no redacted replay token carries
+        // nothing visible to show — the event must be skipped to preserve
+        // existing behavior for missing-text-only reasoning.
+        let events = vec![ThreadEvent::Reasoning {
+            text: None,
+            replay: None,
+            ts: "2026-04-16T00:00:03Z".to_string(),
+        }];
+
+        let cells = build_transcript_from_events(&events);
+        assert!(cells.is_empty());
     }
 }

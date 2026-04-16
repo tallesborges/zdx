@@ -14,6 +14,7 @@ mod wrap;
 
 // New feature slice modules
 mod build;
+mod reasoning;
 mod render;
 mod selection;
 mod state;
@@ -23,6 +24,10 @@ mod update;
 // Re-export build function
 pub use build::build_transcript_from_events;
 pub use cell::{CellId, HistoryCell, ToolState};
+// Re-export the shared reasoning-display helper so the message-reload path
+// in `crate::state` can share the same display logic as build.rs and
+// update.rs.
+pub(crate) use reasoning::reasoning_display_text;
 // Re-export render functions
 pub use render::{SPINNER_SPEED_DIVISOR, calculate_cell_line_counts, render_transcript};
 // Re-export selection types (only those used externally)

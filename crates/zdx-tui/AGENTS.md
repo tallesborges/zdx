@@ -29,7 +29,7 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 - `features/input/`: input feature slice (`text_buffer.rs` cursor editing)
 - `features/statusline/`: debug status line state/render
 - `features/thread/`: thread picker + thread tree view
-- `features/transcript/`: transcript feature + markdown rendering
+- `features/transcript/`: transcript feature + markdown rendering (`reasoning.rs` shared reasoning-display helper + `[redacted reasoning]` placeholder constant)
 
 ### Other modules
 
