@@ -582,27 +582,33 @@ impl HistoryCell {
     /// Appends a chunk of streaming output to a tool cell's `output_delta`.
     ///
     /// Accumulates incremental stdout/stderr from `ToolOutputDelta` events.
-    /// Caps the buffer at 64KB (keeps the tail) to bound memory usage.
+    ///
+    /// Keeps a ~64KB tail to bound memory. To amortize trim cost, the buffer
+    /// is only trimmed when it exceeds twice the visible cap (128KB), after
+    /// which it is drained back to 64KB in-place. This keeps append at
+    /// amortized O(1) per byte while preserving the 64KB visible window.
     ///
     /// # Panics
     /// Panics if called on a non-tool cell.
     pub fn append_tool_output_delta(&mut self, chunk: &str) {
-        const MAX_OUTPUT_DELTA_BYTES: usize = 65536;
+        /// Visible tail kept after trimming.
+        const MAX_OUTPUT_DELTA_BYTES: usize = 65_536;
+        /// Trim only when the buffer exceeds this threshold, to amortize cost.
+        const TRIM_THRESHOLD_BYTES: usize = MAX_OUTPUT_DELTA_BYTES * 2;
 
         match self {
             HistoryCell::Tool { output_delta, .. } => {
                 let buf = output_delta.get_or_insert_with(String::new);
                 buf.push_str(chunk);
-                if buf.len() > MAX_OUTPUT_DELTA_BYTES {
-                    // Truncate from the front to keep the last MAX_OUTPUT_DELTA_BYTES bytes.
-                    // Find a char boundary at or after the cut point.
+                if buf.len() > TRIM_THRESHOLD_BYTES {
+                    // Drop the oldest bytes so only the last ~64KB remain.
+                    // Advance to the next char boundary to stay UTF-8 safe.
                     let cut = buf.len() - MAX_OUTPUT_DELTA_BYTES;
                     let mut boundary = cut;
                     while boundary < buf.len() && !buf.is_char_boundary(boundary) {
                         boundary += 1;
                     }
-                    let truncated = buf[boundary..].to_string();
-                    *buf = truncated;
+                    buf.drain(..boundary);
                 }
             }
             _ => panic!("append_tool_output_delta called on non-tool cell"),
