@@ -13,7 +13,26 @@ pub(crate) enum ThinkingConfig {
     #[serde(rename = "enabled")]
     Enabled { budget_tokens: u32 },
     #[serde(rename = "adaptive")]
-    Adaptive,
+    Adaptive {
+        /// Controls how thinking content is returned. Always `"summarized"`
+        /// for now — Opus 4.7 silently changed the default to `"omitted"`,
+        /// which would surface empty thinking blocks in the UI. Setting
+        /// this explicitly preserves visible thinking text on 4.7 and is
+        /// a no-op on 4.6 / Sonnet 4.6 where `"summarized"` is already
+        /// the default.
+        ///
+        /// See: <https://platform.claude.com/docs/en/build-with-claude/adaptive-thinking#summarized-thinking>
+        display: ThinkingDisplay,
+    },
+}
+
+/// `thinking.display` value. Mirrors Anthropic's API enum.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ThinkingDisplay {
+    Summarized,
+    #[allow(dead_code)] // Reserved for a future "omitted" mode (faster TTFT).
+    Omitted,
 }
 
 impl ThinkingConfig {
@@ -22,7 +41,9 @@ impl ThinkingConfig {
     }
 
     pub(crate) fn adaptive() -> Self {
-        Self::Adaptive
+        Self::Adaptive {
+            display: ThinkingDisplay::Summarized,
+        }
     }
 }
 
@@ -33,6 +54,7 @@ pub enum EffortLevel {
     Low,
     Medium,
     High,
+    XHigh,
     Max,
 }
 
@@ -103,6 +125,12 @@ pub(crate) struct ApiToolDef<'a> {
     pub(crate) name: &'a str,
     pub(crate) description: &'a str,
     pub(crate) input_schema: &'a Value,
+    /// Enables fine-grained tool input streaming (GA on all models per
+    /// Anthropic docs). Streams `input_json_delta` chunks as the model
+    /// produces them instead of buffering the full JSON, matching the
+    /// behavior previously gated by the `fine-grained-tool-streaming-2025-05-14`
+    /// beta header.
+    pub(crate) eager_input_streaming: bool,
 }
 
 impl<'a> From<&'a ToolDefinition> for ApiToolDef<'a> {
@@ -111,6 +139,7 @@ impl<'a> From<&'a ToolDefinition> for ApiToolDef<'a> {
             name: &def.name,
             description: &def.description,
             input_schema: &def.input_schema,
+            eager_input_streaming: true,
         }
     }
 }
