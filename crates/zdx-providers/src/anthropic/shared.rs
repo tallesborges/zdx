@@ -15,14 +15,11 @@ use crate::debug_metrics::maybe_wrap_with_metrics;
 use crate::shared::{ChatMessage, ProviderError, ProviderErrorKind, ProviderStream};
 use crate::{DebugTrace, wrap_stream};
 
-pub(crate) const FINE_GRAINED_TOOL_STREAMING_BETA_HEADER: &str =
-    "fine-grained-tool-streaming-2025-05-14";
 pub(crate) const INTERLEAVED_THINKING_BETA_HEADER: &str = "interleaved-thinking-2025-05-14";
 
 pub(crate) fn build_beta_header(base_headers: &[&str], include_interleaved: bool) -> String {
-    let mut headers = Vec::with_capacity(base_headers.len() + 2);
+    let mut headers = Vec::with_capacity(base_headers.len() + 1);
     headers.extend(base_headers.iter().copied());
-    headers.push(FINE_GRAINED_TOOL_STREAMING_BETA_HEADER);
     if include_interleaved {
         headers.push(INTERLEAVED_THINKING_BETA_HEADER);
     }
@@ -73,11 +70,20 @@ pub(crate) fn build_thinking_and_output_config(
     let output_config = if supports_effort_control(normalized_model) {
         thinking_effort
             .map(|effort| {
-                if effort == EffortLevel::Max && !supports_max_effort(normalized_model) {
+                let effort_supported = match effort {
+                    EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
+                    EffortLevel::XHigh => supports_xhigh_effort(normalized_model),
+                    EffortLevel::Max => supports_max_effort(normalized_model),
+                };
+                if !effort_supported {
                     bail!(
-                        "Anthropic model '{normalized_model}' does not support output_config.effort=\"max\". \
-                         thinking_level=\"xhigh\" currently maps to effort=\"max\". \
-                         Use a lower thinking level or switch to claude-opus-4-6 / claude-sonnet-4-6."
+                        "Anthropic model '{normalized_model}' does not support output_config.effort=\"{}\". \
+                         Use a lower thinking level or switch to a model with full effort control.",
+                        match effort {
+                            EffortLevel::XHigh => "xhigh",
+                            EffortLevel::Max => "max",
+                            _ => unreachable!(),
+                        }
                     );
                 }
                 Ok(OutputConfig::new(effort))
@@ -110,15 +116,26 @@ fn normalize_model_id(model: &str) -> &str {
 }
 
 fn supports_max_effort(model: &str) -> bool {
-    model.starts_with("claude-opus-4-6") || model.starts_with("claude-sonnet-4-6")
+    model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4-6")
+        || model.starts_with("claude-sonnet-4-6")
+}
+
+/// `xhigh` effort was introduced in Claude Opus 4.7 (sits between `high`
+/// and `max`). No earlier model supports it.
+fn supports_xhigh_effort(model: &str) -> bool {
+    model.starts_with("claude-opus-4-7")
 }
 
 fn supports_adaptive_thinking(model: &str) -> bool {
-    model.starts_with("claude-opus-4-6") || model.starts_with("claude-sonnet-4-6")
+    model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4-6")
+        || model.starts_with("claude-sonnet-4-6")
 }
 
 fn supports_effort_control(model: &str) -> bool {
-    model.starts_with("claude-opus-4-6")
+    model.starts_with("claude-opus-4-7")
+        || model.starts_with("claude-opus-4-6")
         || model.starts_with("claude-opus-4-5")
         || model.starts_with("claude-sonnet-4-6")
 }
@@ -275,7 +292,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(thinking.unwrap()).unwrap(),
-            json!({"type": "adaptive"})
+            json!({"type": "adaptive", "display": "summarized"})
         );
         assert_eq!(
             serde_json::to_value(output_config.unwrap()).unwrap(),
@@ -351,6 +368,118 @@ mod tests {
     }
 
     #[test]
+    fn xhigh_effort_errors_on_opus_45() {
+        let err = build_thinking_and_output_config(
+            "claude-opus-4-5",
+            true,
+            1024,
+            Some(EffortLevel::XHigh),
+        )
+        .expect_err("xhigh effort should fail on opus 4.5");
+
+        assert!(
+            err.to_string()
+                .contains("does not support output_config.effort=\"xhigh\""),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn xhigh_effort_errors_on_opus_46() {
+        let err = build_thinking_and_output_config(
+            "claude-opus-4-6",
+            true,
+            1024,
+            Some(EffortLevel::XHigh),
+        )
+        .expect_err("xhigh effort should fail on opus 4.6");
+
+        assert!(
+            err.to_string()
+                .contains("does not support output_config.effort=\"xhigh\""),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn xhigh_effort_errors_on_sonnet_46() {
+        let err = build_thinking_and_output_config(
+            "claude-sonnet-4-6",
+            true,
+            1024,
+            Some(EffortLevel::XHigh),
+        )
+        .expect_err("xhigh effort should fail on sonnet 4.6");
+
+        assert!(
+            err.to_string()
+                .contains("does not support output_config.effort=\"xhigh\""),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn thinking_and_effort_opus_47_uses_adaptive_and_xhigh_effort() {
+        let (thinking, output_config) = build_thinking_and_output_config(
+            "claude-opus-4-7",
+            true,
+            4096,
+            Some(EffortLevel::XHigh),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "xhigh"})
+        );
+    }
+
+    #[test]
+    fn max_effort_allowed_on_opus_47() {
+        let (_, output_config) =
+            build_thinking_and_output_config("claude-opus-4-7", true, 4096, Some(EffortLevel::Max))
+                .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(output_config.unwrap()).unwrap(),
+            json!({"effort": "max"})
+        );
+    }
+
+    #[test]
+    fn interleaved_beta_disabled_for_opus_47() {
+        assert!(!should_enable_interleaved_thinking_beta(
+            "claude-opus-4-7",
+            true
+        ));
+    }
+
+    #[test]
+    fn opus_47_adaptive_thinking_explicitly_requests_summarized_display() {
+        // Anthropic Opus 4.7 silently changed the default `thinking.display`
+        // from "summarized" to "omitted" — without this explicit opt-in,
+        // the API would return thinking blocks with empty `thinking` text
+        // and only a signature, leaving the UI blank.
+        // See: docs/SPEC.md and Anthropic adaptive-thinking#summarized-thinking.
+        let (thinking, _) = build_thinking_and_output_config(
+            "claude-opus-4-7",
+            true,
+            4096,
+            Some(EffortLevel::High),
+        )
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(thinking.unwrap()).unwrap(),
+            json!({"type": "adaptive", "display": "summarized"})
+        );
+    }
+
+    #[test]
     fn provider_prefixed_model_ids_are_normalized() {
         let (thinking, output_config) = build_thinking_and_output_config(
             "claude-cli:claude-opus-4-6",
@@ -362,7 +491,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(thinking.unwrap()).unwrap(),
-            json!({"type": "adaptive"})
+            json!({"type": "adaptive", "display": "summarized"})
         );
         assert_eq!(
             serde_json::to_value(output_config.unwrap()).unwrap(),
@@ -406,7 +535,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(thinking.unwrap()).unwrap(),
-            json!({"type": "adaptive"})
+            json!({"type": "adaptive", "display": "summarized"})
         );
         assert_eq!(
             serde_json::to_value(output_config.unwrap()).unwrap(),
@@ -426,7 +555,7 @@ mod tests {
 
         assert_eq!(
             serde_json::to_value(thinking.unwrap()).unwrap(),
-            json!({"type": "adaptive"})
+            json!({"type": "adaptive", "display": "summarized"})
         );
         assert_eq!(
             serde_json::to_value(output_config.unwrap()).unwrap(),
@@ -495,14 +624,19 @@ mod tests {
     }
 
     #[test]
-    fn build_beta_header_always_includes_fine_grained_tool_streaming() {
+    fn build_beta_header_only_includes_interleaved_when_requested() {
+        assert_eq!(build_beta_header(&[], false), "");
         assert_eq!(
-            build_beta_header(&[], false),
-            FINE_GRAINED_TOOL_STREAMING_BETA_HEADER
+            build_beta_header(&[], true),
+            INTERLEAVED_THINKING_BETA_HEADER
         );
         assert_eq!(
             build_beta_header(&["claude-code-20250219,oauth-2025-04-20"], true),
-            "claude-code-20250219,oauth-2025-04-20,fine-grained-tool-streaming-2025-05-14,interleaved-thinking-2025-05-14"
+            "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14"
+        );
+        assert_eq!(
+            build_beta_header(&["claude-code-20250219,oauth-2025-04-20"], false),
+            "claude-code-20250219,oauth-2025-04-20"
         );
     }
 }

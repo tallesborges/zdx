@@ -186,7 +186,10 @@ mod tests {
             .unwrap();
 
         let payload = serde_json::to_value(&request).unwrap();
-        assert_eq!(payload["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(
+            payload["thinking"],
+            json!({"type": "adaptive", "display": "summarized"})
+        );
         assert_eq!(payload["output_config"], json!({"effort": "high"}));
     }
 

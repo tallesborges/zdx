@@ -143,7 +143,11 @@ impl AnthropicClient {
                 .header("anthropic-version", API_VERSION)
                 .header("x-api-key", &self.config.api_key);
 
-            builder.header("anthropic-beta", beta_header)
+            if beta_header.is_empty() {
+                builder
+            } else {
+                builder.header("anthropic-beta", beta_header)
+            }
         })
         .await
     }
@@ -209,7 +213,10 @@ mod tests {
             .unwrap();
 
         let payload = serde_json::to_value(&request).unwrap();
-        assert_eq!(payload["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(
+            payload["thinking"],
+            json!({"type": "adaptive", "display": "summarized"})
+        );
         assert_eq!(payload["output_config"], json!({"effort": "high"}));
     }
 

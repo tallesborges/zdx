@@ -917,7 +917,7 @@ fn build_provider_client(
         .thinking_level
         .compute_reasoning_budget(options.max_tokens, options.model_output_limit)
         .unwrap_or(0);
-    let thinking_effort = map_thinking_to_anthropic_effort(options.thinking_level);
+    let thinking_effort = map_thinking_to_anthropic_effort(options.thinking_level, options.model);
     let gemini_thinking = thinking_enabled
         .then(|| GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model));
 
@@ -1845,14 +1845,40 @@ fn map_thinking_to_reasoning(level: ThinkingLevel) -> Option<String> {
     }
 }
 
-fn map_thinking_to_anthropic_effort(level: ThinkingLevel) -> Option<AnthropicEffortLevel> {
-    match level {
-        ThinkingLevel::Off => None,
-        ThinkingLevel::Minimal | ThinkingLevel::Low => Some(AnthropicEffortLevel::Low),
-        ThinkingLevel::Medium => Some(AnthropicEffortLevel::Medium),
-        ThinkingLevel::High => Some(AnthropicEffortLevel::High),
-        ThinkingLevel::XHigh => Some(AnthropicEffortLevel::Max),
+fn map_thinking_to_anthropic_effort(
+    level: ThinkingLevel,
+    model: &str,
+) -> Option<AnthropicEffortLevel> {
+    if matches!(level, ThinkingLevel::Off) {
+        return None;
     }
+
+    // Strip provider-prefixed model ids like "claude-cli:claude-opus-4-7".
+    let normalized = model.rsplit(':').next().unwrap_or(model);
+
+    // Opus 4.7 introduced an `xhigh` effort level between `high` and `max`,
+    // giving it 5 effort levels (low/medium/high/xhigh/max) — perfect 1:1
+    // alignment with our 5 active ThinkingLevels.
+    if normalized.starts_with("claude-opus-4-7") {
+        return Some(match level {
+            ThinkingLevel::Off => unreachable!(),
+            ThinkingLevel::Minimal => AnthropicEffortLevel::Low,
+            ThinkingLevel::Low => AnthropicEffortLevel::Medium,
+            ThinkingLevel::Medium => AnthropicEffortLevel::High,
+            ThinkingLevel::High => AnthropicEffortLevel::XHigh,
+            ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
+        });
+    }
+
+    // Opus/Sonnet 4.6 and earlier expose at most 4 effort levels
+    // (low/medium/high/max). Collapse Minimal+Low into `low`.
+    Some(match level {
+        ThinkingLevel::Off => unreachable!(),
+        ThinkingLevel::Minimal | ThinkingLevel::Low => AnthropicEffortLevel::Low,
+        ThinkingLevel::Medium => AnthropicEffortLevel::Medium,
+        ThinkingLevel::High => AnthropicEffortLevel::High,
+        ThinkingLevel::XHigh => AnthropicEffortLevel::Max,
+    })
 }
 
 /// Executes all tool uses in parallel and emits events via async channel.
@@ -2065,6 +2091,78 @@ mod tests {
         assert_eq!(
             resolve_text_verbosity(Some(TextVerbosity::Low), Some(TextVerbosity::High)),
             Some(TextVerbosity::Low)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_opus_47_uses_one_to_one_shift_with_xhigh() {
+        let m = "claude-opus-4-7";
+        assert_eq!(map_thinking_to_anthropic_effort(ThinkingLevel::Off, m), None);
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Minimal, m),
+            Some(AnthropicEffortLevel::Low)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Low, m),
+            Some(AnthropicEffortLevel::Medium)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Medium, m),
+            Some(AnthropicEffortLevel::High)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
+            Some(AnthropicEffortLevel::XHigh)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::XHigh, m),
+            Some(AnthropicEffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_opus_46_collapses_minimal_low_and_skips_xhigh() {
+        let m = "claude-opus-4-6";
+        // 4.6 has no `xhigh`; High must stay at `high` (not be promoted).
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Minimal, m),
+            Some(AnthropicEffortLevel::Low)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Low, m),
+            Some(AnthropicEffortLevel::Low)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::Medium, m),
+            Some(AnthropicEffortLevel::Medium)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::High, m),
+            Some(AnthropicEffortLevel::High)
+        );
+        assert_eq!(
+            map_thinking_to_anthropic_effort(ThinkingLevel::XHigh, m),
+            Some(AnthropicEffortLevel::Max)
+        );
+    }
+
+    #[test]
+    fn anthropic_effort_normalizes_provider_prefixed_model_id() {
+        // claude-cli:claude-opus-4-7 should still hit the 4.7 branch.
+        assert_eq!(
+            map_thinking_to_anthropic_effort(
+                ThinkingLevel::High,
+                "claude-cli:claude-opus-4-7"
+            ),
+            Some(AnthropicEffortLevel::XHigh)
+        );
+        // And 4.6 should still collapse High → high under the cli prefix.
+        assert_eq!(
+            map_thinking_to_anthropic_effort(
+                ThinkingLevel::High,
+                "claude-cli:claude-opus-4-6"
+            ),
+            Some(AnthropicEffortLevel::High)
         );
     }
 

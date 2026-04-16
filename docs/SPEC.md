@@ -244,6 +244,11 @@ Providers are the bridge between the agent and LLM APIs. New providers can be ad
 - Each provider may expose `base_url` and `tools` overrides under `[providers.<id>]` in config.
 - Provider implementations live in `zdx-providers`; the models registry (`models.toml`) tracks available models per provider.
 
+### Anthropic adaptive thinking
+
+- Adaptive thinking (`thinking.type: "adaptive"`) is used on Claude Opus 4.7, Opus 4.6, and Sonnet 4.6.
+- We always send `thinking.display: "summarized"` so visible thinking text is preserved. This is required on Opus 4.7 (where the API default silently became `"omitted"`) and is a no-op on older Claude 4 models where `"summarized"` is already the default.
+
 ---
 
 ## 11) Environment Variables (Runtime Context)
