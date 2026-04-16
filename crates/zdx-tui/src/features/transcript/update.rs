@@ -53,6 +53,13 @@ pub fn handle_agent_event(
             transcript.push_cell(HistoryCell::system(format!("Error: {message}")));
             vec![]
         }
+        AgentEvent::Notice { message, .. } => {
+            // Non-fatal informational notice (e.g. refusal,
+            // context window exceeded). Render as a system cell
+            // without the "Error:" prefix.
+            transcript.push_cell(HistoryCell::system(format!("⚠ {message}")));
+            vec![]
+        }
         AgentEvent::ProviderRetry {
             message,
             attempt,

@@ -26,6 +26,9 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
             ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {
                 // Skip non-display events when building transcript
             }
+            ThreadEvent::Notice { message, .. } => {
+                cells.push(HistoryCell::system(format!("⚠ {message}")));
+            }
             ThreadEvent::Message { role, text, .. } => {
                 let cell = match role.as_str() {
                     "user" => HistoryCell::user(text),
@@ -287,5 +290,33 @@ mod tests {
         assert!(matches!(&cells[1], HistoryCell::Thinking { .. }));
         assert!(matches!(&cells[2], HistoryCell::Tool { .. }));
         assert!(matches!(&cells[3], HistoryCell::Assistant { .. }));
+    }
+
+    #[test]
+    fn test_build_transcript_renders_notice_as_system_cell() {
+        // Persisted notices (refusal, context window exceeded) must
+        // surface in the rebuilt transcript so reload preserves the
+        // user-visible warning.
+        let events = vec![
+            ThreadEvent::Message {
+                role: "user".to_string(),
+                text: "hi".to_string(),
+                phase: None,
+                ts: "2026-04-16T00:00:00Z".to_string(),
+            },
+            ThreadEvent::Notice {
+                kind: zdx_engine::core::events::NoticeKind::Refusal,
+                message: "Claude declined.".to_string(),
+                ts: "2026-04-16T00:00:01Z".to_string(),
+            },
+        ];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 2);
+        assert!(matches!(&cells[0], HistoryCell::User { .. }));
+        assert!(
+            matches!(&cells[1], HistoryCell::System { .. }),
+            "notice should render as a system cell"
+        );
     }
 }
