@@ -21,7 +21,7 @@ pub async fn bash_execution(
 
     let ctx = ToolContext::new(root, None);
     let leaf = ctx.as_leaf();
-    let run_fut = bash::run(&cmd, &leaf, None);
+    let run_fut = bash::run(&cmd, &leaf, None, None);
     let result = if let Some(cancel) = cancel {
         let cancel_clone = cancel.clone();
         tokio::select! {

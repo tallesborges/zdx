@@ -521,6 +521,19 @@ impl TranscriptState {
         }
     }
 
+    /// Appends a chunk of streaming tool output for a cell by `tool_use_id`.
+    ///
+    /// Only appends if the cell is in `ToolState::Running` — silently ignores
+    /// deltas for tools that have already completed, errored, or been cancelled.
+    pub fn append_tool_output_delta_for(&mut self, tool_id: &str, chunk: &str) {
+        if let Some(cell) = self.cells.iter_mut().find(
+            |c| matches!(c, super::HistoryCell::Tool { tool_use_id, state, .. } if tool_use_id == tool_id && *state == super::ToolState::Running),
+        ) {
+            cell.append_tool_output_delta(chunk);
+            self.invalidate_line_info();
+        }
+    }
+
     /// Finalizes an assistant cell by `cell_id` (streaming → complete).
     pub fn finalize_assistant_cell(&mut self, cell_id: super::CellId) {
         if let Some(cell) = self.cells.iter_mut().find(|c| c.id() == cell_id) {
@@ -838,10 +851,8 @@ fn is_word_grapheme(grapheme: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use zdx_engine::core::events::ToolOutput;
-
     use super::*;
-    use crate::transcript::{HistoryCell, LineMapping};
+    use crate::transcript::LineMapping;
 
     #[test]
     fn test_scroll_accumulator_acceleration() {

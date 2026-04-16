@@ -1914,7 +1914,9 @@ async fn execute_tools_async(
 
         // Clone for 'static requirement
         let tu = tu.clone();
-        let ctx = ctx.clone();
+        let mut ctx = ctx.clone();
+        ctx.event_sender = Some(sender.clone());
+        ctx.tool_use_id = Some(tu.id.clone());
         let enabled_tools = enabled_tools.clone();
         let tool_registry = tool_registry.clone();
 

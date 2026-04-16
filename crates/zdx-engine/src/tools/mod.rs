@@ -25,12 +25,14 @@ pub use zdx_tools::{
     ResolvedPath, expand_env_vars, insert_file_path_fields, resolve_existing_path,
     resolve_input_path, resolve_path_against_root,
 };
+use zdx_types::events::AgentEvent;
 pub use zdx_types::{ToolDefinition, ToolResult, ToolResultBlock, ToolResultContent};
 
+use crate::core::agent::EventSender;
 use crate::core::events::ToolOutput;
 
 /// Context for tool execution.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct ToolContext {
     /// Root directory for file operations.
     pub root: PathBuf,
@@ -58,6 +60,32 @@ pub struct ToolContext {
 
     /// Available model list for subagent delegation.
     pub subagent_available_models: Vec<String>,
+
+    /// Event sender for emitting streaming tool output events.
+    /// Set by the engine before tool execution; used by `bash_handler`
+    /// to bridge output chunks to `ToolOutputDelta` events.
+    pub event_sender: Option<EventSender>,
+
+    /// Tool use ID for the current execution (needed for `ToolOutputDelta` events).
+    pub tool_use_id: Option<String>,
+}
+
+impl std::fmt::Debug for ToolContext {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ToolContext")
+            .field("root", &self.root)
+            .field("current_thread_id", &self.current_thread_id)
+            .field("timeout", &self.timeout)
+            .field("model", &self.model)
+            .field("read_thread_model", &self.read_thread_model)
+            .field("thinking_level", &self.thinking_level)
+            .field("config", &self.config.is_some())
+            .field("subagents_enabled", &self.subagents_enabled)
+            .field("subagent_available_models", &self.subagent_available_models)
+            .field("event_sender", &self.event_sender.as_ref().map(|_| ".."))
+            .field("tool_use_id", &self.tool_use_id)
+            .finish()
+    }
 }
 
 impl ToolContext {
@@ -72,6 +100,8 @@ impl ToolContext {
             config: None,
             subagents_enabled: true,
             subagent_available_models: Vec::new(),
+            event_sender: None,
+            tool_use_id: None,
         }
     }
 
@@ -307,7 +337,35 @@ impl ToolRegistry {
 // -- Leaf tool handlers (bridge via as_leaf()) --
 
 fn bash_handler(input: Value, ctx: ToolContext) -> ToolFuture {
-    Box::pin(async move { bash::execute(&input, &ctx.as_leaf(), ctx.timeout).await })
+    Box::pin(async move {
+        let event_sender = ctx.event_sender.clone();
+        let tool_use_id = ctx.tool_use_id.clone();
+
+        if let (Some(sender), Some(id)) = (event_sender, tool_use_id) {
+            let (output_tx, mut output_rx) = tokio::sync::mpsc::unbounded_channel::<String>();
+
+            let leaf = ctx.as_leaf();
+            let timeout = ctx.timeout;
+
+            // Run bash and chunk forwarding concurrently.
+            // bash owns output_tx and drops it when done, which closes the
+            // channel and lets the receiver loop exit.
+            tokio::join!(
+                bash::execute(&input, &leaf, timeout, Some(output_tx)),
+                async {
+                    while let Some(chunk) = output_rx.recv().await {
+                        sender.send(AgentEvent::ToolOutputDelta {
+                            id: id.clone(),
+                            chunk,
+                        });
+                    }
+                }
+            )
+            .0
+        } else {
+            bash::execute(&input, &ctx.as_leaf(), ctx.timeout, None).await
+        }
+    })
 }
 
 fn apply_patch_handler(input: Value, ctx: ToolContext) -> ToolFuture {
