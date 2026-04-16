@@ -133,6 +133,7 @@ fn parse_content_block_start(data: &str) -> ProviderResult<StreamEvent> {
         block_type,
         id: parsed.content_block.id,
         name: parsed.content_block.name,
+        data: parsed.content_block.data,
     })
 }
 
@@ -251,6 +252,10 @@ struct SseContentBlock {
     id: Option<String>,
     #[serde(default)]
     name: Option<String>,
+    /// Opaque encrypted payload for `redacted_thinking` blocks. Delivered
+    /// in full on `content_block_start`; no subsequent deltas follow.
+    #[serde(default)]
+    data: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -466,6 +471,7 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
                 block_type,
                 id: Some(id),
                 name: Some(name),
+                ..
             } if *block_type == ContentBlockType::ToolUse
                 && id == "toolu_abc123"
                 && name == "get_weather"
@@ -759,5 +765,83 @@ data: {"type":"message_stop"}
         // for (i, e) in events.iter().enumerate() {
         //     println!("{}: {:?}", i, e);
         // }
+    }
+
+    /// SSE fixture simulating a `redacted_thinking` block delivered in a
+    /// single `content_block_start` (no deltas), followed by a normal
+    /// text block. The `data` payload is opaque and must be captured as
+    /// part of the block-start event so it can later be replayed back to
+    /// Anthropic unchanged.
+    const SSE_REDACTED_THINKING_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_redacted","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"encrypted_blob_xyz=="}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Answer."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    #[tokio::test]
+    async fn test_sse_parser_redacted_thinking_response() {
+        let stream = mock_byte_stream(SSE_REDACTED_THINKING_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // message_start + (redacted start + stop) + (text start + delta + stop)
+        // + message_delta + message_stop = 8
+        assert_eq!(events.len(), 8);
+
+        // The redacted_thinking block arrives as a single ContentBlockStart
+        // carrying the opaque encrypted payload in `data`.
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some(data),
+            } if data == "encrypted_blob_xyz=="
+        ));
+        assert_eq!(events[2], StreamEvent::ContentBlockCompleted { index: 0 });
+
+        // Subsequent text block is unaffected.
+        assert!(matches!(
+            &events[3],
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block_type: ContentBlockType::Text,
+                data: None,
+                ..
+            }
+        ));
+        assert_eq!(
+            events[4],
+            StreamEvent::TextDelta {
+                index: 1,
+                text: "Answer.".to_string()
+            }
+        );
     }
 }

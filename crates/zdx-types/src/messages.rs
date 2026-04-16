@@ -43,6 +43,12 @@ pub enum ContentBlockType {
     Text,
     ToolUse,
     Reasoning,
+    /// Anthropic `redacted_thinking`: encrypted reasoning content that the
+    /// server may return when a safety classifier flags the model's raw
+    /// chain-of-thought. The opaque `data` blob must be replayed back
+    /// unchanged on subsequent turns so the server can reconstruct the
+    /// conversation; no plain-text summary is available.
+    RedactedThinking,
 }
 
 /// Provider that produced a reasoning signature delta.
@@ -60,6 +66,7 @@ impl FromStr for ContentBlockType {
             "text" => Ok(Self::Text),
             "tool_use" => Ok(Self::ToolUse),
             "thinking" | "reasoning" => Ok(Self::Reasoning),
+            "redacted_thinking" => Ok(Self::RedactedThinking),
             _ => Err(format!("Unknown content block type: {value}")),
         }
     }
@@ -230,6 +237,10 @@ mod tests {
         assert_eq!(
             ContentBlockType::from_str("tool_use").unwrap(),
             ContentBlockType::ToolUse
+        );
+        assert_eq!(
+            ContentBlockType::from_str("redacted_thinking").unwrap(),
+            ContentBlockType::RedactedThinking
         );
     }
 }

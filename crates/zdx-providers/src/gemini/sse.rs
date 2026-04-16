@@ -206,6 +206,7 @@ impl<S> GeminiSseParser<S> {
                             block_type: ContentBlockType::Reasoning,
                             id: None,
                             name: None,
+                            data: None,
                         });
                     }
 
@@ -245,6 +246,7 @@ impl<S> GeminiSseParser<S> {
                             block_type: ContentBlockType::Text,
                             id: None,
                             name: None,
+                            data: None,
                         });
                     }
 
@@ -286,6 +288,7 @@ impl<S> GeminiSseParser<S> {
                             block_type: ContentBlockType::ToolUse,
                             id: Some(tool_id.clone()),
                             name: Some(name.to_string()),
+                            data: None,
                         });
 
                         let args_json = if args.is_null() {
@@ -319,6 +322,7 @@ impl<S> GeminiSseParser<S> {
                     block_type: ContentBlockType::Reasoning,
                     id: None,
                     name: None,
+                    data: None,
                 });
             }
 

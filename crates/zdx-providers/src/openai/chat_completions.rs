@@ -617,6 +617,7 @@ impl<S> ChatCompletionsSseParser<S> {
             block_type: ContentBlockType::Reasoning,
             id: None,
             name: None,
+            data: None,
         });
         index
     }
@@ -787,6 +788,7 @@ impl<S> ChatCompletionsSseParser<S> {
                     block_type: ContentBlockType::Text,
                     id: None,
                     name: None,
+                    data: None,
                 });
             }
             if !text.is_empty() {
@@ -850,6 +852,7 @@ impl<S> ChatCompletionsSseParser<S> {
                         block_type: ContentBlockType::ToolUse,
                         id: Some(tool_id.clone()),
                         name: Some(name.to_string()),
+                        data: None,
                     });
                     ToolCallState { stream_index }
                 });

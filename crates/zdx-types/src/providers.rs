@@ -174,6 +174,10 @@ pub enum StreamEvent {
         id: Option<String>,
         /// For `tool_use` blocks: the tool name
         name: Option<String>,
+        /// For `redacted_thinking` blocks: the opaque encrypted payload
+        /// that must be replayed back to the provider unchanged on
+        /// subsequent turns. `None` for every other block type.
+        data: Option<String>,
     },
     /// Text delta within a content block
     TextDelta { index: usize, text: String },

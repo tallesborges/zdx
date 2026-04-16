@@ -1431,6 +1431,7 @@ fn handle_stream_event(
             block_type: ContentBlockType::ToolUse,
             id,
             name,
+            ..
         } => {
             handle_tool_content_start(index, id, name, sender, &mut state.turn);
         }
