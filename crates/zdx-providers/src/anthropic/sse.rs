@@ -844,4 +844,120 @@ data: {"type":"message_stop"}
             }
         );
     }
+
+    /// SSE fixture exercising a turn that mixes a normal `thinking`
+    /// block (with `thinking_delta` + `signature_delta`), a
+    /// `redacted_thinking` block (single `content_block_start` with
+    /// `data`), and a regular `text` block. The parser must emit the
+    /// correct block type for each and MUST only populate `data` on
+    /// the redacted block.
+    const SSE_MIXED_THINKING_RESPONSE: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_mixed","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"Visible reasoning."}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig_mixed"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":0}
+
+event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"redacted_thinking","data":"redacted_blob"}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":1}
+
+event: content_block_start
+data: {"type":"content_block_start","index":2,"content_block":{"type":"text","text":""}}
+
+event: content_block_delta
+data: {"type":"content_block_delta","index":2,"delta":{"type":"text_delta","text":"Answer."}}
+
+event: content_block_stop
+data: {"type":"content_block_stop","index":2}
+
+event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":"end_turn","stop_sequence":null},"usage":{"output_tokens":5}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    #[tokio::test]
+    async fn test_sse_parser_mixed_thinking_and_redacted_thinking() {
+        let stream = mock_byte_stream(SSE_MIXED_THINKING_RESPONSE);
+        let mut parser = SseParser::new(stream);
+
+        let mut events = Vec::new();
+        while let Some(result) = parser.next().await {
+            events.push(result.expect("Expected valid event"));
+        }
+
+        // Normal `thinking` start carries neither `data` nor tool metadata.
+        assert!(matches!(
+            &events[1],
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+            }
+        ));
+        assert_eq!(
+            events[2],
+            StreamEvent::ReasoningDelta {
+                index: 0,
+                reasoning: "Visible reasoning.".to_string()
+            }
+        );
+        assert_eq!(
+            events[3],
+            StreamEvent::ReasoningSignatureDelta {
+                index: 0,
+                signature: "sig_mixed".to_string(),
+                provider: SignatureProvider::Anthropic,
+            }
+        );
+        assert_eq!(events[4], StreamEvent::ContentBlockCompleted { index: 0 });
+
+        // `redacted_thinking` start is the ONLY block with a non-None `data`.
+        assert!(matches!(
+            &events[5],
+            StreamEvent::ContentBlockStart {
+                index: 1,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some(data),
+            } if data == "redacted_blob"
+        ));
+        assert_eq!(events[6], StreamEvent::ContentBlockCompleted { index: 1 });
+
+        // Regular text block: no `data`, no signature.
+        assert!(matches!(
+            &events[7],
+            StreamEvent::ContentBlockStart {
+                index: 2,
+                block_type: ContentBlockType::Text,
+                id: None,
+                name: None,
+                data: None,
+            }
+        ));
+        assert_eq!(
+            events[8],
+            StreamEvent::TextDelta {
+                index: 2,
+                text: "Answer.".to_string()
+            }
+        );
+        assert_eq!(events[9], StreamEvent::ContentBlockCompleted { index: 2 });
+    }
 }
