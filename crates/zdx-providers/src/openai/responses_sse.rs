@@ -152,6 +152,7 @@ impl<S> ResponsesSseParser<S> {
                             block_type: ContentBlockType::Text,
                             id: None,
                             name: None,
+                            data: None,
                         })
                     }
                     "function_call" => {
@@ -176,6 +177,7 @@ impl<S> ResponsesSseParser<S> {
                             block_type: ContentBlockType::ToolUse,
                             id: Some(tool_id),
                             name: Some(name.to_string()),
+                            data: None,
                         })
                     }
                     "reasoning" => {
@@ -197,6 +199,7 @@ impl<S> ResponsesSseParser<S> {
                             block_type: ContentBlockType::Reasoning,
                             id: None,
                             name: None,
+                            data: None,
                         })
                     }
                     _ => Ok(StreamEvent::Ping),
