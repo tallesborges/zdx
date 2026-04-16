@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::AsyncBufReadExt;
 use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
@@ -151,7 +152,16 @@ impl BashOutput {
 }
 
 /// Executes the bash tool and returns a structured envelope.
-pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
+///
+/// If `output_tx` is provided, stdout/stderr lines are streamed through the
+/// channel as they arrive. Ownership is taken so the channel closes when this
+/// function completes.
+pub async fn execute(
+    input: &Value,
+    ctx: &ToolContext,
+    timeout: Option<Duration>,
+    output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+) -> ToolOutput {
     let input: BashInput = match serde_json::from_value(input.clone()) {
         Ok(i) => i,
         Err(e) => {
@@ -167,7 +177,7 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
 
-    match run_command(&input.command, ctx, timeout).await {
+    match run_command(&input.command, ctx, timeout, output_tx).await {
         Ok(output) => output.into_tool_output(),
         Err(e) => e,
     }
@@ -177,12 +187,20 @@ pub async fn execute(input: &Value, ctx: &ToolContext, timeout: Option<Duration>
 ///
 /// This is a simpler API that takes the command string directly,
 /// useful for direct user invocation (e.g., `$` shortcut).
-pub async fn run(command: &str, ctx: &ToolContext, timeout: Option<Duration>) -> ToolOutput {
+///
+/// If `output_tx` is provided, stdout/stderr lines are streamed through the
+/// channel as they arrive.
+pub async fn run(
+    command: &str,
+    ctx: &ToolContext,
+    timeout: Option<Duration>,
+    output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+) -> ToolOutput {
     if command.trim().is_empty() {
         return ToolOutput::failure("invalid_input", "command cannot be empty", None);
     }
 
-    match run_command(command, ctx, timeout).await {
+    match run_command(command, ctx, timeout, output_tx).await {
         Ok(output) => output.into_tool_output(),
         Err(e) => e,
     }
@@ -239,10 +257,12 @@ impl Drop for ProcessGroupGuard {
 }
 
 /// Runs a shell command in the context's root directory.
+#[allow(clippy::too_many_lines)]
 async fn run_command(
     command: &str,
     ctx: &ToolContext,
     timeout: Option<Duration>,
+    output_tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
 ) -> Result<BashOutput, ToolOutput> {
     let mut cmd = tokio::process::Command::new("sh");
     cmd.arg("-c")
@@ -276,7 +296,7 @@ async fn run_command(
     #[cfg(not(unix))]
     cmd.kill_on_drop(true);
 
-    let child = cmd.spawn().map_err(|e| {
+    let mut child = cmd.spawn().map_err(|e| {
         ToolOutput::failure(
             "spawn_error",
             format!("Failed to execute command '{command}'"),
@@ -290,66 +310,143 @@ async fn run_command(
     #[cfg(unix)]
     let mut pg_guard = ProcessGroupGuard::new(child_pid);
 
-    let output_fut = child.wait_with_output();
-    let output = match timeout {
-        Some(timeout) => {
-            if let Ok(result) = tokio::time::timeout(timeout, output_fut).await {
-                result
-            } else {
-                // Timeout: kill the entire process group (guard will handle it on drop,
-                // but we can also be explicit here).
-                #[cfg(unix)]
-                kill_process_group(child_pid);
+    // Take stdout/stderr handles before waiting so we can read incrementally.
+    let child_stdout = child.stdout.take();
+    let child_stderr = child.stderr.take();
 
-                return Ok(BashOutput {
-                    stdout: String::new(),
-                    stderr: format!("Command timed out after {} seconds", timeout.as_secs()),
-                    exit_code: -1,
-                    timed_out: true,
-                    stdout_truncated: false,
-                    stderr_truncated: false,
-                    stdout_total_bytes: 0,
-                    stderr_total_bytes: 0,
-                    stdout_file: None,
-                    stderr_file: None,
-                });
+    // Spawn stdout/stderr reader tasks so they run independently of timeout.
+    // Using spawned tasks (not inline futures) ensures that timeout cancellation
+    // does NOT drop in-progress read_line calls — the tasks continue to drain
+    // the pipes to EOF after the process is killed, and we join them below.
+    let stdout_tx = output_tx.clone();
+    let stderr_tx = output_tx.clone();
+
+    let stdout_task = tokio::spawn(async move {
+        let mut buf: Vec<u8> = Vec::new();
+        if let Some(handle) = child_stdout {
+            let mut reader = tokio::io::BufReader::new(handle);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if let Some(ref tx) = stdout_tx {
+                            let _ = tx.send(line.clone());
+                        }
+                        buf.extend_from_slice(line.as_bytes());
+                    }
+                }
             }
         }
-        None => output_fut.await,
-    }
-    .map_err(|e| {
-        ToolOutput::failure(
-            "exec_error",
-            format!("Failed to execute command '{command}'"),
-            Some(format!("Error: {e}")),
-        )
-    })?;
+        buf
+    });
 
-    // Process completed normally — disarm the guard so we don't kill already-exited processes.
+    let stderr_task = tokio::spawn(async move {
+        let mut buf: Vec<u8> = Vec::new();
+        if let Some(handle) = child_stderr {
+            let mut reader = tokio::io::BufReader::new(handle);
+            let mut line = String::new();
+            loop {
+                line.clear();
+                match reader.read_line(&mut line).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(_) => {
+                        if let Some(ref tx) = stderr_tx {
+                            let _ = tx.send(line.clone());
+                        }
+                        buf.extend_from_slice(line.as_bytes());
+                    }
+                }
+            }
+        }
+        buf
+    });
+
+    // Wait for child exit, with optional timeout.
+    // Reader tasks run independently — they'll see EOF after the process exits
+    // (or is killed on timeout).
+    let (timed_out, exit_code) = match timeout {
+        Some(dur) => {
+            match tokio::time::timeout(dur, child.wait()).await {
+                Ok(Ok(status)) => (false, status.code().unwrap_or(-1)),
+                Ok(Err(_)) => (false, -1),
+                Err(_) => {
+                    // Timeout: kill the process group / child.
+                    #[cfg(unix)]
+                    kill_process_group(child_pid);
+                    #[cfg(not(unix))]
+                    let _ = child.kill().await;
+
+                    // Reap the child to avoid zombies.
+                    let _ = child.wait().await;
+                    (true, -1)
+                }
+            }
+        }
+        None => match child.wait().await {
+            Ok(status) => (false, status.code().unwrap_or(-1)),
+            Err(_) => (false, -1),
+        },
+    };
+
+    // Disarm the guard now that the child has exited (normal, timeout, or error).
     #[cfg(unix)]
     pg_guard.disarm();
 
+    // Join reader tasks — they finish once pipes close (which happens after child exits).
+    let stdout_buf = stdout_task.await.unwrap_or_default();
+    let stderr_buf = stderr_task.await.unwrap_or_default();
+
+    // Apply truncation to accumulated buffers.
     let (stdout, stdout_truncated, stdout_total_bytes) =
-        truncate_at_utf8_boundary(&output.stdout, MAX_OUTPUT_BYTES);
-    let (stderr, stderr_truncated, stderr_total_bytes) =
-        truncate_at_utf8_boundary(&output.stderr, MAX_OUTPUT_BYTES);
+        truncate_at_utf8_boundary(&stdout_buf, MAX_OUTPUT_BYTES);
+    let (stderr_text, stderr_truncated, stderr_total_bytes) =
+        truncate_at_utf8_boundary(&stderr_buf, MAX_OUTPUT_BYTES);
 
     // Write full output to temp files when truncated
     let stdout_file = if stdout_truncated {
-        write_temp_file(&output.stdout, "stdout")
+        write_temp_file(&stdout_buf, "stdout")
     } else {
         None
     };
     let stderr_file = if stderr_truncated {
-        write_temp_file(&output.stderr, "stderr")
+        write_temp_file(&stderr_buf, "stderr")
     } else {
         None
     };
 
+    if timed_out {
+        let timeout_msg = format!(
+            "Command timed out after {} seconds",
+            timeout.map_or(0, |d| d.as_secs())
+        );
+        if let Some(ref tx) = output_tx {
+            let _ = tx.send(timeout_msg.clone());
+        }
+        let stderr = if stderr_text.is_empty() {
+            timeout_msg
+        } else {
+            format!("{stderr_text}\n{timeout_msg}")
+        };
+        return Ok(BashOutput {
+            stdout,
+            stderr,
+            exit_code: -1,
+            timed_out: true,
+            stdout_truncated,
+            stderr_truncated,
+            stdout_total_bytes,
+            stderr_total_bytes,
+            stdout_file,
+            stderr_file,
+        });
+    }
+
     Ok(BashOutput {
         stdout,
-        stderr,
-        exit_code: output.status.code().unwrap_or(-1),
+        stderr: stderr_text,
+        exit_code,
         timed_out: false,
         stdout_truncated,
         stderr_truncated,
@@ -372,7 +469,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo hello"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stdout"].as_str().unwrap().contains("hello"));
@@ -388,7 +485,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "echo error >&2"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stderr"].as_str().unwrap().contains("error"));
@@ -400,7 +497,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "exit 42"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert_eq!(data["exit_code"], 42);
@@ -414,7 +511,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "ls"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
         assert!(data["stdout"].as_str().unwrap().contains("test.txt"));
@@ -426,7 +523,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "sleep 5"});
 
-        let result = execute(&input, &ctx, Some(Duration::from_millis(100))).await;
+        let result = execute(&input, &ctx, Some(Duration::from_millis(100)), None).await;
         assert!(result.is_ok()); // timed_out is success with timed_out=true
         let data = result.data().expect("should have data");
         assert_eq!(data["timed_out"], true);
@@ -440,7 +537,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"wrong_field": "ls"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(!result.is_ok());
         let json_str = result.to_json_string();
         assert!(json_str.contains(r#""code":"invalid_input""#));
@@ -452,7 +549,7 @@ mod tests {
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
         let input = json!({"command": "   "});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
@@ -464,7 +561,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let ctx = ToolContext::new(temp.path().to_path_buf(), None);
 
-        let result = run("", &ctx, None).await;
+        let result = run("", &ctx, None, None).await;
         assert!(!result.is_ok());
         let payload = serde_json::to_value(result).unwrap();
         assert_eq!(payload["error"]["code"], "invalid_input");
@@ -513,7 +610,7 @@ mod tests {
         // Generate more than 40KB of output (50KB of 'x' characters)
         let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'x'"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 
@@ -540,7 +637,7 @@ mod tests {
         // Generate more than 40KB of stderr output (50KB)
         let input = json!({"command": "head -c 51200 /dev/zero | tr '\\0' 'y' >&2"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 
@@ -567,7 +664,7 @@ mod tests {
         // Generate less than 40KB of output (1KB)
         let input = json!({"command": "head -c 1024 /dev/zero | tr '\\0' 'z'"});
 
-        let result = execute(&input, &ctx, None).await;
+        let result = execute(&input, &ctx, None, None).await;
         assert!(result.is_ok());
         let data = result.data().expect("should have data");
 

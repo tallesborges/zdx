@@ -195,6 +195,7 @@ impl ToolDetailState {
             started_at,
             completed_at,
             input_delta,
+            output_delta,
             ..
         } = cell
         else {
@@ -352,8 +353,15 @@ impl ToolDetailState {
                 }
             }
         } else if *state == ToolState::Running {
-            // Show streaming input_delta if available
-            if let Some(delta) = input_delta {
+            // Show streaming output_delta first, then input_delta, then placeholder
+            if let Some(delta) = output_delta.as_deref().filter(|d| !d.is_empty()) {
+                for line in delta.lines() {
+                    lines.push(Line::from(Span::styled(
+                        line.to_string(),
+                        Style::default().fg(Color::White),
+                    )));
+                }
+            } else if let Some(delta) = input_delta.as_deref().filter(|d| !d.is_empty()) {
                 for line in delta.lines() {
                     lines.push(Line::from(Span::styled(
                         line.to_string(),
@@ -366,6 +374,14 @@ impl ToolDetailState {
                     Style::default()
                         .fg(Color::DarkGray)
                         .add_modifier(Modifier::ITALIC),
+                )));
+            }
+        } else if let Some(delta) = output_delta.as_deref().filter(|d| !d.is_empty()) {
+            // Show preserved partial output for cancelled/errored tools
+            for line in delta.lines() {
+                lines.push(Line::from(Span::styled(
+                    line.to_string(),
+                    Style::default().fg(Color::DarkGray),
                 )));
             }
         } else {

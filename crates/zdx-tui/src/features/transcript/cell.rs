@@ -334,6 +334,8 @@ pub enum HistoryCell {
         name: String,
         input: Value,
         input_delta: Option<String>,
+        /// Accumulated streaming output (stdout/stderr) from `ToolOutputDelta` events.
+        output_delta: Option<String>,
         state: ToolState,
         started_at: DateTime<Utc>,
         /// Timestamp when the tool finished (Done, Error, or Cancelled).
@@ -447,6 +449,7 @@ impl HistoryCell {
             name: name.into(),
             input,
             input_delta: None,
+            output_delta: None,
             state: ToolState::Running,
             started_at: now,
             completed_at: None,
@@ -576,6 +579,36 @@ impl HistoryCell {
         }
     }
 
+    /// Appends a chunk of streaming output to a tool cell's `output_delta`.
+    ///
+    /// Accumulates incremental stdout/stderr from `ToolOutputDelta` events.
+    /// Caps the buffer at 64KB (keeps the tail) to bound memory usage.
+    ///
+    /// # Panics
+    /// Panics if called on a non-tool cell.
+    pub fn append_tool_output_delta(&mut self, chunk: &str) {
+        const MAX_OUTPUT_DELTA_BYTES: usize = 65536;
+
+        match self {
+            HistoryCell::Tool { output_delta, .. } => {
+                let buf = output_delta.get_or_insert_with(String::new);
+                buf.push_str(chunk);
+                if buf.len() > MAX_OUTPUT_DELTA_BYTES {
+                    // Truncate from the front to keep the last MAX_OUTPUT_DELTA_BYTES bytes.
+                    // Find a char boundary at or after the cut point.
+                    let cut = buf.len() - MAX_OUTPUT_DELTA_BYTES;
+                    let mut boundary = cut;
+                    while boundary < buf.len() && !buf.is_char_boundary(boundary) {
+                        boundary += 1;
+                    }
+                    let truncated = buf[boundary..].to_string();
+                    *buf = truncated;
+                }
+            }
+            _ => panic!("append_tool_output_delta called on non-tool cell"),
+        }
+    }
+
     /// Sets the result on a tool cell and updates state to Done or Error.
     ///
     /// # Panics
@@ -586,15 +619,23 @@ impl HistoryCell {
                 state,
                 result,
                 completed_at,
+                output_delta,
                 ..
             } => {
-                *state = if tool_result.is_ok() {
+                let new_state = if tool_result.is_ok() {
                     ToolState::Done
                 } else if matches!(tool_result, ToolOutput::Canceled { .. }) {
                     ToolState::Cancelled
                 } else {
                     ToolState::Error
                 };
+                // Clear output_delta only on successful completion — the final
+                // result supersedes it.  Preserve on Error/Cancelled so partial
+                // streaming output remains visible.
+                if new_state == ToolState::Done {
+                    *output_delta = None;
+                }
+                *state = new_state;
                 *completed_at = Some(Utc::now());
                 *result = Some(tool_result);
             }
@@ -756,6 +797,7 @@ impl HistoryCell {
                 state,
                 input,
                 input_delta,
+                output_delta,
                 result,
                 ..
             } => {
@@ -815,6 +857,34 @@ impl HistoryCell {
                     let max_preview_rows = 7;
                     let (rows, total_rows) =
                         tail_rendered_rows(delta_text, width, max_preview_rows);
+                    if !rows.is_empty() {
+                        let truncated = total_rows > rows.len();
+
+                        if truncated {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: format!("[{} more rows ...]", total_rows - rows.len()),
+                                    style: Style::ToolBracket,
+                                }],
+                            });
+                        }
+
+                        for row in rows {
+                            lines.push(StyledLine {
+                                spans: vec![StyledSpan {
+                                    text: row,
+                                    style: Style::ToolOutput,
+                                }],
+                            });
+                        }
+                    }
+                }
+
+                // output_delta rows (streaming tool output preview)
+                if let Some(output_text) = output_delta.as_deref() {
+                    let max_preview_rows = 7;
+                    let (rows, total_rows) =
+                        tail_rendered_rows(output_text, width, max_preview_rows);
                     if !rows.is_empty() {
                         let truncated = total_rows > rows.len();
 

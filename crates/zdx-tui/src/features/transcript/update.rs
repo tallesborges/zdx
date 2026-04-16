@@ -171,9 +171,8 @@ pub fn handle_agent_event(
             // Turn start - no UI updates needed yet
             vec![]
         }
-        AgentEvent::ToolOutputDelta { .. } => {
-            // TODO: Update tool cell with streaming output
-            // For now, we only show final output in ToolCompleted
+        AgentEvent::ToolOutputDelta { id, chunk } => {
+            transcript.append_tool_output_delta_for(id, chunk);
             vec![]
         }
     };
