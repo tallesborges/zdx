@@ -14,6 +14,11 @@ pub enum ReplayToken {
     /// Anthropic extended thinking - requires signature for replay
     #[serde(rename = "anthropic")]
     Anthropic { signature: String },
+    /// Anthropic `redacted_thinking`: opaque encrypted payload that must be
+    /// replayed back to Anthropic unchanged. No plain-text summary; no
+    /// signature; the `data` blob IS the block.
+    #[serde(rename = "anthropic_redacted")]
+    AnthropicRedacted { data: String },
     /// `OpenAI` Responses API reasoning - requires id + encrypted content for cache replay
     #[serde(rename = "openai")]
     OpenAI {
@@ -215,6 +220,26 @@ mod tests {
 
         assert!(json.contains(r#""provider":"gemini""#));
         assert!(json.contains(r#""signature":"base64_encoded_thought_signature""#));
+
+        let parsed: ReplayToken = serde_json::from_str(&json).unwrap();
+        assert_eq!(token, parsed);
+    }
+
+    /// Test: `ReplayToken::AnthropicRedacted` serialization round-trips correctly.
+    ///
+    /// The opaque `data` blob carries the server's encrypted reasoning
+    /// payload and MUST survive a JSON round-trip unchanged so it can be
+    /// replayed back to Anthropic on the next turn.
+    #[test]
+    fn test_replay_token_anthropic_redacted_roundtrip() {
+        let token = ReplayToken::AnthropicRedacted {
+            data: "encrypted_blob_xyz==".to_string(),
+        };
+
+        let json = serde_json::to_string(&token).unwrap();
+
+        assert!(json.contains(r#""provider":"anthropic_redacted""#));
+        assert!(json.contains(r#""data":"encrypted_blob_xyz==""#));
 
         let parsed: ReplayToken = serde_json::from_str(&json).unwrap();
         assert_eq!(token, parsed);

@@ -196,6 +196,12 @@ pub(crate) enum ApiToolResultContent {
 pub(crate) enum ApiContentBlock {
     #[serde(rename = "thinking")]
     Thinking { thinking: String, signature: String },
+    /// Anthropic `redacted_thinking`: the opaque encrypted payload the
+    /// server delivered on the previous turn, replayed back verbatim.
+    /// No `thinking` text and no `signature` — the `data` blob IS the
+    /// block.
+    #[serde(rename = "redacted_thinking")]
+    RedactedThinking { data: String },
     #[serde(rename = "text")]
     Text {
         text: String,
@@ -288,6 +294,14 @@ fn api_reasoning_block(reasoning: &ReasoningBlock) -> Option<ApiContentBlock> {
                     signature: signature.clone(),
                 })
             }
+        }
+        // A redacted replay MUST be sent back verbatim as a
+        // `redacted_thinking` block. The `data` blob IS the block and
+        // there is no plain-text fallback — dropping or rewriting it
+        // would break Anthropic's server-side reasoning verification on
+        // the next turn.
+        Some(ReplayToken::AnthropicRedacted { data }) => {
+            Some(ApiContentBlock::RedactedThinking { data: data.clone() })
         }
         Some(ReplayToken::OpenAI { .. } | ReplayToken::Gemini { .. }) => None,
         None => reasoning
@@ -390,5 +404,76 @@ mod tests {
                 ref signature,
             }) if thinking.is_empty() && signature == "sig_123"
         ));
+    }
+
+    /// A `ReasoningBlock` carrying a `ReplayToken::AnthropicRedacted`
+    /// must serialize as a `redacted_thinking` API block whose `data`
+    /// field is the opaque blob, with no `thinking` or `signature`.
+    #[test]
+    fn redacted_replay_token_serializes_to_redacted_thinking_block() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: None,
+            replay: Some(ReplayToken::AnthropicRedacted {
+                data: "encrypted_blob".to_string(),
+            }),
+        });
+
+        assert!(matches!(
+            block,
+            Some(ApiContentBlock::RedactedThinking { ref data })
+                if data == "encrypted_blob"
+        ));
+    }
+
+    /// Even when a `ReasoningBlock` also carries visible text, a
+    /// redacted replay token MUST NOT fall back to a plain-text block —
+    /// the `data` blob is the only thing Anthropic's server will accept
+    /// for reconstructing the previous turn's reasoning.
+    #[test]
+    fn redacted_replay_token_never_falls_back_to_plain_text() {
+        let block = api_reasoning_block(&ReasoningBlock {
+            text: Some("stray visible text".to_string()),
+            replay: Some(ReplayToken::AnthropicRedacted {
+                data: "blob".to_string(),
+            }),
+        });
+
+        assert!(matches!(
+            block,
+            Some(ApiContentBlock::RedactedThinking { ref data })
+                if data == "blob"
+        ));
+    }
+
+    /// End-to-end wire-shape assertion: a `ChatMessage` containing a
+    /// redacted `ReasoningBlock` must serialize to a JSON payload that
+    /// contains a `{"type":"redacted_thinking","data":"..."}` block
+    /// with the original encrypted blob, because Anthropic verifies
+    /// the exact bytes round-trip.
+    #[test]
+    fn redacted_reasoning_block_serializes_to_expected_wire_shape() {
+        use crate::shared::{ChatContentBlock, ChatMessage, MessageContent};
+
+        let msg = ChatMessage {
+            role: "assistant".to_string(),
+            phase: None,
+            content: MessageContent::Blocks(vec![ChatContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted {
+                    data: "encrypted_blob_xyz==".to_string(),
+                }),
+            })]),
+        };
+
+        let api = ApiMessage::from_chat_message(&msg, false);
+        let json = serde_json::to_string(&api).unwrap();
+        assert!(
+            json.contains(r#""type":"redacted_thinking""#),
+            "wire shape missing redacted_thinking type: {json}"
+        );
+        assert!(
+            json.contains(r#""data":"encrypted_blob_xyz==""#),
+            "wire shape missing opaque data blob: {json}"
+        );
     }
 }

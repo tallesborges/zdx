@@ -1440,14 +1440,26 @@ fn handle_stream_event(
             block_type: ContentBlockType::Reasoning,
             ..
         } => {
-            state.turn.thinking_blocks.push(ThinkingBuilder {
+            start_reasoning_block(&mut state.turn, index, None);
+        }
+        StreamEvent::ContentBlockStart {
+            index,
+            block_type: ContentBlockType::RedactedThinking,
+            data,
+            ..
+        } => {
+            let Some(data) = data else {
+                return Err(TurnError::Parse {
+                    message: "Anthropic redacted_thinking block missing required `data` field"
+                        .to_string(),
+                    details: None,
+                });
+            };
+            start_reasoning_block(
+                &mut state.turn,
                 index,
-                text: String::new(),
-                signature: String::new(),
-                signature_provider: None,
-                replay: None,
-                had_delta: false,
-            });
+                Some(ReplayToken::AnthropicRedacted { data }),
+            );
         }
         StreamEvent::InputJsonDelta {
             index,
@@ -1527,6 +1539,26 @@ fn handle_tool_content_start(
         name: tool_name,
         input_json: String::new(),
         input_preview_len: 0,
+    });
+}
+
+/// Appends a new `ThinkingBuilder` to a turn for a reasoning-style
+/// `content_block_start`. `replay` is pre-populated for
+/// `redacted_thinking` (the `data` blob IS the block) and left `None`
+/// for normal `thinking` blocks that accumulate text and signature
+/// through subsequent deltas.
+fn start_reasoning_block(
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+    replay: Option<ReplayToken>,
+) {
+    turn.thinking_blocks.push(ThinkingBuilder {
+        index,
+        text: String::new(),
+        signature: String::new(),
+        signature_provider: None,
+        replay,
+        had_delta: false,
     });
 }
 
@@ -2301,6 +2333,117 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    /// Feeds a `redacted_thinking` `content_block_start` (with opaque
+    /// `data`) followed by a `content_block_stop` through
+    /// `handle_stream_event` and asserts the turn builder captured the
+    /// block as an empty-text `ReasoningBlock` carrying a
+    /// `ReplayToken::AnthropicRedacted` for next-turn replay.
+    #[test]
+    fn handle_stream_event_captures_redacted_thinking_block() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new();
+
+        handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some("enc".to_string()),
+            },
+            &sender,
+            &mut state,
+        )
+        .expect("redacted_thinking start should be accepted");
+
+        handle_stream_event(
+            StreamEvent::ContentBlockCompleted { index: 0 },
+            &sender,
+            &mut state,
+        )
+        .expect("content_block_stop should be accepted");
+
+        assert_eq!(state.turn.thinking_blocks.len(), 1);
+        let tb = &state.turn.thinking_blocks[0];
+        assert_eq!(tb.index, 0);
+        assert!(tb.text.is_empty());
+        assert_eq!(
+            tb.replay,
+            Some(ReplayToken::AnthropicRedacted {
+                data: "enc".to_string()
+            })
+        );
+
+        // `content_block_stop` should have emitted a `ReasoningCompleted`
+        // event carrying the replay token but no plain-text summary.
+        let evt = rx.try_recv().expect("expected ReasoningCompleted event");
+        match &*evt {
+            AgentEvent::ReasoningCompleted { block } => {
+                assert!(block.text.is_none());
+                assert_eq!(
+                    block.replay,
+                    Some(ReplayToken::AnthropicRedacted {
+                        data: "enc".to_string()
+                    })
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+
+        // `into_blocks` should emit a `Reasoning` block with empty text
+        // and the redacted replay token — exactly what the outbound
+        // request path needs to serialize as `redacted_thinking`.
+        let blocks = state.turn.into_blocks(Vec::new());
+        assert_eq!(blocks.len(), 1);
+        assert!(matches!(
+            &blocks[0],
+            ChatContentBlock::Reasoning(ReasoningBlock {
+                text: None,
+                replay: Some(ReplayToken::AnthropicRedacted { data })
+            }) if data == "enc"
+        ));
+    }
+
+    /// A `redacted_thinking` `content_block_start` that is missing the
+    /// required `data` field is a protocol violation — the engine must
+    /// surface a `TurnError::Parse` rather than silently capturing an
+    /// empty block that would be unreplayable on the next turn.
+    #[test]
+    fn handle_stream_event_rejects_redacted_thinking_without_data() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new();
+
+        let err = handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: None,
+            },
+            &sender,
+            &mut state,
+        )
+        .expect_err("missing data must be a parse error");
+
+        match err {
+            TurnError::Parse { message, details } => {
+                assert!(
+                    message.contains("redacted_thinking"),
+                    "unexpected message: {message}"
+                );
+                assert!(details.is_none());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            state.turn.thinking_blocks.is_empty(),
+            "no thinking block should be recorded on parse error"
+        );
     }
 
     #[test]
