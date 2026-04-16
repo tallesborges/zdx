@@ -6,17 +6,26 @@
 use std::fs::File;
 use std::io::Write;
 use std::process::Stdio;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde::Deserialize;
 use serde_json::{Value, json};
-use tokio::io::AsyncBufReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncRead};
 use uuid::Uuid;
 
 use super::{ToolContext, ToolDefinition, ToolOutput};
 
 /// Maximum bytes per output stream (stdout/stderr) before truncation.
 const MAX_OUTPUT_BYTES: usize = 40 * 1024; // 40KB
+
+/// Grace period to wait for reader tasks to drain after the child exits.
+///
+/// Normally pipes close immediately once the child exits, but if a descendant
+/// process inherited stdout/stderr and escaped the process group (e.g. via
+/// `setsid`), it can keep the pipes open. After this grace expires, readers
+/// are aborted so `bash_handler` isn't held hostage by orphan processes.
+const READER_GRACE: Duration = Duration::from_millis(500);
 
 /// Writes full output to a temp file and returns the file path.
 ///
@@ -256,6 +265,71 @@ impl Drop for ProcessGroupGuard {
     }
 }
 
+/// Shared buffer type for stream reader tasks.
+type StreamBuffer = Arc<Mutex<Vec<u8>>>;
+
+/// Spawns a line-buffered reader task that appends lines to `buf` and forwards
+/// each line through `tx` (if set).
+///
+/// The task owns its share of `buf` and `tx`; both are released on task exit,
+/// which lets bridges waiting on channel closure see EOF.
+fn spawn_stream_reader<H>(
+    handle: Option<H>,
+    tx: Option<tokio::sync::mpsc::UnboundedSender<String>>,
+    buf: StreamBuffer,
+) -> tokio::task::JoinHandle<()>
+where
+    H: AsyncRead + Unpin + Send + 'static,
+{
+    tokio::spawn(async move {
+        let Some(handle) = handle else { return };
+        let mut reader = tokio::io::BufReader::new(handle);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => break,
+                Ok(_) => {
+                    if let Some(ref tx) = tx {
+                        let _ = tx.send(line.clone());
+                    }
+                    if let Ok(mut guard) = buf.lock() {
+                        guard.extend_from_slice(line.as_bytes());
+                    }
+                }
+            }
+        }
+    })
+}
+
+/// Waits for a reader task to finish within the grace period. If grace expires,
+/// aborts the task (ensuring it drops its pipe handle and sender clone) and
+/// awaits the abort to completion. Then extracts whatever was buffered.
+///
+/// This prevents hangs when an orphan descendant inherits the pipe FDs and
+/// keeps the write-end open indefinitely. Partial output is preserved; only
+/// any unterminated fragment still inside `BufReader` is lost on abort.
+async fn finish_reader(mut task: tokio::task::JoinHandle<()>, buf: StreamBuffer) -> Vec<u8> {
+    // Use select! with a sleep so we keep ownership of the JoinHandle on
+    // expiry and can abort it — unlike tokio::time::timeout which consumes it.
+    tokio::select! {
+        _ = &mut task => {}
+        () = tokio::time::sleep(READER_GRACE) => {
+            task.abort();
+            // Await the aborted task so its resources (pipe handle, sender
+            // clone) are fully released before we return.
+            let _ = task.await;
+        }
+    }
+
+    // Extract the buffer. try_unwrap succeeds when no other Arc clones remain
+    // (normal case after the task ended); fall back to cloning under the lock.
+    Arc::try_unwrap(buf).map_or_else(
+        |arc| arc.lock().map(|g| g.clone()).unwrap_or_default(),
+        |m| m.into_inner().unwrap_or_default(),
+    )
+}
+
 /// Runs a shell command in the context's root directory.
 #[allow(clippy::too_many_lines)]
 async fn run_command(
@@ -314,54 +388,14 @@ async fn run_command(
     let child_stdout = child.stdout.take();
     let child_stderr = child.stderr.take();
 
-    // Spawn stdout/stderr reader tasks so they run independently of timeout.
-    // Using spawned tasks (not inline futures) ensures that timeout cancellation
-    // does NOT drop in-progress read_line calls — the tasks continue to drain
-    // the pipes to EOF after the process is killed, and we join them below.
-    let stdout_tx = output_tx.clone();
-    let stderr_tx = output_tx.clone();
+    // Spawn stdout/stderr reader tasks. Shared Arc<Mutex<Vec<u8>>> buffers
+    // let us extract partial output even if we have to abort a task that's
+    // stuck on a pipe held open by an orphan descendant.
+    let stdout_buf: StreamBuffer = Arc::new(Mutex::new(Vec::new()));
+    let stderr_buf: StreamBuffer = Arc::new(Mutex::new(Vec::new()));
 
-    let stdout_task = tokio::spawn(async move {
-        let mut buf: Vec<u8> = Vec::new();
-        if let Some(handle) = child_stdout {
-            let mut reader = tokio::io::BufReader::new(handle);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        if let Some(ref tx) = stdout_tx {
-                            let _ = tx.send(line.clone());
-                        }
-                        buf.extend_from_slice(line.as_bytes());
-                    }
-                }
-            }
-        }
-        buf
-    });
-
-    let stderr_task = tokio::spawn(async move {
-        let mut buf: Vec<u8> = Vec::new();
-        if let Some(handle) = child_stderr {
-            let mut reader = tokio::io::BufReader::new(handle);
-            let mut line = String::new();
-            loop {
-                line.clear();
-                match reader.read_line(&mut line).await {
-                    Ok(0) | Err(_) => break,
-                    Ok(_) => {
-                        if let Some(ref tx) = stderr_tx {
-                            let _ = tx.send(line.clone());
-                        }
-                        buf.extend_from_slice(line.as_bytes());
-                    }
-                }
-            }
-        }
-        buf
-    });
+    let stdout_task = spawn_stream_reader(child_stdout, output_tx.clone(), Arc::clone(&stdout_buf));
+    let stderr_task = spawn_stream_reader(child_stderr, output_tx.clone(), Arc::clone(&stderr_buf));
 
     // Wait for child exit, with optional timeout.
     // Reader tasks run independently — they'll see EOF after the process exits
@@ -394,9 +428,11 @@ async fn run_command(
     #[cfg(unix)]
     pg_guard.disarm();
 
-    // Join reader tasks — they finish once pipes close (which happens after child exits).
-    let stdout_buf = stdout_task.await.unwrap_or_default();
-    let stderr_buf = stderr_task.await.unwrap_or_default();
+    // Finish readers with a bounded grace period and extract their buffers.
+    // This applies on every exit path — even normal completion can leave pipes
+    // open if a descendant inherited stdout/stderr and escaped the process group.
+    let stdout_buf = finish_reader(stdout_task, stdout_buf).await;
+    let stderr_buf = finish_reader(stderr_task, stderr_buf).await;
 
     // Apply truncation to accumulated buffers.
     let (stdout, stdout_truncated, stdout_total_bytes) =
