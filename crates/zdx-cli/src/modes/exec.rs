@@ -287,6 +287,7 @@ fn event_type_name(event: &AgentEvent) -> &'static str {
         AgentEvent::ToolOutputDelta { .. } => "tool_output_delta",
         AgentEvent::ToolCompleted { .. } => "tool_completed",
         AgentEvent::Error { .. } => "error",
+        AgentEvent::Notice { .. } => "notice",
         AgentEvent::ProviderRetry { .. } => "provider_retry",
         AgentEvent::TurnFinished { .. } => "turn_finished",
         AgentEvent::UsageUpdate { .. } => "usage_update",

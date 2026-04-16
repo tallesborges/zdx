@@ -10,7 +10,9 @@ pub mod messages;
 pub mod providers;
 pub mod tools;
 
-pub use events::{AgentEvent, ErrorKind, ImageContent, ToolError, ToolOutput, TurnStatus};
+pub use events::{
+    AgentEvent, ErrorKind, ImageContent, NoticeKind, ToolError, ToolOutput, TurnStatus,
+};
 pub use messages::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ReasoningBlock, ReplayToken,
     SignatureProvider,

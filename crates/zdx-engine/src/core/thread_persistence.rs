@@ -199,6 +199,18 @@ pub enum ThreadEvent {
         cache_write_tokens: u64,
         ts: String,
     },
+
+    /// Informational notice from the model or runtime
+    /// (e.g. `refusal`, `model_context_window_exceeded`).
+    ///
+    /// Persisted so the UI can render it on thread reload, but never
+    /// rehydrated as a chat message — it is purely informational and
+    /// MUST NOT be sent back to providers as part of the conversation.
+    Notice {
+        kind: zdx_types::NoticeKind,
+        message: String,
+        ts: String,
+    },
 }
 
 impl ThreadEvent {
@@ -337,6 +349,15 @@ impl ThreadEvent {
             AgentEvent::ReasoningCompleted { block } => {
                 Some(Self::reasoning(block.text.clone(), block.replay.clone()))
             }
+            // Persist informational notices (refusal, context window
+            // exceeded) as a non-replayable thread event so they survive
+            // reload but are NEVER re-sent to the provider as part of
+            // the conversation history.
+            AgentEvent::Notice { kind, message, .. } => Some(Self::Notice {
+                kind: kind.clone(),
+                message: message.clone(),
+                ts: chrono_timestamp(),
+            }),
             // These are not persisted via this path:
             // - AssistantDelta: streamed chunks, not final
             // - AssistantCompleted: handled by caller with full context
@@ -1485,7 +1506,8 @@ fn latest_event_timestamp(events: &[ThreadEvent]) -> Option<DateTime<Utc>> {
                 | ThreadEvent::ToolResult { ts, .. }
                 | ThreadEvent::Interrupted { ts, .. }
                 | ThreadEvent::Reasoning { ts, .. }
-                | ThreadEvent::Usage { ts, .. } => ts,
+                | ThreadEvent::Usage { ts, .. }
+                | ThreadEvent::Notice { ts, .. } => ts,
             };
             DateTime::parse_from_rfc3339(ts)
                 .ok()
@@ -1887,7 +1909,10 @@ impl MessageReplay {
 
     fn handle_event(&mut self, event: ThreadEvent) {
         match event {
-            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {}
+            // Non-replay events: meta, usage, and informational notices
+            // (the latter are UI-only and MUST NOT be sent back to the
+            // provider as part of the conversation).
+            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } | ThreadEvent::Notice { .. } => {}
             ThreadEvent::Message {
                 role, text, phase, ..
             } => self.handle_message(role, text, phase),
@@ -2182,6 +2207,9 @@ pub fn format_transcript(events: &[ThreadEvent]) -> String {
             ThreadEvent::Interrupted { .. } => {
                 output.push_str("### Interrupted\n\n");
             }
+            ThreadEvent::Notice { message, .. } => {
+                writeln!(output, "### Notice\n⚠ {message}\n").expect("write");
+            }
             ThreadEvent::Usage { .. } => {
                 // Skip usage events in transcript display
             }
@@ -2387,6 +2415,79 @@ mod tests {
         assert_eq!(messages[2].role, "user");
         // Fourth is final assistant message
         assert_eq!(messages[3].role, "assistant");
+    }
+
+    #[test]
+    fn notice_agent_event_persists_as_thread_notice_not_message() {
+        use crate::core::events::{AgentEvent, NoticeKind};
+
+        let evt = AgentEvent::Notice {
+            kind: NoticeKind::Refusal,
+            message: "Claude declined.".to_string(),
+            details: Some("stop_reason=refusal".to_string()),
+        };
+
+        let persisted = ThreadEvent::from_agent(&evt).expect("Notice should persist");
+        match persisted {
+            ThreadEvent::Notice { kind, message, .. } => {
+                assert_eq!(kind, NoticeKind::Refusal);
+                assert_eq!(message, "Claude declined.");
+            }
+            other => panic!("expected ThreadEvent::Notice, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn notice_thread_event_is_not_replayed_as_chat_message() {
+        // Critical contract: notices MUST NOT be re-sent to providers as
+        // part of the conversation history on thread reload. They are
+        // UI-only informational events.
+        let events = vec![
+            ThreadEvent::user_message("hi"),
+            ThreadEvent::Notice {
+                kind: zdx_types::NoticeKind::ContextWindowExceeded,
+                message: "Context window exceeded.".to_string(),
+                ts: "2026-04-16T00:00:00Z".to_string(),
+            },
+            ThreadEvent::assistant_message("hello"),
+        ];
+
+        let messages = thread_events_to_messages(events);
+        // Only user + assistant — notice must be filtered out.
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0].role, "user");
+        assert_eq!(messages[1].role, "assistant");
+        // No message should contain the notice text.
+        for m in &messages {
+            let text = format!("{:?}", m.content);
+            assert!(
+                !text.contains("Context window exceeded"),
+                "notice text leaked into chat history: {text}"
+            );
+        }
+    }
+
+    #[test]
+    fn notice_thread_event_wire_format_roundtrips_as_tagged_json() {
+        // Locks the on-disk JSONL contract: notice events are written as
+        // `{"type":"notice","kind":"refusal","message":"...","ts":"..."}`
+        // and round-trip cleanly through serde.
+        let line = r#"{"type":"notice","kind":"refusal","message":"Claude declined.","ts":"2026-04-16T00:00:00Z"}"#;
+        let parsed: ThreadEvent = serde_json::from_str(line).expect("parse notice");
+        match &parsed {
+            ThreadEvent::Notice { kind, message, ts } => {
+                assert_eq!(*kind, zdx_types::NoticeKind::Refusal);
+                assert_eq!(message, "Claude declined.");
+                assert_eq!(ts, "2026-04-16T00:00:00Z");
+            }
+            other => panic!("expected ThreadEvent::Notice, got {other:?}"),
+        }
+        let reserialized = serde_json::to_string(&parsed).expect("serialize");
+        assert!(reserialized.contains("\"type\":\"notice\""));
+        assert!(reserialized.contains("\"kind\":\"refusal\""));
+        // And it still does not leak into chat message replay.
+        let messages = thread_events_to_messages(vec![parsed]);
+        assert!(messages.is_empty(), "notice must be filtered from replay");
     }
 
     #[test]

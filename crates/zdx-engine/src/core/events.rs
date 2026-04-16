@@ -3,4 +3,6 @@
 //! Pure value types now live in `zdx_types`. This module re-exports them so
 //! existing `crate::core::events::*` imports keep working.
 
-pub use zdx_types::{AgentEvent, ErrorKind, ImageContent, ToolError, ToolOutput, TurnStatus};
+pub use zdx_types::{
+    AgentEvent, ErrorKind, ImageContent, NoticeKind, ToolError, ToolOutput, TurnStatus,
+};

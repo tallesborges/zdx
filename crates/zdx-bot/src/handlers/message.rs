@@ -1197,6 +1197,9 @@ async fn stream_turn_events(
                         tracing::error!(message, "Agent error event");
                         // Diagnostic only; terminal outcome is carried by TurnFinished.
                     }
+                    AgentEvent::Notice { kind, message, .. } => {
+                        tracing::info!(?kind, message, "Agent notice event");
+                    }
                     other => update_status(context, incoming.chat_id, status, other, &mut current_status, &mut last_edit).await,
                 }
             }

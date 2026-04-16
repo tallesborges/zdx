@@ -71,6 +71,20 @@ pub enum AgentEvent {
         details: Option<String>,
     },
 
+    /// A non-fatal informational notice from the model or runtime.
+    /// The turn still completes; this is purely informational so the UI
+    /// can surface what happened (e.g. the model declined the request,
+    /// or generation stopped due to context window exhaustion).
+    Notice {
+        /// Notice category for structured handling.
+        kind: NoticeKind,
+        /// One-line human-readable summary.
+        message: String,
+        /// Optional additional details.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        details: Option<String>,
+    },
+
     /// A transient provider failure was hit and the agent is backing off
     /// before retrying the request.
     ProviderRetry {
@@ -126,6 +140,22 @@ pub enum ErrorKind {
     ApiError,
     /// Internal/unknown error
     Internal,
+}
+
+/// Notice categories for `AgentEvent::Notice`.
+///
+/// These are informational, not errors — the turn still completes. They
+/// surface model/runtime conditions the user should know about (e.g. a
+/// `refusal` or `model_context_window_exceeded` stop reason from Claude
+/// 4.5+).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum NoticeKind {
+    /// The model declined to respond (Anthropic `stop_reason=refusal`).
+    Refusal,
+    /// Generation stopped due to context window exhaustion
+    /// (Anthropic `stop_reason=model_context_window_exceeded`).
+    ContextWindowExceeded,
 }
 
 /// Terminal status for a turn.

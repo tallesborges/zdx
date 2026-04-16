@@ -137,7 +137,8 @@ Threads are append-only **JSONL** event logs (thread events are never modified o
 
 - First line is `meta` with `schema_version` and optional `title`.
 - Timestamps are RFC3339 UTC.
-- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`.
+- Event types: `meta`, `message`, `tool_use`, `tool_result`, `interrupted`, `reasoning`, `usage`, `notice`.
+- `notice` events (e.g. model `refusal`, `model_context_window_exceeded`) are persisted for UI replay and MUST NOT be rehydrated as conversation messages sent back to providers.
 - Threads remain readable even if interrupted mid-stream.
 
 ### Metadata Updates

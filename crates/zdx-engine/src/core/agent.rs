@@ -17,7 +17,7 @@ use tokio::time::{Duration, timeout};
 use tokio_util::sync::CancellationToken;
 
 use crate::config::{Config, TextVerbosity, ThinkingLevel};
-use crate::core::events::{AgentEvent, ErrorKind, ToolOutput, TurnStatus};
+use crate::core::events::{AgentEvent, ErrorKind, NoticeKind, ToolOutput, TurnStatus};
 use crate::core::interrupt::{self, InterruptedError};
 use crate::providers::anthropic::{
     AnthropicClient, AnthropicConfig, ClaudeCliClient, ClaudeCliConfig,
@@ -798,6 +798,8 @@ async fn run_turn_inner(
         let mut stream_state = consume_stream(stream, &messages, sender, cancel)
             .await
             .map_err(|e| (e, messages.clone()))?;
+
+        emit_stop_reason_notice(stream_state.stop_reason.as_deref(), sender);
 
         if stream_state.needs_tool_execution() {
             let stats = process_tool_turn(
@@ -1881,6 +1883,31 @@ fn map_thinking_to_anthropic_effort(
     })
 }
 
+/// Surface non-`tool_use`/`end_turn` stop reasons that warrant explicit
+/// user feedback (introduced in Claude 4.5+ and reaffirmed in the 4.6/4.7
+/// migration guide). The turn still completes — this is informational so
+/// the UI can show what happened and the thread log can persist it.
+fn emit_stop_reason_notice(stop_reason: Option<&str>, sender: &EventSender) {
+    let (kind, message, details) = match stop_reason {
+        Some("refusal") => (
+            NoticeKind::Refusal,
+            "Claude declined to respond to this request.",
+            "stop_reason=refusal",
+        ),
+        Some("model_context_window_exceeded") => (
+            NoticeKind::ContextWindowExceeded,
+            "Generation stopped: model context window exceeded. Start a new thread or trim history.",
+            "stop_reason=model_context_window_exceeded",
+        ),
+        _ => return,
+    };
+    sender.send(AgentEvent::Notice {
+        kind,
+        message: message.to_string(),
+        details: Some(details.to_string()),
+    });
+}
+
 /// Executes all tool uses in parallel and emits events via async channel.
 ///
 /// Tools are spawned concurrently using `tokio::JoinSet`. `ToolStarted` events
@@ -2164,6 +2191,49 @@ mod tests {
             ),
             Some(AnthropicEffortLevel::High)
         );
+    }
+
+    #[test]
+    fn stop_reason_notice_emits_for_refusal() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        emit_stop_reason_notice(Some("refusal"), &sender);
+        let evt = rx.try_recv().expect("expected an event");
+        match &*evt {
+            AgentEvent::Notice { kind, message, .. } => {
+                assert_eq!(*kind, NoticeKind::Refusal);
+                assert!(message.contains("declined"), "got: {message}");
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_reason_notice_emits_for_context_window_exceeded() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        emit_stop_reason_notice(Some("model_context_window_exceeded"), &sender);
+        let evt = rx.try_recv().expect("expected an event");
+        match &*evt {
+            AgentEvent::Notice { kind, message, .. } => {
+                assert_eq!(*kind, NoticeKind::ContextWindowExceeded);
+                assert!(
+                    message.contains("context window exceeded"),
+                    "got: {message}"
+                );
+            }
+            other => panic!("unexpected event: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn stop_reason_notice_is_silent_for_normal_reasons() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        emit_stop_reason_notice(Some("end_turn"), &sender);
+        emit_stop_reason_notice(Some("tool_use"), &sender);
+        emit_stop_reason_notice(None, &sender);
+        assert!(rx.try_recv().is_err(), "no event should be emitted");
     }
 
     #[test]
