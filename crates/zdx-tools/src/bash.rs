@@ -96,7 +96,7 @@ fn truncate_at_utf8_boundary(bytes: &[u8], max_bytes: usize) -> (String, bool, u
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Bash".to_string(),
-        description: "Execute a shell command when no dedicated tool exists. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Use Bash for builds, tests, git, and other CLI workflows that have no first-class tool. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
+        description: "Execute a shell command when no dedicated tool exists. Use Bash for builds, tests, git, gh, and other CLI workflows with no first-class tool. NEVER use grep, rg, cat, head, tail, less, find, or ls through Bash for file operations — use the dedicated Read, Grep, and Glob tools instead, which return structured output with pagination and .gitignore awareness. Chain dependent shell steps in one command, but prefer parallel tool calls for independent work. Do not use Bash to communicate with the user. Returns stdout, stderr, and exit code. When stdout or stderr is truncated, use Read on the returned temp file to inspect the full output."
             .to_string(),
         input_schema: json!({
             "type": "object",

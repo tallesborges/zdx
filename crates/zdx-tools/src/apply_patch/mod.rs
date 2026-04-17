@@ -19,7 +19,7 @@ pub use types::{Hunk, ParseError, UpdateFileChunk};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Apply_Patch".to_string(),
-        description: "Apply a file-oriented patch. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Paths support $VAR/${VAR} env vars. Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
+        description: "Apply a file-oriented patch. Read the target files first and keep patches minimal and focused rather than sending broad rewrites. The patch must be wrapped in '*** Begin Patch' and '*** End Patch'. Each file section starts with one of: '*** Add File: <path>', '*** Delete File: <path>', or '*** Update File: <path>' (optionally followed by '*** Move to: <new path>'). Paths support $VAR/${VAR} env vars. Update sections contain one or more '@@' hunks with line prefixes: '+' to add, '-' to delete, ' ' (space) for context, and an empty line meaning context. Add File sections must use '+' lines for every line of content.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

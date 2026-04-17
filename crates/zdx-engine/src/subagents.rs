@@ -44,7 +44,7 @@ impl BuiltinAlias {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Task => {
-                "Delegate an independent sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices, and prefer direct execution when the work is small enough to do yourself."
+                "Delegate an independent execution-oriented sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices; prefer `finder` for broad discovery and `oracle` for deep analysis."
             }
         }
     }
@@ -479,7 +479,7 @@ fn fallback_finder_capability() -> CapabilityDescriptor {
         name: FINDER_SUBAGENT_NAME.to_string(),
         title: "Finder".to_string(),
         description:
-            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history. Prefer it when the main need is evidence-gathering from local sources. It uses native read/search tools and does not have `bash`."
+            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history. Prefer it for broad evidence-gathering from local sources rather than implementation. It uses native read/search tools and does not have `bash`."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: FINDER_SUBAGENT_NAME.to_string(),
@@ -492,7 +492,7 @@ fn fallback_designer_capability() -> CapabilityDescriptor {
         name: DESIGNER_SUBAGENT_NAME.to_string(),
         title: "Designer".to_string(),
         description:
-            "Use for UI/UX implementation, design review, accessibility refinement, and visual polish in existing product surfaces."
+            "Use for UI/UX implementation, design review, accessibility refinement, and visual polish in existing product surfaces when the work is primarily user-facing."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: DESIGNER_SUBAGENT_NAME.to_string(),
@@ -505,7 +505,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery when `finder` is a better fit."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery when `finder` is a better fit."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
