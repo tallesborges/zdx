@@ -161,6 +161,74 @@ pub struct Usage {
     pub cache_creation_input_tokens: u64,
 }
 
+impl Usage {
+    /// Returns true when every usage counter is zero.
+    pub fn is_empty(&self) -> bool {
+        self.input_tokens == 0
+            && self.output_tokens == 0
+            && self.cache_read_input_tokens == 0
+            && self.cache_creation_input_tokens == 0
+    }
+}
+
+/// Possibly-partial cumulative usage update from a streaming `message_delta`.
+/// Missing fields mean "unchanged", not zero.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct UsageDelta {
+    pub input_tokens: Option<u64>,
+    pub output_tokens: Option<u64>,
+    pub cache_read_input_tokens: Option<u64>,
+    pub cache_creation_input_tokens: Option<u64>,
+}
+
+impl From<Usage> for UsageDelta {
+    fn from(value: Usage) -> Self {
+        Self {
+            input_tokens: Some(value.input_tokens),
+            output_tokens: Some(value.output_tokens),
+            cache_read_input_tokens: Some(value.cache_read_input_tokens),
+            cache_creation_input_tokens: Some(value.cache_creation_input_tokens),
+        }
+    }
+}
+
+impl UsageDelta {
+    /// Computes the incremental usage represented by this sparse cumulative
+    /// update relative to the previously seen cumulative totals.
+    pub fn incremental_from(&self, previous: &Usage) -> Usage {
+        Usage {
+            input_tokens: self
+                .input_tokens
+                .unwrap_or(previous.input_tokens)
+                .saturating_sub(previous.input_tokens),
+            output_tokens: self
+                .output_tokens
+                .unwrap_or(previous.output_tokens)
+                .saturating_sub(previous.output_tokens),
+            cache_read_input_tokens: self
+                .cache_read_input_tokens
+                .unwrap_or(previous.cache_read_input_tokens)
+                .saturating_sub(previous.cache_read_input_tokens),
+            cache_creation_input_tokens: self
+                .cache_creation_input_tokens
+                .unwrap_or(previous.cache_creation_input_tokens)
+                .saturating_sub(previous.cache_creation_input_tokens),
+        }
+    }
+
+    /// Applies this sparse cumulative update onto the previously seen totals.
+    pub fn apply_to(&self, previous: &mut Usage) {
+        previous.input_tokens = self.input_tokens.unwrap_or(previous.input_tokens);
+        previous.output_tokens = self.output_tokens.unwrap_or(previous.output_tokens);
+        previous.cache_read_input_tokens = self
+            .cache_read_input_tokens
+            .unwrap_or(previous.cache_read_input_tokens);
+        previous.cache_creation_input_tokens = self
+            .cache_creation_input_tokens
+            .unwrap_or(previous.cache_creation_input_tokens);
+    }
+}
+
 /// Events emitted during streaming.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StreamEvent {
@@ -204,10 +272,13 @@ pub enum StreamEvent {
     /// Message delta (e.g., `stop_reason` update, final usage)
     MessageDelta {
         stop_reason: Option<String>,
-        usage: Option<Usage>,
+        usage: Option<UsageDelta>,
     },
     /// Message completed
     MessageCompleted,
+    /// Provider event intentionally ignored because it carries metadata or an
+    /// unsupported block/delta shape that ZDX does not currently render.
+    Ignored { kind: String },
     /// Ping event (keepalive)
     Ping,
     /// Error event from API

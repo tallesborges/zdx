@@ -7,7 +7,7 @@ use serde::de::DeserializeOwned;
 
 use crate::shared::{
     ContentBlockType, ProviderError, ProviderErrorKind, ProviderResult, SignatureProvider,
-    StreamEvent, Usage,
+    StreamEvent, Usage, UsageDelta,
 };
 
 /// SSE parser that converts a byte stream into `StreamEvents`.
@@ -86,10 +86,9 @@ fn parse_sse_event_fields(event_type: &str, data: &str) -> ProviderResult<Stream
         "message_delta" => parse_message_delta(data),
         "message_stop" => Ok(StreamEvent::MessageCompleted),
         "error" => parse_error_event(data),
-        other => Err(ProviderError::new(
-            ProviderErrorKind::Parse,
-            format!("Unknown SSE event type: {other}"),
-        )),
+        other => Ok(StreamEvent::Ignored {
+            kind: format!("anthropic_sse_event:{other}"),
+        }),
     }
 }
 
@@ -123,11 +122,14 @@ fn parse_message_start(data: &str) -> ProviderResult<StreamEvent> {
 
 fn parse_content_block_start(data: &str) -> ProviderResult<StreamEvent> {
     let parsed: SseContentBlockStart = parse_event_json("content_block_start", data)?;
-    let block_type = parsed
-        .content_block
-        .block_type
-        .parse::<ContentBlockType>()
-        .map_err(|e| ProviderError::new(ProviderErrorKind::Parse, e))?;
+    let Some(block_type) = parse_supported_content_block_type(&parsed.content_block.block_type) else {
+        return Ok(StreamEvent::Ignored {
+            kind: format!(
+                "anthropic_content_block_start:{}",
+                parsed.content_block.block_type
+            ),
+        });
+    };
     if block_type == ContentBlockType::RedactedThinking
         && parsed
             .content_block
@@ -169,10 +171,19 @@ fn parse_content_block_delta(data: &str) -> ProviderResult<StreamEvent> {
             signature: parsed.delta.signature.unwrap_or_default(),
             provider: SignatureProvider::Anthropic,
         }),
-        other => Err(ProviderError::new(
-            ProviderErrorKind::Parse,
-            format!("Unknown delta type: {other}"),
-        )),
+        other => Ok(StreamEvent::Ignored {
+            kind: format!("anthropic_content_block_delta:{other}"),
+        }),
+    }
+}
+
+fn parse_supported_content_block_type(value: &str) -> Option<ContentBlockType> {
+    match value {
+        "text" => Some(ContentBlockType::Text),
+        "tool_use" => Some(ContentBlockType::ToolUse),
+        "thinking" | "reasoning" => Some(ContentBlockType::Reasoning),
+        "redacted_thinking" => Some(ContentBlockType::RedactedThinking),
+        _ => None,
     }
 }
 
@@ -299,13 +310,36 @@ struct SseContentBlockCompleted {
 struct SseMessageDelta {
     delta: SseMessageDeltaInner,
     #[serde(default)]
-    usage: Option<SseUsage>,
+    usage: Option<SsePartialUsage>,
 }
 
 #[derive(Debug, Deserialize)]
 struct SseMessageDeltaInner {
     #[serde(default)]
     stop_reason: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct SsePartialUsage {
+    #[serde(default, rename = "input_tokens")]
+    input: Option<u64>,
+    #[serde(default, rename = "output_tokens")]
+    output: Option<u64>,
+    #[serde(default, rename = "cache_read_input_tokens")]
+    cache_read: Option<u64>,
+    #[serde(default, rename = "cache_creation_input_tokens")]
+    cache_write: Option<u64>,
+}
+
+impl From<SsePartialUsage> for UsageDelta {
+    fn from(u: SsePartialUsage) -> Self {
+        Self {
+            input_tokens: u.input,
+            output_tokens: u.output,
+            cache_read_input_tokens: u.cache_read,
+            cache_creation_input_tokens: u.cache_write,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -539,6 +573,80 @@ data: {"type":"error","error":{"type":"overloaded_error","message":"API is tempo
             StreamEvent::Error {
                 error_type: "overloaded_error".to_string(),
                 message: "API is temporarily overloaded".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_server_tool_use_block_is_ignored_instead_of_failing() {
+        let event = parse_sse_event(
+            r#"event: content_block_start
+data: {"type":"content_block_start","index":1,"content_block":{"type":"server_tool_use","id":"srvtoolu_123","name":"web_search","input":{}}}
+"#,
+        )
+        .expect("server_tool_use should not fail parsing");
+
+        assert_eq!(
+            event,
+            StreamEvent::Ignored {
+                kind: "anthropic_content_block_start:server_tool_use".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_citations_delta_is_ignored_instead_of_failing() {
+        let event = parse_sse_event(
+            r#"event: content_block_delta
+data: {"type":"content_block_delta","index":0,"delta":{"type":"citations_delta","citation":{"type":"web_search_result_location","url":"https://example.com"}}}
+"#,
+        )
+        .expect("citations_delta should not fail parsing");
+
+        assert_eq!(
+            event,
+            StreamEvent::Ignored {
+                kind: "anthropic_content_block_delta:citations_delta".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_unknown_top_level_event_is_ignored_instead_of_failing() {
+        let event = parse_sse_event(
+            r#"event: future_event
+data: {"type":"future_event","foo":"bar"}
+"#,
+        )
+        .expect("unknown event types should be ignored");
+
+        assert_eq!(
+            event,
+            StreamEvent::Ignored {
+                kind: "anthropic_sse_event:future_event".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn parse_message_delta_preserves_sparse_usage_fields() {
+        let event = parse_sse_event(
+            r#"event: message_delta
+data: {"type":"message_delta","delta":{"stop_reason":null},"usage":{"output_tokens":89}}
+"#,
+        )
+        .expect("sparse message_delta usage should parse");
+
+        assert_eq!(
+            event,
+            StreamEvent::MessageDelta {
+                stop_reason: None,
+                usage: Some(UsageDelta {
+                    input_tokens: None,
+                    output_tokens: Some(89),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                })
             }
         );
     }

@@ -428,7 +428,7 @@ impl<S> ResponsesSseParser<S> {
                 });
                 self.pending.push_back(StreamEvent::MessageDelta {
                     stop_reason: Some(stop_reason.to_string()),
-                    usage: Some(usage),
+                    usage: Some(usage.into()),
                 });
                 self.pending.push_back(StreamEvent::MessageCompleted);
 

@@ -241,7 +241,7 @@ impl StreamMetrics {
         // Count events
         self.event_count += 1;
         let type_name = Self::event_type_name(event);
-        *self.event_counts.entry(type_name.to_string()).or_insert(0) += 1;
+        *self.event_counts.entry(type_name).or_insert(0) += 1;
 
         // Track specific event timings
         match event {
@@ -284,24 +284,33 @@ impl StreamMetrics {
             StreamEvent::Error { .. } => {
                 self.completion_state = CompletionState::Error;
             }
-            _ => {}
+            StreamEvent::Ping
+            | StreamEvent::MessageDelta { .. }
+            | StreamEvent::Ignored { .. }
+            | StreamEvent::ContentBlockStart { .. }
+            | StreamEvent::ContentBlockCompleted { .. }
+            | StreamEvent::InputJsonDelta { .. }
+            | StreamEvent::ReasoningDelta { .. }
+            | StreamEvent::ReasoningSignatureDelta { .. }
+            | StreamEvent::ReasoningCompleted { .. } => {}
         }
     }
 
-    fn event_type_name(event: &StreamEvent) -> &'static str {
+    fn event_type_name(event: &StreamEvent) -> String {
         match event {
-            StreamEvent::Ping => "Ping",
-            StreamEvent::MessageStart { .. } => "MessageStart",
-            StreamEvent::MessageDelta { .. } => "MessageDelta",
-            StreamEvent::MessageCompleted => "MessageCompleted",
-            StreamEvent::ContentBlockStart { .. } => "ContentBlockStart",
-            StreamEvent::ContentBlockCompleted { .. } => "ContentBlockCompleted",
-            StreamEvent::TextDelta { .. } => "TextDelta",
-            StreamEvent::InputJsonDelta { .. } => "InputJsonDelta",
-            StreamEvent::ReasoningDelta { .. } => "ReasoningDelta",
-            StreamEvent::ReasoningSignatureDelta { .. } => "ReasoningSignatureDelta",
-            StreamEvent::ReasoningCompleted { .. } => "ReasoningCompleted",
-            StreamEvent::Error { .. } => "Error",
+            StreamEvent::Ping => "Ping".to_string(),
+            StreamEvent::MessageStart { .. } => "MessageStart".to_string(),
+            StreamEvent::MessageDelta { .. } => "MessageDelta".to_string(),
+            StreamEvent::MessageCompleted => "MessageCompleted".to_string(),
+            StreamEvent::Ignored { kind } => format!("Ignored:{kind}"),
+            StreamEvent::ContentBlockStart { .. } => "ContentBlockStart".to_string(),
+            StreamEvent::ContentBlockCompleted { .. } => "ContentBlockCompleted".to_string(),
+            StreamEvent::TextDelta { .. } => "TextDelta".to_string(),
+            StreamEvent::InputJsonDelta { .. } => "InputJsonDelta".to_string(),
+            StreamEvent::ReasoningDelta { .. } => "ReasoningDelta".to_string(),
+            StreamEvent::ReasoningSignatureDelta { .. } => "ReasoningSignatureDelta".to_string(),
+            StreamEvent::ReasoningCompleted { .. } => "ReasoningCompleted".to_string(),
+            StreamEvent::Error { .. } => "Error".to_string(),
         }
     }
 

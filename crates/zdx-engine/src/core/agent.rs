@@ -1347,6 +1347,7 @@ fn resolve_tools(
 struct StreamState {
     turn: AssistantTurnBuilder,
     stop_reason: Option<String>,
+    usage_seen: crate::providers::Usage,
 }
 
 impl StreamState {
@@ -1354,6 +1355,7 @@ impl StreamState {
         Self {
             turn: AssistantTurnBuilder::new(),
             stop_reason: None,
+            usage_seen: crate::providers::Usage::default(),
         }
     }
 
@@ -1461,6 +1463,10 @@ fn handle_stream_event(
                 Some(ReplayToken::AnthropicRedacted { data }),
             );
         }
+        StreamEvent::ContentBlockStart {
+            block_type: ContentBlockType::Text,
+            ..
+        } => {}
         StreamEvent::InputJsonDelta {
             index,
             partial_json,
@@ -1490,7 +1496,7 @@ fn handle_stream_event(
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
             state.stop_reason = stop_reason;
-            emit_message_delta_usage(sender, usage);
+            emit_message_delta_usage(sender, &mut state.usage_seen, usage);
         }
         StreamEvent::Error {
             error_type,
@@ -1501,7 +1507,9 @@ fn handle_stream_event(
                 &message,
             )));
         }
-        StreamEvent::MessageStart { usage, .. } => emit_message_start_usage(sender, &usage),
+        StreamEvent::MessageStart { usage, .. } => {
+            emit_message_start_usage(sender, &mut state.usage_seen, &usage)
+        }
         StreamEvent::ReasoningCompleted {
             index,
             id,
@@ -1514,7 +1522,10 @@ fn handle_stream_event(
             encrypted_content,
             summary,
         ),
-        _ => {}
+        StreamEvent::TextDelta { .. }
+        | StreamEvent::MessageCompleted
+        | StreamEvent::Ping
+        | StreamEvent::Ignored { .. } => {}
     }
     Ok(())
 }
@@ -1584,21 +1595,35 @@ fn handle_input_json_delta(
     }
 }
 
-fn emit_message_delta_usage(sender: &EventSender, usage: Option<crate::providers::Usage>) {
+fn emit_message_delta_usage(
+    sender: &EventSender,
+    usage_seen: &mut crate::providers::Usage,
+    usage: Option<crate::providers::UsageDelta>,
+) {
     if let Some(u) = usage {
-        sender.send(AgentEvent::UsageUpdate {
-            input_tokens: 0,
-            output_tokens: u.output_tokens,
-            cache_read_input_tokens: 0,
-            cache_creation_input_tokens: 0,
-        });
+        let delta = u.incremental_from(usage_seen);
+        u.apply_to(usage_seen);
+
+        if !delta.is_empty() {
+            sender.send(AgentEvent::UsageUpdate {
+                input_tokens: delta.input_tokens,
+                output_tokens: delta.output_tokens,
+                cache_read_input_tokens: delta.cache_read_input_tokens,
+                cache_creation_input_tokens: delta.cache_creation_input_tokens,
+            });
+        }
     }
 }
 
-fn emit_message_start_usage(sender: &EventSender, usage: &crate::providers::Usage) {
+fn emit_message_start_usage(
+    sender: &EventSender,
+    usage_seen: &mut crate::providers::Usage,
+    usage: &crate::providers::Usage,
+) {
+    *usage_seen = usage.clone();
     sender.send(AgentEvent::UsageUpdate {
         input_tokens: usage.input_tokens,
-        output_tokens: 0,
+        output_tokens: usage.output_tokens,
         cache_read_input_tokens: usage.cache_read_input_tokens,
         cache_creation_input_tokens: usage.cache_creation_input_tokens,
     });
@@ -1656,18 +1681,37 @@ fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder,
         // payload under a sentinel field so persistence and downstream
         // diagnostics can still see what was emitted, instead of silently
         // collapsing to `{}` and discarding the evidence.
-        let input: Value = serde_json::from_str(&tu.input_json).unwrap_or_else(|_| {
-            serde_json::json!({
-                "__zdx_invalid_json__": true,
-                "raw": tu.input_json,
-            })
-        });
+        let input: Value = serde_json::from_str(&tu.input_json)
+            .unwrap_or_else(|_| malformed_tool_input_value(&tu.input_json));
         sender.send(AgentEvent::ToolInputCompleted {
             id: tu.id.clone(),
             name: tu.name.clone(),
             input,
         });
     }
+}
+
+fn malformed_tool_input_value(input_json: &str) -> Value {
+    serde_json::json!({
+        "__zdx_invalid_json__": true,
+        "raw": input_json,
+    })
+}
+
+fn malformed_tool_use(builder: &ToolUseBuilder) -> ToolUse {
+    ToolUse {
+        id: builder.id.clone(),
+        name: builder.name.clone(),
+        input: malformed_tool_input_value(&builder.input_json),
+    }
+}
+
+fn invalid_tool_output(input_json: &str, error: &serde_json::Error) -> ToolOutput {
+    ToolOutput::failure(
+        "invalid_json",
+        format!("Failed to parse tool arguments: {error}"),
+        Some(truncate_for_error(input_json, 500)),
+    )
 }
 
 struct ToolTurnOutcome {
@@ -1778,16 +1822,8 @@ fn build_interrupted_messages(
                 assistant_tools.push(tool_use);
             }
             Err(err) => {
-                assistant_tools.push(ToolUse {
-                    id: tu.id.clone(),
-                    name: tu.name.clone(),
-                    input: serde_json::json!({ "_raw_malformed": tu.input_json }),
-                });
-                let error_output = ToolOutput::failure(
-                    "invalid_json",
-                    format!("Failed to parse tool arguments: {err}"),
-                    Some(truncate_for_error(&tu.input_json, 500)),
-                );
+                assistant_tools.push(malformed_tool_use(&tu));
+                let error_output = invalid_tool_output(&tu.input_json, &err);
                 tool_results.push(ToolResult::from_output(tu.id, &error_output));
             }
         }
@@ -1853,16 +1889,8 @@ fn finalize_tool_calls(turn: &mut AssistantTurnBuilder) -> ToolTurnOutcome {
                     message: format!("Invalid tool input JSON for {}: {}", tu.name, e),
                     details: Some(truncate_for_error(&tu.input_json, 500)),
                 });
-                assistant_tools.push(ToolUse {
-                    id: tu.id.clone(),
-                    name: tu.name.clone(),
-                    input: serde_json::json!({ "_raw_malformed": tu.input_json }),
-                });
-                let error_output = ToolOutput::failure(
-                    "invalid_json",
-                    format!("Failed to parse tool arguments: {e}"),
-                    Some(truncate_for_error(&tu.input_json, 500)),
-                );
+                assistant_tools.push(malformed_tool_use(&tu));
+                let error_output = invalid_tool_output(&tu.input_json, &e);
                 malformed_results.push(ToolResult::from_output(tu.id.clone(), &error_output));
                 malformed_tools.push((tu.id, tu.name, error_output));
             }
@@ -2333,6 +2361,101 @@ mod tests {
             }
             other => panic!("unexpected event: {other:?}"),
         }
+    }
+
+    #[test]
+    fn finalize_tool_calls_reuses_malformed_tool_input_sentinel() {
+        let mut turn = AssistantTurnBuilder {
+            thinking_blocks: Vec::new(),
+            text: String::new(),
+            tool_uses: vec![ToolUseBuilder {
+                index: 0,
+                id: "tool_bad".to_string(),
+                name: "write".to_string(),
+                input_json: "{\"path\":\"a.txt\",\"content\":\"hel".to_string(),
+                input_preview_len: 0,
+            }],
+        };
+
+        let outcome = finalize_tool_calls(&mut turn);
+        assert_eq!(outcome.executable.len(), 0);
+        assert_eq!(outcome.assistant_tools.len(), 1);
+        assert_eq!(
+            outcome.assistant_tools[0].input,
+            malformed_tool_input_value("{\"path\":\"a.txt\",\"content\":\"hel")
+        );
+    }
+
+    #[test]
+    fn message_delta_usage_is_emitted_as_delta_from_cumulative_counts() {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new();
+
+        handle_stream_event(
+            StreamEvent::MessageStart {
+                model: "claude-opus-4-7".to_string(),
+                usage: crate::providers::Usage {
+                    input_tokens: 100,
+                    output_tokens: 2,
+                    cache_read_input_tokens: 5,
+                    cache_creation_input_tokens: 1,
+                },
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::MessageDelta {
+                stop_reason: None,
+                usage: Some(crate::providers::UsageDelta {
+                    input_tokens: None,
+                    output_tokens: Some(10),
+                    cache_read_input_tokens: None,
+                    cache_creation_input_tokens: None,
+                }),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+        handle_stream_event(
+            StreamEvent::MessageDelta {
+                stop_reason: Some("end_turn".to_string()),
+                usage: Some(crate::providers::UsageDelta {
+                    input_tokens: Some(120),
+                    output_tokens: Some(15),
+                    cache_read_input_tokens: Some(8),
+                    cache_creation_input_tokens: Some(1),
+                }),
+            },
+            &sender,
+            &mut state,
+        )
+        .unwrap();
+
+        let usage_updates: Vec<_> = std::iter::from_fn(|| rx.try_recv().ok())
+            .filter_map(|event| match &*event {
+                AgentEvent::UsageUpdate {
+                    input_tokens,
+                    output_tokens,
+                    cache_read_input_tokens,
+                    cache_creation_input_tokens,
+                } => Some((
+                    *input_tokens,
+                    *output_tokens,
+                    *cache_read_input_tokens,
+                    *cache_creation_input_tokens,
+                )),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            usage_updates,
+            vec![(100, 2, 5, 1), (0, 8, 0, 0), (20, 5, 3, 0)]
+        );
     }
 
     /// Feeds a `redacted_thinking` `content_block_start` (with opaque
