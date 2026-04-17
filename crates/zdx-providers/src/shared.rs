@@ -7,6 +7,7 @@ pub use zdx_types::{
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken,
     SignatureProvider, StreamEvent, Usage,
 };
+pub use zdx_types::providers::UsageDelta;
 
 /// Standard User-Agent header for zdx API requests.
 ///

@@ -360,7 +360,7 @@ impl<S> GeminiSseParser<S> {
             });
             self.pending.push_back(StreamEvent::MessageDelta {
                 stop_reason,
-                usage: Some(usage),
+                usage: Some(usage.into()),
             });
             self.pending.push_back(StreamEvent::MessageCompleted);
         }
