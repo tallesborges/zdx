@@ -128,6 +128,18 @@ fn parse_content_block_start(data: &str) -> ProviderResult<StreamEvent> {
         .block_type
         .parse::<ContentBlockType>()
         .map_err(|e| ProviderError::new(ProviderErrorKind::Parse, e))?;
+    if block_type == ContentBlockType::RedactedThinking
+        && parsed
+            .content_block
+            .data
+            .as_deref()
+            .is_none_or(str::is_empty)
+    {
+        return Err(ProviderError::new(
+            ProviderErrorKind::Parse,
+            "Anthropic redacted_thinking content_block_start requires a non-empty `data` field",
+        ));
+    }
     Ok(StreamEvent::ContentBlockStart {
         index: parsed.index,
         block_type,
@@ -959,5 +971,96 @@ data: {"type":"message_stop"}
             }
         );
         assert_eq!(events[9], StreamEvent::ContentBlockCompleted { index: 2 });
+    }
+
+    /// SSE fixture where a `redacted_thinking` `content_block_start`
+    /// event is missing the required `data` field entirely. The parser
+    /// must reject this as a `ProviderErrorKind::Parse` rather than
+    /// surfacing a `StreamEvent` that would silently persist an empty
+    /// replay token.
+    const SSE_REDACTED_THINKING_MISSING_DATA: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_bad","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking"}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    #[tokio::test]
+    async fn test_sse_parser_rejects_redacted_thinking_without_data() {
+        let stream = mock_byte_stream(SSE_REDACTED_THINKING_MISSING_DATA);
+        let mut parser = SseParser::new(stream);
+
+        let mut results = Vec::new();
+        while let Some(result) = parser.next().await {
+            results.push(result);
+        }
+
+        // message_start parses fine; content_block_start must error; message_stop parses fine.
+        assert_eq!(results.len(), 3);
+        assert!(matches!(&results[0], Ok(StreamEvent::MessageStart { .. })));
+        let err = results[1]
+            .as_ref()
+            .expect_err("redacted_thinking without data must be a parse error");
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(
+            err.message.contains("redacted_thinking"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("data"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(matches!(&results[2], Ok(StreamEvent::MessageCompleted)));
+    }
+
+    /// SSE fixture where a `redacted_thinking` `content_block_start`
+    /// event has an explicit empty-string `data` field. The parser must
+    /// reject this with the same diagnostic as the missing-`data` case
+    /// — Anthropic's server treats `""` as invalid and a persisted
+    /// empty blob would fail on the next turn's replay.
+    const SSE_REDACTED_THINKING_EMPTY_DATA: &str = r#"event: message_start
+data: {"type":"message_start","message":{"id":"msg_bad","type":"message","role":"assistant","content":[],"model":"claude-opus-4-7","stop_reason":null,"stop_sequence":null,"usage":{"input_tokens":10,"output_tokens":1}}}
+
+event: content_block_start
+data: {"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":""}}
+
+event: message_stop
+data: {"type":"message_stop"}
+
+"#;
+
+    #[tokio::test]
+    async fn test_sse_parser_rejects_redacted_thinking_with_empty_data() {
+        let stream = mock_byte_stream(SSE_REDACTED_THINKING_EMPTY_DATA);
+        let mut parser = SseParser::new(stream);
+
+        let mut results = Vec::new();
+        while let Some(result) = parser.next().await {
+            results.push(result);
+        }
+
+        assert_eq!(results.len(), 3);
+        assert!(matches!(&results[0], Ok(StreamEvent::MessageStart { .. })));
+        let err = results[1]
+            .as_ref()
+            .expect_err("redacted_thinking with empty data must be a parse error");
+        assert_eq!(err.kind, ProviderErrorKind::Parse);
+        assert!(
+            err.message.contains("redacted_thinking"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("data"),
+            "unexpected message: {}",
+            err.message
+        );
+        assert!(matches!(&results[2], Ok(StreamEvent::MessageCompleted)));
     }
 }
