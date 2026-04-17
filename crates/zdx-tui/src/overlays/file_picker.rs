@@ -10,7 +10,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
 use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
+use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{List, ListItem, ListState, Paragraph};
@@ -22,7 +22,8 @@ use crate::input::InputState;
 use crate::mutations::{InputMutation, StateMutation};
 
 const MAX_VISIBLE_FILES: usize = 10;
-const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES - 2;
+/// Visible list rows in the dropdown (no title/hints overhead).
+const VISIBLE_HEIGHT: usize = MAX_VISIBLE_FILES;
 const MAX_DEPTH: usize = 15;
 
 /// A matched file with its score and matched character indices.
@@ -425,79 +426,59 @@ pub fn render_file_picker(
     area: Rect,
     input_top_y: u16,
 ) {
-    use super::render_utils::{InputHint, OverlayConfig, render_overlay, render_separator};
+    use ratatui::widgets::{Block, Borders, Clear};
 
     let file_count = picker.filtered.len();
     let visible_count = file_count.min(MAX_VISIBLE_FILES);
 
-    let picker_width = 50;
-    let base_height = if picker.loading || file_count == 0 {
-        5
-    } else {
-        visible_count as u16 + 4
-    };
-    let picker_height = base_height.max(7);
+    // Width: wide, left-anchored, leaves a small right margin
+    let picker_width = area.width.saturating_sub(4).min(80);
 
-    let title = if picker.loading {
-        "Files (loading...)".to_string()
+    // Height: 2 borders + list rows (no title/hints overhead)
+    let inner_height: u16 = if picker.loading || file_count == 0 {
+        1
     } else {
-        format!("Files ({file_count})")
+        visible_count as u16
     };
-    let hints = [
-        InputHint::new("↑↓", "nav"),
-        InputHint::new("Enter", "select"),
-        InputHint::new("Esc", "close"),
-    ];
-    let layout = render_overlay(
-        frame,
-        area,
-        input_top_y,
-        &OverlayConfig {
-            title: &title,
-            border_color: Color::Blue,
-            width: picker_width,
-            height: picker_height,
-            hints: &hints,
-        },
-    );
+    let picker_height = (inner_height + 2).max(3);
+
+    // Position: bottom of available space, just above the input bar
+    let available_y = input_top_y;
+    let popup_y = available_y.saturating_sub(picker_height);
+    let popup = Rect::new(0, popup_y, picker_width.min(area.width), picker_height);
+
+    frame.render_widget(Clear, popup);
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
+
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
+
+    if inner.height == 0 || inner.width == 0 {
+        return;
+    }
 
     if picker.loading {
-        let loading_msg = Paragraph::new("Loading files...")
-            .style(Style::default().fg(Color::DarkGray))
-            .alignment(Alignment::Center);
-        frame.render_widget(loading_msg, layout.body);
+        let loading_msg =
+            Paragraph::new("Loading files...").style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(loading_msg, inner);
         return;
     }
 
     if picker.filtered.is_empty() {
-        let empty_msg = if picker.files.is_empty() {
+        let msg_text = if picker.files.is_empty() {
             "No files found"
         } else {
             "No matches"
         };
-        let msg = Paragraph::new(vec![
-            Line::from(Span::styled(
-                empty_msg,
-                Style::default().fg(Color::DarkGray),
-            )),
-            Line::default(),
-            Line::from(Span::styled(
-                "Esc to close",
-                Style::default().fg(Color::DarkGray),
-            )),
-        ])
-        .alignment(Alignment::Center);
-        frame.render_widget(msg, layout.body);
+        let msg = Paragraph::new(msg_text).style(Style::default().fg(Color::DarkGray));
+        frame.render_widget(msg, inner);
         return;
     }
 
-    let list_height = layout.body.height.saturating_sub(1) as usize;
-    let list_area = Rect::new(
-        layout.body.x,
-        layout.body.y,
-        layout.body.width,
-        list_height as u16,
-    );
+    let list_height = inner.height as usize;
 
     let items: Vec<ListItem> = picker
         .filtered
@@ -507,34 +488,27 @@ pub fn render_file_picker(
         .filter_map(|file_match| {
             picker.files.get(file_match.file_idx).map(|path| {
                 let path_str = path.to_string_lossy();
-                let max_width = layout.body.width.saturating_sub(4) as usize;
+                let max_width = inner.width.saturating_sub(2) as usize;
 
-                // Handle path truncation with ellipsis
                 let (display, adjusted_indices) = if path_str.len() > max_width {
-                    // Truncate from the start, keep the end
                     let truncate_at = path_str.len() - max_width + 1;
                     let truncated = format!("…{}", &path_str[truncate_at..]);
-
-                    // Adjust match indices for truncation
                     let adjusted: Vec<usize> = file_match
                         .match_indices
                         .iter()
                         .filter_map(|&idx| {
                             if idx >= truncate_at {
-                                // Add 1 for the ellipsis character
                                 Some(idx - truncate_at + 1)
                             } else {
-                                None // Index was in the truncated portion
+                                None
                             }
                         })
                         .collect();
-
                     (truncated, adjusted)
                 } else {
                     (path_str.to_string(), file_match.match_indices.clone())
                 };
 
-                // Build styled spans with highlighted characters
                 let line = build_highlighted_line(&display, &adjusted_indices);
                 ListItem::new(line)
             })
@@ -552,9 +526,7 @@ pub fn render_file_picker(
     let mut list_state = ListState::default();
     let visible_selected = picker.selected.saturating_sub(picker.offset);
     list_state.select(Some(visible_selected));
-    frame.render_stateful_widget(list, list_area, &mut list_state);
-
-    render_separator(frame, layout.body, list_height as u16);
+    frame.render_stateful_widget(list, inner, &mut list_state);
 }
 
 #[cfg(test)]

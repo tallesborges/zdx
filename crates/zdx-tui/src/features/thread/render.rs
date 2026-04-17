@@ -27,67 +27,65 @@ pub fn render_thread_picker(
     area: Rect,
     input_top_y: u16,
 ) {
-    use crate::overlays::render_utils::{
-        calculate_overlay_area, render_overlay_container, render_separator,
-    };
+    use ratatui::widgets::{Block, Borders, Clear};
+
+    use crate::overlays::render_utils::render_separator;
 
     let tree_items = picker.visible_tree_items();
     let visible_count = tree_items.len().min(MAX_VISIBLE_THREADS);
-    let thread_count = match picker.scope {
-        ThreadScope::All => picker.all_threads.len(),
-        ThreadScope::Current => picker
-            .all_threads
-            .iter()
-            .filter(|t| t.root_path.as_deref() == Some(picker.current_root.as_str()))
-            .count(),
+
+    // Width: wide, left-anchored, leaves a small right margin
+    let picker_width = area.width.saturating_sub(4).min(80);
+
+    // Height: 2 borders + filter row + separator + list rows (no title/hints overhead)
+    let inner_height: u16 = if tree_items.is_empty() {
+        3 // filter + sep + empty message
+    } else {
+        2 + visible_count as u16 // filter + sep + list
     };
+    let picker_height = (inner_height + 2).max(5);
 
-    let picker_width = 60;
-    // Add 2 rows for filter input + separator
-    let picker_height = (visible_count as u16 + 7).max(9);
+    // Position: bottom of available space, just above the input bar
+    let popup_y = input_top_y.saturating_sub(picker_height);
+    let popup = Rect::new(0, popup_y, picker_width.min(area.width), picker_height);
 
-    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
-    let title = thread_picker_title(picker.scope, tree_items.len(), thread_count);
-    render_overlay_container(frame, picker_area, &title, Color::Magenta);
+    frame.render_widget(Clear, popup);
 
-    let inner_area = Rect::new(
-        picker_area.x + 1,
-        picker_area.y + 1,
-        picker_area.width.saturating_sub(2),
-        picker_area.height.saturating_sub(2),
-    );
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray));
 
-    render_filter_input(frame, picker, inner_area);
+    let inner = block.inner(popup);
+    frame.render_widget(block, popup);
 
-    render_separator(frame, inner_area, 1);
-
-    if tree_items.is_empty() {
-        render_empty_picker(frame, picker, inner_area);
+    if inner.height == 0 || inner.width == 0 {
         return;
     }
 
-    // Account for filter (1) + separator (1) + hints (2)
-    let list_height = inner_area.height.saturating_sub(4) as usize;
+    render_filter_input(frame, picker, inner);
 
-    let list_area = Rect::new(
-        inner_area.x,
-        inner_area.y + 2,
-        inner_area.width,
-        list_height as u16,
-    );
+    render_separator(frame, inner, 1);
+
+    if tree_items.is_empty() {
+        render_empty_picker(frame, picker, inner);
+        return;
+    }
+
+    // list starts after filter (1) + separator (1)
+    let list_height = inner.height.saturating_sub(2) as usize;
+    let list_area = Rect::new(inner.x, inner.y + 2, inner.width, list_height as u16);
 
     let items: Vec<ListItem> = tree_items
         .iter()
         .skip(picker.offset)
         .take(list_height)
-        .map(|item| build_thread_list_item(item, picker, inner_area.width))
+        .map(|item| build_thread_list_item(item, picker, inner.width))
         .collect();
 
     let list = List::new(items)
         .highlight_style(
             Style::default()
-                .bg(Color::Magenta)
-                .fg(Color::Black)
+                .bg(Color::DarkGray)
                 .add_modifier(Modifier::BOLD),
         )
         .highlight_symbol("▶ ");
@@ -96,17 +94,6 @@ pub fn render_thread_picker(
     let visible_selected = picker.selected.saturating_sub(picker.offset);
     list_state.select(Some(visible_selected));
     frame.render_stateful_widget(list, list_area, &mut list_state);
-
-    render_separator(frame, inner_area, 2 + list_height as u16);
-
-    render_picker_hints(frame, picker, inner_area);
-}
-
-fn thread_picker_title(scope: ThreadScope, visible_count: usize, total_count: usize) -> String {
-    match scope {
-        ThreadScope::All => format!("Threads ({total_count})"),
-        ThreadScope::Current => format!("Threads ({visible_count}/{total_count})"),
-    }
 }
 
 fn render_filter_input(frame: &mut Frame, picker: &ThreadPickerState, inner_area: Rect) {
@@ -141,7 +128,7 @@ fn render_empty_picker(frame: &mut Frame, picker: &ThreadPickerState, inner_area
         inner_area.x,
         inner_area.y + 2,
         inner_area.width,
-        inner_area.height.saturating_sub(4),
+        inner_area.height.saturating_sub(2),
     );
     frame.render_widget(
         Paragraph::new(message)
@@ -149,9 +136,6 @@ fn render_empty_picker(frame: &mut Frame, picker: &ThreadPickerState, inner_area
             .alignment(Alignment::Center),
         empty_area,
     );
-    let list_height = inner_area.height.saturating_sub(4);
-    crate::overlays::render_utils::render_separator(frame, inner_area, 2 + list_height);
-    render_picker_hints(frame, picker, inner_area);
 }
 
 fn build_thread_list_item(
@@ -229,29 +213,4 @@ fn build_thread_list_item(
         Span::styled(timestamp, Style::default().fg(Color::DarkGray)),
     ]);
     ListItem::new(line)
-}
-
-fn render_picker_hints(frame: &mut Frame, picker: &ThreadPickerState, inner_area: Rect) {
-    use crate::overlays::render_utils::{InputHint, render_hints};
-    let copy_hint = if picker.should_show_copied() {
-        InputHint::new("✓", "Copied!")
-    } else {
-        InputHint::new("y", "copy id")
-    };
-    let toggle_hint = match picker.scope {
-        ThreadScope::Current => "all",
-        ThreadScope::All => "current",
-    };
-    render_hints(
-        frame,
-        inner_area,
-        &[
-            InputHint::new("↑↓", "navigate"),
-            InputHint::new("Enter", "select"),
-            copy_hint,
-            InputHint::new("Ctrl+T", toggle_hint),
-            InputHint::new("Esc", "cancel"),
-        ],
-        Color::Magenta,
-    );
 }
