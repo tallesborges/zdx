@@ -15,7 +15,7 @@ use crate::prompts::READ_THREAD_PROMPT_TEMPLATE;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Read_Thread".to_string(),
-        description: "Answer a goal using a saved thread transcript. Returns response text only."
+        description: "Answer a goal using a saved thread transcript. Use Thread_Search first to find the thread_id — do not guess or invent thread IDs. Provide a specific `goal` describing what to extract; vague goals return vague answers. Returns response text only."
             .to_string(),
         input_schema: json!({
             "type": "object",

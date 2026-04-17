@@ -16,7 +16,7 @@ const DEFAULT_LIMIT: usize = 20;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Thread_Search".to_string(),
-        description: "Search through saved ZDX conversation threads by content, keywords, file references, dates, or thread titles. Supports query/date filters and returns structured thread matches.".to_string(),
+        description: "Search through saved ZDX conversation threads by content, keywords, file references, dates, or thread titles. Use this to find thread IDs before calling Read_Thread — never guess a thread_id. Supports query/date filters and returns structured thread matches including thread IDs, titles, and activity dates.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

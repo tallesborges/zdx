@@ -41,7 +41,7 @@ fn format_extract_errors(errors: &[ExtractError]) -> String {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Fetch_Webpage".to_string(),
-        description: "Extract clean markdown content from a URL. Converts any public URL into LLM-optimized markdown.".to_string(),
+        description: "Extract clean markdown content from a URL. Use this when you have a specific URL to read; use Web_Search when you need to discover URLs first. Provide `objective` to guide what to extract and `search_queries` to focus results — both improve extraction quality. Set `full_content: true` only when you need the complete page. Returns LLM-optimized markdown excerpts by default.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -1418,6 +1418,7 @@ async fn consume_stream(
     }
 }
 
+#[allow(clippy::too_many_lines, clippy::match_same_arms)]
 fn handle_stream_event(
     event: StreamEvent,
     sender: &EventSender,
@@ -1463,10 +1464,6 @@ fn handle_stream_event(
                 Some(ReplayToken::AnthropicRedacted { data }),
             );
         }
-        StreamEvent::ContentBlockStart {
-            block_type: ContentBlockType::Text,
-            ..
-        } => {}
         StreamEvent::InputJsonDelta {
             index,
             partial_json,
@@ -1508,7 +1505,7 @@ fn handle_stream_event(
             )));
         }
         StreamEvent::MessageStart { usage, .. } => {
-            emit_message_start_usage(sender, &mut state.usage_seen, &usage)
+            emit_message_start_usage(sender, &mut state.usage_seen, &usage);
         }
         StreamEvent::ReasoningCompleted {
             index,
@@ -1522,6 +1519,10 @@ fn handle_stream_event(
             encrypted_content,
             summary,
         ),
+        StreamEvent::ContentBlockStart {
+            block_type: ContentBlockType::Text,
+            ..
+        } => {}
         StreamEvent::TextDelta { .. }
         | StreamEvent::MessageCompleted
         | StreamEvent::Ping
