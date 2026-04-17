@@ -75,7 +75,7 @@ fn image_mime_type(path: &Path) -> Option<&'static str> {
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Read".to_string(),
-        description: "Read the contents of a file from disk. Prefer this over shell commands like cat, head, tail, less, or more for file reading. Always provide `file_path`. For large files or specific ranges, use `offset` (1-indexed) and `limit` to page through the file. Responses are capped to 2000 lines and ~40KB total, including protection against huge single lines (for example minified files or embedded base64). If the result is truncated, call Read again with a higher offset or use grep to locate relevant sections first. Returns structured metadata including `content`, `offset`, `lines_shown`, `total_lines`, `truncated`, `byte_limited`, and an optional `warning`. Also supports JPEG, PNG, GIF, and WebP images for visual analysis.".to_string(),
+        description: "Read the contents of a file from disk. NEVER use cat, head, tail, less, or more through Bash for file reading — use this tool instead. Always provide `file_path`. For large files or specific ranges, use `offset` (1-indexed) and `limit` to page through the file. Responses are capped to 2000 lines and ~40KB total, including protection against huge single lines (for example minified files or embedded base64). If the result is truncated, call Read again with a higher offset or use grep to locate relevant sections first. Returns structured metadata including `content`, `offset`, `lines_shown`, `total_lines`, `truncated`, `byte_limited`, and an optional `warning`. Also supports JPEG, PNG, GIF, and WebP images for visual analysis.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

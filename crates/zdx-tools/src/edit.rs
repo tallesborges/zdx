@@ -16,7 +16,7 @@ use super::{
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Edit".to_string(),
-        description: "Edit an existing file by performing an exact string replacement. The 'old_string' text must match exactly (including whitespace and newlines).".to_string(),
+        description: "Edit an existing file by performing an exact string replacement. ALWAYS prefer this over Write for modifying existing files. MUST read the file with Read before editing. The 'old_string' text must match exactly (including whitespace and newlines). The edit WILL FAIL if old_string is not unique in the file — include more surrounding context to make it unique, or increase expected_replacements to replace all occurrences.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

@@ -42,7 +42,7 @@ const MAX_CONTEXT_LINES: usize = 5;
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Grep".to_string(),
-        description: "Search file contents for text matching a regex pattern. Prefer this over running rg or grep through Bash when you need to find text in files. Use `glob` to narrow file types and `file_path` to scope the search. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default."
+        description: "Search file contents for text matching a regex pattern. ALWAYS use this tool instead of running grep or rg through Bash — it returns structured JSON with file paths, line numbers, and context, respects .gitignore, supports pagination, and never floods the context window. NEVER invoke grep or rg as a Bash command. Use `glob` to narrow file types and `file_path` to scope the search. Returns structured JSON results with file paths, line numbers, matched text, and optional context. Large files are skipped above 4MB, long match/context lines are truncated to safe snippets, and oversized result sets include a warning so the model can narrow the search or paginate with offset/max_count. Respects .gitignore by default."
             .to_string(),
         input_schema: json!({
             "type": "object",

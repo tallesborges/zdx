@@ -2,12 +2,12 @@
 
 use anyhow::{Context, Result};
 use serde_json::Value;
+pub use zdx_types::providers::UsageDelta;
 pub use zdx_types::{
     ChatContentBlock, ChatMessage, ContentBlockType, MessageContent, ProviderError,
     ProviderErrorKind, ProviderResult, ProviderStream, ReasoningBlock, ReplayToken,
     SignatureProvider, StreamEvent, Usage,
 };
-pub use zdx_types::providers::UsageDelta;
 
 /// Standard User-Agent header for zdx API requests.
 ///

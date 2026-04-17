@@ -122,7 +122,8 @@ fn parse_message_start(data: &str) -> ProviderResult<StreamEvent> {
 
 fn parse_content_block_start(data: &str) -> ProviderResult<StreamEvent> {
     let parsed: SseContentBlockStart = parse_event_json("content_block_start", data)?;
-    let Some(block_type) = parse_supported_content_block_type(&parsed.content_block.block_type) else {
+    let Some(block_type) = parse_supported_content_block_type(&parsed.content_block.block_type)
+    else {
         return Ok(StreamEvent::Ignored {
             kind: format!(
                 "anthropic_content_block_start:{}",
