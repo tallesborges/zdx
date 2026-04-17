@@ -15,7 +15,7 @@ const PARALLEL_BETA_HEADER: &str = "search-extract-2025-10-10";
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Web_Search".to_string(),
-        description: "Search the web for current information and return ranked URLs with LLM-optimized excerpts. Use `objective` for the research goal and `search_queries` for concrete keyword searches. Do not send a `query` field. Prefer providing both `objective` and `search_queries`. Example: {\"objective\":\"When was the United Nations established? Prefer UN's websites.\",\"search_queries\":[\"Founding year UN\",\"Year of founding United Nations\"],\"max_results\":5}.".to_string(),
+        description: "Search the web for current information and return ranked URLs with LLM-optimized excerpts. At least one of `objective` or `search_queries` is required. Use `objective` for the natural-language research goal and `search_queries` for concrete keyword searches; prefer providing both. Do not send a `query` field. Example: {\"objective\":\"When was the United Nations established? Prefer UN's websites.\",\"search_queries\":[\"Founding year UN\",\"Year of founding United Nations\"],\"max_results\":5}.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

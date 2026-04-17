@@ -14,7 +14,7 @@ pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Write".to_string(),
         description:
-            "Write content to a file. Creates the file if it doesn't exist, overwrites if it does. ALWAYS prefer Edit for modifying existing files — only use Write when creating a new file or fully replacing its content. If overwriting an existing file, you MUST read it with Read first. NEVER proactively create documentation files (*.md, *.txt, README, CHANGELOG) unless explicitly asked."
+            "Write content to a file. Creates the file if it doesn't exist, overwrites if it does, and creates parent directories automatically. ALWAYS prefer Edit for modifying existing files — use Write mainly for brand-new files or full rewrites. If overwriting an existing file, you MUST read it with Read first. NEVER proactively create documentation files (*.md, *.txt, README, CHANGELOG) unless explicitly asked."
                 .to_string(),
         input_schema: json!({
             "type": "object",

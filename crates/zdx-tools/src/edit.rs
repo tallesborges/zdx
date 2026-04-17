@@ -16,7 +16,7 @@ use super::{
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Edit".to_string(),
-        description: "Edit an existing file by performing an exact string replacement. ALWAYS prefer this over Write for modifying existing files. MUST read the file with Read before editing. The 'old_string' text must match exactly (including whitespace and newlines). The edit WILL FAIL if old_string is not unique in the file — include more surrounding context to make it unique, or increase expected_replacements to replace all occurrences.".to_string(),
+        description: "Edit an existing file by performing an exact string replacement. ALWAYS prefer this over Write for modifying existing files when you know the exact region to change. MUST read the file with Read before editing. The `old_string` text must match exactly, including whitespace and newlines. If the edit fails because the match is missing or not unique, read more context and retry with a larger exact snippet. Increase `expected_replacements` only when you intentionally want multiple replacements in the same file.".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

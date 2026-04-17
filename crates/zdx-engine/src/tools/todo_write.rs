@@ -11,7 +11,7 @@ use crate::core::thread_persistence::{self as tp, ThreadEvent};
 pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Todo_Write".to_string(),
-        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send an `ops` array of mutations such as `replace`, `add`, `update`, and `remove` — `ops` must be a real JSON array, not a quoted JSON string. Prefer updating tasks immediately as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one task `in_progress`. Example: {\"ops\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
+        description: "Create and manage a structured todo list for the current thread. Use this for tasks with 3+ meaningful steps, multiple requested changes, or work that benefits from visible progress. Send an `ops` array of mutations such as `replace`, `add`, `update`, and `remove` — `ops` must be a real JSON array, not a quoted JSON string. Use `replace` to initialize or fully reset the list, then prefer incremental `update`/`add`/`remove` ops as work advances instead of keeping a long implicit plan in prose. While unfinished work remains, keep exactly one task `in_progress`. Example: {\"ops\":[{\"op\":\"add\",\"content\":\"Inspect bug\",\"status\":\"in_progress\"}]}".to_string(),
         input_schema: json!({
             "type": "object",
             "properties": {

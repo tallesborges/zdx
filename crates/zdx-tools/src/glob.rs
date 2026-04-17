@@ -20,7 +20,7 @@ pub fn definition() -> ToolDefinition {
     ToolDefinition {
         name: "Glob".to_string(),
         description:
-            "Find files by name pattern (glob). NEVER use find or rg --files through Bash for file discovery — use this tool instead. Use Glob when finding files by name pattern; use Grep when searching file contents. Returns a sorted list of matching file paths. Respects .gitignore by default, retries without .gitignore if no results are found, and auto-prefixes patterns without path separators with **/ for recursive matching. Batch multiple Glob calls together rather than running them sequentially."
+            "Find files by name pattern (glob). NEVER use find or rg --files through Bash for file discovery — use this tool instead. Use Glob when finding files by name pattern or discovering likely paths before Read; use Grep when searching file contents. Returns a sorted list of matching file paths. Respects .gitignore by default, retries without .gitignore if no results are found, and auto-prefixes patterns without path separators with **/ for recursive matching. Batch multiple Glob calls together rather than running them sequentially."
                 .to_string(),
         input_schema: json!({
             "type": "object",
