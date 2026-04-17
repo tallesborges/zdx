@@ -21,7 +21,96 @@ use crate::overlays::{ThreadPickerState, ThreadScope};
 pub const MAX_VISIBLE_THREADS: usize = 10;
 
 /// Renders the thread picker overlay.
+///
+/// - `Switch` mode (opened from command palette): centered modal with title + hints.
+/// - `Insert` mode (opened via `@@`): bottom-left inline dropdown, no title/hints.
 pub fn render_thread_picker(
+    frame: &mut Frame,
+    picker: &ThreadPickerState,
+    area: Rect,
+    input_top_y: u16,
+) {
+    if picker.mode.is_switch() {
+        render_thread_picker_modal(frame, picker, area, input_top_y);
+    } else {
+        render_thread_picker_inline(frame, picker, area, input_top_y);
+    }
+}
+
+/// Centered modal style — used for Switch mode (command palette / Ctrl+T).
+fn render_thread_picker_modal(
+    frame: &mut Frame,
+    picker: &ThreadPickerState,
+    area: Rect,
+    input_top_y: u16,
+) {
+    use crate::overlays::render_utils::{
+        calculate_overlay_area, render_overlay_container, render_separator,
+    };
+
+    let tree_items = picker.visible_tree_items();
+    let visible_count = tree_items.len().min(MAX_VISIBLE_THREADS);
+    let thread_count = match picker.scope {
+        ThreadScope::All => picker.all_threads.len(),
+        ThreadScope::Current => picker
+            .all_threads
+            .iter()
+            .filter(|t| t.root_path.as_deref() == Some(picker.current_root.as_str()))
+            .count(),
+    };
+
+    let picker_width = 60;
+    let picker_height = (visible_count as u16 + 7).max(9);
+
+    let picker_area = calculate_overlay_area(area, input_top_y, picker_width, picker_height);
+    let title = thread_picker_title(picker.scope, tree_items.len(), thread_count);
+    render_overlay_container(frame, picker_area, &title, Color::Magenta);
+
+    let inner = Rect::new(
+        picker_area.x + 1,
+        picker_area.y + 1,
+        picker_area.width.saturating_sub(2),
+        picker_area.height.saturating_sub(2),
+    );
+
+    render_filter_input(frame, picker, inner);
+    render_separator(frame, inner, 1);
+
+    if tree_items.is_empty() {
+        render_empty_picker(frame, picker, inner, /* modal */ true);
+        return;
+    }
+
+    // filter(1) + sep(1) top, sep(1) + hints(1) bottom
+    let list_height = inner.height.saturating_sub(4) as usize;
+    let list_area = Rect::new(inner.x, inner.y + 2, inner.width, list_height as u16);
+
+    let items: Vec<ListItem> = tree_items
+        .iter()
+        .skip(picker.offset)
+        .take(list_height)
+        .map(|item| build_thread_list_item(item, picker, inner.width))
+        .collect();
+
+    let list = List::new(items)
+        .highlight_style(
+            Style::default()
+                .bg(Color::Magenta)
+                .fg(Color::Black)
+                .add_modifier(Modifier::BOLD),
+        )
+        .highlight_symbol("▶ ");
+
+    let mut list_state = ListState::default();
+    list_state.select(Some(picker.selected.saturating_sub(picker.offset)));
+    frame.render_stateful_widget(list, list_area, &mut list_state);
+
+    render_separator(frame, inner, 2 + list_height as u16);
+    render_picker_hints(frame, picker, inner);
+}
+
+/// Inline dropdown style — used for Insert mode (`@@`).
+fn render_thread_picker_inline(
     frame: &mut Frame,
     picker: &ThreadPickerState,
     area: Rect,
@@ -63,11 +152,10 @@ pub fn render_thread_picker(
     }
 
     render_filter_input(frame, picker, inner);
-
     render_separator(frame, inner, 1);
 
     if tree_items.is_empty() {
-        render_empty_picker(frame, picker, inner);
+        render_empty_picker(frame, picker, inner, /* modal */ false);
         return;
     }
 
@@ -91,9 +179,15 @@ pub fn render_thread_picker(
         .highlight_symbol("▶ ");
 
     let mut list_state = ListState::default();
-    let visible_selected = picker.selected.saturating_sub(picker.offset);
-    list_state.select(Some(visible_selected));
+    list_state.select(Some(picker.selected.saturating_sub(picker.offset)));
     frame.render_stateful_widget(list, list_area, &mut list_state);
+}
+
+fn thread_picker_title(scope: ThreadScope, visible_count: usize, total_count: usize) -> String {
+    match scope {
+        ThreadScope::All => format!("Threads ({total_count})"),
+        ThreadScope::Current => format!("Threads ({visible_count}/{total_count})"),
+    }
 }
 
 fn render_filter_input(frame: &mut Frame, picker: &ThreadPickerState, inner_area: Rect) {
@@ -115,7 +209,17 @@ fn render_filter_input(frame: &mut Frame, picker: &ThreadPickerState, inner_area
     );
 }
 
-fn render_empty_picker(frame: &mut Frame, picker: &ThreadPickerState, inner_area: Rect) {
+/// Renders the empty-state message.
+///
+/// `modal` controls how much vertical space the empty area takes:
+/// - modal=true: subtracts hints + separator from bottom (4 rows overhead)
+/// - modal=false: subtracts only filter + separator from top (2 rows overhead)
+fn render_empty_picker(
+    frame: &mut Frame,
+    picker: &ThreadPickerState,
+    inner_area: Rect,
+    modal: bool,
+) {
     let message = if picker.filter.is_empty() {
         match picker.scope {
             ThreadScope::Current => "No threads in this workspace",
@@ -124,17 +228,49 @@ fn render_empty_picker(frame: &mut Frame, picker: &ThreadPickerState, inner_area
     } else {
         "No matching threads"
     };
+    let bottom_overhead: u16 = if modal { 2 } else { 0 };
+    let empty_height = inner_area.height.saturating_sub(2 + bottom_overhead);
     let empty_area = Rect::new(
         inner_area.x,
         inner_area.y + 2,
         inner_area.width,
-        inner_area.height.saturating_sub(2),
+        empty_height,
     );
     frame.render_widget(
         Paragraph::new(message)
             .style(Style::default().fg(Color::DarkGray))
             .alignment(Alignment::Center),
         empty_area,
+    );
+    if modal {
+        use crate::overlays::render_utils::render_separator;
+        render_separator(frame, inner_area, 2 + empty_height);
+        render_picker_hints(frame, picker, inner_area);
+    }
+}
+
+fn render_picker_hints(frame: &mut Frame, picker: &ThreadPickerState, inner_area: Rect) {
+    use crate::overlays::render_utils::{InputHint, render_hints};
+    let copy_hint = if picker.should_show_copied() {
+        InputHint::new("✓", "Copied!")
+    } else {
+        InputHint::new("y", "copy id")
+    };
+    let toggle_hint = match picker.scope {
+        ThreadScope::Current => "all",
+        ThreadScope::All => "current",
+    };
+    render_hints(
+        frame,
+        inner_area,
+        &[
+            InputHint::new("↑↓", "navigate"),
+            InputHint::new("Enter", "select"),
+            copy_hint,
+            InputHint::new("Ctrl+T", toggle_hint),
+            InputHint::new("Esc", "cancel"),
+        ],
+        Color::Magenta,
     );
 }
 
