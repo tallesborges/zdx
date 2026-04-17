@@ -1448,9 +1448,9 @@ fn handle_stream_event(
             data,
             ..
         } => {
-            let Some(data) = data else {
+            let Some(data) = data.filter(|s| !s.is_empty()) else {
                 return Err(TurnError::Parse {
-                    message: "Anthropic redacted_thinking block missing required `data` field"
+                    message: "Anthropic redacted_thinking content_block_start requires a non-empty `data` field"
                         .to_string(),
                     details: None,
                 });
@@ -2436,6 +2436,48 @@ mod tests {
                     message.contains("redacted_thinking"),
                     "unexpected message: {message}"
                 );
+                assert!(details.is_none());
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+        assert!(
+            state.turn.thinking_blocks.is_empty(),
+            "no thinking block should be recorded on parse error"
+        );
+    }
+
+    /// A `redacted_thinking` `content_block_start` that carries an
+    /// explicit empty-string `data` field is also a protocol violation.
+    /// The engine guard must mirror the SSE-parser boundary and reject
+    /// it with the same diagnostic so a malformed event injected via a
+    /// non-SSE producer (synthetic events, corrupted-JSONL rehydration)
+    /// cannot silently persist an unreplayable empty replay token.
+    #[test]
+    fn handle_stream_event_rejects_redacted_thinking_with_empty_data() {
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let sender = EventSender::new(tx);
+        let mut state = StreamState::new();
+
+        let err = handle_stream_event(
+            StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some(String::new()),
+            },
+            &sender,
+            &mut state,
+        )
+        .expect_err("empty data must be a parse error");
+
+        match err {
+            TurnError::Parse { message, details } => {
+                assert!(
+                    message.contains("redacted_thinking"),
+                    "unexpected message: {message}"
+                );
+                assert!(message.contains("`data`"), "unexpected message: {message}");
                 assert!(details.is_none());
             }
             other => panic!("unexpected error: {other:?}"),
