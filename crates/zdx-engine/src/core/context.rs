@@ -11,6 +11,8 @@
 
 use std::fs;
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
+use std::sync::OnceLock;
 
 use anyhow::Result;
 use chrono::Utc;
@@ -211,6 +213,12 @@ struct PromptTemplateVars {
     identity_prompt: String,
     provider: String,
     is_openai_codex: bool,
+    edit_tool_label: String,
+    os: String,
+    os_version: String,
+    arch: String,
+    git_repo_root: String,
+    git_branch: String,
     base_prompt: String,
     project_context: String,
     memory_index: String,
@@ -303,6 +311,63 @@ fn load_prompt_template(config: &Config) -> std::result::Result<TemplateSource, 
     })
 }
 
+fn parse_os_release_version_id(contents: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        let value = line.strip_prefix("VERSION_ID=")?;
+        let value = value.trim().trim_matches(|c| matches!(c, '"' | '\''));
+        (!value.is_empty()).then(|| value.to_string())
+    })
+}
+
+fn detect_os_version() -> String {
+    static CACHE: OnceLock<String> = OnceLock::new();
+    CACHE
+        .get_or_init(|| match std::env::consts::OS {
+            "macos" => Command::new("sw_vers")
+                .arg("-productVersion")
+                .output()
+                .ok()
+                .filter(|out| out.status.success())
+                .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+                .unwrap_or_default(),
+            "linux" => fs::read_to_string("/etc/os-release")
+                .ok()
+                .or_else(|| fs::read_to_string("/usr/lib/os-release").ok())
+                .and_then(|contents| parse_os_release_version_id(&contents))
+                .unwrap_or_default(),
+            _ => String::new(),
+        })
+        .clone()
+}
+
+fn detect_git_repo(cwd: &Path) -> (String, String) {
+    let toplevel = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+
+    if toplevel.is_empty() {
+        return (String::new(), String::new());
+    }
+
+    let branch = Command::new("git")
+        .args(["symbolic-ref", "--quiet", "--short", "HEAD"])
+        .current_dir(cwd)
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|s| !s.is_empty())
+        .unwrap_or_default();
+
+    (toplevel, branch)
+}
+
 fn build_prompt_template_vars(
     root: &Path,
     model: &str,
@@ -346,11 +411,23 @@ fn build_prompt_template_vars(
     let provider_selection = resolve_provider(model);
     let provider = provider_selection.kind.id().to_string();
     let is_openai_codex = provider_selection.kind == ProviderKind::OpenAICodex;
+    let edit_tool_label = if is_openai_codex {
+        "`apply_patch`".to_string()
+    } else {
+        "`edit`/`write`".to_string()
+    };
+    let (git_repo_root, git_branch) = detect_git_repo(&canonical_root);
 
     PromptTemplateVars {
         identity_prompt: prompts::identity_prompt().to_string(),
         provider,
         is_openai_codex,
+        edit_tool_label,
+        os: std::env::consts::OS.to_string(),
+        os_version: detect_os_version(),
+        arch: std::env::consts::ARCH.to_string(),
+        git_repo_root,
+        git_branch,
         base_prompt,
         project_context,
         memory_index,
@@ -1838,14 +1915,14 @@ mod tests {
         assert!(rendered.contains("<memory_index>"));
         assert!(rendered.contains("Treat skill guidance as task-specific instructions."));
         assert!(rendered.contains(
-            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references."
+            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the Path Resolution rules, unless the skill defines a different base for its own relative references."
         ));
         assert!(rendered.contains(
             "Skills are instruction files: read the `SKILL.md`, then follow it with normal"
         ));
 
-        let skills_pos = rendered.find("<skills_registry>").unwrap();
-        let memory_pos = rendered.find("<memory_contract>").unwrap();
+        let skills_pos = rendered.find("## Skills").unwrap();
+        let memory_pos = rendered.find("## Memory").unwrap();
         assert!(skills_pos < memory_pos);
 
         let memory_skill_pos = rendered
@@ -1858,6 +1935,45 @@ mod tests {
         assert!(when_to_consult_pos < saving_memory_pos);
         assert!(saving_memory_pos < memory_index_pos);
         assert!(memory_skill_pos < memory_index_pos);
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_double_quoted() {
+        let input = "NAME=\"Ubuntu\"\nVERSION_ID=\"22.04.3\"\nPRETTY_NAME=\"Ubuntu 22.04.3 LTS\"\n";
+        assert_eq!(
+            parse_os_release_version_id(input),
+            Some("22.04.3".to_string())
+        );
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_single_quoted() {
+        let input = "ID=rhel\nVERSION_ID='9'\n";
+        assert_eq!(parse_os_release_version_id(input), Some("9".to_string()));
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_unquoted() {
+        let input = "VERSION_ID=42\n";
+        assert_eq!(parse_os_release_version_id(input), Some("42".to_string()));
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_crlf_line_endings() {
+        let input = "NAME=\"Debian\"\r\nVERSION_ID=\"12\"\r\n";
+        assert_eq!(parse_os_release_version_id(input), Some("12".to_string()));
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_missing() {
+        let input = "NAME=\"Arch Linux\"\nID=arch\n";
+        assert_eq!(parse_os_release_version_id(input), None);
+    }
+
+    #[test]
+    fn test_parse_os_release_version_id_empty_value() {
+        let input = "VERSION_ID=\n";
+        assert_eq!(parse_os_release_version_id(input), None);
     }
 
     #[test]
@@ -1878,6 +1994,7 @@ mod tests {
 
         assert_eq!(anthropic.provider, "anthropic");
         assert!(!anthropic.is_openai_codex);
+        assert_eq!(anthropic.edit_tool_label, "`edit`/`write`");
 
         let codex = build_prompt_template_vars(
             Path::new("/tmp"),
@@ -1895,6 +2012,7 @@ mod tests {
 
         assert_eq!(codex.provider, "openai-codex");
         assert!(codex.is_openai_codex);
+        assert_eq!(codex.edit_tool_label, "`apply_patch`");
     }
 
     #[test]
@@ -1974,9 +2092,17 @@ mod tests {
             build_effective_system_prompt_with_paths(&config, dir.path(), false).unwrap();
         let prompt = effective.prompt.unwrap_or_default();
 
+        assert!(prompt.contains("When sections inside this template conflict, follow this order:"));
+        assert!(prompt.contains("1. Runtime instruction layers"));
+        assert!(prompt.contains("2. In-scope project instructions (`AGENTS.md` / `CLAUDE.md`)"));
+        assert!(prompt.contains("3. Matched skill guidance"));
+        assert!(prompt.contains("4. Memory guidance (for memory-related tasks)"));
+        assert!(prompt.contains("5. User-defined base instructions"));
+        assert!(prompt.contains("6. Defaults"));
         assert!(prompt.contains(
-            "When prompt sections conflict, follow this order: higher-priority runtime instructions outside this template, then runtime instruction layers, then in-scope project-context rules, then matched skill guidance, then user-defined base instructions, then defaults."
+            "Document order primes context; conflict resolution follows the list above."
         ));
+        assert!(!prompt.contains("Higher-priority runtime instructions outside this template"));
         assert!(prompt.contains(
             "These are user-defined base instructions. Treat them as baseline instructions for this run unless higher-priority guidance in this prompt overrides them."
         ));
@@ -1985,12 +2111,19 @@ mod tests {
         ));
         assert!(prompt.contains("for example `cargo` or git)."));
         assert!(!prompt.contains("for example `rg`, `cargo`, or git)."));
+        assert!(prompt.contains(
+            "When creating or editing files, MUST use `edit`/`write` instead of shell redirection, heredocs, `echo > file`, or `sed -i`-style commands."
+        ));
+        assert!(!prompt.contains("apply_patch"));
         assert!(prompt.contains("<environment>"));
         assert!(prompt.contains(
             "Runtime facts for this session. Use the listed env vars for special runtime locations when relevant; otherwise resolve ordinary workspace paths from the current working directory. This block provides runtime facts and path-resolution guidance."
         ));
         assert!(prompt.contains("The current working directory is '"));
         assert!(prompt.contains("Current date:"));
+        assert!(prompt.contains(&format!("Operating system: {}", std::env::consts::OS)));
+        assert!(prompt.contains(&format!(" on {}", std::env::consts::ARCH)));
+        assert!(prompt.contains("### Path Resolution"));
         assert!(
             prompt.contains("The following runtime environment variables are especially relevant:")
         );
@@ -2015,9 +2148,9 @@ mod tests {
             "Relative paths passed to tools still resolve from the current working directory; convert any source-relative path before calling a tool."
         ));
         assert!(prompt.contains("Base prompt"));
-        assert!(prompt.contains("<project-context>"));
+        assert!(prompt.contains("## Project Instructions"));
         assert!(prompt.contains(
-            "Project-context blocks are source-labeled by their `## /path/to/AGENTS.md` or `## /path/to/CLAUDE.md` heading; apply the relative path reminder above unless that file defines a different base for its own relative references."
+            "Project-instruction blocks are source-labeled by their `## /path/to/AGENTS.md` or `## /path/to/CLAUDE.md` heading; apply the Path Resolution rules unless that file defines a different base for its own relative references."
         ));
         assert!(prompt.contains(
             "Example: if cwd is `/repo/services/api`, and `/repo/services/AGENTS.md` mentions `web/README.md`, call `read` with `../web/README.md` or `/repo/services/web/README.md`."
@@ -2027,10 +2160,10 @@ mod tests {
         assert!(prompt.contains("Agent note"));
         assert!(prompt.contains("Treat skill guidance as task-specific instructions."));
         assert!(prompt.contains(
-            "Skills provide task-specific guidance, but they MUST NOT override higher-priority runtime instructions or in-scope project-context rules."
+            "Skills provide task-specific guidance, but they MUST NOT override higher-priority runtime instructions or in-scope project instructions."
         ));
         assert!(prompt.contains(
-            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the relative path reminder above, unless the skill defines a different base for its own relative references."
+            "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the Path Resolution rules, unless the skill defines a different base for its own relative references."
         ));
         assert!(prompt.contains("Available specialized capabilities"));
         assert!(prompt.contains("Task (`task`)"));
@@ -2127,7 +2260,7 @@ mod tests {
         let prompt = effective.prompt.unwrap_or_default();
 
         assert!(prompt.contains("Telegram output rules"));
-        assert!(prompt.contains("<instruction_layers>"));
+        assert!(prompt.contains("## Runtime Layers"));
     }
 
     #[test]
