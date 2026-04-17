@@ -1696,6 +1696,8 @@ mod tests {
         // Create a file larger than MAX_AGENTS_FILE_SIZE
         let large_content = "x".repeat(MAX_AGENTS_FILE_SIZE + 1000);
         fs::write(&agents_md, &large_content).unwrap();
+        let canonical_agents_md = agents_md.canonicalize().unwrap();
+        let canonical_root = dir.path().canonicalize().unwrap();
 
         let result = load_all_agents_files(dir.path());
         assert!(result.is_some());
@@ -1718,11 +1720,24 @@ mod tests {
             loaded.content.contains("[truncated]"),
             "Content should show truncation marker"
         );
-        // Content should be capped at MAX_AGENTS_FILE_SIZE
-        // (actual content is trimmed, so just verify it's smaller than original)
+
         assert!(
-            loaded.content.len() < large_content.len(),
-            "Content should be truncated"
+            loaded
+                .loaded_paths
+                .iter()
+                .any(|path| path == &canonical_agents_md),
+            "Loaded paths should include the root AGENTS.md"
+        );
+
+        let expected_section = format_inline_context_section(
+            &canonical_root,
+            &canonical_agents_md,
+            &large_content[..MAX_AGENTS_FILE_SIZE],
+            true,
+        );
+        assert!(
+            loaded.content.contains(&expected_section),
+            "Loaded content should include the truncated root AGENTS.md section"
         );
     }
 
