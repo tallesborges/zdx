@@ -58,9 +58,9 @@ async fn run_subagent(
         model: Some(handoff_model),
         system_prompt: None,
         thinking_level: Some(zdx_engine::config::ThinkingLevel::Minimal),
-        no_tools: false,
+        no_tools: true,
         no_system_prompt: true,
-        tools_override: Some(vec!["read".to_string()]),
+        tools_override: None,
         event_filter: Some(vec!["turn_finished".to_string()]),
         timeout: Some(Duration::from_secs(HANDOFF_TIMEOUT_SECS)),
     };
