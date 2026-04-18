@@ -29,15 +29,15 @@ pub struct GeminiCliConfig {
     pub max_tokens: Option<u32>,
     /// Session ID for rate limit grouping (persists across requests in a session).
     pub session_id: String,
-    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5)
-    pub thinking_config: Option<GeminiThinkingConfig>,
+    /// Thinking configuration (level for Gemini 3, budget for Gemini 2.5).
+    pub thinking_config: GeminiThinkingConfig,
 }
 
 impl GeminiCliConfig {
     pub fn new(
         model: String,
         max_tokens: Option<u32>,
-        thinking_config: Option<GeminiThinkingConfig>,
+        thinking_config: GeminiThinkingConfig,
     ) -> Self {
         Self {
             model,
@@ -120,9 +120,9 @@ impl GeminiCliClient {
                 max_output_tokens: self.config.max_tokens,
                 session_id: &self.config.session_id,
                 prompt_seq: seq,
-                thinking_config: self.config.thinking_config.as_ref(),
+                thinking_config: Some(&self.config.thinking_config),
             },
-        )?;
+        );
 
         let url = format!("{API_ENDPOINT}{STREAM_PATH}?alt=sse");
         let headers = build_headers(&creds.access);

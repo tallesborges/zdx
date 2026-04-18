@@ -88,232 +88,202 @@ impl<S> GeminiSseParser<S> {
         self.handle_chunk(value)
     }
 
-    #[allow(
-        clippy::too_many_lines,
-        clippy::needless_pass_by_value,
-        clippy::unnecessary_wraps
-    )]
+    #[allow(clippy::needless_pass_by_value, clippy::unnecessary_wraps)]
     fn handle_chunk(&mut self, value: Value) -> ProviderResult<()> {
         let payload = value.get("response").unwrap_or(&value);
 
-        if let Some(error) = value.get("error").or_else(|| payload.get("error")) {
-            let error_type = error
-                .get("status")
-                .or_else(|| error.get("code"))
-                .and_then(|v| v.as_str())
-                .unwrap_or("error")
-                .to_string();
-            let message = error_message_from_payload(error, &["message"]);
-            self.pending.push_back(StreamEvent::Error {
-                error_type,
-                message,
-            });
+        if self.emit_error_payload(&value, payload) {
             return Ok(());
         }
 
-        if let Some(usage) = payload
-            .get("usageMetadata")
-            .or_else(|| payload.get("usage_metadata"))
-        {
-            let prompt = usage
-                .get("promptTokenCount")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let completion = usage
-                .get("candidatesTokenCount")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(0);
-            let cached_from_details = usage
-                .get("cacheTokensDetails")
-                .and_then(|v| v.as_array())
-                .map_or(0, |details| {
-                    details
-                        .iter()
-                        .filter_map(|item| {
-                            item.get("tokenCount").and_then(serde_json::Value::as_u64)
-                        })
-                        .sum::<u64>()
-                });
-            let cached = usage
-                .get("cachedContentTokenCount")
-                .and_then(serde_json::Value::as_u64)
-                .unwrap_or(cached_from_details);
-            self.final_usage = Some(Usage {
-                input_tokens: prompt.saturating_sub(cached),
-                output_tokens: completion,
-                cache_read_input_tokens: cached,
-                cache_creation_input_tokens: 0,
-            });
+        self.capture_usage(payload);
+
+        if self.emit_prompt_feedback(payload) {
+            return Ok(());
         }
 
-        if let Some(candidates) = payload.get("candidates").and_then(|v| v.as_array())
-            && let Some(candidate) = candidates.first()
+        // Once a prior chunk has already emitted the completion block, a late
+        // candidate payload (e.g. a follow-up `functionCall` after `STOP`) must
+        // not emit any more content/tool events.
+        if !self.emitted_done
+            && let Some(candidate) = payload
+                .get("candidates")
+                .and_then(|v| v.as_array())
+                .and_then(|c| c.first())
         {
             if let Some(reason) = candidate.get("finishReason").and_then(|v| v.as_str()) {
                 self.final_finish_reason = Some(reason.to_string());
             }
-
-            if let Some(content) = candidate.get("content")
-                && let Some(parts) = content.get("parts").and_then(|v| v.as_array())
+            if let Some(parts) = candidate
+                .get("content")
+                .and_then(|c| c.get("parts"))
+                .and_then(|p| p.as_array())
             {
-                // Capture thought signatures from any part (text, thought, or functionCall).
-                // Prefer signatures attached to function calls when present.
-                for part in parts {
-                    let mut signature = part
-                        .get("thoughtSignature")
-                        .and_then(serde_json::Value::as_str)
-                        .map(|sig| (sig, part.get("functionCall").is_some()));
-
-                    if signature.is_none() {
-                        signature = part
-                            .get("functionCall")
-                            .and_then(|call| call.get("thoughtSignature"))
-                            .and_then(serde_json::Value::as_str)
-                            .map(|sig| (sig, true));
-                    }
-
-                    if let Some((sig, is_function_call)) = signature
-                        && (is_function_call || !self.signature_from_function_call)
-                    {
-                        self.pending_signature = Some(sig.to_string());
-                        self.signature_from_function_call = is_function_call;
-                    }
-                }
-
-                // First pass: process thought parts (reasoning)
-                let mut combined_reasoning = String::new();
-                for part in parts {
-                    let is_thought = part
-                        .get("thought")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
-                    if is_thought {
-                        // Accumulate thought text
-                        if let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                            combined_reasoning.push_str(text);
-                        }
-                    }
-                }
-
-                // Emit reasoning events if we have thought content
-                if !combined_reasoning.is_empty() {
-                    if self.reasoning_index.is_none() {
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.reasoning_index = Some(index);
-                        self.pending.push_back(StreamEvent::ContentBlockStart {
-                            index,
-                            block_type: ContentBlockType::Reasoning,
-                            id: None,
-                            name: None,
-                            data: None,
-                        });
-                    }
-
-                    let delta = if combined_reasoning.starts_with(&self.last_reasoning) {
-                        combined_reasoning[self.last_reasoning.len()..].to_string()
-                    } else {
-                        combined_reasoning.clone()
-                    };
-                    self.last_reasoning = combined_reasoning;
-                    if !delta.is_empty() {
-                        self.pending.push_back(StreamEvent::ReasoningDelta {
-                            index: self.reasoning_index.unwrap_or(0),
-                            reasoning: delta,
-                        });
-                    }
-                }
-
-                // Second pass: process regular text parts (non-thought)
-                let mut combined_text = String::new();
-                for part in parts {
-                    let is_thought = part
-                        .get("thought")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
-                    if !is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
-                        combined_text.push_str(text);
-                    }
-                }
-
-                if !combined_text.is_empty() {
-                    if self.text_index.is_none() {
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.text_index = Some(index);
-                        self.pending.push_back(StreamEvent::ContentBlockStart {
-                            index,
-                            block_type: ContentBlockType::Text,
-                            id: None,
-                            name: None,
-                            data: None,
-                        });
-                    }
-
-                    let delta = if combined_text.starts_with(&self.last_text) {
-                        combined_text[self.last_text.len()..].to_string()
-                    } else {
-                        combined_text.clone()
-                    };
-                    self.last_text = combined_text;
-                    if !delta.is_empty() {
-                        self.pending.push_back(StreamEvent::TextDelta {
-                            index: self.text_index.unwrap_or(0),
-                            text: delta,
-                        });
-                    }
-                }
-
-                // Third pass: process function calls
-                for part in parts {
-                    if let Some(call) = part.get("functionCall") {
-                        let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
-                        let args = call.get("args").unwrap_or(&Value::Null);
-                        let key = format!("{name}:{args}");
-                        if self.emitted_tool_calls.contains(&key) {
-                            continue;
-                        }
-                        self.emitted_tool_calls.insert(key);
-
-                        let tool_id = format!(
-                            "{}-{}-{}",
-                            self.tool_id_prefix, self.run_id, self.next_index
-                        );
-                        let index = self.next_index;
-                        self.next_index += 1;
-                        self.saw_tool = true;
-
-                        self.pending.push_back(StreamEvent::ContentBlockStart {
-                            index,
-                            block_type: ContentBlockType::ToolUse,
-                            id: Some(tool_id.clone()),
-                            name: Some(name.to_string()),
-                            data: None,
-                        });
-
-                        let args_json = if args.is_null() {
-                            "{}".to_string()
-                        } else {
-                            serde_json::to_string(args).unwrap_or_else(|_| "{}".to_string())
-                        };
-                        self.pending.push_back(StreamEvent::InputJsonDelta {
-                            index,
-                            partial_json: args_json,
-                        });
-                        self.pending
-                            .push_back(StreamEvent::ContentBlockCompleted { index });
-                    }
-                }
+                self.process_parts(parts);
             }
         }
 
-        if let Some(reason) = self.final_finish_reason.clone()
-            && !self.emitted_done
-        {
-            self.emitted_done = true;
+        self.maybe_finalize();
+        Ok(())
+    }
 
-            // Close reasoning block with signature if present
-            if self.reasoning_index.is_none() && self.pending_signature.is_some() {
+    fn emit_error_payload(&mut self, value: &Value, payload: &Value) -> bool {
+        let Some(error) = value.get("error").or_else(|| payload.get("error")) else {
+            return false;
+        };
+        let error_type = error
+            .get("status")
+            .or_else(|| error.get("code"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("error")
+            .to_string();
+        let message = error_message_from_payload(error, &["message"]);
+        self.pending.push_back(StreamEvent::Error {
+            error_type,
+            message,
+        });
+        // Error is terminal: prevent a subsequent EOF from synthesizing a
+        // spurious second `truncated` error.
+        self.emitted_done = true;
+        true
+    }
+
+    fn capture_usage(&mut self, payload: &Value) {
+        let Some(usage) = payload
+            .get("usageMetadata")
+            .or_else(|| payload.get("usage_metadata"))
+        else {
+            return;
+        };
+        let prompt = usage
+            .get("promptTokenCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let completion = usage
+            .get("candidatesTokenCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        // Per Vertex docs, `totalTokenCount = promptTokenCount + candidatesTokenCount
+        // + toolUsePromptTokenCount + thoughtsTokenCount`, so the tool-use and
+        // thoughts counts are additive to prompt/candidates, not already included.
+        let thoughts = usage
+            .get("thoughtsTokenCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let tool_use = usage
+            .get("toolUsePromptTokenCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(0);
+        let cached_from_details = usage
+            .get("cacheTokensDetails")
+            .and_then(|v| v.as_array())
+            .map_or(0, |details| {
+                details
+                    .iter()
+                    .filter_map(|item| item.get("tokenCount").and_then(serde_json::Value::as_u64))
+                    .sum::<u64>()
+            });
+        let cached = usage
+            .get("cachedContentTokenCount")
+            .and_then(serde_json::Value::as_u64)
+            .unwrap_or(cached_from_details);
+        // Cached tokens are already included in `promptTokenCount`; subtract them
+        // to avoid double-counting (they're reported separately in
+        // `cache_read_input_tokens`). `toolUsePromptTokenCount` is input-side but
+        // separate from the prompt, so add it after the subtraction.
+        let input_tokens = prompt.saturating_sub(cached).saturating_add(tool_use);
+        self.final_usage = Some(Usage {
+            input_tokens,
+            output_tokens: completion.saturating_add(thoughts),
+            cache_read_input_tokens: cached,
+            cache_creation_input_tokens: 0,
+        });
+    }
+
+    fn emit_prompt_feedback(&mut self, payload: &Value) -> bool {
+        // Gemini may block a prompt entirely; in that case the response contains
+        // `promptFeedback` with a `blockReason`. The same payload may also include
+        // `usageMetadata` (processed above), which we surface via a `MessageDelta`
+        // so consumers can see prompt tokens for the blocked request. The `Error`
+        // event is the terminal signal for blocked streams — downstream consumers
+        // (e.g. the engine, debug metrics) abort on it, so we intentionally do
+        // not emit `MessageCompleted` afterward.
+        if self.emitted_done {
+            return false;
+        }
+        let Some(feedback) = payload.get("promptFeedback") else {
+            return false;
+        };
+        let Some(reason) = feedback
+            .get("blockReason")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        else {
+            return false;
+        };
+        let message = if let Some(detail) = feedback
+            .get("blockReasonMessage")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+        {
+            format!("Prompt blocked: {reason}: {detail}")
+        } else {
+            format!("Prompt blocked: {reason}")
+        };
+        if let Some(usage) = self.final_usage.clone() {
+            self.pending.push_back(StreamEvent::MessageDelta {
+                stop_reason: Some("blocked".to_string()),
+                usage: Some(usage.into()),
+            });
+        }
+        self.pending.push_back(StreamEvent::Error {
+            error_type: "blocked".to_string(),
+            message,
+        });
+        self.emitted_done = true;
+        true
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn process_parts(&mut self, parts: &[Value]) {
+        // Capture thought signatures from any part (text, thought, or functionCall).
+        // Prefer signatures attached to function calls when present.
+        for part in parts {
+            let mut signature = part
+                .get("thoughtSignature")
+                .and_then(serde_json::Value::as_str)
+                .map(|sig| (sig, part.get("functionCall").is_some()));
+
+            if signature.is_none() {
+                signature = part
+                    .get("functionCall")
+                    .and_then(|call| call.get("thoughtSignature"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|sig| (sig, true));
+            }
+
+            if let Some((sig, is_function_call)) = signature
+                && (is_function_call || !self.signature_from_function_call)
+            {
+                self.pending_signature = Some(sig.to_string());
+                self.signature_from_function_call = is_function_call;
+            }
+        }
+
+        // First pass: thought parts (reasoning).
+        let mut combined_reasoning = String::new();
+        for part in parts {
+            let is_thought = part
+                .get("thought")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                combined_reasoning.push_str(text);
+            }
+        }
+
+        if !combined_reasoning.is_empty() {
+            if self.reasoning_index.is_none() {
                 let index = self.next_index;
                 self.next_index += 1;
                 self.reasoning_index = Some(index);
@@ -326,46 +296,182 @@ impl<S> GeminiSseParser<S> {
                 });
             }
 
-            if let Some(index) = self.reasoning_index.take() {
-                // Emit signature if we accumulated one
-                if let Some(signature) = self.pending_signature.take() {
-                    self.pending
-                        .push_back(StreamEvent::ReasoningSignatureDelta {
-                            index,
-                            signature,
-                            provider: SignatureProvider::Gemini,
-                        });
-                    self.signature_from_function_call = false;
-                }
-                self.pending
-                    .push_back(StreamEvent::ContentBlockCompleted { index });
-            }
-
-            // Close text block
-            if let Some(index) = self.text_index.take() {
-                self.pending
-                    .push_back(StreamEvent::ContentBlockCompleted { index });
-            }
-
-            let usage = self.final_usage.clone().unwrap_or_default();
-            let stop_reason = if self.saw_tool {
-                Some("tool_use".to_string())
+            let delta = if combined_reasoning.starts_with(&self.last_reasoning) {
+                combined_reasoning[self.last_reasoning.len()..].to_string()
             } else {
-                Some(map_finish_reason(&reason))
+                combined_reasoning.clone()
             };
-
-            self.pending.push_back(StreamEvent::MessageStart {
-                model: self.model.clone(),
-                usage: usage.clone(),
-            });
-            self.pending.push_back(StreamEvent::MessageDelta {
-                stop_reason,
-                usage: Some(usage.into()),
-            });
-            self.pending.push_back(StreamEvent::MessageCompleted);
+            self.last_reasoning = combined_reasoning;
+            if !delta.is_empty() {
+                self.pending.push_back(StreamEvent::ReasoningDelta {
+                    index: self.reasoning_index.unwrap_or(0),
+                    reasoning: delta,
+                });
+            }
         }
 
-        Ok(())
+        // Second pass: regular text parts (non-thought).
+        let mut combined_text = String::new();
+        for part in parts {
+            let is_thought = part
+                .get("thought")
+                .and_then(serde_json::Value::as_bool)
+                .unwrap_or(false);
+            if !is_thought && let Some(text) = part.get("text").and_then(|v| v.as_str()) {
+                combined_text.push_str(text);
+            }
+        }
+
+        if !combined_text.is_empty() {
+            if self.text_index.is_none() {
+                let index = self.next_index;
+                self.next_index += 1;
+                self.text_index = Some(index);
+                self.pending.push_back(StreamEvent::ContentBlockStart {
+                    index,
+                    block_type: ContentBlockType::Text,
+                    id: None,
+                    name: None,
+                    data: None,
+                });
+            }
+
+            let delta = if combined_text.starts_with(&self.last_text) {
+                combined_text[self.last_text.len()..].to_string()
+            } else {
+                combined_text.clone()
+            };
+            self.last_text = combined_text;
+            if !delta.is_empty() {
+                self.pending.push_back(StreamEvent::TextDelta {
+                    index: self.text_index.unwrap_or(0),
+                    text: delta,
+                });
+            }
+        }
+
+        // Third pass: function calls.
+        for part in parts {
+            if let Some(call) = part.get("functionCall") {
+                let name = call.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                // Gemini occasionally emits malformed `{ "functionCall": {} }`
+                // (or with only a signature). Skip — an empty-name tool call
+                // would propagate as a bogus invocation to the engine.
+                if name.is_empty() {
+                    continue;
+                }
+                let args = call.get("args").unwrap_or(&Value::Null);
+
+                // Prefer Gemini 3's real `functionCall.id` so it can be replayed
+                // in the subsequent `functionResponse`. Older models omit it;
+                // fall back to a synthesized local id in that case.
+                let real_id = call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string);
+
+                // Dedup only by real id: Gemini can internally retry and re-emit
+                // the same functionCall in a later chunk. Within a single chunk
+                // each part is iterated once, so no content-keyed dedup is
+                // needed for legacy models without an id.
+                if let Some(id) = &real_id
+                    && !self.emitted_tool_calls.insert(id.clone())
+                {
+                    continue;
+                }
+
+                let tool_id = real_id.unwrap_or_else(|| {
+                    format!(
+                        "{}-{}-{}",
+                        self.tool_id_prefix, self.run_id, self.next_index
+                    )
+                });
+                let index = self.next_index;
+                self.next_index += 1;
+                self.saw_tool = true;
+
+                self.pending.push_back(StreamEvent::ContentBlockStart {
+                    index,
+                    block_type: ContentBlockType::ToolUse,
+                    id: Some(tool_id.clone()),
+                    name: Some(name.to_string()),
+                    data: None,
+                });
+
+                let args_json = if args.is_null() {
+                    "{}".to_string()
+                } else {
+                    args.to_string()
+                };
+                self.pending.push_back(StreamEvent::InputJsonDelta {
+                    index,
+                    partial_json: args_json,
+                });
+                self.pending
+                    .push_back(StreamEvent::ContentBlockCompleted { index });
+            }
+        }
+    }
+
+    fn maybe_finalize(&mut self) {
+        let Some(reason) = self.final_finish_reason.clone() else {
+            return;
+        };
+        if self.emitted_done {
+            return;
+        }
+        self.emitted_done = true;
+
+        // Close reasoning block with signature if present.
+        if self.reasoning_index.is_none() && self.pending_signature.is_some() {
+            let index = self.next_index;
+            self.next_index += 1;
+            self.reasoning_index = Some(index);
+            self.pending.push_back(StreamEvent::ContentBlockStart {
+                index,
+                block_type: ContentBlockType::Reasoning,
+                id: None,
+                name: None,
+                data: None,
+            });
+        }
+
+        if let Some(index) = self.reasoning_index.take() {
+            if let Some(signature) = self.pending_signature.take() {
+                self.pending
+                    .push_back(StreamEvent::ReasoningSignatureDelta {
+                        index,
+                        signature,
+                        provider: SignatureProvider::Gemini,
+                    });
+                self.signature_from_function_call = false;
+            }
+            self.pending
+                .push_back(StreamEvent::ContentBlockCompleted { index });
+        }
+
+        if let Some(index) = self.text_index.take() {
+            self.pending
+                .push_back(StreamEvent::ContentBlockCompleted { index });
+        }
+
+        let usage = self.final_usage.clone().unwrap_or_default();
+        let stop_reason = if self.saw_tool {
+            Some("tool_use".to_string())
+        } else {
+            Some(map_finish_reason(&reason))
+        };
+
+        self.pending.push_back(StreamEvent::MessageStart {
+            model: self.model.clone(),
+            usage: usage.clone(),
+        });
+        self.pending.push_back(StreamEvent::MessageDelta {
+            stop_reason,
+            usage: Some(usage.into()),
+        });
+        self.pending.push_back(StreamEvent::MessageCompleted);
     }
 }
 
@@ -395,12 +501,33 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(e))) => {
+                    // Transport-level failure during streaming (socket reset,
+                    // connection dropped, etc.). Classify as `Timeout` (not `Parse`)
+                    // so `ProviderError::is_retryable()` can see it as transient, and
+                    // include an explicit "network error" token in the message so the
+                    // pattern match in `RETRYABLE_PATTERNS` catches arbitrary
+                    // underlying transport errors.
                     return Poll::Ready(Some(Err(ProviderError::new(
-                        ProviderErrorKind::Parse,
-                        format!("SSE stream error: {e}"),
+                        ProviderErrorKind::Timeout,
+                        format!("SSE stream network error: {e}"),
                     ))));
                 }
-                Poll::Ready(None) => return Poll::Ready(None),
+                Poll::Ready(None) => {
+                    // The upstream stream ended. If we never emitted the completion
+                    // block, the response was truncated (server closed the connection
+                    // mid-stream). Surface a terminal `Error` event so consumers can
+                    // distinguish this from a clean end; subsequent polls return None
+                    // normally.
+                    if !self.emitted_done {
+                        self.emitted_done = true;
+                        self.pending.push_back(StreamEvent::Error {
+                            error_type: "truncated".to_string(),
+                            message: "Gemini stream ended without finishReason".to_string(),
+                        });
+                        continue;
+                    }
+                    return Poll::Ready(None);
+                }
                 Poll::Pending => return Poll::Pending,
             }
         }
@@ -790,5 +917,602 @@ mod tests {
                 reasoning,
             } if reasoning == ", second"
         ));
+    }
+
+    /// Test: A real Gemini 3 `functionCall.id` is preserved end-to-end instead of
+    /// being replaced by a synthesized local id. The id must flow to
+    /// `ContentBlockStart` so it can be replayed on the subsequent
+    /// `functionResponse`.
+    #[test]
+    fn test_function_call_id_preserved_from_gemini() {
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "id": "call_abc123_from_gemini",
+                            "name": "get_weather",
+                            "args": {"city": "Paris"}
+                        }
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        let start = parser
+            .pending
+            .iter()
+            .find(|e| matches!(e, StreamEvent::ContentBlockStart { .. }))
+            .cloned()
+            .expect("should emit ContentBlockStart for tool use");
+
+        match start {
+            StreamEvent::ContentBlockStart {
+                block_type: ContentBlockType::ToolUse,
+                id,
+                name,
+                ..
+            } => {
+                assert_eq!(
+                    id.as_deref(),
+                    Some("call_abc123_from_gemini"),
+                    "real functionCall.id must be preserved"
+                );
+                assert_eq!(name.as_deref(), Some("get_weather"));
+            }
+            other => panic!("expected ToolUse ContentBlockStart, got {other:?}"),
+        }
+
+        // The synthesized prefix must not appear in the emitted id.
+        let synthesized_prefix = format!("test-{}", parser.run_id);
+        let uses_synthesized = parser.pending.iter().any(|e| match e {
+            StreamEvent::ContentBlockStart {
+                id: Some(id),
+                block_type: ContentBlockType::ToolUse,
+                ..
+            } => id.starts_with(&synthesized_prefix),
+            _ => false,
+        });
+        assert!(
+            !uses_synthesized,
+            "should not use synthesized id when Gemini supplied one"
+        );
+
+        // Re-emitting the same functionCall with the same real id in a later chunk
+        // must be deduped (guards against internal retries).
+        parser.pending.clear();
+        let retry = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "id": "call_abc123_from_gemini",
+                            "name": "get_weather",
+                            "args": {"city": "Paris"}
+                        }
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(retry).unwrap();
+        let retry_tool_starts = parser
+            .pending
+            .iter()
+            .filter(|e| {
+                matches!(
+                    e,
+                    StreamEvent::ContentBlockStart {
+                        block_type: ContentBlockType::ToolUse,
+                        ..
+                    }
+                )
+            })
+            .count();
+        assert_eq!(
+            retry_tool_starts, 0,
+            "duplicate functionCall.id must be deduped across chunks"
+        );
+    }
+
+    /// Test: `promptFeedback.blockReason` combined with `usageMetadata` emits a
+    /// `MessageDelta` carrying the prompt tokens followed by a terminal `Error`.
+    /// The engine aborts on `Error`, so `MessageCompleted` must NOT be emitted
+    /// afterward — otherwise debug metrics misclassify blocked streams as
+    /// `Completed`. The `MessageDelta` must come first so consumers see the
+    /// usage before the `Error` aborts the stream.
+    #[test]
+    fn test_prompt_feedback_blocked_emits_error_with_usage() {
+        use crate::UsageDelta;
+
+        let mut parser = create_test_parser();
+
+        // Real Gemini payload: both promptFeedback and usageMetadata in the same
+        // chunk. Without reordering handle_chunk, the early return from the
+        // promptFeedback branch would drop usageMetadata entirely.
+        let chunk = json!({
+            "promptFeedback": {
+                "blockReason": "SAFETY",
+                "safetyRatings": [
+                    {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH"}
+                ]
+            },
+            "usageMetadata": {
+                "promptTokenCount": 42,
+                "totalTokenCount": 42
+            }
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        let delta_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    StreamEvent::MessageDelta {
+                        stop_reason: Some(sr),
+                        usage: Some(UsageDelta {
+                            input_tokens: Some(tokens),
+                            ..
+                        }),
+                    } if sr == "blocked" && *tokens > 0
+                )
+            })
+            .expect("should emit MessageDelta carrying prompt tokens for blocked prompt");
+
+        let error_idx = events
+            .iter()
+            .position(|e| {
+                matches!(
+                    e,
+                    StreamEvent::Error { error_type, message }
+                        if error_type == "blocked" && message.contains("SAFETY")
+                )
+            })
+            .expect("should emit a blocked Error event with the reason");
+
+        assert!(
+            delta_idx < error_idx,
+            "MessageDelta must come before Error so consumers see usage before the stream aborts",
+        );
+
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageCompleted)),
+            "MessageCompleted must NOT be emitted — Error is the terminal signal for blocked streams",
+        );
+
+        assert!(parser.emitted_done, "emitted_done must be set");
+    }
+
+    /// Test: A blocked-prompt payload carrying `usageMetadata` reports the token
+    /// counts via the emitted `MessageDelta`, and they are also retained in
+    /// `parser.final_usage`. Regression test for the bug where the early return
+    /// from the `promptFeedback` branch dropped `usageMetadata`, causing blocked
+    /// requests to account as zero tokens.
+    #[test]
+    fn test_prompt_feedback_blocked_with_usage_reports_tokens() {
+        use crate::UsageDelta;
+
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "promptFeedback": {
+                "blockReason": "SAFETY"
+            },
+            "usageMetadata": {
+                "promptTokenCount": 7,
+                "totalTokenCount": 7
+            }
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        // final_usage must be captured despite the blocked branch returning early.
+        let final_usage = parser
+            .final_usage
+            .clone()
+            .expect("final_usage must be captured from usageMetadata on blocked payloads");
+        assert_eq!(final_usage.input_tokens, 7);
+
+        let events: Vec<_> = parser.pending.drain(..).collect();
+
+        // Event sequence: MessageDelta (with usage), then Error. No MessageCompleted.
+        let mut iter = events.iter();
+        let first = iter.next().expect("expected at least one event");
+        match first {
+            StreamEvent::MessageDelta {
+                stop_reason,
+                usage:
+                    Some(UsageDelta {
+                        input_tokens: Some(tokens),
+                        ..
+                    }),
+            } => {
+                assert_eq!(stop_reason.as_deref(), Some("blocked"));
+                assert_eq!(*tokens, 7, "prompt tokens must be surfaced to consumers");
+            }
+            other => panic!("expected MessageDelta with usage first, got {other:?}"),
+        }
+
+        let second = iter.next().expect("expected Error after MessageDelta");
+        assert!(
+            matches!(
+                second,
+                StreamEvent::Error { error_type, .. } if error_type == "blocked"
+            ),
+            "expected blocked Error after MessageDelta, got {second:?}",
+        );
+
+        assert!(
+            iter.next().is_none(),
+            "no further events should be emitted; MessageCompleted must not follow Error",
+        );
+    }
+
+    /// Test: `thoughtsTokenCount` is added to `output_tokens` and
+    /// `toolUsePromptTokenCount` is added to `input_tokens`. Per Vertex docs,
+    /// `totalTokenCount` equals `promptTokenCount` + `candidatesTokenCount` +
+    /// `toolUsePromptTokenCount` + `thoughtsTokenCount`, so those fields are
+    /// additive, not already included.
+    #[test]
+    fn test_usage_includes_thoughts_tokens() {
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": { "parts": [{ "text": "done" }] }
+            }],
+            "usageMetadata": {
+                "promptTokenCount": 100,
+                "candidatesTokenCount": 50,
+                "thoughtsTokenCount": 30,
+                "toolUsePromptTokenCount": 10,
+                "cachedContentTokenCount": 20
+            }
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        let usage = parser
+            .final_usage
+            .clone()
+            .expect("final_usage should be set from usageMetadata");
+
+        // input = (prompt - cached) + tool_use = (100 - 20) + 10 = 90
+        assert_eq!(
+            usage.input_tokens, 90,
+            "input_tokens should include tool_use and exclude cached"
+        );
+        // output = completion + thoughts = 50 + 30 = 80
+        assert_eq!(
+            usage.output_tokens, 80,
+            "output_tokens should include thoughtsTokenCount"
+        );
+        assert_eq!(usage.cache_read_input_tokens, 20);
+        assert_eq!(usage.cache_creation_input_tokens, 0);
+    }
+
+    /// Test: After a chunk with `finishReason` has already emitted the completion
+    /// block, a late chunk carrying a `functionCall` must NOT emit any further
+    /// tool events. Previously the parts pass was unconditional, so Gemini could
+    /// leak a post-STOP tool call through to the engine.
+    #[test]
+    fn test_late_tool_call_after_stop_is_ignored() {
+        let mut parser = create_test_parser();
+
+        // Chunk 1: finishReason=STOP with empty parts → emits completion block.
+        let chunk1 = json!({
+            "candidates": [{
+                "finishReason": "STOP",
+                "content": { "parts": [] }
+            }]
+        });
+        parser.handle_chunk(chunk1).unwrap();
+        assert!(parser.emitted_done, "chunk 1 should mark done");
+        let drained: Vec<_> = parser.pending.drain(..).collect();
+        assert!(
+            drained
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageStart { .. })),
+            "chunk 1 should drain MessageStart",
+        );
+        assert!(
+            drained
+                .iter()
+                .any(|e| matches!(e, StreamEvent::MessageCompleted)),
+            "chunk 1 should drain MessageCompleted",
+        );
+
+        // Chunk 2: late functionCall after STOP — must be ignored.
+        let chunk2 = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{
+                        "functionCall": {
+                            "id": "x",
+                            "name": "bash",
+                            "args": {}
+                        }
+                    }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk2).unwrap();
+
+        let post_stop_tool_start = parser.pending.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::ToolUse,
+                    ..
+                }
+            )
+        });
+        assert!(
+            !post_stop_tool_start,
+            "late functionCall after STOP must not emit a ToolUse ContentBlockStart",
+        );
+        assert!(
+            !parser.saw_tool,
+            "saw_tool must remain false for post-STOP tool payloads",
+        );
+    }
+
+    /// Test: The inner byte stream ending without a `finishReason` is a truncated
+    /// response. `poll_next` must emit a terminal `Error { error_type: "truncated" }`
+    /// (so consumers can distinguish truncation from a clean end) and only then
+    /// return `None`.
+    #[tokio::test]
+    async fn test_eof_without_finish_reason_emits_truncated_error() {
+        use futures_util::StreamExt;
+
+        // One SSE event with partial text (no finishReason), then the stream
+        // ends. The eventsource layer parses `data: ...\n\n` blocks.
+        let sse_body =
+            b"data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"hi\"}]}}]}\n\n";
+        let byte_stream = stream::iter(vec![Ok::<_, std::io::Error>(Bytes::from_static(sse_body))]);
+        let mut parser =
+            GeminiSseParser::new(byte_stream, "gemini-3-flash-preview".to_string(), "test");
+
+        // Drain the partial text events.
+        let mut saw_text_delta = false;
+        let mut saw_truncated_error = false;
+        while let Some(event) = parser.next().await {
+            let event = event.expect("partial events should be Ok");
+            match event {
+                StreamEvent::TextDelta { ref text, .. } if text == "hi" => {
+                    saw_text_delta = true;
+                }
+                StreamEvent::Error {
+                    ref error_type,
+                    ref message,
+                } if error_type == "truncated" => {
+                    assert!(
+                        message.contains("finishReason"),
+                        "truncated error message should mention missing finishReason, got: {message}",
+                    );
+                    saw_truncated_error = true;
+                }
+                _ => {}
+            }
+        }
+
+        assert!(saw_text_delta, "should emit the partial text delta first");
+        assert!(
+            saw_truncated_error,
+            "stream ending without finishReason must emit a truncated Error event",
+        );
+    }
+
+    /// Test: A transport-level error mid-stream must surface as a retryable
+    /// `ProviderError`. Previously the parser mapped it to `ProviderErrorKind::Parse`,
+    /// which `is_retryable()` hard-codes as non-retryable, so transient socket
+    /// failures were incorrectly treated as fatal.
+    #[tokio::test]
+    async fn test_transport_error_is_retryable() {
+        use futures_util::StreamExt;
+
+        let byte_stream = stream::iter(vec![Err::<Bytes, std::io::Error>(std::io::Error::new(
+            std::io::ErrorKind::ConnectionReset,
+            "socket closed mid-stream",
+        ))]);
+        let mut parser =
+            GeminiSseParser::new(byte_stream, "gemini-3-flash-preview".to_string(), "test");
+
+        let first = parser
+            .next()
+            .await
+            .expect("stream should yield the transport error");
+        let err = first.expect_err("transport failure must surface as Err");
+
+        assert_ne!(
+            err.kind,
+            ProviderErrorKind::Parse,
+            "transport error must not be classified as Parse (non-retryable)",
+        );
+        assert!(
+            err.is_retryable(),
+            "transient transport errors must be retryable, got {err:?}",
+        );
+    }
+
+    /// Test: A malformed `functionCall` with no `name` (or an empty one) must be
+    /// skipped silently. Previously it propagated as an empty-name tool
+    /// invocation to the engine.
+    #[test]
+    fn test_malformed_empty_function_call_is_skipped() {
+        // Case A: functionCall is an empty object.
+        let mut parser = create_test_parser();
+        let chunk_a = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "functionCall": {} }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk_a).unwrap();
+        let any_tool_start = parser.pending.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::ToolUse,
+                    ..
+                }
+            )
+        });
+        assert!(
+            !any_tool_start,
+            "empty `functionCall: {{}}` must not emit a ToolUse block",
+        );
+        assert!(
+            !parser.saw_tool,
+            "empty `functionCall: {{}}` must not flip saw_tool",
+        );
+
+        // Case B: functionCall with explicit empty name.
+        let mut parser = create_test_parser();
+        let chunk_b = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [{ "functionCall": { "name": "" } }]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk_b).unwrap();
+        let any_tool_start = parser.pending.iter().any(|e| {
+            matches!(
+                e,
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::ToolUse,
+                    ..
+                }
+            )
+        });
+        assert!(
+            !any_tool_start,
+            "`functionCall` with empty name must not emit a ToolUse block",
+        );
+        assert!(
+            !parser.saw_tool,
+            "`functionCall` with empty name must not flip saw_tool",
+        );
+    }
+
+    /// Dedup is keyed on `functionCall.id`, not `(name, args)`. Two calls with
+    /// identical name+args but distinct ids must both be emitted.
+    #[test]
+    fn test_function_call_dedup_is_id_based_not_content_based() {
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "candidates": [{
+                "content": {
+                    "parts": [
+                        { "functionCall": { "id": "call_a", "name": "bash", "args": {"cmd": "ls"} } },
+                        { "functionCall": { "id": "call_b", "name": "bash", "args": {"cmd": "ls"} } }
+                    ]
+                }
+            }]
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        let tool_ids: Vec<String> = parser
+            .pending
+            .iter()
+            .filter_map(|e| match e {
+                StreamEvent::ContentBlockStart {
+                    block_type: ContentBlockType::ToolUse,
+                    id: Some(id),
+                    ..
+                } => Some(id.clone()),
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(
+            tool_ids,
+            vec!["call_a".to_string(), "call_b".to_string()],
+            "both distinct-id calls must be emitted even with identical name+args",
+        );
+    }
+
+    /// An API error payload is terminal. A subsequent EOF must NOT synthesize
+    /// a second `truncated` error on top of the original API error.
+    #[test]
+    fn test_error_payload_marks_stream_terminal() {
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "error": {
+                "status": "INVALID_ARGUMENT",
+                "message": "bad request"
+            }
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        assert!(parser.emitted_done, "error payload must set emitted_done");
+
+        let error_count = parser
+            .pending
+            .iter()
+            .filter(|e| matches!(e, StreamEvent::Error { .. }))
+            .count();
+        assert_eq!(error_count, 1, "exactly one Error event from the payload");
+
+        // Simulate a subsequent EOF poll: with emitted_done=true, poll_next
+        // must NOT push an additional `truncated` error. Verify by calling
+        // the same path the Stream impl's None branch takes: if emitted_done
+        // is already true, no new error should be enqueued.
+        let pending_before = parser.pending.len();
+        // This mirrors the `Poll::Ready(None)` branch logic:
+        if !parser.emitted_done {
+            parser.emitted_done = true;
+            parser.pending.push_back(StreamEvent::Error {
+                error_type: "truncated".to_string(),
+                message: "Gemini stream ended without finishReason".to_string(),
+            });
+        }
+        assert_eq!(
+            parser.pending.len(),
+            pending_before,
+            "EOF after API error must not enqueue a second truncated error",
+        );
+    }
+
+    /// `emit_error_payload` must handle errors nested under `response.error`
+    /// (Cloud Code Assist wrapper) identically to top-level `error`.
+    #[test]
+    fn test_error_under_response_wrapper_is_handled() {
+        let mut parser = create_test_parser();
+
+        let chunk = json!({
+            "response": {
+                "error": {
+                    "status": "PERMISSION_DENIED",
+                    "message": "auth failed"
+                }
+            }
+        });
+        parser.handle_chunk(chunk).unwrap();
+
+        let error = parser
+            .pending
+            .iter()
+            .find_map(|e| match e {
+                StreamEvent::Error {
+                    error_type,
+                    message,
+                } => Some((error_type.clone(), message.clone())),
+                _ => None,
+            })
+            .expect("Error event must be emitted for response.error");
+        assert_eq!(error.0, "PERMISSION_DENIED");
+        assert!(error.1.contains("auth failed"));
+        assert!(parser.emitted_done);
     }
 }
