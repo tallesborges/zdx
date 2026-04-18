@@ -920,8 +920,13 @@ fn build_provider_client(
         .compute_reasoning_budget(options.max_tokens, options.model_output_limit)
         .unwrap_or(0);
     let thinking_effort = map_thinking_to_anthropic_effort(options.thinking_level, options.model);
-    let gemini_thinking = thinking_enabled
-        .then(|| GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model));
+    // Always emit a Gemini thinking config — even when ThinkingLevel::Off — so that
+    // `Off` sends an explicit minimum-thinking config rather than omitting
+    // `thinkingConfig` (which lets Gemini fall back to its default high reasoning).
+    let gemini_thinking = Some(GeminiThinkingConfig::from_thinking_level(
+        options.thinking_level,
+        options.model,
+    ));
 
     match options.provider {
         ProviderKind::Anthropic => build_anthropic_client(
@@ -987,7 +992,7 @@ fn build_provider_client(
             GeminiCliConfig::new(
                 options.model.to_string(),
                 config.max_tokens,
-                gemini_thinking,
+                GeminiThinkingConfig::from_thinking_level(options.thinking_level, options.model),
             ),
         ))),
         ProviderKind::Zen => build_zen_client(

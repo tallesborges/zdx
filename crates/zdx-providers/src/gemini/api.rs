@@ -118,7 +118,8 @@ impl GeminiClient {
             system_prompt.as_deref(),
             self.config.max_output_tokens,
             self.config.thinking_config.as_ref(),
-        )?;
+            &self.config.model,
+        );
         let trace = DebugTrace::from_env(&self.config.model, None);
         let url = format!(
             "{}/models/{}:streamGenerateContent?alt=sse",
