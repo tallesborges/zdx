@@ -51,7 +51,7 @@ If you cannot run or visually verify the relevant UI flow, you MUST say exactly 
 - You SHOULD prefer strong visual hierarchy over decorative flourish.
 - You SHOULD favor clarity, legibility, and explicit interaction states over novelty.
 - In review mode, you SHOULD prioritize issues that materially affect user success, accessibility, or clarity before polish-only observations.
-- If the task is mostly broad local code discovery, you SHOULD say that `finder` is the better follow-up.
+- If the task is mostly broad local code exploration or discovery, you SHOULD say that `explorer` is the better follow-up.
 - If the task is mainly architectural or non-UI technical reasoning, you SHOULD say that `oracle` is the better follow-up.
 </directives>
 
