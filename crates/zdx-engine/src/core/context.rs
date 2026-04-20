@@ -2083,6 +2083,7 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::too_many_lines)]
     fn test_template_mode_default_template_renders_runtime_and_context_sections() {
         let dir = tempdir().unwrap();
         fs::write(dir.path().join("AGENTS.md"), "Agent note").unwrap();
@@ -2188,7 +2189,9 @@ mod tests {
         assert!(prompt.contains(
             "Use `designer` when the task is mainly UI/UX implementation, design review, accessibility refinement, or visual polish."
         ));
-        assert!(prompt.contains("Use `task` for scoped implementation when no named specialist fits better."));
+        assert!(prompt.contains(
+            "Use `task` for scoped implementation when no named specialist fits better."
+        ));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
     }

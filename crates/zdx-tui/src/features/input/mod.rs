@@ -22,6 +22,6 @@ pub use render::{calculate_input_height, render_input, render_input_with_cursor}
 pub use state::{HandoffState, InputState};
 pub use text_buffer::{CursorMove, TextBuffer};
 pub use update::{
-    InputContext, build_send_effects, handle_handoff_result, handle_main_key, handle_mouse,
-    handle_paste,
+    InputContext, build_fast_mode_toggle_actions, build_send_effects, handle_handoff_result,
+    handle_main_key, handle_mouse, handle_paste,
 };

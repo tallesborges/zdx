@@ -99,6 +99,7 @@ impl XaiClient {
                 parallel_tool_calls: Some(true),
                 tool_choice: Some("auto".to_string()),
                 truncation: None,
+                service_tier: None,
             },
             http: reqwest::Client::new(),
         }

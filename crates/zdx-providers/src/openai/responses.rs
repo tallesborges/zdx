@@ -36,6 +36,8 @@ pub struct ResponsesConfig {
     /// Truncation strategy: "auto" or "disabled" (default)
     /// "auto" drops items from conversation start if context is exceeded
     pub truncation: Option<String>,
+    /// `OpenAI` Responses API service tier: `"priority"` for faster inference (2× cost), `"flex"` for reduced cost.
+    pub service_tier: Option<String>,
 }
 
 /// Sends a Responses API request and returns a stream of normalized events.
@@ -85,6 +87,7 @@ pub async fn send_responses_stream(
         truncation: config.truncation.clone(),
         prompt_cache_key: config.prompt_cache_key.clone(),
         parallel_tool_calls: config.parallel_tool_calls,
+        service_tier: config.service_tier.clone(),
     };
 
     let url = format!("{}{}", config.base_url, config.path);

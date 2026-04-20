@@ -19,6 +19,7 @@ pub struct OpenAIConfig {
     pub reasoning_effort: Option<String>,
     pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 impl OpenAIConfig {
@@ -34,6 +35,7 @@ impl OpenAIConfig {
     ///
     /// # Errors
     /// Returns an error if the operation fails.
+    #[allow(clippy::too_many_arguments)]
     pub fn from_env(
         model: String,
         max_output_tokens: Option<u32>,
@@ -42,6 +44,7 @@ impl OpenAIConfig {
         reasoning_effort: Option<String>,
         text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
+        service_tier: Option<String>,
     ) -> Result<Self> {
         let api_key = ProviderKind::OpenAI.resolve_api_key(config_api_key)?;
         let base_url = ProviderKind::OpenAI.resolve_base_url(config_base_url)?;
@@ -54,6 +57,7 @@ impl OpenAIConfig {
             reasoning_effort,
             text_verbosity,
             prompt_cache_key,
+            service_tier,
         })
     }
 }
@@ -106,6 +110,7 @@ impl OpenAIClient {
             parallel_tool_calls: Some(true),
             tool_choice: Some("auto".to_string()),
             truncation: None, // Default: "disabled" - fail if context exceeded
+            service_tier: self.config.service_tier.clone(),
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
@@ -142,6 +147,7 @@ mod tests {
             reasoning_effort: None,
             text_verbosity: None,
             prompt_cache_key: None,
+            service_tier: None,
         };
 
         assert_eq!(

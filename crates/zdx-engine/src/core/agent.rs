@@ -55,6 +55,8 @@ pub struct AgentOptions {
     pub surface: Option<String>,
     /// Optional `OpenAI` Responses text verbosity override for this run.
     pub text_verbosity: Option<TextVerbosity>,
+    /// `OpenAI` Responses API service tier: `"priority"` for faster inference (2× cost).
+    pub service_tier: Option<String>,
 }
 
 /// Tool configuration for agent execution.
@@ -729,47 +731,20 @@ async fn run_turn_inner(
     loop {
         ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
 
-        // Retry loop for pre-stream transient errors (connection, overloaded before SSE starts).
-        // Mid-stream errors (from consume_stream) are NOT retried to avoid UI rewind complexity.
-        let stream = match request_stream(
-            &setup.client,
-            &messages,
-            &setup.tools,
-            system_prompt,
-            cancel,
-        )
-        .await
-        {
-            Ok(stream) => stream,
-            Err(TurnError::Provider(ref initial_err)) if initial_err.is_retryable() => {
-                // Track the most recent provider error across attempts so
-                // each emitted ProviderRetry event reflects the *current*
-                // failure kind/message/details, not the one from attempt 0.
-                let mut current_err: ProviderError = initial_err.clone();
-                let mut attempt: u32 = 0;
-                loop {
-                    attempt += 1;
-                    let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
-                    tracing::warn!(
-                        attempt,
-                        max = MAX_RETRIES,
-                        delay_ms = delay,
-                        error = %current_err.message,
-                        "Transient provider error, retrying"
-                    );
-                    // Surface the retry in the transcript so TUI/bot users
-                    // can see that we're backing off instead of staring at
-                    // a frozen spinner. Non-fatal: the turn continues.
-                    sender.send(AgentEvent::ProviderRetry {
-                        kind: ErrorKind::from(current_err.kind.clone()),
-                        message: current_err.message.clone(),
-                        details: current_err.details.clone(),
-                        attempt,
-                        max_retries: MAX_RETRIES,
-                        delay_ms: delay,
-                    });
-                    tokio::time::sleep(Duration::from_millis(delay)).await;
-                    ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
+        // Unified retry loop for transient provider errors.
+        //
+        // Covers two cases with the same backoff/telemetry:
+        //   1. Pre-stream failures (connection errors, HTTP 5xx before SSE starts).
+        //   2. Mid-stream SSE errors (e.g. Anthropic `overloaded_error` event)
+        //      — but only when nothing user-visible has been emitted yet, so a
+        //      retry doesn't force the UI to rewind partial text / tool calls /
+        //      reasoning deltas.
+        let mut stream_state = {
+            let mut attempt: u32 = 0;
+            'retry: loop {
+                ensure_not_interrupted(None, cancel).map_err(|e| (e, messages.clone()))?;
+
+                let outcome: std::result::Result<StreamState, (TurnError, bool)> =
                     match request_stream(
                         &setup.client,
                         &messages,
@@ -779,25 +754,56 @@ async fn run_turn_inner(
                     )
                     .await
                     {
-                        Ok(s) => break s,
-                        Err(retry_err) => {
-                            if let TurnError::Provider(ref perr) = retry_err
-                                && perr.is_retryable()
-                                && attempt < MAX_RETRIES
-                            {
-                                current_err = perr.clone();
-                                continue;
+                        Ok(stream) => match consume_stream(stream, &messages, sender, cancel).await
+                        {
+                            Ok(state) => Ok(state),
+                            Err((err, state)) => Err((err, can_transparently_retry_stream(&state))),
+                        },
+                        Err(err) => Err((err, true)),
+                    };
+
+                match outcome {
+                    Ok(state) => break 'retry state,
+                    Err((err, can_retry)) => {
+                        let retry_err = match &err {
+                            TurnError::Provider(p) if p.is_retryable() && can_retry => {
+                                Some(p.clone())
                             }
-                            return Err((retry_err, messages.clone()));
+                            _ => None,
+                        };
+                        let Some(retry_err) = retry_err else {
+                            return Err((err, messages.clone()));
+                        };
+                        if attempt >= MAX_RETRIES {
+                            return Err((err, messages.clone()));
                         }
+                        attempt += 1;
+                        let delay = RETRY_BASE_DELAY_MS * 2u64.pow(attempt - 1);
+                        tracing::warn!(
+                            attempt,
+                            max = MAX_RETRIES,
+                            delay_ms = delay,
+                            error = %retry_err.message,
+                            "Transient provider error, retrying"
+                        );
+                        // Surface the retry in the transcript so TUI/bot users
+                        // can see that we're backing off instead of staring at
+                        // a frozen spinner. Non-fatal: the turn continues.
+                        sender.send(AgentEvent::ProviderRetry {
+                            kind: ErrorKind::from(retry_err.kind.clone()),
+                            message: retry_err.message.clone(),
+                            details: retry_err.details.clone(),
+                            attempt,
+                            max_retries: MAX_RETRIES,
+                            delay_ms: delay,
+                        });
+                        wait_for_retry_delay(Duration::from_millis(delay), cancel)
+                            .await
+                            .map_err(|e| (e, messages.clone()))?;
                     }
                 }
             }
-            Err(err) => return Err((err, messages.clone())),
         };
-        let mut stream_state = consume_stream(stream, &messages, sender, cancel)
-            .await
-            .map_err(|e| (e, messages.clone()))?;
 
         emit_stop_reason_notice(stream_state.stop_reason.as_deref(), sender);
 
@@ -875,6 +881,15 @@ fn build_run_turn_setup(
             max_tokens,
             thinking_level,
             model_output_limit,
+            service_tier: options.service_tier.as_deref().or({
+                match provider {
+                    ProviderKind::OpenAI if config.providers.openai.fast_mode => Some("priority"),
+                    ProviderKind::OpenAICodex if config.providers.openai_codex.fast_mode => {
+                        Some("priority")
+                    }
+                    _ => None,
+                }
+            }),
         },
     )?;
     let tool_ctx = ToolContext::new(
@@ -905,6 +920,7 @@ struct ProviderBuildOptions<'a> {
     max_tokens: u32,
     thinking_level: ThinkingLevel,
     model_output_limit: Option<u32>,
+    service_tier: Option<&'a str>,
 }
 
 #[allow(clippy::too_many_lines)]
@@ -957,6 +973,7 @@ fn build_provider_client(
                     config.providers.openai_codex.effective_text_verbosity(),
                 ),
                 cache_key,
+                options.service_tier.map(std::string::ToString::to_string),
             ),
         ))),
         ProviderKind::OpenAI => build_openai_client(
@@ -966,6 +983,7 @@ fn build_provider_client(
             reasoning_effort,
             options.text_verbosity,
             cache_key,
+            options.service_tier.map(std::string::ToString::to_string),
         ),
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, options.model, reasoning_effort, cache_key)
@@ -1050,6 +1068,7 @@ fn build_openai_client(
     reasoning_effort: Option<String>,
     text_verbosity: Option<TextVerbosity>,
     cache_key: Option<String>,
+    service_tier: Option<String>,
 ) -> Result<ProviderClient> {
     Ok(ProviderClient::OpenAI(OpenAIClient::new(
         OpenAIConfig::from_env(
@@ -1063,6 +1082,7 @@ fn build_openai_client(
                 config.providers.openai.effective_text_verbosity(),
             ),
             cache_key,
+            service_tier,
         )?,
     )))
 }
@@ -1353,6 +1373,7 @@ struct StreamState {
     turn: AssistantTurnBuilder,
     stop_reason: Option<String>,
     usage_seen: crate::providers::Usage,
+    emitted_events: bool,
 }
 
 impl StreamState {
@@ -1361,6 +1382,7 @@ impl StreamState {
             turn: AssistantTurnBuilder::new(),
             stop_reason: None,
             usage_seen: crate::providers::Usage::default(),
+            emitted_events: false,
         }
     }
 
@@ -1402,25 +1424,48 @@ async fn request_stream(
     }
 }
 
+async fn wait_for_retry_delay(
+    delay: Duration,
+    cancel: Option<&CancellationToken>,
+) -> TurnResult<()> {
+    tokio::select! {
+        biased;
+        () = interrupt::wait_for_interrupt() => Err(TurnError::interrupted(None)),
+        () = wait_for_cancel(cancel) => Err(TurnError::interrupted(None)),
+        () = tokio::time::sleep(delay) => Ok(()),
+    }
+}
+
+/// Consumes a provider stream. On error, returns the accumulated `StreamState`
+/// alongside the error so the caller can decide whether a transparent retry is
+/// safe (i.e. nothing externally visible or persisted has been emitted yet).
 async fn consume_stream(
     mut stream: ProviderStream,
     prior_messages: &[ChatMessage],
     sender: &EventSender,
     cancel: Option<&CancellationToken>,
-) -> TurnResult<StreamState> {
+) -> std::result::Result<StreamState, (TurnError, StreamState)> {
     let mut state = StreamState::new();
 
     loop {
         if interrupt::is_interrupted() || cancel.is_some_and(CancellationToken::is_cancelled) {
-            return Err(interrupted_turn_from_stream(prior_messages, state.turn));
+            let turn = std::mem::take(&mut state.turn);
+            return Err((interrupted_turn_from_stream(prior_messages, turn), state));
         }
         let event = match timeout(STREAM_POLL_TIMEOUT, stream.next()).await {
-            Ok(Some(result)) => result.map_err(TurnError::Provider)?,
+            Ok(Some(Ok(event))) => event,
+            Ok(Some(Err(err))) => return Err((TurnError::Provider(err), state)),
             Ok(None) => return Ok(state),
             Err(_) => continue,
         };
-        handle_stream_event(event, sender, &mut state)?;
+        if let Err(err) = handle_stream_event(event, sender, &mut state) {
+            return Err((err, state));
+        }
     }
+}
+
+fn can_transparently_retry_stream(state: &StreamState) -> bool {
+    !state.emitted_events
 }
 
 #[allow(clippy::too_many_lines, clippy::match_same_arms)]
@@ -1433,6 +1478,7 @@ fn handle_stream_event(
         StreamEvent::TextDelta { text, .. } if !text.is_empty() => {
             state.turn.text.push_str(&text);
             sender.send(AgentEvent::AssistantDelta { text });
+            state.emitted_events = true;
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1442,6 +1488,7 @@ fn handle_stream_event(
             ..
         } => {
             handle_tool_content_start(index, id, name, sender, &mut state.turn);
+            state.emitted_events = true;
         }
         StreamEvent::ContentBlockStart {
             index,
@@ -1472,7 +1519,11 @@ fn handle_stream_event(
         StreamEvent::InputJsonDelta {
             index,
             partial_json,
-        } => handle_input_json_delta(index, &partial_json, sender, &mut state.turn),
+        } => {
+            if handle_input_json_delta(index, &partial_json, sender, &mut state.turn) {
+                state.emitted_events = true;
+            }
+        }
         StreamEvent::ReasoningDelta { index, reasoning } => {
             if let Some(tb) = state.turn.find_thinking_mut(index) {
                 if !reasoning.is_empty() {
@@ -1480,6 +1531,7 @@ fn handle_stream_event(
                 }
                 tb.text.push_str(&reasoning);
                 sender.send(AgentEvent::ReasoningDelta { text: reasoning });
+                state.emitted_events = true;
             }
         }
         StreamEvent::ReasoningSignatureDelta {
@@ -1493,12 +1545,18 @@ fn handle_stream_event(
             }
         }
         StreamEvent::ContentBlockCompleted { index } => {
-            emit_reasoning_completion(sender, &mut state.turn, index);
-            emit_tool_input_completion(sender, &state.turn, index);
+            if emit_reasoning_completion(sender, &mut state.turn, index) {
+                state.emitted_events = true;
+            }
+            if emit_tool_input_completion(sender, &state.turn, index) {
+                state.emitted_events = true;
+            }
         }
         StreamEvent::MessageDelta { stop_reason, usage } => {
             state.stop_reason = stop_reason;
-            emit_message_delta_usage(sender, &mut state.usage_seen, usage);
+            if emit_message_delta_usage(sender, &mut state.usage_seen, usage) {
+                state.emitted_events = true;
+            }
         }
         StreamEvent::Error {
             error_type,
@@ -1510,7 +1568,9 @@ fn handle_stream_event(
             )));
         }
         StreamEvent::MessageStart { usage, .. } => {
-            emit_message_start_usage(sender, &mut state.usage_seen, &usage);
+            if emit_message_start_usage(sender, &mut state.usage_seen, &usage) {
+                state.emitted_events = true;
+            }
         }
         StreamEvent::ReasoningCompleted {
             index,
@@ -1584,7 +1644,7 @@ fn handle_input_json_delta(
     partial_json: &str,
     sender: &EventSender,
     turn: &mut AssistantTurnBuilder,
-) {
+) -> bool {
     if let Some(tu) = turn.find_tool_use_mut(index) {
         tu.input_json.push_str(partial_json);
         if let Some(delta) = extract_partial_tool_input(&tu.name, &tu.input_json)
@@ -1597,15 +1657,17 @@ fn handle_input_json_delta(
                 name: tu.name.clone(),
                 delta,
             });
+            return true;
         }
     }
+    false
 }
 
 fn emit_message_delta_usage(
     sender: &EventSender,
     usage_seen: &mut crate::providers::Usage,
     usage: Option<crate::providers::UsageDelta>,
-) {
+) -> bool {
     if let Some(u) = usage {
         let delta = u.incremental_from(usage_seen);
         u.apply_to(usage_seen);
@@ -1617,15 +1679,17 @@ fn emit_message_delta_usage(
                 cache_read_input_tokens: delta.cache_read_input_tokens,
                 cache_creation_input_tokens: delta.cache_creation_input_tokens,
             });
+            return true;
         }
     }
+    false
 }
 
 fn emit_message_start_usage(
     sender: &EventSender,
     usage_seen: &mut crate::providers::Usage,
     usage: &crate::providers::Usage,
-) {
+) -> bool {
     *usage_seen = usage.clone();
     sender.send(AgentEvent::UsageUpdate {
         input_tokens: usage.input_tokens,
@@ -1633,6 +1697,7 @@ fn emit_message_start_usage(
         cache_read_input_tokens: usage.cache_read_input_tokens,
         cache_creation_input_tokens: usage.cache_creation_input_tokens,
     });
+    true
 }
 
 fn apply_openai_reasoning_completion(
@@ -1656,7 +1721,11 @@ fn apply_openai_reasoning_completion(
     }
 }
 
-fn emit_reasoning_completion(sender: &EventSender, turn: &mut AssistantTurnBuilder, index: usize) {
+fn emit_reasoning_completion(
+    sender: &EventSender,
+    turn: &mut AssistantTurnBuilder,
+    index: usize,
+) -> bool {
     if let Some(tb) = turn.find_thinking_mut(index) {
         if tb.replay.is_none()
             && !tb.signature.is_empty()
@@ -1676,10 +1745,16 @@ fn emit_reasoning_completion(sender: &EventSender, turn: &mut AssistantTurnBuild
             replay: tb.replay.clone(),
         };
         sender.send(AgentEvent::ReasoningCompleted { block });
+        return true;
     }
+    false
 }
 
-fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder, index: usize) {
+fn emit_tool_input_completion(
+    sender: &EventSender,
+    turn: &AssistantTurnBuilder,
+    index: usize,
+) -> bool {
     if let Some(tu) = turn.tool_uses.iter().find(|t| t.index == index) {
         // With fine-grained tool streaming (`eager_input_streaming: true`),
         // Anthropic may legitimately deliver partial/invalid JSON if a tool
@@ -1694,7 +1769,9 @@ fn emit_tool_input_completion(sender: &EventSender, turn: &AssistantTurnBuilder,
             name: tu.name.clone(),
             input,
         });
+        return true;
     }
+    false
 }
 
 fn malformed_tool_input_value(input_json: &str) -> Value {
@@ -3013,5 +3090,108 @@ mod tests {
             .expect("timeout")
             .expect("should receive event");
         assert!(matches!(&*ev, AgentEvent::AssistantDelta { text } if text == "test"));
+    }
+
+    /// Transparent retries are only safe before the stream emits any external
+    /// event to the UI/persistence pipeline.
+    #[test]
+    fn test_can_transparently_retry_stream_requires_no_emitted_events() {
+        let mut state = StreamState::new();
+        assert!(can_transparently_retry_stream(&state));
+
+        state.emitted_events = true;
+        assert!(!can_transparently_retry_stream(&state));
+    }
+
+    /// Verifies mid-stream retryable errors (e.g. Anthropic `overloaded_error`
+    /// before any stream events are emitted remain transparently retryable.
+    #[tokio::test]
+    async fn test_consume_stream_returns_state_on_midstream_error() {
+        use futures_util::stream;
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![Err(
+            ProviderError::api_error("overloaded_error", "API is temporarily overloaded"),
+        )];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let Err((err, state)) = result else {
+            panic!("stream should error out");
+        };
+        assert!(matches!(
+            &err,
+            TurnError::Provider(p) if p.is_retryable() && p.message.contains("overloaded_error")
+        ));
+        assert!(
+            can_transparently_retry_stream(&state),
+            "no stream events were emitted, so retry should be safe"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_consume_stream_marks_usage_update_as_retry_unsafe() {
+        use futures_util::stream;
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::MessageStart {
+                model: "claude-test".to_string(),
+                usage: crate::providers::Usage::default(),
+            }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let Err((_err, state)) = result else {
+            panic!("stream should error out");
+        };
+
+        assert!(
+            !can_transparently_retry_stream(&state),
+            "usage updates are externally emitted and make retry unsafe"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_consume_stream_marks_reasoning_completion_as_retry_unsafe() {
+        use futures_util::stream;
+
+        let (tx, _rx) = create_event_channel();
+        let sender = EventSender::new(tx);
+
+        let events: Vec<crate::providers::ProviderResult<StreamEvent>> = vec![
+            Ok(StreamEvent::ContentBlockStart {
+                index: 0,
+                block_type: ContentBlockType::RedactedThinking,
+                id: None,
+                name: None,
+                data: Some("enc".to_string()),
+            }),
+            Ok(StreamEvent::ContentBlockCompleted { index: 0 }),
+            Err(ProviderError::api_error(
+                "overloaded_error",
+                "API is temporarily overloaded",
+            )),
+        ];
+        let provider_stream: ProviderStream = Box::pin(stream::iter(events));
+
+        let result = consume_stream(provider_stream, &[], &sender, None).await;
+        let Err((_err, state)) = result else {
+            panic!("stream should error out");
+        };
+
+        assert!(
+            !can_transparently_retry_stream(&state),
+            "reasoning completion is persisted and makes retry unsafe"
+        );
     }
 }

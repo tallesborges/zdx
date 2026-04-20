@@ -176,6 +176,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "fast",
+        aliases: &[],
+        description: "Toggle fast mode for OpenAI models (priority tier, 2× cost)",
+        category: "model",
+        shortcut: None,
+    },
+    Command {
         name: "thinking",
         aliases: &[],
         description: "Change thinking level",
@@ -192,8 +199,15 @@ pub const COMMANDS: &[Command] = &[
 ];
 
 pub fn command_available(command: &Command, model_id: &str) -> bool {
+    use zdx_engine::providers::{ProviderKind, resolve_provider};
     if command.name == "thinking" {
         return zdx_engine::models::model_supports_reasoning(model_id);
+    }
+    if command.name == "fast" {
+        return matches!(
+            resolve_provider(model_id).kind,
+            ProviderKind::OpenAI | ProviderKind::OpenAICodex
+        );
     }
     true
 }
@@ -260,6 +274,7 @@ mod tests {
         assert_eq!(find_command("open").display_name(), "open (terminal, term)");
         assert_eq!(find_command("pwd").display_name(), "pwd");
         assert_eq!(find_command("root-new").display_name(), "root-new (root)");
+        assert_eq!(find_command("fast").display_name(), "fast");
         assert_eq!(find_command("thinking").display_name(), "thinking");
         assert_eq!(find_command("timeline").display_name(), "timeline");
     }

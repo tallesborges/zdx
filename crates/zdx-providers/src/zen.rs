@@ -137,6 +137,7 @@ impl ZenClient {
                     reasoning_effort: config.reasoning_effort,
                     text_verbosity: None,
                     prompt_cache_key: config.cache_key,
+                    service_tier: None,
                 }))
             }
             ZenRoute::GoogleGenerativeAI => {

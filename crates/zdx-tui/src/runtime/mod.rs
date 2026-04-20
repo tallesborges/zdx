@@ -693,6 +693,10 @@ impl TuiRuntime {
                 let _ = zdx_engine::config::Config::save_thinking_level(level);
                 // Errors are silently ignored - level is already set in state
             }
+            UiEffect::PersistFastMode { enabled, provider } => {
+                let _ = zdx_engine::config::Config::save_fast_mode_for_provider(provider, enabled);
+                // Errors are silently ignored - flag is already set in state
+            }
             UiEffect::PersistThreadThinkingOverride { level } => {
                 if let Some(thread_handle) = self.state.tui.thread.thread_handle.as_ref()
                     && let Ok(mut thread) = zdx_engine::core::thread_persistence::Thread::with_id(

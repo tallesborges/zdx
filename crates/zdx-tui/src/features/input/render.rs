@@ -13,7 +13,7 @@ use zdx_engine::models::{ModelOption, model_supports_reasoning};
 use zdx_engine::providers::{ProviderAuthMode, ProviderKind, provider_for_model};
 
 use crate::input::TextBuffer;
-use crate::state::TuiState;
+use crate::state::{TuiState, fast_mode_enabled_for_model};
 use crate::thread::ThreadUsage;
 
 /// Minimum height of the input area (lines, including borders).
@@ -294,13 +294,18 @@ pub fn render_input_with_cursor(
         return;
     }
 
-    // Build top-left title: model name + thinking level
+    // Build top-left title: model name + fast/thinking badges
     let base_style = Style::default().fg(Color::DarkGray);
+    let fast_style = Style::default().fg(Color::Cyan).add_modifier(Modifier::DIM);
     let thinking_style = Style::default()
         .fg(Color::DarkGray)
         .add_modifier(Modifier::DIM);
 
     let mut title_spans = vec![Span::styled(format!(" {}", state.config.model), base_style)];
+
+    if fast_mode_enabled_for_model(&state.config, &state.config.model) {
+        title_spans.push(Span::styled(" [F]", fast_style));
+    }
 
     // Add thinking indicator with dim style (only when enabled + supported)
     if state.config.thinking_level != ThinkingLevel::Off

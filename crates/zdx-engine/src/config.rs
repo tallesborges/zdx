@@ -913,6 +913,56 @@ impl Config {
         Self::write_config(path, &doc.to_string())
     }
 
+    /// Saves the provider-specific fast mode flag to the default config file.
+    ///
+    /// # Errors
+    /// Returns an error if the operation fails.
+    pub fn save_fast_mode_for_provider(
+        provider: crate::providers::ProviderKind,
+        enabled: bool,
+    ) -> Result<()> {
+        Self::save_provider_fast_mode_to(
+            &paths::config_path(),
+            provider_fast_mode_key(provider),
+            enabled,
+        )
+    }
+
+    /// Returns whether fast mode is enabled for a provider.
+    #[must_use]
+    pub fn fast_mode_for_provider(&self, provider: crate::providers::ProviderKind) -> bool {
+        self.providers.get(provider).fast_mode
+    }
+
+    /// Updates the fast mode flag for a provider in memory.
+    pub fn set_fast_mode_for_provider(
+        &mut self,
+        provider: crate::providers::ProviderKind,
+        enabled: bool,
+    ) {
+        self.providers.get_mut(provider).fast_mode = enabled;
+    }
+
+    fn save_provider_fast_mode_to(path: &Path, provider_key: &str, enabled: bool) -> Result<()> {
+        use toml_edit::{DocumentMut, value};
+
+        let contents = if path.exists() {
+            let user_config = fs::read_to_string(path)
+                .with_context(|| format!("Failed to read config from {}", path.display()))?;
+            merge_with_template(&user_config)?
+        } else {
+            default_config_template().to_string()
+        };
+
+        let mut doc: DocumentMut = contents
+            .parse()
+            .with_context(|| format!("Failed to parse config from {}", path.display()))?;
+
+        doc["providers"][provider_key]["fast_mode"] = value(enabled);
+
+        Self::write_config(path, &doc.to_string())
+    }
+
     /// Returns the effective system prompt, preferring the file if both are set.
     ///
     /// # Errors
@@ -1201,6 +1251,38 @@ impl ProvidersConfig {
             ProviderKind::Xai => &self.xai,
         }
     }
+
+    /// Returns the mutable provider config for a given provider kind.
+    pub fn get_mut(&mut self, kind: crate::providers::ProviderKind) -> &mut ProviderConfig {
+        use crate::providers::ProviderKind;
+
+        match kind {
+            ProviderKind::Anthropic => &mut self.anthropic,
+            ProviderKind::ClaudeCli => &mut self.claude_cli,
+            ProviderKind::OpenAI => &mut self.openai,
+            ProviderKind::OpenAICodex => &mut self.openai_codex,
+            ProviderKind::OpenRouter => &mut self.openrouter,
+            ProviderKind::Mistral => &mut self.mistral,
+            ProviderKind::Moonshot => &mut self.moonshot,
+            ProviderKind::Stepfun => &mut self.stepfun,
+            ProviderKind::Xiomi => &mut self.xiaomi,
+            ProviderKind::Gemini => &mut self.gemini,
+            ProviderKind::GeminiCli => &mut self.gemini_cli,
+            ProviderKind::Zen => &mut self.zen,
+            ProviderKind::Apiyi => &mut self.apiyi,
+            ProviderKind::Minimax => &mut self.minimax,
+            ProviderKind::Zai => &mut self.zai,
+            ProviderKind::Xai => &mut self.xai,
+        }
+    }
+}
+
+fn provider_fast_mode_key(provider: crate::providers::ProviderKind) -> &'static str {
+    match provider {
+        crate::providers::ProviderKind::OpenAI => "openai",
+        crate::providers::ProviderKind::OpenAICodex => "openai_codex",
+        _ => unreachable!("fast mode is only supported for OpenAI providers"),
+    }
 }
 
 impl Default for ProvidersConfig {
@@ -1442,6 +1524,9 @@ pub struct ProviderConfig {
     /// Explicit list of enabled tools (if set, only these tools are used).
     /// If unset, all tools are available.
     pub tools: Option<Vec<String>>,
+    /// Enable fast mode (`service_tier: "priority"`) for `OpenAI` Responses API (2× cost).
+    #[serde(default)]
+    pub fast_mode: bool,
 }
 
 impl ProviderConfig {

@@ -5,6 +5,7 @@
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as CrosstermKeyModifiers};
 use zdx_engine::agent_activity;
+use zdx_engine::config::Config;
 use zdx_engine::core::thread_persistence::ThreadEvent;
 use zdx_engine::providers::ChatMessage;
 
@@ -14,9 +15,11 @@ use super::state::{
 };
 use crate::common::{TaskKind, Tasks, sanitize_for_display};
 use crate::effects::UiEffect;
-use crate::mutations::{InputMutation, StateMutation, ThreadMutation, TranscriptMutation};
+use crate::mutations::{
+    ConfigMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
+};
 use crate::overlays::{LoginState, Overlay, OverlayRequest};
-use crate::state::AgentState;
+use crate::state::{AgentState, fast_mode_enabled_for_model, fast_mode_provider_for_model};
 use crate::transcript::HistoryCell;
 
 /// Result type for key handlers.
@@ -31,8 +34,43 @@ pub struct InputContext<'a> {
     pub tasks: &'a Tasks,
     pub thread_id: Option<String>,
     pub thread_title: Option<&'a str>,
+    pub config: &'a Config,
     pub model_id: &'a str,
     pub active_thread_ids: &'a std::collections::HashSet<String>,
+}
+
+const FAST_MODE_UNAVAILABLE_MSG: &str =
+    "Fast mode is only available for OpenAI and OpenAI Codex models.";
+
+/// Builds the shared fast-mode toggle effects and mutations for the active model.
+///
+/// # Errors
+/// Returns an error message when the current model does not support fast mode.
+pub fn build_fast_mode_toggle_actions(
+    config: &Config,
+    model_id: &str,
+) -> Result<(Vec<UiEffect>, Vec<StateMutation>), &'static str> {
+    let Some(provider) = fast_mode_provider_for_model(model_id) else {
+        return Err(FAST_MODE_UNAVAILABLE_MSG);
+    };
+
+    let enabled = !fast_mode_enabled_for_model(config, model_id);
+    let label = if enabled { "on" } else { "off" };
+    let suffix = if enabled {
+        " (service_tier: priority, 2× cost)"
+    } else {
+        ""
+    };
+
+    Ok((
+        vec![UiEffect::PersistFastMode { enabled, provider }],
+        vec![
+            StateMutation::Config(ConfigMutation::SetFastMode { provider, enabled }),
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(format!(
+                "Fast mode {label}{suffix}"
+            ))),
+        ],
+    ))
 }
 
 fn is_image_path(text: &str) -> bool {
@@ -505,6 +543,8 @@ fn handle_submission(
             ctx.thread_id.clone(),
             ctx.thread_title,
             ctx.active_thread_ids,
+            ctx.config,
+            ctx.model_id,
         )),
         _ => None,
     }
@@ -620,6 +660,7 @@ fn compute_at_trigger_position(input: &InputState) -> usize {
 // =============================================================================
 
 /// Handles input submission.
+#[allow(clippy::too_many_arguments)]
 fn submit_input(
     input: &mut InputState,
     agent_state: &AgentState,
@@ -627,6 +668,8 @@ fn submit_input(
     thread_id: Option<String>,
     thread_title: Option<&str>,
     active_thread_ids: &std::collections::HashSet<String>,
+    config: &Config,
+    model_id: &str,
 ) -> KeyResult {
     // Block input during handoff generation (prevent state interleaving)
     if input.handoff.is_generating() {
@@ -669,6 +712,11 @@ fn submit_input(
             )],
             None,
         );
+    }
+
+    // Try slash commands (/fast, etc.)
+    if let Some(result) = handle_slash_commands(input, trimmed, config, model_id) {
+        return result;
     }
 
     // Try bash commands
@@ -737,6 +785,43 @@ fn handle_submit_while_agent_running(
     input.enqueue_prompt(text.to_string());
     input.clear();
     (vec![], vec![], None)
+}
+
+fn handle_slash_commands(
+    input: &mut InputState,
+    trimmed: &str,
+    config: &Config,
+    model_id: &str,
+) -> Option<KeyResult> {
+    let rest = trimmed.strip_prefix("/fast")?;
+    let arg = rest.trim();
+
+    input.clear();
+
+    if !arg.is_empty() {
+        return Some((
+            vec![],
+            vec![StateMutation::Transcript(
+                TranscriptMutation::AppendSystemMessage("Usage: /fast".to_string()),
+            )],
+            None,
+        ));
+    }
+
+    let (effects, mutations) = match build_fast_mode_toggle_actions(config, model_id) {
+        Ok(actions) => actions,
+        Err(message) => {
+            return Some((
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(message.to_string()),
+                )],
+                None,
+            ));
+        }
+    };
+
+    Some((effects, mutations, None))
 }
 
 fn handle_bash_commands(input: &mut InputState, trimmed: &str, text: &str) -> Option<KeyResult> {

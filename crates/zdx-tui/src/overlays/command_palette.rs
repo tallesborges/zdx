@@ -10,7 +10,7 @@ use crate::common::TaskKind;
 use crate::common::clipboard::Clipboard;
 use crate::common::commands::{COMMANDS, Command, command_available};
 use crate::effects::UiEffect;
-use crate::input::HandoffState;
+use crate::input::{HandoffState, build_fast_mode_toggle_actions};
 use crate::mutations::{
     AuthMutation, InputMutation, StateMutation, ThreadMutation, TranscriptMutation,
 };
@@ -20,24 +20,16 @@ use crate::state::TuiState;
 pub struct CommandPaletteState {
     pub filter: String,
     pub selected: usize,
-    pub provider: zdx_engine::providers::ProviderKind,
     pub model_id: String,
 }
 
 impl CommandPaletteState {
-    pub fn open(
-        provider: zdx_engine::providers::ProviderKind,
-        model_id: String,
-    ) -> (Self, Vec<UiEffect>) {
-        (
-            Self {
-                filter: String::new(),
-                selected: 0,
-                provider,
-                model_id,
-            },
-            vec![],
-        )
+    pub fn open(model_id: String) -> Self {
+        Self {
+            filter: String::new(),
+            selected: 0,
+            model_id,
+        }
     }
 
     pub fn render(&self, frame: &mut Frame, area: Rect, input_y: u16) {
@@ -142,6 +134,16 @@ fn execute_command(
         }
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "debug" => (None, vec![], vec![StateMutation::ToggleDebugStatus]),
+        "fast" => match build_fast_mode_toggle_actions(&tui.config, &tui.config.model) {
+            Ok((effects, mutations)) => (None, effects, mutations),
+            Err(message) => (
+                None,
+                vec![],
+                vec![StateMutation::Transcript(
+                    TranscriptMutation::AppendSystemMessage(message.to_string()),
+                )],
+            ),
+        },
         "models" => (None, vec![UiEffect::OpenModelsConfig], vec![]),
         "copy-id" => {
             let (effects, mutations) = execute_copy_id(tui);
@@ -586,22 +588,17 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
-        let (state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::Anthropic,
-            "claude-haiku-4-5".to_string(),
-        );
+        let state = CommandPaletteState::open("claude-haiku-4-5".to_string());
         let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), COMMANDS.len());
+        // fast is hidden for non-OpenAI providers
+        assert!(!filtered.iter().any(|c| c.name == "fast"));
         let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
         assert!(names.contains(&"thinking"));
     }
 
     #[test]
     fn test_palette_state_filtered_commands_with_filter() {
-        let (mut state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::Anthropic,
-            "claude-haiku-4-5".to_string(),
-        );
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string());
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
         assert_eq!(filtered.len(), 3);
@@ -615,10 +612,7 @@ mod tests {
     fn test_palette_state_filtered_commands_respects_reasoning_support() {
         let model_id = "openai:gpt-4.1";
         let supports_reasoning = zdx_engine::models::model_supports_reasoning(model_id);
-        let (state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::OpenAI,
-            model_id.to_string(),
-        );
+        let state = CommandPaletteState::open(model_id.to_string());
         let filtered = state.filtered_commands();
         let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
         assert_eq!(names.contains(&"thinking"), supports_reasoning);
@@ -626,10 +620,7 @@ mod tests {
 
     #[test]
     fn test_palette_state_filtered_commands_no_match() {
-        let (mut state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::Anthropic,
-            "claude-haiku-4-5".to_string(),
-        );
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string());
         state.filter = "xyz".to_string();
         let filtered = state.filtered_commands();
         assert!(filtered.is_empty());
@@ -637,21 +628,16 @@ mod tests {
 
     #[test]
     fn test_palette_state_clamp_selection() {
-        let (mut state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::Anthropic,
-            "claude-haiku-4-5".to_string(),
-        );
-        state.selected = COMMANDS.len() + 10;
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string());
+        let available = state.filtered_commands().len();
+        state.selected = available + 10;
         state.clamp_selection();
-        assert_eq!(state.selected, COMMANDS.len() - 1);
+        assert_eq!(state.selected, available - 1);
     }
 
     #[test]
     fn test_palette_state_clamp_selection_empty_filter() {
-        let (mut state, _) = CommandPaletteState::open(
-            zdx_engine::providers::ProviderKind::Anthropic,
-            "claude-haiku-4-5".to_string(),
-        );
+        let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string());
         state.filter = "xyz".to_string();
         state.selected = 5;
         state.clamp_selection();
