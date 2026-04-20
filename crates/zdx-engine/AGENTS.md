@@ -15,7 +15,7 @@ Scope: core runtime engine — config, agent orchestration, tools, prompt/contex
 - `src/mcp.rs`: MCP config loading, server discovery, helper workspace/runtime, and MCP tool-call execution helpers
 - `src/prompts.rs`: prompt template helpers (re-exports of `zdx_assets` prompt constants)
 - `src/skills.rs`: skills discovery + parsing (materializes bundled skills from `zdx_assets::bundled_skill_assets()`)
-- `src/subagents.rs`: named subagent discovery + parsing (built-in subagents come from `zdx_assets::{FINDER,DESIGNER,ORACLE}_SUBAGENT`)
+- `src/subagents.rs`: named subagent discovery + parsing (built-in subagents come from `zdx_assets::{EXPLORER,ORACLE}_SUBAGENT`)
 - `src/images/mod.rs`: shared image utilities module exports
 - `src/images/decode.rs`: generic image decode/resize/PNG encode helpers
 - `src/images/path_mime.rs`: path normalization + extension MIME helpers
