@@ -15,7 +15,6 @@ use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, s
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
-pub const DESIGNER_SUBAGENT_NAME: &str = "designer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
@@ -227,7 +226,6 @@ pub fn capability_catalog(
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(explorer_capability(root)?);
-        capabilities.push(designer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
 
@@ -242,7 +240,6 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(fallback_explorer_capability());
-        capabilities.push(fallback_designer_capability());
         capabilities.push(fallback_oracle_capability());
     }
 
@@ -416,10 +413,6 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             zdx_assets::EXPLORER_SUBAGENT,
         ),
         (
-            manifest_dir.join("subagents").join("designer.md"),
-            zdx_assets::DESIGNER_SUBAGENT,
-        ),
-        (
             manifest_dir.join("subagents").join("oracle.md"),
             zdx_assets::ORACLE_SUBAGENT,
         ),
@@ -462,18 +455,6 @@ fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn designer_capability(root: &Path) -> Result<CapabilityDescriptor> {
-    let definition = load_by_name(root, DESIGNER_SUBAGENT_NAME)?;
-    Ok(CapabilityDescriptor {
-        name: definition.name.clone(),
-        title: "Designer".to_string(),
-        description: definition.description,
-        kind: CapabilityKind::Subagent {
-            subagent: definition.name,
-        },
-    })
-}
-
 fn fallback_explorer_capability() -> CapabilityDescriptor {
     CapabilityDescriptor {
         name: EXPLORER_SUBAGENT_NAME.to_string(),
@@ -483,19 +464,6 @@ fn fallback_explorer_capability() -> CapabilityDescriptor {
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: EXPLORER_SUBAGENT_NAME.to_string(),
-        },
-    }
-}
-
-fn fallback_designer_capability() -> CapabilityDescriptor {
-    CapabilityDescriptor {
-        name: DESIGNER_SUBAGENT_NAME.to_string(),
-        title: "Designer".to_string(),
-        description:
-            "Use for UI/UX implementation, design review, accessibility refinement, and visual polish in existing product surfaces when the work is primarily user-facing."
-                .to_string(),
-        kind: CapabilityKind::Subagent {
-            subagent: DESIGNER_SUBAGENT_NAME.to_string(),
         },
     }
 }
@@ -737,7 +705,6 @@ mod tests {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "explorer"));
-        assert!(all.iter().any(|s| s.name == "designer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -893,7 +860,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "explorer", "designer", "oracle"]
+            vec!["task", "explorer", "oracle"]
         );
     }
 

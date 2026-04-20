@@ -183,7 +183,6 @@ These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — e
 - SHOULD prefer doing the work directly when the task is small enough to complete without delegation.
 - For local codebase or thread exploration, a single exact-path read or exact string/symbol lookup is direct work; if the task is likely to need more than one search/read round or may span multiple files or threads, SHOULD prefer `invoke_subagent` with `explorer` to keep the main context focused.
 - Use `oracle` when the task is mainly deep diagnosis, debugging dead ends, architecture, or tradeoff analysis.
-- Use `designer` when the task is mainly UI/UX implementation, design review, accessibility refinement, or visual polish.
 - Use `task` for scoped implementation when no named specialist fits better.
 - When local exploration can be split into independent slices (for example different directories, repos, subsystems, or thread/date ranges), SHOULD launch multiple `explorer` subagents in parallel rather than serializing the discovery in one run.
 - MUST delegate with a specific prompt and expected output.

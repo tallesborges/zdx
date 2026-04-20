@@ -2187,9 +2187,6 @@ mod tests {
             "Use `oracle` when the task is mainly deep diagnosis, debugging dead ends, architecture, or tradeoff analysis."
         ));
         assert!(prompt.contains(
-            "Use `designer` when the task is mainly UI/UX implementation, design review, accessibility refinement, or visual polish."
-        ));
-        assert!(prompt.contains(
             "Use `task` for scoped implementation when no named specialist fits better."
         ));
         assert!(prompt.contains("Task (`task`)"));
