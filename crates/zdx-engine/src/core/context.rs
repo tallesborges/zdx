@@ -2139,6 +2139,7 @@ mod tests {
         assert!(prompt.contains(&format!("Operating system: {}", std::env::consts::OS)));
         assert!(prompt.contains(&format!(" on {}", std::env::consts::ARCH)));
         assert!(prompt.contains("### Path Resolution"));
+        assert!(prompt.contains("### Parallel Tool Use"));
         assert!(
             prompt.contains("The following runtime environment variables are especially relevant:")
         );
@@ -2181,6 +2182,13 @@ mod tests {
             "The skill `<path>` points to `SKILL.md`; use its parent directory as the source location when applying the Path Resolution rules, unless the skill defines a different base for its own relative references."
         ));
         assert!(prompt.contains("Available specialized capabilities"));
+        assert!(prompt.contains(
+            "Use `oracle` when the task is mainly deep diagnosis, debugging dead ends, architecture, or tradeoff analysis."
+        ));
+        assert!(prompt.contains(
+            "Use `designer` when the task is mainly UI/UX implementation, design review, accessibility refinement, or visual polish."
+        ));
+        assert!(prompt.contains("Use `task` for scoped implementation when no named specialist fits better."));
         assert!(prompt.contains("Task (`task`)"));
         assert!(prompt.contains("Oracle (`oracle`)"));
     }
