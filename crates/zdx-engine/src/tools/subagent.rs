@@ -313,7 +313,7 @@ fn build_subagent_field_description(subagents: &[SubagentSummary]) -> String {
 }
 
 fn build_description(subagents: &[SubagentSummary]) -> String {
-    let mut description = "Delegate a scoped task to an isolated child agent run. Best for complex multi-step work, output-heavy subtasks, independent parallel implementation slices, or broad exploration/discovery that would clutter the main context. Prefer doing the work directly when it is small enough to complete without delegation. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. Do not delegate single-hop reads or exact lookups you can do directly; prefer `explorer` for multi-round local discovery, multi-file evidence gathering, or thread-history search. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Trust but verify: if a child reports edits or claims you plan to rely on, inspect the resulting files or key evidence before reporting success. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
+    let mut description = "Delegate a scoped task to an isolated child agent run. Choose the named specialist when one clearly fits: use `explorer` for multi-round local exploration, repo understanding, or thread-history discovery; use `oracle` for deep diagnosis, debugging dead ends, architecture, or tradeoff analysis; use `designer` for UI/UX implementation or review; use `task` for scoped implementation when no named specialist fits better. Exact one-hop reads or exact string/symbol lookups are direct work and should not be delegated. When multiple subtasks are independent, call `invoke_subagent` multiple times in the same response to run them in parallel; `explorer` is especially appropriate for fan-out across separate search areas. Child runs are self-contained and do not share your full parent reasoning or implicit context, so every important decision, relevant detail, file path, constraint, non-goal, and acceptance criterion must be made explicit in the prompt. Provide a focused prompt with the goal, relevant context, constraints/non-goals, file paths, expected output, and how success should be verified. Trust but verify: if a child reports edits or claims you plan to rely on, inspect the resulting files or key evidence before reporting success. Use `subagent` to select a named configuration, or `task` for the default delegated ZDX behavior when no named specialist fits. Returns response text only. Skill names are invalid unless they are also listed as supported subagents.".to_string();
 
     if !subagents.is_empty() {
         let listed = subagents
@@ -545,6 +545,10 @@ mod tests {
 
         assert!(desc.contains("coder (Coding helper)"));
         assert!(desc.contains("researcher (Research helper)"));
+        assert!(desc.contains("Choose the named specialist when one clearly fits"));
+        assert!(desc.contains("use `explorer` for multi-round local exploration"));
+        assert!(desc.contains("use `oracle` for deep diagnosis"));
+        assert!(desc.contains("use `designer` for UI/UX implementation or review"));
         assert!(desc.contains("`task`"));
         assert!(desc.contains("Child runs are self-contained"));
         assert!(desc.contains("do not share your full parent reasoning"));
