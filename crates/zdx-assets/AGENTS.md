@@ -14,7 +14,7 @@ Scope: embedded asset content (prompts, instruction layers, default TOMLs, bundl
 - `default_config.toml`: default configuration template (generated output; do not edit by hand)
 - `default_models.toml`: default model registry fallback
 - `bundled_skills/*/`: built-in bundled skill fallbacks; `build.rs` embeds every file under this tree
-- `subagents/*.md`: built-in standalone subagent prompts (`finder`, `designer`, `oracle`)
+- `subagents/*.md`: built-in standalone subagent prompts (`explorer`, `designer`, `oracle`)
 
 ## Conventions
 

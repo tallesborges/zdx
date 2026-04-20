@@ -315,7 +315,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Named subagents may declare `skills:` (allowed on-demand skills) and `auto_loaded_skills:` (skills whose `SKILL.md` contents are injected directly into the subagent prompt). Auto-loaded skills should be treated as already in context for that run.
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
 - Built-in subagents currently include:
-  - `finder`: a read-only local discovery specialist for complex multi-step search across the current workspace, broader machine-local filesystem paths, and saved thread history.
+  - `explorer`: a read-only local exploration specialist for open-ended multi-step discovery across the current workspace, broader machine-local filesystem paths, and saved thread history.
   - `designer`: a UI/UX specialist for implementing and reviewing product surfaces, with a focus on accessibility, visual consistency, interaction states, and minimal polished UI changes.
   - `oracle`: a read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Its output is advisory and should be independently validated by the parent agent.
 

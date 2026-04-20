@@ -14,7 +14,7 @@ use crate::core::context::{
 use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, skill_access_path};
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
-pub const FINDER_SUBAGENT_NAME: &str = "finder";
+pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
 pub const DESIGNER_SUBAGENT_NAME: &str = "designer";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
@@ -44,7 +44,7 @@ impl BuiltinAlias {
     pub const fn description(self) -> &'static str {
         match self {
             Self::Task => {
-                "Delegate an independent execution-oriented sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices; prefer `finder` for broad discovery and `oracle` for deep analysis."
+                "Delegate an independent execution-oriented sub-task using the default full ZDX prompt and project context. Use it for complex multi-step work, output-heavy subtasks, or parallelizable implementation slices; prefer `explorer` for broad local exploration and `oracle` for deep analysis."
             }
         }
     }
@@ -226,7 +226,7 @@ pub fn capability_catalog(
 
     if delegation_enabled {
         capabilities.push(task_capability());
-        capabilities.push(finder_capability(root)?);
+        capabilities.push(explorer_capability(root)?);
         capabilities.push(designer_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
@@ -241,7 +241,7 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
 
     if delegation_enabled {
         capabilities.push(task_capability());
-        capabilities.push(fallback_finder_capability());
+        capabilities.push(fallback_explorer_capability());
         capabilities.push(fallback_designer_capability());
         capabilities.push(fallback_oracle_capability());
     }
@@ -412,8 +412,8 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
     let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     [
         (
-            manifest_dir.join("subagents").join("finder.md"),
-            zdx_assets::FINDER_SUBAGENT,
+            manifest_dir.join("subagents").join("explorer.md"),
+            zdx_assets::EXPLORER_SUBAGENT,
         ),
         (
             manifest_dir.join("subagents").join("designer.md"),
@@ -450,11 +450,11 @@ fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn finder_capability(root: &Path) -> Result<CapabilityDescriptor> {
-    let definition = load_by_name(root, FINDER_SUBAGENT_NAME)?;
+fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, EXPLORER_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
         name: definition.name.clone(),
-        title: "Finder".to_string(),
+        title: "Explorer".to_string(),
         description: definition.description,
         kind: CapabilityKind::Subagent {
             subagent: definition.name,
@@ -474,15 +474,15 @@ fn designer_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
-fn fallback_finder_capability() -> CapabilityDescriptor {
+fn fallback_explorer_capability() -> CapabilityDescriptor {
     CapabilityDescriptor {
-        name: FINDER_SUBAGENT_NAME.to_string(),
-        title: "Finder".to_string(),
+        name: EXPLORER_SUBAGENT_NAME.to_string(),
+        title: "Explorer".to_string(),
         description:
-            "Use for read-only local code and thread discovery: complex multi-step search across the current workspace, other machine-local paths, and saved thread history. Prefer it for broad evidence-gathering from local sources rather than implementation. It uses native read/search tools and does not have `bash`."
+            "Use for read-only local codebase and thread exploration: open-ended multi-step discovery across the current workspace, other machine-local paths, and saved thread history. Prefer it when the task likely needs several search/read rounds or broad orientation before implementation. It uses native read/search tools and does not have `bash`."
                 .to_string(),
         kind: CapabilityKind::Subagent {
-            subagent: FINDER_SUBAGENT_NAME.to_string(),
+            subagent: EXPLORER_SUBAGENT_NAME.to_string(),
         },
     }
 }
@@ -505,7 +505,7 @@ fn fallback_oracle_capability() -> CapabilityDescriptor {
         name: ORACLE_SUBAGENT_NAME.to_string(),
         title: "Oracle".to_string(),
         description:
-            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local discovery when `finder` is a better fit."
+            "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local exploration or discovery when `explorer` is a better fit."
                 .to_string(),
         kind: CapabilityKind::Subagent {
             subagent: ORACLE_SUBAGENT_NAME.to_string(),
@@ -736,7 +736,7 @@ mod tests {
     fn discover_includes_built_ins() {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
-        assert!(all.iter().any(|s| s.name == "finder"));
+        assert!(all.iter().any(|s| s.name == "explorer"));
         assert!(all.iter().any(|s| s.name == "designer"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
@@ -893,7 +893,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "finder", "designer", "oracle"]
+            vec!["task", "explorer", "designer", "oracle"]
         );
     }
 
