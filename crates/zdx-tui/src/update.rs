@@ -672,6 +672,9 @@ fn apply_config_mutation(tui: &mut TuiState, mutation: ConfigMutation) {
             tui.base_thinking_level = level;
             tui.config.thinking_level = level;
         }
+        ConfigMutation::SetFastMode { provider, enabled } => {
+            tui.config.set_fast_mode_for_provider(provider, enabled);
+        }
     }
 }
 
@@ -745,11 +748,9 @@ fn apply_overlay_update(app: &mut AppState, update: overlays::OverlayUpdate) -> 
 fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) -> Vec<UiEffect> {
     match request {
         overlays::OverlayRequest::CommandPalette => {
-            let provider = zdx_engine::providers::provider_for_model(&app.tui.config.model);
-            let (state, effects) =
-                overlays::CommandPaletteState::open(provider, app.tui.config.model.clone());
+            let state = overlays::CommandPaletteState::open(app.tui.config.model.clone());
             app.overlay = Some(overlays::Overlay::CommandPalette(state));
-            effects
+            vec![]
         }
         overlays::OverlayRequest::ModelPicker => {
             let (state, effects) =
@@ -1010,6 +1011,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         tasks: &app.tui.tasks,
         thread_id,
         thread_title: app.tui.thread.title.as_deref(),
+        config: &app.tui.config,
         model_id: &app.tui.config.model,
         active_thread_ids: &active_thread_ids,
     };

@@ -35,6 +35,7 @@ pub struct OpenAICodexConfig {
     pub reasoning_effort: Option<String>,
     pub text_verbosity: Option<TextVerbosity>,
     pub prompt_cache_key: Option<String>,
+    pub service_tier: Option<String>,
 }
 
 impl OpenAICodexConfig {
@@ -44,6 +45,7 @@ impl OpenAICodexConfig {
         reasoning_effort: Option<String>,
         text_verbosity: Option<TextVerbosity>,
         prompt_cache_key: Option<String>,
+        service_tier: Option<String>,
     ) -> Self {
         Self {
             model,
@@ -51,6 +53,7 @@ impl OpenAICodexConfig {
             reasoning_effort,
             text_verbosity,
             prompt_cache_key,
+            service_tier,
         }
     }
 }
@@ -158,6 +161,7 @@ impl OpenAICodexClient {
             parallel_tool_calls: Some(true),
             tool_choice: Some("auto".to_string()),
             truncation: None, // Default: "disabled" - fail if context exceeded
+            service_tier: self.config.service_tier.clone(),
         };
 
         // For Codex, send the system prompt through top-level `instructions`.
@@ -242,7 +246,8 @@ mod tests {
 
     #[test]
     fn codex_config_defaults_text_verbosity_to_medium_when_unset() {
-        let config = super::OpenAICodexConfig::new("gpt-5.4".to_string(), 4096, None, None, None);
+        let config =
+            super::OpenAICodexConfig::new("gpt-5.4".to_string(), 4096, None, None, None, None);
 
         assert_eq!(
             config.text_verbosity.unwrap_or_default().as_str(),

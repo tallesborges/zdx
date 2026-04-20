@@ -156,6 +156,7 @@ pub(crate) fn spawn_agent_turn(
         tool_config: tool_config.clone(),
         surface: Some("telegram".to_string()),
         text_verbosity: Some(TextVerbosity::Low),
+        service_tier: None,
     };
 
     // Create channels: agent -> broadcaster -> [bot, persist]

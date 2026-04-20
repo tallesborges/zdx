@@ -40,7 +40,7 @@ use zdx_engine::config::Config;
 use zdx_engine::core::agent::{AgentOptions, ToolConfig};
 use zdx_engine::core::events::AgentEvent;
 use zdx_engine::core::thread_persistence::Thread;
-use zdx_engine::providers::{ChatContentBlock, ChatMessage};
+use zdx_engine::providers::{ChatContentBlock, ChatMessage, ProviderKind, resolve_provider};
 
 use crate::auth::AuthState;
 use crate::common::{TaskSeq, Tasks};
@@ -210,6 +210,7 @@ impl TuiState {
             tool_config: ToolConfig::default(),
             surface: Some("chat".to_string()),
             text_verbosity: None,
+            service_tier: None,
         };
 
         // Cache display values at startup (avoids I/O during render)
@@ -378,6 +379,19 @@ impl TuiState {
     }
 }
 
+pub fn fast_mode_provider_for_model(model_id: &str) -> Option<ProviderKind> {
+    match resolve_provider(model_id).kind {
+        ProviderKind::OpenAI => Some(ProviderKind::OpenAI),
+        ProviderKind::OpenAICodex => Some(ProviderKind::OpenAICodex),
+        _ => None,
+    }
+}
+
+pub fn fast_mode_enabled_for_model(config: &Config, model_id: &str) -> bool {
+    fast_mode_provider_for_model(model_id)
+        .is_some_and(|provider| config.fast_mode_for_provider(provider))
+}
+
 // ============================================================================
 // Startup Helpers (one-shot I/O, not called during render)
 // ============================================================================
@@ -448,4 +462,36 @@ fn compact_segment(segment: &str, keep_chars_each_side: usize) -> String {
         .skip(char_count.saturating_sub(keep_chars_each_side))
         .collect();
     format!("{start}...{end}")
+}
+
+#[cfg(test)]
+mod tests {
+    use zdx_engine::config::Config;
+    use zdx_engine::providers::ProviderKind;
+
+    use super::{fast_mode_enabled_for_model, fast_mode_provider_for_model};
+
+    #[test]
+    fn fast_mode_helpers_follow_the_active_provider() {
+        let mut config = Config::default();
+        config.providers.openai.fast_mode = true;
+        config.providers.openai_codex.fast_mode = false;
+
+        assert_eq!(
+            fast_mode_provider_for_model("openai:gpt-5.4"),
+            Some(ProviderKind::OpenAI)
+        );
+        assert_eq!(
+            fast_mode_provider_for_model("openai-codex:gpt-5.4"),
+            Some(ProviderKind::OpenAICodex)
+        );
+        assert_eq!(fast_mode_provider_for_model("claude-haiku-4-5"), None);
+
+        assert!(fast_mode_enabled_for_model(&config, "openai:gpt-5.4"));
+        assert!(!fast_mode_enabled_for_model(
+            &config,
+            "openai-codex:gpt-5.4"
+        ));
+        assert!(!fast_mode_enabled_for_model(&config, "claude-haiku-4-5"));
+    }
 }

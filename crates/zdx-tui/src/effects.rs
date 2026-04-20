@@ -88,6 +88,12 @@ pub enum UiEffect {
     /// Persist the thinking level preference to config.
     PersistThinking { level: ThinkingLevel },
 
+    /// Persist fast mode preference to config (`providers.openai.fast_mode` or `providers.openai_codex.fast_mode`).
+    PersistFastMode {
+        enabled: bool,
+        provider: ProviderKind,
+    },
+
     /// Persist the active thread's thinking override.
     PersistThreadThinkingOverride { level: ThinkingLevel },
 
