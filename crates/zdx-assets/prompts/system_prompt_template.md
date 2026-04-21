@@ -81,7 +81,6 @@ MUST read the relevant file before modifying code in that scope:
 - SHOULD reserve `bash` for actions no tool can do (for example `cargo` or git).
 {% if is_openai_codex %}
 - For code edits with `apply_patch`, MUST use minimal, focused hunks. Avoid broad rewrites.
-- MUST use `multi_tool_use.parallel` to parallelize tool calls and only this.
 {% endif %}
 
 ### Tool Call Discipline
@@ -181,7 +180,8 @@ These env vars are usable directly as `$VAR`/`${VAR}` in any tool argument — e
 
 - SHOULD use `invoke_subagent` for large, splittable, or isolated tasks to keep context focused.
 - SHOULD prefer doing the work directly when the task is small enough to complete without delegation.
-- For local codebase or thread exploration, a single exact-path read or exact string/symbol lookup is direct work; if the task is likely to need more than one search/read round or may span multiple files or threads, SHOULD prefer `invoke_subagent` with `explorer` to keep the main context focused.
+- **Default to `explorer` for local read-only discovery.** The main thread is for synthesis, decisions, and final output. Inline read-only exploration (read, grep, glob, thread_search, read_thread) is allowed only for **(a)** one exact-path read or **(b)** one exact string/symbol lookup when the target is already known. If unsure whether the task will stay trivial, delegate to `explorer`.
+- **Circuit breaker:** If inline read-only exploration reaches **2 sequential tool-call rounds** and more discovery is still needed, MUST stop and delegate the remaining exploration to `explorer`. Do not continue into a third round of inline discovery.
 - Use `oracle` when the task is mainly deep diagnosis, debugging dead ends, architecture, or tradeoff analysis.
 - Use `task` for scoped implementation when no named specialist fits better.
 - When local exploration can be split into independent slices (for example different directories, repos, subsystems, or thread/date ranges), SHOULD launch multiple `explorer` subagents in parallel rather than serializing the discovery in one run.
