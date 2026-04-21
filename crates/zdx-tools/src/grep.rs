@@ -86,7 +86,7 @@ pub fn definition() -> ToolDefinition {
                 },
                 "type": {
                     "type": "string",
-                    "description": "Ripgrep file-type filter (e.g. \"rust\", \"ts\", \"py\"). Restricts search to files matching the named type's extensions. Returns invalid_input for unrecognized type names."
+                    "description": "Ripgrep file-type filter (e.g. \"rust\", \"ts\", \"py\"). Restricts search to files matching the named type's extensions. Unknown values are treated as file extensions, so \"kt\" matches \"*.kt\"."
                 }
             },
             "required": ["pattern"],
@@ -186,8 +186,8 @@ fn sanitize_pattern(pattern: &str) -> String {
 
 /// Build a pre-validated `ignore::types::Types` filter from a user-supplied type name.
 ///
-/// Returns `Ok(Some(types))` on success, `Ok(None)` when no type is specified,
-/// and `Err(ToolOutput)` with `invalid_input` when the type name is unrecognized.
+/// Returns `Ok(Some(types))` on success and `Ok(None)` when no type is specified.
+/// Unknown ripgrep type names fall back to a simple `*.ext` extension matcher.
 fn build_type_filter(file_type: Option<&str>) -> Result<Option<ignore::types::Types>, ToolOutput> {
     let Some(ft) = file_type else {
         return Ok(None);
@@ -199,15 +199,33 @@ fn build_type_filter(file_type: Option<&str>) -> Result<Option<ignore::types::Ty
     let mut tb = ignore::types::TypesBuilder::new();
     tb.add_defaults();
     tb.select(ft);
-    tb.build().map(Some).map_err(|e| {
-        ToolOutput::failure(
-            "invalid_input",
-            format!(
-                "Unknown file type '{ft}': {e}. Use a ripgrep type name (e.g. rust, ts, py, go, json)."
-            ),
-            None,
-        )
-    })
+    if let Ok(types) = tb.build() {
+        Ok(Some(types))
+    } else {
+        let extension = ft.trim_start_matches('.');
+        let mut extension_tb = ignore::types::TypesBuilder::new();
+        extension_tb.add_defaults();
+        extension_tb.add("zdxextensionfallback", &format!("*.{extension}"))
+            .map_err(|e| {
+                ToolOutput::failure(
+                    "invalid_input",
+                    format!(
+                        "Unknown file type '{ft}', and it could not be treated as a file extension: {e}. Use a ripgrep type name (e.g. rust, ts, py, go, json) or pass glob: \"**/*.{extension}\"."
+                    ),
+                    None,
+                )
+            })?;
+        extension_tb.select("zdxextensionfallback");
+        extension_tb.build().map(Some).map_err(|e| {
+            ToolOutput::failure(
+                "invalid_input",
+                format!(
+                    "Unknown file type '{ft}', and extension fallback '*.{extension}' could not be built: {e}."
+                ),
+                None,
+            )
+        })
+    }
 }
 
 /// Resolve the search path from user input + context root.
@@ -1778,12 +1796,42 @@ mod type_filter_tests {
     }
 
     #[test]
-    fn test_type_filter_unknown_type_returns_invalid_input() {
+    fn test_type_filter_unknown_type_falls_back_to_extension_match() {
+        let temp = TempDir::new().unwrap();
+        fs::write(
+            temp.path().join("Main.kt"),
+            "fun main() { println(\"hi\") }\n",
+        )
+        .unwrap();
+        fs::write(temp.path().join("code.rs"), "fn main() {}\n").unwrap();
+
+        let ctx = make_ctx(&temp);
+        let input = json!({"pattern": "main", "type": "kt"});
+
+        let result = execute(&input, &ctx);
+        assert!(result.is_ok(), "got: {}", result.to_json_string());
+        let data = result.data().unwrap();
+        let files: Vec<&str> = data["matches"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["file"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            files.len(),
+            1,
+            "expected only the Kotlin file, got: {files:?}"
+        );
+        assert!(files[0].ends_with("Main.kt"), "got: {files:?}");
+    }
+
+    #[test]
+    fn test_type_filter_invalid_extension_still_returns_invalid_input() {
         let temp = TempDir::new().unwrap();
         fs::write(temp.path().join("code.rs"), "fn main() {}\n").unwrap();
 
         let ctx = make_ctx(&temp);
-        let input = json!({"pattern": "fn", "type": "not_a_real_type_xyz"});
+        let input = json!({"pattern": "fn", "type": "not/[valid"});
 
         let result = execute(&input, &ctx);
         assert!(!result.is_ok());
@@ -1792,10 +1840,7 @@ mod type_filter_tests {
             json_str.contains(r#""code":"invalid_input""#),
             "got: {json_str}"
         );
-        assert!(
-            json_str.contains("not_a_real_type_xyz"),
-            "error should name the bad type"
-        );
+        assert!(json_str.contains("not/[valid"), "got: {json_str}");
     }
 
     #[test]
