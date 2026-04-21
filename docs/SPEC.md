@@ -316,6 +316,7 @@ Child `zdx exec` processes inherit all `ZDX_*` env vars from the parent automati
 - Explicit subagent skill dependencies are resolved from enabled sources even if global `include_skills` / `ignored_skills` filters would otherwise hide them.
 - Built-in subagents currently include:
   - `explorer`: a read-only local exploration specialist for open-ended multi-step discovery across the current workspace, broader machine-local filesystem paths, and saved thread history.
+  - `thread-searcher`: a saved-thread retrieval and audit specialist that can iterate on `thread_search`, use `zdx threads tools` for tool-usage/failure audits, and use `read_thread` to answer questions from prior ZDX conversations.
   - `oracle`: a read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Its output is advisory and should be independently validated by the parent agent.
 
 ### Models registry
@@ -369,7 +370,7 @@ Skills are folders containing a `SKILL.md` file with YAML frontmatter (`name`, `
 
 ### Discovery & sources
 
-- **Bundled skills:** ZDX includes built-in bundled skill fallbacks (currently `deepwiki-cli`, `memory`, `thread-tools`, `imagine`, and `skill-creator`) shipped inside the crate under `crates/zdx-assets/bundled_skills/`. At build time, ZDX embeds every file under that tree into the binary. At runtime, it materializes the bundle on demand under `$ZDX_HOME/bundled-skills/` and rewrites that directory only when the materialized bundle stamp is missing or differs from the embedded bundled-skill manifest hash; it does not verify individual bundled files on each startup.
+- **Bundled skills:** ZDX includes built-in bundled skill fallbacks (currently `deepwiki-cli`, `memory`, `imagine`, and `skill-creator`) shipped inside the crate under `crates/zdx-assets/bundled_skills/`. At build time, ZDX embeds every file under that tree into the binary. At runtime, it materializes the bundle on demand under `$ZDX_HOME/bundled-skills/` and rewrites that directory only when the materialized bundle stamp is missing or differs from the embedded bundled-skill manifest hash; it does not verify individual bundled files on each startup.
 - **Recursive sources:** `~/.zdx/skills/`, project `.zdx/skills/`, `~/.codex/skills/`, `~/.agents/skills/`, and project `.agents/skills/` are scanned recursively for `SKILL.md`.
 - **Claude sources (one-level):** `~/.claude/skills/` and project `.claude/skills/` only scan `dir/*/SKILL.md`.
 - **Priority:** zdx-user → zdx-project → codex-user → claude-user → claude-project → agents-user → agents-project → built-in (first wins on name collision, so user/project skills override bundled fallbacks).

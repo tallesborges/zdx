@@ -15,6 +15,7 @@ use crate::skills::{LoadSkillsOptions, Skill, load_skills, read_skill_content, s
 
 pub const TASK_BUILTIN_ALIAS_NAME: &str = "task";
 pub const EXPLORER_SUBAGENT_NAME: &str = "explorer";
+pub const THREAD_SEARCHER_SUBAGENT_NAME: &str = "thread-searcher";
 pub const ORACLE_SUBAGENT_NAME: &str = "oracle";
 
 /// Reserved runtime aliases that are not backed by a markdown subagent file.
@@ -226,6 +227,7 @@ pub fn capability_catalog(
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(explorer_capability(root)?);
+        capabilities.push(thread_searcher_capability(root)?);
         capabilities.push(oracle_capability(root)?);
     }
 
@@ -240,6 +242,7 @@ pub fn fallback_capability_catalog(delegation_enabled: bool) -> Vec<CapabilityDe
     if delegation_enabled {
         capabilities.push(task_capability());
         capabilities.push(fallback_explorer_capability());
+        capabilities.push(fallback_thread_searcher_capability());
         capabilities.push(fallback_oracle_capability());
     }
 
@@ -416,6 +419,10 @@ fn built_in_definitions() -> Result<Vec<SubagentDefinition>> {
             manifest_dir.join("subagents").join("oracle.md"),
             zdx_assets::ORACLE_SUBAGENT,
         ),
+        (
+            manifest_dir.join("subagents").join("thread-searcher.md"),
+            zdx_assets::THREAD_SEARCHER_SUBAGENT,
+        ),
     ]
     .into_iter()
     .map(|(path, content)| parse_subagent_content(&path, SubagentSource::BuiltIn, content))
@@ -443,6 +450,18 @@ fn oracle_capability(root: &Path) -> Result<CapabilityDescriptor> {
     })
 }
 
+fn thread_searcher_capability(root: &Path) -> Result<CapabilityDescriptor> {
+    let definition = load_by_name(root, THREAD_SEARCHER_SUBAGENT_NAME)?;
+    Ok(CapabilityDescriptor {
+        name: definition.name.clone(),
+        title: "Thread Searcher".to_string(),
+        description: definition.description,
+        kind: CapabilityKind::Subagent {
+            subagent: definition.name,
+        },
+    })
+}
+
 fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
     let definition = load_by_name(root, EXPLORER_SUBAGENT_NAME)?;
     Ok(CapabilityDescriptor {
@@ -453,6 +472,19 @@ fn explorer_capability(root: &Path) -> Result<CapabilityDescriptor> {
             subagent: definition.name,
         },
     })
+}
+
+fn fallback_thread_searcher_capability() -> CapabilityDescriptor {
+    CapabilityDescriptor {
+        name: THREAD_SEARCHER_SUBAGENT_NAME.to_string(),
+        title: "Thread Searcher".to_string(),
+        description:
+            "Use for saved ZDX thread discovery and retrieval when the parent needs answers from past conversations rather than current filesystem state. It can run multiple `thread_search` passes, pick promising threads, and use `read_thread` to extract the final answer."
+                .to_string(),
+        kind: CapabilityKind::Subagent {
+            subagent: THREAD_SEARCHER_SUBAGENT_NAME.to_string(),
+        },
+    }
 }
 
 fn fallback_explorer_capability() -> CapabilityDescriptor {
@@ -705,6 +737,7 @@ mod tests {
         let root = tempdir().unwrap();
         let all = discover(root.path()).unwrap();
         assert!(all.iter().any(|s| s.name == "explorer"));
+        assert!(all.iter().any(|s| s.name == "thread-searcher"));
         assert!(all.iter().any(|s| s.name == "oracle"));
     }
 
@@ -860,7 +893,7 @@ mod tests {
                 .iter()
                 .map(|cap| cap.name.as_str())
                 .collect::<Vec<_>>(),
-            vec!["task", "explorer", "oracle"]
+            vec!["task", "explorer", "thread-searcher", "oracle"]
         );
     }
 

@@ -1011,10 +1011,6 @@ mod tests {
             "names={names:?}, warnings={warnings:?}"
         );
         assert!(
-            names.contains(&"thread-tools"),
-            "names={names:?}, warnings={warnings:?}"
-        );
-        assert!(
             names.contains(&"imagine"),
             "names={names:?}, warnings={warnings:?}"
         );
