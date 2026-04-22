@@ -37,6 +37,9 @@ pub enum UiEffect {
     /// Quit the application.
     Quit,
 
+    /// Cycle to the next tab.
+    CycleTab,
+
     /// Start an agent turn with the current input.
     StartAgentTurn,
 

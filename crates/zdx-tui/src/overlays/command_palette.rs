@@ -171,6 +171,7 @@ fn execute_command(
         }
         "model" => (Some(OverlayRequest::ModelPicker), vec![], vec![]),
         "skills" => (Some(OverlayRequest::SkillPicker), vec![], vec![]),
+        "tabs" => (None, vec![UiEffect::CycleTab], vec![]),
         "threads" => {
             if tui.tasks.state(TaskKind::ThreadList).is_running() {
                 return (None, vec![], vec![]);
