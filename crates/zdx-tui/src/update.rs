@@ -591,6 +591,35 @@ fn handle_thread_ui_event(app: &mut AppState, thread_event: ThreadUiEvent) -> Ve
         {
             vec![]
         }
+        ThreadUiEvent::OpenAsTab {
+            cells,
+            messages,
+            history,
+            thread_handle,
+            title,
+            model_override,
+            thinking_override,
+            usage,
+            user_input,
+        } => {
+            let tab_id = app.next_tab_id();
+            let tab = create_thread_tab(
+                tab_id,
+                cells,
+                messages,
+                history,
+                thread_handle,
+                title,
+                model_override.as_ref(),
+                thinking_override,
+                usage,
+                user_input.as_deref(),
+                &app.tui,
+            );
+            app.overlay = None; // Close thread picker / timeline
+            app.push_tab(tab);
+            vec![]
+        }
         event => {
             let (mut effects, mutations, overlay_action) = thread::handle_thread_event(event);
             apply_mutations(&mut app.tui, mutations);
@@ -911,6 +940,76 @@ fn create_btw_tab(
         tasks: crate::common::Tasks::default(),
         auth: crate::auth::AuthState::new(),
         config: parent.config.clone(),
+        base_model: parent.base_model.clone(),
+        base_thinking_level: parent.base_thinking_level,
+        last_skill_repo: parent.last_skill_repo.clone(),
+        agent_opts: parent.agent_opts.clone(),
+        system_prompt: parent.system_prompt.clone(),
+        agent_state: AgentState::Idle,
+        spinner_frame: 0,
+        git_branch: parent.git_branch.clone(),
+        display_path: parent.display_path.clone(),
+        status_line: crate::statusline::StatusLineAccumulator::new(),
+        show_debug_status: false,
+        input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+        optimistic_active_threads: std::collections::HashMap::new(),
+    }
+}
+
+/// Creates a tab from a loaded or forked thread.
+#[allow(clippy::too_many_arguments)]
+fn create_thread_tab(
+    tab_id: TabId,
+    cells: Vec<HistoryCell>,
+    messages: Vec<zdx_engine::providers::ChatMessage>,
+    history: Vec<String>,
+    thread_handle: zdx_engine::core::thread_persistence::Thread,
+    title: Option<String>,
+    model_override: Option<&String>,
+    thinking_override: Option<zdx_engine::config::ThinkingLevel>,
+    usage: (
+        zdx_engine::core::thread_persistence::Usage,
+        zdx_engine::core::thread_persistence::Usage,
+    ),
+    user_input: Option<&str>,
+    parent: &TuiState,
+) -> TuiState {
+    use crate::input::InputState;
+    use crate::thread::ThreadState;
+    use crate::transcript::TranscriptState;
+
+    let transcript = TranscriptState::with_cells(cells);
+    let mut thread = ThreadState::with_thread(Some(thread_handle), messages);
+    thread.title = title;
+    thread.model_override = model_override.cloned();
+    thread.thinking_override = thinking_override;
+    thread.usage.restore(usage.0, usage.1);
+
+    let mut config = parent.config.clone();
+    if let Some(model) = model_override {
+        config.model.clone_from(model);
+    }
+    if let Some(thinking) = thinking_override {
+        config.thinking_level = thinking;
+    }
+
+    let mut input = InputState::new();
+    input.history = history;
+    if let Some(text) = user_input {
+        input.set_text(text);
+    }
+
+    TuiState {
+        tab_id,
+        tab_kind: TabKind::Main, // Thread tabs behave like main tabs
+        should_quit: false,
+        input,
+        transcript,
+        thread,
+        task_seq: crate::common::TaskSeq::default(),
+        tasks: crate::common::Tasks::default(),
+        auth: crate::auth::AuthState::new(),
+        config,
         base_model: parent.base_model.clone(),
         base_thinking_level: parent.base_thinking_level,
         last_skill_repo: parent.last_skill_repo.clone(),

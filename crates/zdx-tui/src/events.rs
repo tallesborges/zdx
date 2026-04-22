@@ -109,6 +109,20 @@ pub enum ThreadUiEvent {
     /// Thread fork failed.
     ForkFailed { error: String },
 
+    /// Thread loaded or forked — open in a new tab instead of switching.
+    OpenAsTab {
+        cells: Vec<HistoryCell>,
+        messages: Vec<ChatMessage>,
+        history: Vec<String>,
+        thread_handle: Thread,
+        title: Option<String>,
+        model_override: Option<String>,
+        thinking_override: Option<zdx_engine::config::ThinkingLevel>,
+        usage: (Usage, Usage),
+        /// If set, pre-fill the input buffer (for fork-at-turn).
+        user_input: Option<String>,
+    },
+
     /// Thread rename succeeded.
     Renamed {
         thread_id: String,

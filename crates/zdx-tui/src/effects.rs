@@ -121,6 +121,9 @@ pub enum UiEffect {
     /// Load a thread by ID (switch to that thread).
     LoadThread { thread_id: String },
 
+    /// Load a thread by ID into a new background tab (keep current thread).
+    LoadThreadAsTab { thread_id: String },
+
     /// Ensure a git worktree for the active thread and switch root to it.
     EnsureWorktree,
 
@@ -163,6 +166,13 @@ pub enum UiEffect {
 
     /// Create a new thread from a truncated set of events.
     ForkThread {
+        events: Vec<ThreadEvent>,
+        user_input: Option<String>,
+        turn_number: usize,
+    },
+
+    /// Fork a thread at a specific point and open it in a new tab.
+    ForkThreadAsTab {
         events: Vec<ThreadEvent>,
         user_input: Option<String>,
         turn_number: usize,
