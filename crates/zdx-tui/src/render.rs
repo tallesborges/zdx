@@ -264,13 +264,10 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     let mut btw_index = 0usize;
 
     // Active tab first
-    let active_label = match &app.tui.tab_kind {
-        TabKind::Main => "main".to_string(),
-        TabKind::Btw { .. } => {
-            btw_index += 1;
-            format!("btw {btw_index}")
-        }
-    };
+    if matches!(&app.tui.tab_kind, TabKind::Btw { .. }) {
+        btw_index += 1;
+    }
+    let active_label = app.tui.tab_kind.label(btw_index);
     spans.push(Span::styled(
         format!(" {active_label} "),
         Style::default().fg(Color::Black).bg(Color::Cyan),
@@ -278,13 +275,10 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
 
     // Background tabs
     for tab in &app.background_tabs {
-        let label = match &tab.tab_kind {
-            TabKind::Main => "main".to_string(),
-            TabKind::Btw { .. } => {
-                btw_index += 1;
-                format!("btw {btw_index}")
-            }
-        };
+        if matches!(&tab.tab_kind, TabKind::Btw { .. }) {
+            btw_index += 1;
+        }
+        let label = tab.tab_kind.label(btw_index);
         let activity = if tab.agent_state.is_running() {
             "*"
         } else {
