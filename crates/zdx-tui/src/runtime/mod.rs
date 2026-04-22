@@ -352,17 +352,12 @@ impl TuiRuntime {
         // - Recent terminal activity (scrolling, typing)
         // Otherwise use slow polling to save CPU.
         let recent_terminal_activity = self.last_terminal_event.elapsed() < IDLE_POLL_DURATION;
-        let popup_running = matches!(
-            self.state.overlay.as_ref(),
-            Some(crate::overlays::Overlay::Btw(state)) if state.agent_state.is_running()
-        );
         let background_tab_running = self
             .state
             .background_tabs
             .iter()
             .any(|tab| tab.agent_state.is_running());
         let needs_fast_poll = self.state.tui.agent_state.is_running()
-            || popup_running
             || background_tab_running
             || self.state.tui.tasks.state(TaskKind::Bash).is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
@@ -423,10 +418,6 @@ impl TuiRuntime {
     /// always delivered.
     fn collect_agent_events(&mut self, events: &mut Vec<UiEvent>) {
         drain_agent_rx(&mut self.state.tui.agent_state, events, UiEvent::Agent);
-
-        if let Some(crate::overlays::Overlay::Btw(state)) = &mut self.state.overlay {
-            drain_agent_rx(&mut state.agent_state, events, UiEvent::BtwAgent);
-        }
 
         // Drain background tab agent events
         for tab in &mut self.state.background_tabs {
@@ -514,43 +505,8 @@ impl TuiRuntime {
                 let event = handlers::spawn_agent_turn(&self.state.tui);
                 self.dispatch_event(event);
             }
-            UiEffect::StartBtwTurn {
-                base_messages,
-                thread_handle,
-                messages,
-                prompt,
-                model,
-                thinking_level,
-            } => {
-                let config = self.state.tui.config.clone();
-                let agent_opts = self.state.tui.agent_opts.clone();
-                let system_prompt = self.state.tui.system_prompt.clone();
-                match handlers::spawn_btw_turn(
-                    config,
-                    agent_opts,
-                    system_prompt,
-                    base_messages,
-                    thread_handle,
-                    messages,
-                    prompt,
-                    &model,
-                    thinking_level,
-                ) {
-                    Ok(event) => self.dispatch_event(event),
-                    Err(error) => self.dispatch_event(UiEvent::Thread(
-                        crate::events::ThreadUiEvent::ForkFailed { error },
-                    )),
-                }
-            }
             UiEffect::InterruptAgent => {
                 handlers::interrupt_agent(&self.state.tui);
-            }
-            UiEffect::InterruptBtwAgent => {
-                if let Some(crate::overlays::Overlay::Btw(state)) = &self.state.overlay
-                    && let Some(cancel) = state.agent_state.cancel_token()
-                {
-                    cancel.cancel();
-                }
             }
             UiEffect::InterruptBash => {
                 // Unified cancellation: call cancel() on the token
@@ -1003,8 +959,8 @@ impl TuiRuntime {
 /// and are always delivered individually.
 ///
 /// `wrap` converts an [`AgentEvent`] into the correct [`UiEvent`] variant
-/// (`UiEvent::Agent` for the main session, `UiEvent::BtwAgent` for the BTW
-/// popup).
+/// (`UiEvent::Agent` for the main session, `UiEvent::BackgroundTabAgent` for
+/// background tabs).
 fn drain_agent_rx<F>(agent_state: &mut AgentState, events: &mut Vec<UiEvent>, wrap: F)
 where
     F: Fn(AgentEvent) -> UiEvent,

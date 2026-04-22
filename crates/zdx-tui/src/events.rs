@@ -234,18 +234,6 @@ pub enum UiEvent {
         messages: Option<Vec<ChatMessage>>,
     },
 
-    /// BTW popup agent turn spawned.
-    BtwAgentSpawned {
-        thread_handle: Thread,
-        prompt: String,
-        messages: Vec<ChatMessage>,
-        rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
-        cancel: CancellationToken,
-    },
-
-    /// BTW popup agent event stream.
-    BtwAgent(AgentEvent),
-
     /// Agent event for a background (non-active) tab.
     BackgroundTabAgent { tab_id: TabId, event: AgentEvent },
 

@@ -22,8 +22,8 @@ use std::path::PathBuf;
 
 use tokio_util::sync::CancellationToken;
 use zdx_engine::config::ThinkingLevel;
-use zdx_engine::core::thread_persistence::{Thread, ThreadEvent};
-use zdx_engine::providers::{ChatMessage, ProviderKind};
+use zdx_engine::core::thread_persistence::ThreadEvent;
+use zdx_engine::providers::ProviderKind;
 
 use crate::common::TaskKind;
 use crate::events::RecordedAudio;
@@ -42,9 +42,6 @@ pub enum UiEffect {
 
     /// Interrupt the running agent task.
     InterruptAgent,
-
-    /// Interrupt the running BTW popup agent task.
-    InterruptBtwAgent,
 
     /// Interrupt the running direct bash command.
     InterruptBash,
@@ -108,16 +105,6 @@ pub enum UiEffect {
 
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
-
-    /// Start or continue the live BTW popup chat in its forked thread.
-    StartBtwTurn {
-        base_messages: Vec<ChatMessage>,
-        thread_handle: Option<Thread>,
-        messages: Vec<ChatMessage>,
-        prompt: String,
-        model: String,
-        thinking_level: ThinkingLevel,
-    },
 
     /// Submit handoff prompt: create new thread and send prompt as first message.
     HandoffSubmit {

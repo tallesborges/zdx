@@ -35,7 +35,6 @@ Scope: full-screen interactive TUI (state/update/render/effects/runtime).
 
 - `src/common/`: shared leaf types
 - `src/overlays/`: command palette, skill picker, rename overlays
-- `src/overlays/btw.rs`: side-question overlay for background forked questions
 - `src/overlays/tool_detail.rs`: tool detail popup overlay (full args/output/status on click)
 
 ## Conventions
