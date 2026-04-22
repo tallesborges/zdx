@@ -10,7 +10,6 @@
 //! - `skill_picker.rs`: Skill installer picker
 //! - `thinking_picker.rs`: Thinking level selection picker
 //! - `thread_picker.rs`: Thread history picker
-//! - `btw.rs`: side-question overlay for background forked questions
 //! - `login.rs`: OAuth login flow overlay
 //! - `file_picker.rs`: File picker triggered by `@`
 //! - `rename.rs`: Thread rename overlay
@@ -22,7 +21,6 @@
 //! `OverlayExt` provides convenience methods for `Option<Overlay>` to encapsulate
 //! the common patterns used in the reducer.
 
-pub mod btw;
 pub mod command_palette;
 pub mod file_picker;
 pub mod image_preview;
@@ -37,7 +35,6 @@ pub mod timeline;
 pub mod tool_detail;
 mod update;
 
-pub use btw::BtwState;
 pub use command_palette::CommandPaletteState;
 use crossterm::event::KeyEvent;
 pub use file_picker::{FilePickerState, discover_files};
@@ -147,7 +144,6 @@ pub enum Overlay {
     ModelPicker(ModelPickerState),
     SkillPicker(SkillPickerState),
     ThinkingPicker(ThinkingPickerState),
-    Btw(Box<BtwState>),
     ThreadPicker(ThreadPickerState),
     Login(LoginState),
     FilePicker(FilePickerState),
@@ -164,7 +160,6 @@ impl Overlay {
             Overlay::ModelPicker(p) => p.render(frame, area, input_y),
             Overlay::SkillPicker(p) => p.render(frame, area, input_y),
             Overlay::ThinkingPicker(p) => p.render(frame, area, input_y),
-            Overlay::Btw(p) => p.render(frame, area, input_y),
             Overlay::ThreadPicker(p) => p.render(frame, area, input_y),
             Overlay::FilePicker(p) => p.render(frame, area, input_y),
             Overlay::Login(l) => l.render(frame, area, input_y),
@@ -186,7 +181,6 @@ impl Overlay {
             Overlay::ModelPicker(p) => p.handle_key(tui, key),
             Overlay::SkillPicker(p) => p.handle_key(tui, key),
             Overlay::ThinkingPicker(p) => p.handle_key(tui, key),
-            Overlay::Btw(p) => p.handle_key(tui, key),
             Overlay::ThreadPicker(p) => p.handle_key(tui, key),
             Overlay::FilePicker(p) => p.handle_key(&tui.input, key),
             Overlay::Login(l) => l.handle_key(tui, key),

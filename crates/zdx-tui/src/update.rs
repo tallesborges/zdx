@@ -31,9 +31,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.transcript.check_selection_timeout();
             // Apply pending streaming deltas each tick so final chunks render without input
             transcript::apply_pending_delta(&mut app.tui.transcript, &mut app.tui.agent_state);
-            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
-                transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
-            }
             // Also coalesce background tab deltas
             for tab in &mut app.background_tabs {
                 transcript::apply_pending_delta(&mut tab.transcript, &mut tab.agent_state);
@@ -43,9 +40,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::Frame { width, height } => {
             let tab_bar_height = u16::from(app.tab_count() > 1);
             handle_frame(&mut app.tui, width, height, tab_bar_height);
-            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
-                transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
-            }
             vec![]
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
@@ -75,33 +69,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             app.tui.agent_state = AgentState::Waiting { rx, cancel };
             app.tui.transcript.activate_pending_user_cell();
             app.tui.status_line.start_turn();
-            vec![]
-        }
-        UiEvent::BtwAgentSpawned {
-            thread_handle,
-            prompt,
-            messages,
-            rx,
-            cancel,
-        } => {
-            app.tui.mark_thread_running(thread_handle.id.clone());
-            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
-                state.on_turn_spawned(thread_handle, prompt, messages, rx, cancel);
-            }
-            vec![]
-        }
-        UiEvent::BtwAgent(agent_event) => {
-            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
-                let finished = matches!(
-                    agent_event,
-                    zdx_engine::core::events::AgentEvent::TurnFinished { .. }
-                );
-                let thread_id = state.thread_handle.as_ref().map(|thread| thread.id.clone());
-                state.handle_agent_event(&agent_event);
-                if finished && let Some(thread_id) = thread_id {
-                    app.tui.mark_thread_finished(&thread_id);
-                }
-            }
             vec![]
         }
         UiEvent::BackgroundTabAgent { tab_id, event } => {
@@ -1015,14 +982,6 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
                 }
                 return vec![];
             }
-            if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
-                let (width, height) = app.tui.transcript.terminal_size;
-                let area = ratatui::layout::Rect::new(0, 0, width, height);
-                let input_y = app.tui.input_area.get().y;
-                if state.handle_mouse(mouse, area, input_y) {
-                    return vec![];
-                }
-            }
 
             // Check if click is in the input area first
             let input_area = app.tui.input_area.get();
@@ -1076,19 +1035,23 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         }
     }
 
-    // Close btw tab with Esc when idle (no agent running, empty input)
-    if matches!(&app.tui.tab_kind, TabKind::Btw { .. })
-        && key.code == KeyCode::Esc
-        && !app.tui.agent_state.is_running()
-        && !app
+    // Close btw tab with Esc:
+    // - If agent running: cancel it (tab stays open for user to see results)
+    // - If idle + empty input: close tab
+    if matches!(&app.tui.tab_kind, TabKind::Btw { .. }) && key.code == KeyCode::Esc {
+        if app.tui.agent_state.is_running() {
+            return vec![UiEffect::InterruptAgent];
+        }
+        if !app
             .tui
             .tasks
             .state(crate::common::TaskKind::Bash)
             .is_running()
-        && app.tui.input.get_text().is_empty()
-    {
-        app.close_active_tab();
-        return vec![];
+            && app.tui.input.get_text().is_empty()
+        {
+            app.close_active_tab();
+            return vec![];
+        }
     }
 
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()

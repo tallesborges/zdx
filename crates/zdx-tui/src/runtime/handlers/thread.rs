@@ -3,13 +3,9 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{Context, anyhow, bail};
-use tokio_util::sync::CancellationToken;
 use zdx_engine::agent_activity;
-use zdx_engine::config::{Config, ThinkingLevel};
-use zdx_engine::core::agent::{self, AgentOptions};
 use zdx_engine::core::thread_persistence::ThreadEvent;
 use zdx_engine::core::{thread_persistence as tp, worktree};
-use zdx_engine::providers::ChatMessage;
 
 use crate::events::{ThreadUiEvent, UiEvent};
 use crate::transcript::{HistoryCell, build_transcript_from_events};
@@ -365,106 +361,6 @@ pub async fn thread_fork(
                 error: format!("Task failed: {e}"),
             })
         })
-}
-
-/// Starts a live BTW popup turn in a forked thread.
-#[allow(clippy::too_many_arguments)]
-pub fn spawn_btw_turn(
-    mut config: Config,
-    agent_opts: AgentOptions,
-    system_prompt: Option<String>,
-    base_messages: Vec<ChatMessage>,
-    thread_handle: Option<tp::Thread>,
-    messages: Vec<ChatMessage>,
-    prompt: String,
-    model: &str,
-    thinking_level: ThinkingLevel,
-) -> Result<UiEvent, String> {
-    config.model = model.to_string();
-    config.thinking_level = thinking_level;
-    let (thread_handle, messages) = prepare_btw_turn(
-        base_messages,
-        thread_handle,
-        messages,
-        &prompt,
-        &agent_opts.root,
-        model,
-        thinking_level,
-    )
-    .map_err(|e| format!("Failed to start side thread: {e}"))?;
-
-    let thread_id = thread_handle.id.clone();
-    let (agent_tx, agent_rx) = agent::create_event_channel();
-    let cancel = CancellationToken::new();
-    let run_cancel = cancel.clone();
-    let (tui_tx, tui_rx) = agent::create_event_channel();
-    let (persist_tx, persist_rx) = agent::create_event_channel();
-    let _broadcaster = agent::spawn_broadcaster(agent_rx, vec![tui_tx, persist_tx]);
-    let _persist = tp::spawn_thread_persist_task_with_completed_messages(
-        thread_handle.clone(),
-        persist_rx,
-        true,
-    );
-
-    let run_messages = messages.clone();
-    tokio::spawn(async move {
-        let _ = agent::run_turn_with_cancel(
-            run_messages,
-            &config,
-            &agent_opts,
-            system_prompt.as_deref(),
-            Some(&thread_id),
-            agent_tx.clone(),
-            Some(run_cancel),
-        )
-        .await;
-    });
-
-    Ok(UiEvent::BtwAgentSpawned {
-        thread_handle,
-        prompt,
-        messages,
-        rx: tui_rx,
-        cancel,
-    })
-}
-
-fn prepare_btw_turn(
-    base_messages: Vec<ChatMessage>,
-    thread_handle: Option<tp::Thread>,
-    mut messages: Vec<ChatMessage>,
-    prompt: &str,
-    root: &Path,
-    model: &str,
-    thinking_level: ThinkingLevel,
-) -> anyhow::Result<(tp::Thread, Vec<ChatMessage>)> {
-    let mut thread_handle = if let Some(thread_handle) = thread_handle {
-        thread_handle
-    } else {
-        let mut thread_handle =
-            tp::Thread::new_with_root(root).context("Failed to create side thread")?;
-        let events = tp::messages_to_events(&base_messages);
-        for event in &events {
-            thread_handle
-                .append(event)
-                .context("Failed to persist side thread context")?;
-        }
-        messages = base_messages;
-        thread_handle
-    };
-
-    thread_handle
-        .append(&ThreadEvent::user_message(prompt))
-        .context("Failed to persist side question")?;
-    thread_handle
-        .set_model_override(Some(model.to_string()))
-        .context("Failed to persist side thread model override")?;
-    thread_handle
-        .set_thinking_override(Some(thinking_level))
-        .context("Failed to persist side thread thinking override")?;
-    messages.push(ChatMessage::user(prompt));
-
-    Ok((thread_handle, messages))
 }
 
 fn fork_thread_sync(
