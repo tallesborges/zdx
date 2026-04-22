@@ -112,14 +112,14 @@ impl ThreadPickerState {
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
 
         match key.code {
-            KeyCode::Char('t') if ctrl => self.toggle_scope(),
+            KeyCode::Char('t') if ctrl => self.open_as_tab(tui),
+            KeyCode::Char('s') if ctrl => self.toggle_scope(),
             KeyCode::Esc | KeyCode::Char('c') if key.code == KeyCode::Esc || ctrl => {
                 self.close_overlay()
             }
             KeyCode::Up | KeyCode::Char('k') => self.navigate_up(),
             KeyCode::Down | KeyCode::Char('j') => self.navigate_down(),
             KeyCode::Enter => self.handle_enter(tui),
-            KeyCode::Tab => self.open_as_tab(tui),
             KeyCode::Char('y') => self.copy_selected_thread_id(),
             // Ctrl+U: clear the filter
             KeyCode::Char('u') if ctrl && !shift && !alt => {
