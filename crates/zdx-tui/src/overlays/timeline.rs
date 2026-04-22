@@ -177,6 +177,22 @@ impl TimelineState {
                     )]),
                 }
             }
+            KeyCode::Char('t') => {
+                if tui.tasks.state(TaskKind::ThreadFork).is_running() {
+                    return OverlayUpdate::stay();
+                }
+
+                match self.fork_as_tab_effect(tui) {
+                    Some(effect) => OverlayUpdate::close()
+                        .with_ui_effects(vec![effect])
+                        .with_mutations(vec![]),
+                    None => OverlayUpdate::stay().with_mutations(vec![StateMutation::Transcript(
+                        TranscriptMutation::AppendSystemMessage(
+                            "No timeline entry selected.".to_string(),
+                        ),
+                    )]),
+                }
+            }
             _ => OverlayUpdate::stay(),
         }
     }
@@ -248,6 +264,28 @@ impl TimelineState {
         }
 
         Some(UiEffect::ForkThread {
+            events,
+            user_input,
+            turn_number: self.selected + 1,
+        })
+    }
+
+    fn fork_as_tab_effect(&self, tui: &TuiState) -> Option<UiEffect> {
+        let entry = self.selected_entry()?;
+        let cells = tui.transcript.cells();
+        let selected_cell = cells.get(entry.cell_index)?;
+        let (events, user_input) = match selected_cell {
+            HistoryCell::User { content, .. } => (
+                cells_to_events(&cells[..entry.cell_index]),
+                Some(content.clone()),
+            ),
+            _ => (cells_to_events(&cells[..=entry.cell_index]), None),
+        };
+        if events.is_empty() && user_input.is_none() {
+            return None;
+        }
+
+        Some(UiEffect::ForkThreadAsTab {
             events,
             user_input,
             turn_number: self.selected + 1,

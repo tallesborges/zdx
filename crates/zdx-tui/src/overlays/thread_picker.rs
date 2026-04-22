@@ -120,6 +120,7 @@ impl ThreadPickerState {
             KeyCode::Down | KeyCode::Char('j') => self.navigate_down(),
             KeyCode::Enter => self.handle_enter(tui),
             KeyCode::Char('y') => self.copy_selected_thread_id(),
+            KeyCode::Char('t') if !ctrl => self.open_as_tab(tui),
             // Ctrl+U: clear the filter
             KeyCode::Char('u') if ctrl && !shift && !alt => {
                 self.filter.clear();
@@ -223,6 +224,22 @@ impl ThreadPickerState {
             }])
         } else {
             OverlayUpdate::close()
+        }
+    }
+
+    fn open_as_tab(&self, tui: &TuiState) -> OverlayUpdate {
+        if !self.mode.is_switch() {
+            return OverlayUpdate::stay();
+        }
+        if tui.tasks.state(TaskKind::ThreadLoad).is_running() {
+            return OverlayUpdate::stay();
+        }
+        if let Some(thread) = self.selected_thread() {
+            OverlayUpdate::close().with_ui_effects(vec![UiEffect::LoadThreadAsTab {
+                thread_id: thread.id.clone(),
+            }])
+        } else {
+            OverlayUpdate::stay()
         }
     }
 

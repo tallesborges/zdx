@@ -727,6 +727,23 @@ impl TuiRuntime {
                     handlers::thread_fork(events, user_input, turn_number, root)
                 });
             }
+            UiEffect::ForkThreadAsTab {
+                events,
+                user_input,
+                turn_number,
+            } => {
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_task(
+                    TaskKind::ThreadFork,
+                    TaskMeta::None,
+                    false,
+                    move |_| async move {
+                        map_forked_to_tab(
+                            handlers::thread_fork(events, user_input, turn_number, root).await,
+                        )
+                    },
+                );
+            }
             UiEffect::OpenThreadPicker { mode } => {
                 if mode.is_switch() && self.state.tui.agent_state.is_running() {
                     self.state
@@ -762,6 +779,17 @@ impl TuiRuntime {
                 self.spawn_task(TaskKind::ThreadLoad, TaskMeta::None, false, move |_| {
                     handlers::thread_load(thread_id, root)
                 });
+            }
+            UiEffect::LoadThreadAsTab { thread_id } => {
+                let root = self.state.tui.agent_opts.root.clone();
+                self.spawn_task(
+                    TaskKind::ThreadLoad,
+                    TaskMeta::None,
+                    false,
+                    move |_| async move {
+                        map_loaded_to_tab(handlers::thread_load(thread_id, root).await)
+                    },
+                );
             }
             UiEffect::OpenTerminal => {
                 let root = self.state.tui.agent_opts.root.clone();
@@ -1184,6 +1212,62 @@ fn open_in_editor(path: &Path) -> std::io::Result<()> {
             cmd.status().map(|_| ())
         }
         _ => open::that(path),
+    }
+}
+
+/// Maps a `ThreadUiEvent::Loaded` result to `ThreadUiEvent::OpenAsTab`.
+fn map_loaded_to_tab(event: UiEvent) -> UiEvent {
+    use crate::events::ThreadUiEvent;
+    match event {
+        UiEvent::Thread(ThreadUiEvent::Loaded {
+            cells,
+            messages,
+            history,
+            thread_handle,
+            title,
+            model_override,
+            thinking_override,
+            usage,
+            ..
+        }) => UiEvent::Thread(ThreadUiEvent::OpenAsTab {
+            cells,
+            messages,
+            history,
+            thread_handle: thread_handle.expect("loaded thread should have handle"),
+            title,
+            model_override,
+            thinking_override,
+            usage,
+            user_input: None,
+        }),
+        other => other, // Pass through errors
+    }
+}
+
+/// Maps a `ThreadUiEvent::ForkedLoaded` result to `ThreadUiEvent::OpenAsTab`.
+fn map_forked_to_tab(event: UiEvent) -> UiEvent {
+    use crate::events::ThreadUiEvent;
+    match event {
+        UiEvent::Thread(ThreadUiEvent::ForkedLoaded {
+            cells,
+            messages,
+            history,
+            thread_handle,
+            usage,
+            user_input,
+            ..
+        }) => UiEvent::Thread(ThreadUiEvent::OpenAsTab {
+            cells,
+            messages,
+            history,
+            thread_handle,
+            title: None,
+            model_override: None,
+            thinking_override: None,
+            usage,
+            user_input,
+        }),
+        other => other,
     }
 }
 

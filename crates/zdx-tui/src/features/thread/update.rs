@@ -228,6 +228,8 @@ pub fn handle_thread_event(
                 UiEffect::CreateNewThread,
             ]
         }
+        // OpenAsTab is intercepted in update.rs before reaching this function.
+        ThreadUiEvent::OpenAsTab { .. } => unreachable!("OpenAsTab handled in update.rs"),
     };
 
     (effects, mutations, overlay_action)
