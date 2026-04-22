@@ -609,7 +609,7 @@ fn handle_thread_ui_event(app: &mut AppState, thread_event: ThreadUiEvent) -> Ve
                 messages,
                 history,
                 thread_handle,
-                title,
+                title.as_ref(),
                 model_override.as_ref(),
                 thinking_override,
                 usage,
@@ -964,7 +964,7 @@ fn create_thread_tab(
     messages: Vec<zdx_engine::providers::ChatMessage>,
     history: Vec<String>,
     thread_handle: zdx_engine::core::thread_persistence::Thread,
-    title: Option<String>,
+    title: Option<&String>,
     model_override: Option<&String>,
     thinking_override: Option<zdx_engine::config::ThinkingLevel>,
     usage: (
@@ -980,7 +980,7 @@ fn create_thread_tab(
 
     let transcript = TranscriptState::with_cells(cells);
     let mut thread = ThreadState::with_thread(Some(thread_handle), messages);
-    thread.title = title;
+    thread.title.clone_from(&title.cloned());
     thread.model_override = model_override.cloned();
     thread.thinking_override = thinking_override;
     thread.usage.restore(usage.0, usage.1);
@@ -1001,7 +1001,14 @@ fn create_thread_tab(
 
     TuiState {
         tab_id,
-        tab_kind: TabKind::Main, // Thread tabs behave like main tabs
+        tab_kind: TabKind::Thread {
+            title: title.cloned(),
+            thread_id: thread
+                .thread_handle
+                .as_ref()
+                .map(|t| t.id.clone())
+                .unwrap_or_default(),
+        },
         should_quit: false,
         input,
         transcript,

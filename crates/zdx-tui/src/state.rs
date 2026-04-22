@@ -75,6 +75,13 @@ pub struct TabId(pub u64);
 pub enum TabKind {
     /// The main/primary chat tab.
     Main,
+    /// A loaded or forked thread opened in a separate tab.
+    Thread {
+        /// Cached title for display, if known.
+        title: Option<String>,
+        /// Thread id fallback when title is missing.
+        thread_id: String,
+    },
     /// A "by the way" side-chat tab forked from another tab's context.
     Btw {
         /// Messages from the parent tab at fork time, used as context.
@@ -87,6 +94,10 @@ impl TabKind {
     pub fn label(&self, btw_index: usize) -> String {
         match self {
             TabKind::Main => "main".to_string(),
+            TabKind::Thread { title, thread_id } => title.clone().unwrap_or_else(|| {
+                let short = thread_id.chars().take(8).collect::<String>();
+                format!("thread {short}")
+            }),
             TabKind::Btw { .. } => format!("btw {btw_index}"),
         }
     }
