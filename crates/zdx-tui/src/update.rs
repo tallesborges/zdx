@@ -892,7 +892,7 @@ fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_engine::providers::ChatMes
 /// Cycles to the next or previous tab.
 ///
 /// `direction` is +1 for next, -1 for previous. Wraps around.
-fn cycle_tab(app: &mut AppState, direction: i32) {
+pub fn cycle_tab(app: &mut AppState, direction: i32) {
     if app.background_tabs.is_empty() {
         return;
     }

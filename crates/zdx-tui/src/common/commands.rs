@@ -45,7 +45,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "btw",
         aliases: &["side"],
-        description: "Ask a side question in a background fork",
+        description: "Ask a side question in a new tab",
         category: "thread",
         shortcut: None,
     },
@@ -132,6 +132,13 @@ pub const COMMANDS: &[Command] = &[
         description: "Exit ZDX",
         category: "app",
         shortcut: None,
+    },
+    Command {
+        name: "tabs",
+        aliases: &[],
+        description: "Switch to the next tab",
+        category: "tab",
+        shortcut: Some("Ctrl+PgDn"),
     },
     Command {
         name: "threads",

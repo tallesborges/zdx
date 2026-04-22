@@ -496,6 +496,9 @@ impl TuiRuntime {
             UiEffect::Quit => {
                 self.state.tui.should_quit = true;
             }
+            UiEffect::CycleTab => {
+                crate::update::cycle_tab(&mut self.state, 1);
+            }
             UiEffect::OpenBrowser { url } => {
                 let _ = open::that(&url);
             }
