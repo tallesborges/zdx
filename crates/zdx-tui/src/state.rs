@@ -1,29 +1,40 @@
 //! Application state composition.
 //!
 //! This module defines the top-level state hierarchy for the TUI:
-//! - `AppState` - combined state (`TuiState` + overlay)
-//! - `TuiState` - non-overlay UI state (input, transcript, thread, auth, agent)
+//! - `AppState` - combined state (active tab + background tabs + overlay)
+//! - `TuiState` - per-tab UI state (input, transcript, thread, auth, agent)
 //! - `AgentState` - agent execution state (idle, waiting, streaming)
+//! - `TabId` / `TabKind` - tab identity and origin
 //!
 //! ## State Hierarchy
 //!
 //! ```text
 //! AppState
-//! ├── tui: TuiState
+//! ├── tui: TuiState              (active tab — always the visible one)
+//! │   ├── tab_id: TabId          (unique session-scoped identifier)
+//! │   ├── tab_kind: TabKind      (Main or Btw fork)
 //! │   ├── input: InputState      (user input, command history)
 //! │   ├── transcript: TranscriptState (cells, scroll, layout)
-//! │   ├── thread: ThreadState (messages, usage)
-//! │   ├── task_seq: TaskSeq (async task id generator)
-//! │   ├── tasks: Tasks (task lifecycle state)
+//! │   ├── thread: ThreadState    (messages, usage)
+//! │   ├── task_seq: TaskSeq      (async task id generator)
+//! │   ├── tasks: Tasks           (task lifecycle state)
 //! │   ├── auth: AuthState        (authentication status)
 //! │   └── agent_state: AgentState (execution state)
+//! ├── background_tabs: Vec<TuiState> (inactive tabs)
 //! └── overlay: Option<Overlay>   (modal overlays)
 //! ```
+//!
+//! ## Tab Architecture (swap-based)
+//!
+//! The active tab is always `app.tui`. Background tabs live in `background_tabs`.
+//! Switching tabs swaps the active tab with the target from `background_tabs`.
+//! This preserves the split-state borrow-checker properties: `tui`, `overlay`,
+//! and `background_tabs` are disjoint fields that can be borrowed simultaneously.
 //!
 //! ## Split State Architecture
 //!
 //! State is split between `TuiState` (non-overlay) and `Option<Overlay>`:
-//! - `TuiState` contains all non-overlay UI state
+//! - `TuiState` contains all non-overlay UI state for one tab
 //! - `Option<Overlay>` holds the active overlay if any
 //! - `AppState` combines both for runtime use
 //!
@@ -50,16 +61,60 @@ use crate::thread::ThreadState;
 use crate::transcript::{CellId, HistoryCell, TranscriptState, reasoning_display_text};
 
 // ============================================================================
+// TabId / TabKind
+// ============================================================================
+
+/// Unique identifier for a tab within a session.
+///
+/// Tab IDs are monotonically increasing and session-scoped (not persisted).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TabId(pub u64);
+
+/// The kind/origin of a tab.
+#[derive(Clone, Debug)]
+pub enum TabKind {
+    /// The main/primary chat tab.
+    Main,
+    /// A "by the way" side-chat tab forked from another tab's context.
+    Btw {
+        /// Messages from the parent tab at fork time, used as context.
+        base_messages: Vec<ChatMessage>,
+    },
+}
+
+impl TabKind {
+    /// Returns a short display label for this tab kind.
+    pub fn label(&self, btw_index: usize) -> String {
+        match self {
+            TabKind::Main => "main".to_string(),
+            TabKind::Btw { .. } => format!("btw {btw_index}"),
+        }
+    }
+
+    pub fn is_main(&self) -> bool {
+        matches!(self, TabKind::Main)
+    }
+}
+
+// ============================================================================
 // AppState (Combined State)
 // ============================================================================
 
 /// Combined application state for the TUI.
 ///
-/// Combines `TuiState` with `Option<Overlay>` to enable the split state
-/// architecture where overlay handlers can access both without borrow conflicts.
+/// Uses a "swap" architecture for tabs: the active tab is always in `tui`,
+/// and background tabs are stored in `background_tabs`. Switching tabs swaps
+/// between them. This preserves the split-state architecture where `tui` and
+/// `overlay` are separate fields for borrow-checker compatibility.
 pub struct AppState {
+    /// The currently active/visible tab.
     pub tui: TuiState,
+    /// Modal overlay (command palette, model picker, etc.).
     pub overlay: Option<Overlay>,
+    /// Background (inactive) tabs. The active tab is always `tui`.
+    pub background_tabs: Vec<TuiState>,
+    /// Counter for generating unique tab IDs.
+    next_tab_id: u64,
 }
 
 impl AppState {
@@ -85,9 +140,83 @@ impl AppState {
         history: Vec<ChatMessage>,
     ) -> Self {
         Self {
-            tui: TuiState::with_history(config, root, system_prompt, thread_handle, history),
+            tui: TuiState::with_history(
+                TabId(0),
+                TabKind::Main,
+                config,
+                root,
+                system_prompt,
+                thread_handle,
+                history,
+            ),
             overlay: None,
+            background_tabs: Vec::new(),
+            next_tab_id: 1, // 0 is used for the main tab
         }
+    }
+
+    // ========================================================================
+    // Tab Management
+    // ========================================================================
+
+    /// Total number of tabs (active + background).
+    pub fn tab_count(&self) -> usize {
+        1 + self.background_tabs.len()
+    }
+
+    /// Allocates a new unique `TabId`.
+    pub fn next_tab_id(&mut self) -> TabId {
+        let id = TabId(self.next_tab_id);
+        self.next_tab_id += 1;
+        id
+    }
+
+    /// Returns an iterator over all tabs (active first, then background).
+    pub fn all_tabs(&self) -> impl Iterator<Item = &TuiState> {
+        std::iter::once(&self.tui).chain(self.background_tabs.iter())
+    }
+
+    /// Switches to a background tab by ID, swapping it with the active tab.
+    ///
+    /// No-op if the target is already active or not found.
+    pub fn switch_to_tab(&mut self, target_id: TabId) {
+        if self.tui.tab_id == target_id {
+            return;
+        }
+        if let Some(pos) = self
+            .background_tabs
+            .iter()
+            .position(|t| t.tab_id == target_id)
+        {
+            let mut target = self.background_tabs.remove(pos);
+            std::mem::swap(&mut self.tui, &mut target);
+            self.background_tabs.push(target);
+        }
+    }
+
+    /// Adds a new tab and switches to it (current tab moves to background).
+    pub fn push_tab(&mut self, tab: TuiState) {
+        let prev = std::mem::replace(&mut self.tui, tab);
+        self.background_tabs.push(prev);
+    }
+
+    /// Closes the active tab (if not the main tab) and switches to the
+    /// most recently backgrounded tab. Returns `true` if the tab was closed.
+    pub fn close_active_tab(&mut self) -> bool {
+        if self.tui.tab_kind.is_main() {
+            return false;
+        }
+        if let Some(target) = self.background_tabs.pop() {
+            self.tui = target;
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Finds a background tab by ID and returns a mutable reference.
+    pub fn background_tab_mut(&mut self, tab_id: TabId) -> Option<&mut TuiState> {
+        self.background_tabs.iter_mut().find(|t| t.tab_id == tab_id)
     }
 }
 
@@ -143,12 +272,18 @@ impl AgentState {
 // TuiState
 // ============================================================================
 
-/// TUI application state (non-overlay).
+/// Per-tab TUI application state (non-overlay).
 ///
-/// This contains all state except for overlays. Overlays are stored separately
-/// in `Option<Overlay>` and combined via `AppState` to enable the split state
-/// architecture where overlay handlers can access both without borrow conflicts.
+/// This contains all state for a single tab except for overlays. Overlays are
+/// stored separately in `Option<Overlay>` and combined via `AppState`.
+///
+/// In the swap-based tab architecture, `AppState.tui` always holds the active
+/// tab, and background tabs live in `AppState.background_tabs`.
 pub struct TuiState {
+    /// Unique tab identifier (session-scoped).
+    pub tab_id: TabId,
+    /// Tab kind (main or btw fork).
+    pub tab_kind: TabKind,
     /// Flag indicating the app should quit.
     pub should_quit: bool,
     /// User input state (textarea, history, navigation).
@@ -199,6 +334,8 @@ impl TuiState {
     ///
     /// Used for resuming previous threads.
     pub fn with_history(
+        tab_id: TabId,
+        tab_kind: TabKind,
         config: Config,
         root: PathBuf,
         system_prompt: Option<String>,
@@ -246,6 +383,8 @@ impl TuiState {
         let auth = AuthState::new();
 
         Self {
+            tab_id,
+            tab_kind,
             should_quit: false,
             input,
             transcript,
@@ -303,7 +442,7 @@ impl TuiState {
     }
 
     /// Builds transcript cells from message history.
-    fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
+    pub(crate) fn build_transcript_from_history(messages: &[ChatMessage]) -> Vec<HistoryCell> {
         use zdx_engine::providers::MessageContent;
 
         let mut transcript = Vec::new();

@@ -17,12 +17,15 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::common::text::truncate_with_ellipsis;
 use crate::common::{Scrollbar, TaskKind};
 use crate::input;
-use crate::state::{AgentState, AppState, TuiState};
+use crate::state::{AgentState, AppState, TabKind, TuiState};
 use crate::statusline::render_debug_status_line;
 use crate::transcript::{self, CellId};
 
 /// Height of status line below input.
 const STATUS_HEIGHT: u16 = 1;
+
+/// Height of the tab bar (shown only when multiple tabs exist).
+const TAB_BAR_HEIGHT: u16 = 1;
 
 /// Height of debug status line (when enabled).
 const DEBUG_STATUS_HEIGHT: u16 = 1;
@@ -48,35 +51,49 @@ const SPINNER_FRAMES: &[&str] = &["◐", "◓", "◑", "◒"];
 pub fn render(app: &AppState, frame: &mut Frame) {
     let area = frame.area();
     let state = &app.tui;
-    let metrics = compute_render_metrics(state, area);
+    let show_tab_bar = app.tab_count() > 1;
+    let metrics = compute_render_metrics(state, area, show_tab_bar);
     let (visible_lines, total_lines, scroll_offset) =
         build_visible_transcript_lines(state, metrics.transcript_width, metrics.transcript_height);
-    let chunks = split_main_layout(area, &metrics, state.show_debug_status);
+    let chunks = split_main_layout(area, &metrics, state.show_debug_status, show_tab_bar);
+
+    // Tab bar (only when multiple tabs exist)
+    // chunk layout: [tab_bar, transcript, queue, input, status, debug_status?]
+    let tab_bar_idx = 0;
+    let transcript_idx = usize::from(show_tab_bar);
+    let queue_idx = transcript_idx + 1;
+    let input_idx = queue_idx + 1;
+    let status_idx = input_idx + 1;
+    let debug_status_idx = status_idx + 1;
+
+    if show_tab_bar {
+        render_tab_bar(app, frame, chunks[tab_bar_idx]);
+    }
 
     // Transcript area with horizontal margins (also accounts for scrollbar)
     // NOTE: No .wrap() here - content is already pre-wrapped by render_transcript()
     // Adding wrap would cause double-wrapping and visual artifacts
     let transcript = Paragraph::new(visible_lines).block(Block::default().borders(Borders::NONE));
     let transcript_area = Rect {
-        x: chunks[0].x + TRANSCRIPT_MARGIN,
-        y: chunks[0].y,
-        width: chunks[0]
+        x: chunks[transcript_idx].x + TRANSCRIPT_MARGIN,
+        y: chunks[transcript_idx].y,
+        width: chunks[transcript_idx]
             .width
             .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH),
-        height: chunks[0].height,
+        height: chunks[transcript_idx].height,
     };
     frame.render_widget(transcript, transcript_area);
 
     frame.render_widget(
         Scrollbar::new(total_lines, metrics.transcript_height, scroll_offset),
-        chunks[0],
+        chunks[transcript_idx],
     );
 
     // Input area with model on top-left border and path on bottom-right
     if metrics.queue_height > 0 {
         render_queue_panel(
             frame,
-            chunks[1],
+            chunks[queue_idx],
             &metrics.queue_summaries,
             metrics.queue_total,
         );
@@ -84,16 +101,16 @@ pub fn render(app: &AppState, frame: &mut Frame) {
 
     // Input area — hide cursor when an overlay is covering the screen
     let show_input_cursor = app.overlay.is_none();
-    input::render_input_with_cursor(state, frame, chunks[2], show_input_cursor);
-    state.input_area.set(chunks[2]);
+    input::render_input_with_cursor(state, frame, chunks[input_idx], show_input_cursor);
+    state.input_area.set(chunks[input_idx]);
 
     // Status line below input
-    render_status_line(state, frame, chunks[3]);
+    render_status_line(state, frame, chunks[status_idx]);
 
     // Debug status line (when enabled)
     if state.show_debug_status {
         let status_line = state.status_line.snapshot();
-        render_debug_status_line(&status_line, frame, chunks[4]);
+        render_debug_status_line(&status_line, frame, chunks[debug_status_idx]);
     }
 
     // Render overlay (last, so it appears on top)
@@ -111,7 +128,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
                 state.render(frame, area, cell, app.tui.spinner_frame);
             }
             _ => {
-                overlay.render(frame, area, chunks[2].y, &app.tui.tasks);
+                overlay.render(frame, area, chunks[input_idx].y, &app.tui.tasks);
             }
         }
     }
@@ -122,11 +139,12 @@ struct RenderMetrics {
     queue_summaries: Vec<String>,
     queue_total: usize,
     queue_height: u16,
+    tab_bar_height: u16,
     transcript_width: usize,
     transcript_height: usize,
 }
 
-fn compute_render_metrics(state: &TuiState, area: Rect) -> RenderMetrics {
+fn compute_render_metrics(state: &TuiState, area: Rect, show_tab_bar: bool) -> RenderMetrics {
     let input_height = input::calculate_input_height(state, area.height);
     let queue_summaries = state.input.queued_summaries(QUEUE_MAX_ITEMS);
     let queue_total = state.input.queued.len();
@@ -140,41 +158,45 @@ fn compute_render_metrics(state: &TuiState, area: Rect) -> RenderMetrics {
     } else {
         0
     };
+    let tab_bar_height = if show_tab_bar { TAB_BAR_HEIGHT } else { 0 };
     let transcript_width =
         area.width
             .saturating_sub(TRANSCRIPT_MARGIN * 2 + SCROLLBAR_WIDTH) as usize;
-    let transcript_height = area
-        .height
-        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
-        as usize;
+    let transcript_height = area.height.saturating_sub(
+        input_height + STATUS_HEIGHT + queue_height + debug_status_height + tab_bar_height,
+    ) as usize;
 
     RenderMetrics {
         input_height,
         queue_summaries,
         queue_total,
         queue_height,
+        tab_bar_height,
         transcript_width,
         transcript_height,
     }
 }
 
-fn split_main_layout(area: Rect, metrics: &RenderMetrics, show_debug_status: bool) -> Vec<Rect> {
-    let constraints = if show_debug_status {
-        vec![
-            Constraint::Min(1),
-            Constraint::Length(metrics.queue_height),
-            Constraint::Length(metrics.input_height),
-            Constraint::Length(STATUS_HEIGHT),
-            Constraint::Length(DEBUG_STATUS_HEIGHT),
-        ]
-    } else {
-        vec![
-            Constraint::Min(1),
-            Constraint::Length(metrics.queue_height),
-            Constraint::Length(metrics.input_height),
-            Constraint::Length(STATUS_HEIGHT),
-        ]
-    };
+fn split_main_layout(
+    area: Rect,
+    metrics: &RenderMetrics,
+    show_debug_status: bool,
+    show_tab_bar: bool,
+) -> Vec<Rect> {
+    let mut constraints = Vec::new();
+
+    if show_tab_bar {
+        constraints.push(Constraint::Length(metrics.tab_bar_height));
+    }
+
+    constraints.push(Constraint::Min(1)); // Transcript
+    constraints.push(Constraint::Length(metrics.queue_height));
+    constraints.push(Constraint::Length(metrics.input_height));
+    constraints.push(Constraint::Length(STATUS_HEIGHT));
+
+    if show_debug_status {
+        constraints.push(Constraint::Length(DEBUG_STATUS_HEIGHT));
+    }
 
     Layout::default()
         .direction(Direction::Vertical)
@@ -234,6 +256,49 @@ fn bottom_align_lines(lines: Vec<Line<'static>>, transcript_height: usize) -> Ve
     let mut padded = vec![Line::default(); transcript_height - lines.len()];
     padded.extend(lines);
     padded
+}
+
+/// Renders the tab bar showing all open tabs.
+fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
+    let mut spans: Vec<Span> = Vec::new();
+    let mut btw_index = 0usize;
+
+    // Active tab first
+    let active_label = match &app.tui.tab_kind {
+        TabKind::Main => "main".to_string(),
+        TabKind::Btw { .. } => {
+            btw_index += 1;
+            format!("btw {btw_index}")
+        }
+    };
+    spans.push(Span::styled(
+        format!(" {active_label} "),
+        Style::default().fg(Color::Black).bg(Color::Cyan),
+    ));
+
+    // Background tabs
+    for tab in &app.background_tabs {
+        let label = match &tab.tab_kind {
+            TabKind::Main => "main".to_string(),
+            TabKind::Btw { .. } => {
+                btw_index += 1;
+                format!("btw {btw_index}")
+            }
+        };
+        let activity = if tab.agent_state.is_running() {
+            "*"
+        } else {
+            ""
+        };
+        spans.push(Span::raw(" "));
+        spans.push(Span::styled(
+            format!(" {label}{activity} "),
+            Style::default().fg(Color::Gray),
+        ));
+    }
+
+    let tab_bar = Paragraph::new(Line::from(spans)).alignment(Alignment::Left);
+    frame.render_widget(tab_bar, area);
 }
 
 /// Formats a duration for the status line display.
@@ -367,7 +432,11 @@ fn render_queue_panel(frame: &mut Frame, area: Rect, summaries: &[String], total
 
 /// Calculates the available height for the transcript given the terminal height and state.
 /// Encapsulates layout logic so callers don't need to know about input/status heights.
-pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height: u16) -> usize {
+pub fn calculate_transcript_height_with_state(
+    state: &TuiState,
+    terminal_height: u16,
+    tab_bar_height: u16,
+) -> usize {
     let input_height = input::calculate_input_height(state, terminal_height);
     let queue_height = if state.input.has_queued() {
         (state.input.queued_summaries(QUEUE_MAX_ITEMS).len() as u16).saturating_add(2)
@@ -379,9 +448,9 @@ pub fn calculate_transcript_height_with_state(state: &TuiState, terminal_height:
     } else {
         0
     };
-    terminal_height
-        .saturating_sub(input_height + STATUS_HEIGHT + queue_height + debug_status_height)
-        as usize
+    terminal_height.saturating_sub(
+        input_height + STATUS_HEIGHT + queue_height + debug_status_height + tab_bar_height,
+    ) as usize
 }
 
 /// Calculates cell line info and returns it for external application.

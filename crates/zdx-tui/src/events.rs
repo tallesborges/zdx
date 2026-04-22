@@ -36,6 +36,7 @@ use zdx_engine::core::thread_persistence::{Thread, ThreadSummary, Usage};
 use zdx_engine::providers::ChatMessage;
 
 use crate::common::{TaskCompleted, TaskKind, TaskStarted};
+use crate::state::TabId;
 use crate::transcript::HistoryCell;
 
 /// Thread event enum for async thread operations.
@@ -227,6 +228,10 @@ pub enum UiEvent {
     AgentSpawned {
         rx: mpsc::UnboundedReceiver<Arc<AgentEvent>>,
         cancel: CancellationToken,
+        /// For btw tabs: thread handle created on first send.
+        thread_handle: Option<Thread>,
+        /// For btw tabs: updated message list after thread preparation.
+        messages: Option<Vec<ChatMessage>>,
     },
 
     /// BTW popup agent turn spawned.
@@ -240,6 +245,9 @@ pub enum UiEvent {
 
     /// BTW popup agent event stream.
     BtwAgent(AgentEvent),
+
+    /// Agent event for a background (non-active) tab.
+    BackgroundTabAgent { tab_id: TabId, event: AgentEvent },
 
     /// Async login token exchange completed.
     LoginResult { result: Result<(), String> },
