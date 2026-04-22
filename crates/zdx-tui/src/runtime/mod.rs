@@ -356,8 +356,14 @@ impl TuiRuntime {
             self.state.overlay.as_ref(),
             Some(crate::overlays::Overlay::Btw(state)) if state.agent_state.is_running()
         );
+        let background_tab_running = self
+            .state
+            .background_tabs
+            .iter()
+            .any(|tab| tab.agent_state.is_running());
         let needs_fast_poll = self.state.tui.agent_state.is_running()
             || popup_running
+            || background_tab_running
             || self.state.tui.tasks.state(TaskKind::Bash).is_running()
             || self.state.tui.transcript.selection.has_pending_clear()
             || self.state.tui.input.handoff.is_generating()
@@ -420,6 +426,14 @@ impl TuiRuntime {
 
         if let Some(crate::overlays::Overlay::Btw(state)) = &mut self.state.overlay {
             drain_agent_rx(&mut state.agent_state, events, UiEvent::BtwAgent);
+        }
+
+        // Drain background tab agent events
+        for tab in &mut self.state.background_tabs {
+            let tab_id = tab.tab_id;
+            drain_agent_rx(&mut tab.agent_state, events, |event| {
+                UiEvent::BackgroundTabAgent { tab_id, event }
+            });
         }
     }
 

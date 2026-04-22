@@ -14,7 +14,7 @@ use crate::events::{SkillUiEvent, ThreadUiEvent, UiEvent};
 use crate::input::HandoffState;
 use crate::mutations::{ConfigMutation, InputMutation, StateMutation, TranscriptMutation};
 use crate::overlays::{self, FilePickerState, Overlay};
-use crate::state::{AgentState, AppState, TuiState};
+use crate::state::{AgentState, AppState, TabId, TabKind, TuiState};
 use crate::transcript::HistoryCell;
 use crate::{auth, input, render, thread, transcript};
 
@@ -34,10 +34,15 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
                 transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
             }
+            // Also coalesce background tab deltas
+            for tab in &mut app.background_tabs {
+                transcript::apply_pending_delta(&mut tab.transcript, &mut tab.agent_state);
+            }
             vec![]
         }
         UiEvent::Frame { width, height } => {
-            handle_frame(&mut app.tui, width, height);
+            let tab_bar_height = u16::from(app.tab_count() > 1);
+            handle_frame(&mut app.tui, width, height, tab_bar_height);
             if let Some(overlays::Overlay::Btw(state)) = &mut app.overlay {
                 transcript::apply_pending_delta(&mut state.transcript, &mut state.agent_state);
             }
@@ -45,8 +50,17 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         }
         UiEvent::Terminal(term_event) => handle_terminal_event(app, term_event),
         UiEvent::Agent(agent_event) => handle_agent_event(app, &agent_event),
-        UiEvent::AgentSpawned { rx, cancel } => {
-            if let Some(thread_id) = app
+        UiEvent::AgentSpawned {
+            rx,
+            cancel,
+            thread_handle,
+            messages,
+        } => {
+            // For btw tabs: apply thread state from first-send preparation
+            if let Some(handle) = thread_handle {
+                app.tui.mark_thread_running(handle.id.clone());
+                app.tui.thread.thread_handle = Some(handle);
+            } else if let Some(thread_id) = app
                 .tui
                 .thread
                 .thread_handle
@@ -54,6 +68,9 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 .map(|thread| thread.id.clone())
             {
                 app.tui.mark_thread_running(thread_id);
+            }
+            if let Some(msgs) = messages {
+                app.tui.thread.messages = msgs;
             }
             app.tui.agent_state = AgentState::Waiting { rx, cancel };
             app.tui.transcript.activate_pending_user_cell();
@@ -83,6 +100,34 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
                 state.handle_agent_event(&agent_event);
                 if finished && let Some(thread_id) = thread_id {
                     app.tui.mark_thread_finished(&thread_id);
+                }
+            }
+            vec![]
+        }
+        UiEvent::BackgroundTabAgent { tab_id, event } => {
+            if let Some(tab) = app.background_tab_mut(tab_id) {
+                let finished = matches!(
+                    event,
+                    zdx_engine::core::events::AgentEvent::TurnFinished { .. }
+                );
+                let thread_id = tab.thread.thread_handle.as_ref().map(|t| t.id.clone());
+                let has_thread = tab.thread.thread_handle.is_some();
+                let (_effects, mutations) = transcript::handle_agent_event(
+                    &mut tab.transcript,
+                    &mut tab.agent_state,
+                    has_thread,
+                    &event,
+                );
+                // Apply mutations directly to the background tab
+                for mutation in mutations {
+                    match mutation {
+                        StateMutation::Transcript(m) => tab.transcript.apply(m),
+                        StateMutation::Thread(m) => tab.thread.apply(m),
+                        _ => {}
+                    }
+                }
+                if finished && let Some(thread_id) = thread_id {
+                    tab.mark_thread_finished(&thread_id);
                 }
             }
             vec![]
@@ -779,26 +824,11 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
         }
         overlays::OverlayRequest::Btw => {
             let base_messages = build_btw_base_messages(&app.tui);
-            match overlays::BtwState::open(
-                base_messages,
-                &app.tui.config.model,
-                app.tui.config.thinking_level,
-                &app.tui.config.providers,
-            ) {
-                Ok((state, effects)) => {
-                    app.overlay = Some(overlays::Overlay::Btw(Box::new(state)));
-                    effects
-                }
-                Err(error) => {
-                    apply_mutations(
-                        &mut app.tui,
-                        vec![StateMutation::Transcript(
-                            TranscriptMutation::AppendSystemMessage(error),
-                        )],
-                    );
-                    vec![]
-                }
-            }
+            let tab_id = app.next_tab_id();
+            let btw_tab = create_btw_tab(tab_id, base_messages, &app.tui);
+            app.overlay = None; // Close command palette before switching tabs
+            app.push_tab(btw_tab);
+            vec![]
         }
         overlays::OverlayRequest::Login => {
             let (state, effects) = overlays::LoginState::open(&app.tui);
@@ -863,6 +893,73 @@ fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_engine::providers::ChatMes
     messages
 }
 
+/// Cycles to the next or previous tab.
+///
+/// `direction` is +1 for next, -1 for previous. Wraps around.
+fn cycle_tab(app: &mut AppState, direction: i32) {
+    if app.background_tabs.is_empty() {
+        return;
+    }
+
+    // Build ordered list of all tab IDs: active first, then background
+    let mut all_ids: Vec<TabId> = Vec::with_capacity(app.tab_count());
+    all_ids.push(app.tui.tab_id);
+    for tab in &app.background_tabs {
+        all_ids.push(tab.tab_id);
+    }
+
+    // Find current position and compute target
+    let current_pos = 0usize; // Active tab is always at position 0 in our view
+    let len = all_ids.len() as i32;
+    let target_pos = ((current_pos as i32 + direction).rem_euclid(len)) as usize;
+
+    if target_pos != current_pos {
+        app.switch_to_tab(all_ids[target_pos]);
+    }
+}
+
+/// Creates a new btw tab forked from the current tab's conversation.
+fn create_btw_tab(
+    tab_id: TabId,
+    base_messages: Vec<zdx_engine::providers::ChatMessage>,
+    parent: &TuiState,
+) -> TuiState {
+    use crate::input::InputState;
+    use crate::thread::ThreadState;
+    use crate::transcript::TranscriptState;
+
+    // Build transcript cells from the forked context so the user can see
+    // the conversation they branched from.
+    let cells = TuiState::build_transcript_from_history(&base_messages);
+    let transcript = TranscriptState::with_cells(cells);
+
+    TuiState {
+        tab_id,
+        tab_kind: TabKind::Btw { base_messages },
+        should_quit: false,
+        input: InputState::new(),
+        transcript,
+        thread: ThreadState::new(),
+        task_seq: crate::common::TaskSeq::default(),
+        tasks: crate::common::Tasks::default(),
+        auth: crate::auth::AuthState::new(),
+        config: parent.config.clone(),
+        base_model: parent.base_model.clone(),
+        base_thinking_level: parent.base_thinking_level,
+        last_skill_repo: parent.last_skill_repo.clone(),
+        agent_opts: parent.agent_opts.clone(),
+        system_prompt: parent.system_prompt.clone(),
+        agent_state: AgentState::Idle,
+        spinner_frame: 0,
+        git_branch: parent.git_branch.clone(),
+        display_path: parent.display_path.clone(),
+        status_line: crate::statusline::StatusLineAccumulator::new(),
+        show_debug_status: false,
+        input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+        optimistic_active_threads: std::collections::HashMap::new(),
+    }
+}
+
 // ============================================================================
 // Frame Handler (layout, delta coalescing, cell line info)
 // ============================================================================
@@ -872,11 +969,12 @@ fn build_btw_base_messages(tui: &TuiState) -> Vec<zdx_engine::providers::ChatMes
 /// This consolidates all the "housekeeping" mutations that need to happen
 /// each frame: layout updates, delta coalescing, and cell line info for
 /// lazy rendering.
-fn handle_frame(tui: &mut TuiState, width: u16, height: u16) {
+fn handle_frame(tui: &mut TuiState, width: u16, height: u16, tab_bar_height: u16) {
     let previous_width = tui.transcript.terminal_size.0;
 
     // Update transcript layout with current terminal dimensions
-    let viewport_height = render::calculate_transcript_height_with_state(tui, height);
+    let viewport_height =
+        render::calculate_transcript_height_with_state(tui, height, tab_bar_height);
     tui.transcript
         .update_layout((width, height), viewport_height);
 
@@ -959,6 +1057,40 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
 }
 
 fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffect> {
+    use crossterm::event::{KeyCode, KeyModifiers};
+
+    // Tab navigation — handled before overlays so it always works
+    if app.tab_count() > 1 {
+        match (key.modifiers, key.code) {
+            // Ctrl+PageDown: next tab
+            (m, KeyCode::PageDown) if m.contains(KeyModifiers::CONTROL) => {
+                cycle_tab(app, 1);
+                return vec![];
+            }
+            // Ctrl+PageUp: previous tab
+            (m, KeyCode::PageUp) if m.contains(KeyModifiers::CONTROL) => {
+                cycle_tab(app, -1);
+                return vec![];
+            }
+            _ => {}
+        }
+    }
+
+    // Close btw tab with Esc when idle (no agent running, empty input)
+    if matches!(&app.tui.tab_kind, TabKind::Btw { .. })
+        && key.code == KeyCode::Esc
+        && !app.tui.agent_state.is_running()
+        && !app
+            .tui
+            .tasks
+            .state(crate::common::TaskKind::Bash)
+            .is_running()
+        && app.tui.input.get_text().is_empty()
+    {
+        app.close_active_tab();
+        return vec![];
+    }
+
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
         && FilePickerState::should_route_input_key(key)
     {
