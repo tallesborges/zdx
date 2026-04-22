@@ -118,8 +118,8 @@ impl ThreadPickerState {
             }
             KeyCode::Up | KeyCode::Char('k') => self.navigate_up(),
             KeyCode::Down | KeyCode::Char('j') => self.navigate_down(),
-            KeyCode::Enter if ctrl => self.open_as_tab(tui),
             KeyCode::Enter => self.handle_enter(tui),
+            KeyCode::Tab => self.open_as_tab(tui),
             KeyCode::Char('y') => self.copy_selected_thread_id(),
             // Ctrl+U: clear the filter
             KeyCode::Char('u') if ctrl && !shift && !alt => {
