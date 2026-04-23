@@ -132,6 +132,7 @@ fn execute_command(
                 (Some(OverlayRequest::Btw), vec![], vec![])
             }
         }
+        "close-tab" => (None, vec![UiEffect::CloseCurrentTab], vec![]),
         "config" => (None, vec![UiEffect::OpenConfig], vec![]),
         "debug" => (None, vec![], vec![StateMutation::ToggleDebugStatus]),
         "fast" => match build_fast_mode_toggle_actions(&tui.config, &tui.config.model) {

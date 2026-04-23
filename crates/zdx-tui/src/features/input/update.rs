@@ -407,7 +407,7 @@ fn handle_control_keys(
 ) -> Option<KeyResult> {
     match code {
         KeyCode::Char(' ') | KeyCode::Null if mods.only_ctrl() => Some(handle_voice_hotkey(input)),
-        // Ctrl+C: interrupt agent, clear input, or quit
+        // Ctrl+C: interrupt agent, clear input, or quit app
         KeyCode::Char('c') if mods.ctrl() => {
             if ctx.agent_state.is_running() {
                 Some((vec![UiEffect::InterruptAgent], vec![], None))

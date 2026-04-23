@@ -17,7 +17,7 @@ use ratatui::widgets::{Block, Borders, Paragraph};
 use crate::common::text::truncate_with_ellipsis;
 use crate::common::{Scrollbar, TaskKind};
 use crate::input;
-use crate::state::{AgentState, AppState, TabKind, TuiState};
+use crate::state::{AgentState, AppState, TuiState};
 use crate::statusline::render_debug_status_line;
 use crate::transcript::{self, CellId};
 
@@ -261,13 +261,7 @@ fn bottom_align_lines(lines: Vec<Line<'static>>, transcript_height: usize) -> Ve
 /// Renders the tab bar showing all open tabs.
 fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
     let mut spans: Vec<Span> = Vec::new();
-    let mut btw_index = 0usize;
-
-    // Active tab first
-    if matches!(&app.tui.tab_kind, TabKind::Btw { .. }) {
-        btw_index += 1;
-    }
-    let active_label = app.tui.tab_kind.label(btw_index);
+    let active_label = format!("tab {}", app.tui.tab_id.0 + 1);
     spans.push(Span::styled(
         format!(" {active_label} "),
         Style::default().fg(Color::Black).bg(Color::Cyan),
@@ -275,10 +269,7 @@ fn render_tab_bar(app: &AppState, frame: &mut Frame, area: Rect) {
 
     // Background tabs
     for tab in &app.background_tabs {
-        if matches!(&tab.tab_kind, TabKind::Btw { .. }) {
-            btw_index += 1;
-        }
-        let label = tab.tab_kind.label(btw_index);
+        let label = format!("tab {}", tab.tab_id.0 + 1);
         let activity = if tab.agent_state.is_running() {
             "*"
         } else {

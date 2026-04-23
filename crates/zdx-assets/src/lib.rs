@@ -57,8 +57,7 @@ pub const DEFAULT_MODELS_TOML: &str = include_str!("../default_models.toml");
 pub const EXPLORER_SUBAGENT: &str = include_str!("../subagents/explorer.md");
 
 /// Built-in `thread-searcher` subagent definition.
-pub const THREAD_SEARCHER_SUBAGENT: &str =
-    include_str!("../subagents/thread-searcher.md");
+pub const THREAD_SEARCHER_SUBAGENT: &str = include_str!("../subagents/thread-searcher.md");
 
 /// Built-in `oracle` subagent definition.
 pub const ORACLE_SUBAGENT: &str = include_str!("../subagents/oracle.md");

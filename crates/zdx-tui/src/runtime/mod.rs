@@ -496,6 +496,17 @@ impl TuiRuntime {
             UiEffect::Quit => {
                 self.state.tui.should_quit = true;
             }
+            UiEffect::CloseCurrentTab => {
+                if let Some(cancel) = self.state.tui.agent_state.cancel_token() {
+                    cancel.cancel();
+                }
+                if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {
+                    cancel.cancel();
+                }
+                if !self.state.close_active_tab() {
+                    self.state.tui.should_quit = true;
+                }
+            }
             UiEffect::CycleTab => {
                 crate::update::cycle_tab(&mut self.state, 1);
             }
