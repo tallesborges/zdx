@@ -1,7 +1,7 @@
 ---
 name: oracle
 description: "Read-only deep reasoning advisor for code review, difficult debugging, planning, and architecture decisions. Use it for interpreting evidence, identifying likely causes, evaluating tradeoffs, and recommending next steps after evidence is gathered. It uses read-only inspection/research tools and does not have `bash`. `oracle` is not the default search agent and MUST NOT be used as a substitute for broad local exploration or discovery when `explorer` is a better fit."
-model: openai-codex:gpt-5.4
+model: openai-codex:gpt-5.5
 thinking_level: high
 tools:
   - read
