@@ -256,6 +256,7 @@ fn execute_command(
             let (effects, mutations) = execute_new(tui);
             (None, effects, mutations)
         }
+        "new-tab" => (Some(OverlayRequest::NewTab), vec![], vec![]),
         "quit" => (None, execute_quit(tui), vec![]),
         _ => (None, vec![], vec![]),
     }
@@ -609,9 +610,10 @@ mod tests {
         let mut state = CommandPaletteState::open("claude-haiku-4-5".to_string());
         state.filter = "ne".to_string();
         let filtered = state.filtered_commands();
-        assert_eq!(filtered.len(), 3);
+        assert_eq!(filtered.len(), 4);
         let names: Vec<&str> = filtered.iter().map(|command| command.name).collect();
         assert!(names.contains(&"new"));
+        assert!(names.contains(&"new-tab"));
         assert!(names.contains(&"root-new"));
         assert!(names.contains(&"timeline"));
     }

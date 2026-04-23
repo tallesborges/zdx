@@ -797,6 +797,13 @@ fn open_overlay_request(app: &mut AppState, request: &overlays::OverlayRequest) 
             app.overlay = Some(overlays::Overlay::ThinkingPicker(state));
             effects
         }
+        overlays::OverlayRequest::NewTab => {
+            let tab_id = app.next_tab_id();
+            let tab = create_main_tab(tab_id, &app.tui);
+            app.overlay = None;
+            app.push_tab(tab);
+            vec![]
+        }
         overlays::OverlayRequest::Btw => {
             let base_messages = build_btw_base_messages(&app.tui);
             let tab_id = app.next_tab_id();
@@ -933,6 +940,25 @@ fn create_btw_tab(
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
     }
+}
+
+fn create_main_tab(tab_id: TabId, parent: &TuiState) -> TuiState {
+    let mut config = parent.config.clone();
+    config.model = parent.base_model.clone();
+    config.thinking_level = parent.base_thinking_level;
+
+    let mut tab = TuiState::with_history(
+        tab_id,
+        TabKind::Main,
+        config,
+        parent.agent_opts.root.clone(),
+        parent.system_prompt.clone(),
+        None,
+        Vec::new(),
+    );
+    tab.last_skill_repo = parent.last_skill_repo.clone();
+    tab.show_debug_status = parent.show_debug_status;
+    tab
 }
 
 /// Creates a tab from a loaded or forked thread.
@@ -1125,6 +1151,7 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
     if app.overlay.is_none()
         && key.code == KeyCode::Char('w')
         && key.modifiers.contains(KeyModifiers::CONTROL)
+        && app.tab_count() > 1
         && app.tui.input.get_text().is_empty()
     {
         return vec![UiEffect::CloseCurrentTab];

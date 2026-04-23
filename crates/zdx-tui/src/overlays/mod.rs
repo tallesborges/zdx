@@ -68,6 +68,7 @@ pub enum OverlayRequest {
     ModelPicker,
     SkillPicker,
     ThinkingPicker,
+    NewTab,
     Btw,
     Login,
     FilePicker {
