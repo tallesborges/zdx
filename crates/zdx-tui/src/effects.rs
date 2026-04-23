@@ -112,7 +112,7 @@ pub enum UiEffect {
     /// Start handoff generation with a goal.
     StartHandoff { goal: String },
 
-    /// Submit handoff prompt: create new thread and send prompt as first message.
+    /// Submit handoff prompt: create new thread and prefill the first message draft.
     HandoffSubmit {
         prompt: String,
         /// The source thread ID this handoff originated from.

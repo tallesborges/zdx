@@ -310,9 +310,20 @@ pub async fn thread_preview(thread_id: String) -> UiEvent {
 /// Creates a new thread.
 ///
 /// Pure async function - runtime spawns and sends result to inbox.
-pub async fn thread_create(config: zdx_engine::config::Config, root: PathBuf) -> UiEvent {
+pub async fn thread_create(
+    config: zdx_engine::config::Config,
+    root: PathBuf,
+    handoff_from: Option<String>,
+    initial_input: Option<String>,
+) -> UiEvent {
     tokio::task::spawn_blocking(move || {
-        let thread_handle = match tp::Thread::new_with_root(&root) {
+        let thread_result = match handoff_from {
+            Some(source_thread_id) => {
+                tp::Thread::new_with_root_and_source(&root, Some(source_thread_id))
+            }
+            None => tp::Thread::new_with_root(&root),
+        };
+        let thread_handle = match thread_result {
             Ok(thread_handle) => thread_handle,
             Err(e) => {
                 return UiEvent::Thread(ThreadUiEvent::CreateFailed {
@@ -335,6 +346,7 @@ pub async fn thread_create(config: zdx_engine::config::Config, root: PathBuf) ->
             thread_handle,
             context_paths: context.loaded_agents_paths.clone(),
             skills: context.loaded_skills,
+            initial_input,
         })
     })
     .await

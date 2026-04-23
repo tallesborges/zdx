@@ -411,10 +411,15 @@ fn new_thread_reset_mutations() -> Vec<StateMutation> {
     vec![
         StateMutation::Transcript(TranscriptMutation::Clear),
         StateMutation::Thread(ThreadMutation::ClearMessages),
+        StateMutation::Thread(ThreadMutation::SetThread(None)),
         StateMutation::Thread(ThreadMutation::ResetUsage),
         StateMutation::Input(InputMutation::ClearHistory),
         StateMutation::Input(InputMutation::ClearQueue),
         StateMutation::Input(InputMutation::ResetImageCounter),
+        StateMutation::SetActiveThreadOverrides {
+            model_override: None,
+            thinking_override: None,
+        },
     ]
 }
 
@@ -587,6 +592,7 @@ fn render_command_description(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mutations::ThreadMutation;
 
     #[test]
     fn test_palette_state_filtered_commands_empty_filter() {
@@ -644,5 +650,22 @@ mod tests {
         state.selected = 5;
         state.clamp_selection();
         assert_eq!(state.selected, 0);
+    }
+
+    #[test]
+    fn test_new_thread_reset_mutations_clear_active_thread_identity() {
+        let mutations = new_thread_reset_mutations();
+
+        assert!(mutations.iter().any(|mutation| matches!(
+            mutation,
+            StateMutation::Thread(ThreadMutation::SetThread(None))
+        )));
+        assert!(mutations.iter().any(|mutation| matches!(
+            mutation,
+            StateMutation::SetActiveThreadOverrides {
+                model_override: None,
+                thinking_override: None,
+            }
+        )));
     }
 }

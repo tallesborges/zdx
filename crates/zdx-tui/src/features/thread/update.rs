@@ -115,8 +115,15 @@ pub fn handle_thread_event(
             thread_handle,
             context_paths,
             skills,
+            initial_input,
         } => {
-            handle_thread_created(thread_handle, context_paths, skills, &mut mutations);
+            handle_thread_created(
+                thread_handle,
+                context_paths,
+                skills,
+                initial_input,
+                &mut mutations,
+            );
             vec![]
         }
         ThreadUiEvent::ForkedLoaded {
@@ -304,6 +311,7 @@ fn handle_thread_created(
     thread_handle: Thread,
     context_paths: Vec<PathBuf>,
     skills: Vec<zdx_engine::skills::Skill>,
+    initial_input: Option<String>,
     mutations: &mut Vec<StateMutation>,
 ) {
     let startup_messages =
@@ -321,6 +329,9 @@ fn handle_thread_created(
         thinking_override: None,
     });
     mutations.push(StateMutation::Input(InputMutation::ClearQueue));
+    if let Some(text) = initial_input {
+        mutations.push(StateMutation::Input(InputMutation::SetText(text)));
+    }
 
     // Show startup messages
     for message in startup_messages {

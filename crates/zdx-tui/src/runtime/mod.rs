@@ -728,7 +728,7 @@ impl TuiRuntime {
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
-                    handlers::thread_create(config, root)
+                    handlers::thread_create(config, root, None, None)
                 });
             }
             UiEffect::ForkThread {
@@ -857,7 +857,7 @@ impl TuiRuntime {
                 self.dispatch_event(prompt_event);
 
                 self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
-                    handlers::thread_create(config, root)
+                    handlers::thread_create(config, root, None, None)
                 });
             }
             UiEffect::ResolveRootDisplay { path } => {
@@ -912,19 +912,9 @@ impl TuiRuntime {
                 let prompt_event = handlers::refresh_system_prompt(&config, &root);
                 self.dispatch_event(prompt_event);
 
-                match handoff::execute_handoff_submit(&config, &root, handoff_from) {
-                    Ok((thread_handle, context_paths, skills)) => {
-                        self.dispatch_event(UiEvent::HandoffThreadCreated {
-                            thread_handle,
-                            context_paths,
-                            skills,
-                            prompt,
-                        });
-                    }
-                    Err(error) => {
-                        self.dispatch_event(UiEvent::HandoffThreadCreateFailed { error });
-                    }
-                }
+                self.spawn_task(TaskKind::ThreadCreate, TaskMeta::None, false, move |_| {
+                    handlers::thread_create(config, root, handoff_from, Some(prompt))
+                });
             }
 
             // File picker effects
