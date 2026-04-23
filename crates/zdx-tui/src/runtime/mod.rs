@@ -497,14 +497,14 @@ impl TuiRuntime {
                 self.state.tui.should_quit = true;
             }
             UiEffect::CloseCurrentTab => {
-                if let Some(cancel) = self.state.tui.agent_state.cancel_token() {
-                    cancel.cancel();
-                }
-                if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {
-                    cancel.cancel();
-                }
-                if !self.state.close_active_tab() {
-                    self.state.tui.should_quit = true;
+                if self.state.tab_count() > 1 {
+                    if let Some(cancel) = self.state.tui.agent_state.cancel_token() {
+                        cancel.cancel();
+                    }
+                    if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {
+                        cancel.cancel();
+                    }
+                    let _ = self.state.close_active_tab();
                 }
             }
             UiEffect::CycleTab => {

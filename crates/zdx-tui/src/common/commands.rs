@@ -134,6 +134,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "new-tab",
+        aliases: &["tab-new"],
+        description: "Open a new blank tab",
+        category: "tab",
+        shortcut: None,
+    },
+    Command {
         name: "quit",
         aliases: &["q", "exit"],
         description: "Quit ZDX",
