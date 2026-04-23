@@ -125,12 +125,12 @@ enabled = true
 # api_key = "sk-..."  # Overrides OPENAI_API_KEY env var
 # base_url = "https://api.openai.com/v1"
 # text_verbosity = "medium"  # Options: low, medium, high
-models = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
+models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
 
 [providers.openai_codex]
 enabled = true
 # text_verbosity = "medium"  # Options: low, medium, high
-models = ["gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
+models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
 # Codex models have built-in apply_patch instructions
 
 [providers.openrouter]
