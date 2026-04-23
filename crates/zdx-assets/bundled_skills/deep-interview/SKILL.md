@@ -1,6 +1,6 @@
 ---
 name: deep-interview
-description: Socratic requirements clarification for vague or broad requests. Use when the user says "deep interview", "interview me", "clarify this", "don't assume", or when a request is too vague for direct planning. Reduces ambiguity through targeted one-question-at-a-time loops before handing off to ship-first-plan.
+description: Socratic requirements clarification for broad or ambiguous requests that are not yet ready for planning or implementation. Use when the user says "deep interview", "interview me", "ask me everything", "clarify this", or "don't assume", or when the request is missing concrete scope, constraints, non-goals, or acceptance criteria. Reduces ambiguity through targeted one-question-at-a-time loops before handing off to `ship-first-plan`.
 metadata:
   short-description: Clarify requirements before planning
 ---
