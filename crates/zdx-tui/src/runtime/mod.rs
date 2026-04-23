@@ -907,13 +907,17 @@ impl TuiRuntime {
                 prompt,
                 handoff_from,
             } => {
-                let root = &self.state.tui.agent_opts.root;
+                let root = self.state.tui.agent_opts.root.clone();
                 let config = self.state.tui.config.clone();
-                match handoff::execute_handoff_submit(&config, root, handoff_from) {
-                    Ok((thread_handle, context_paths)) => {
+                let prompt_event = handlers::refresh_system_prompt(&config, &root);
+                self.dispatch_event(prompt_event);
+
+                match handoff::execute_handoff_submit(&config, &root, handoff_from) {
+                    Ok((thread_handle, context_paths, skills)) => {
                         self.dispatch_event(UiEvent::HandoffThreadCreated {
                             thread_handle,
                             context_paths,
+                            skills,
                             prompt,
                         });
                     }
