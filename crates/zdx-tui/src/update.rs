@@ -121,13 +121,14 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
         UiEvent::HandoffThreadCreated {
             thread_handle,
             context_paths,
+            skills,
             prompt,
         } => {
             let (effects, mutations, _action) =
                 thread::handle_thread_event(ThreadUiEvent::Created {
                     thread_handle,
                     context_paths,
-                    skills: Vec::new(), // Handoff creation doesn't currently track skills here
+                    skills,
                 });
             apply_mutations(&mut app.tui, mutations);
             app.tui.input.set_text(&prompt);
@@ -1139,6 +1140,16 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
             }
             _ => {}
         }
+    }
+
+    // Ctrl+W: close current tab when idle and input is empty.
+    // Otherwise keep the normal readline-style delete-word behavior in input handling.
+    if app.overlay.is_none()
+        && key.code == KeyCode::Char('w')
+        && key.modifiers.contains(KeyModifiers::CONTROL)
+        && app.tui.input.get_text().is_empty()
+    {
+        return vec![UiEffect::CloseCurrentTab];
     }
 
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
