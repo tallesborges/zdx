@@ -73,7 +73,7 @@ pub struct TabId(pub u64);
 /// The kind/origin of a tab.
 #[derive(Clone, Debug)]
 pub enum TabKind {
-    /// The main/primary chat tab.
+    /// The initial/default chat tab.
     Main,
     /// A loaded or forked thread opened in a separate tab.
     Thread {
@@ -100,10 +100,6 @@ impl TabKind {
             }),
             TabKind::Btw { .. } => format!("btw {btw_index}"),
         }
-    }
-
-    pub fn is_main(&self) -> bool {
-        matches!(self, TabKind::Main)
     }
 }
 
@@ -162,7 +158,7 @@ impl AppState {
             ),
             overlay: None,
             background_tabs: Vec::new(),
-            next_tab_id: 1, // 0 is used for the main tab
+            next_tab_id: 1, // 0 is used for the initial tab
         }
     }
 
@@ -211,12 +207,10 @@ impl AppState {
         self.background_tabs.push(prev);
     }
 
-    /// Closes the active tab (if not the main tab) and switches to the
-    /// most recently backgrounded tab. Returns `true` if the tab was closed.
+    /// Closes the active tab and switches to the most recently backgrounded tab.
+    /// Returns `true` if another tab became active, or `false` when there were
+    /// no other tabs left.
     pub fn close_active_tab(&mut self) -> bool {
-        if self.tui.tab_kind.is_main() {
-            return false;
-        }
         if let Some(target) = self.background_tabs.pop() {
             self.tui = target;
             true

@@ -50,6 +50,13 @@ pub const COMMANDS: &[Command] = &[
         shortcut: None,
     },
     Command {
+        name: "close-tab",
+        aliases: &["close"],
+        description: "Close the current tab",
+        category: "tab",
+        shortcut: None,
+    },
+    Command {
         name: "config",
         aliases: &["settings"],
         description: "Open config file in default editor",
@@ -129,7 +136,7 @@ pub const COMMANDS: &[Command] = &[
     Command {
         name: "quit",
         aliases: &["q", "exit"],
-        description: "Exit ZDX",
+        description: "Quit ZDX",
         category: "app",
         shortcut: None,
     },

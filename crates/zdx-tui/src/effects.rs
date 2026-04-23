@@ -37,6 +37,9 @@ pub enum UiEffect {
     /// Quit the application.
     Quit,
 
+    /// Close the current tab. If it is the last tab, quit the app.
+    CloseCurrentTab,
+
     /// Cycle to the next tab.
     CycleTab,
 

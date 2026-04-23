@@ -1141,25 +1141,6 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
         }
     }
 
-    // Close btw tab with Esc:
-    // - If agent running: cancel it (tab stays open for user to see results)
-    // - If idle + empty input: close tab
-    if matches!(&app.tui.tab_kind, TabKind::Btw { .. }) && key.code == KeyCode::Esc {
-        if app.tui.agent_state.is_running() {
-            return vec![UiEffect::InterruptAgent];
-        }
-        if !app
-            .tui
-            .tasks
-            .state(crate::common::TaskKind::Bash)
-            .is_running()
-            && app.tui.input.get_text().is_empty()
-        {
-            app.close_active_tab();
-            return vec![];
-        }
-    }
-
     if let Some(Overlay::FilePicker(picker)) = app.overlay.as_mut()
         && FilePickerState::should_route_input_key(key)
     {
