@@ -183,3 +183,36 @@ pub(crate) fn thread_startup_messages(
 
     messages
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::{Path, PathBuf};
+
+    use zdx_engine::skills::{Skill, SkillSource};
+
+    use super::thread_startup_messages;
+
+    #[test]
+    fn thread_startup_messages_include_context_and_skills() {
+        let messages = thread_startup_messages(
+            Some(Path::new("/tmp/thread.jsonl")),
+            &[PathBuf::from("/tmp/AGENTS.md")],
+            &[Skill {
+                name: "ship-first-plan".to_string(),
+                description: "Create ship-first plans".to_string(),
+                file_path: PathBuf::from("/tmp/skills/ship-first-plan/SKILL.md"),
+                base_dir: PathBuf::from("/tmp/skills/ship-first-plan"),
+                source: SkillSource::BuiltIn,
+            }],
+        );
+
+        assert_eq!(
+            messages,
+            vec![
+                "Thread path: /tmp/thread.jsonl".to_string(),
+                "Project context files available from:\n  - /tmp/AGENTS.md".to_string(),
+                "Loaded skills:\n  - ship-first-plan (builtin)".to_string(),
+            ]
+        );
+    }
+}

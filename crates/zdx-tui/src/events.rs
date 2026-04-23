@@ -88,6 +88,8 @@ pub enum ThreadUiEvent {
         thread_handle: Thread,
         context_paths: Vec<PathBuf>,
         skills: Vec<zdx_engine::skills::Skill>,
+        /// If set, pre-fill the input buffer after thread creation.
+        initial_input: Option<String>,
     },
 
     /// Forked thread created successfully.
@@ -262,16 +264,6 @@ pub enum UiEvent {
         goal: String,
         result: Result<String, String>,
     },
-
-    /// Handoff thread creation succeeded.
-    HandoffThreadCreated {
-        thread_handle: Thread,
-        context_paths: Vec<PathBuf>,
-        prompt: String,
-    },
-
-    /// Handoff thread creation failed.
-    HandoffThreadCreateFailed { error: String },
 
     /// File discovery completed.
     FilesDiscovered(Vec<PathBuf>),

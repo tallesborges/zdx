@@ -118,28 +118,6 @@ pub fn update(app: &mut AppState, event: UiEvent) -> Vec<UiEffect> {
             apply_mutations(&mut app.tui, mutations);
             vec![]
         }
-        UiEvent::HandoffThreadCreated {
-            thread_handle,
-            context_paths,
-            skills,
-            prompt,
-        } => {
-            let (effects, mutations, _action) =
-                thread::handle_thread_event(ThreadUiEvent::Created {
-                    thread_handle,
-                    context_paths,
-                    skills,
-                });
-            apply_mutations(&mut app.tui, mutations);
-            app.tui.input.set_text(&prompt);
-            effects
-        }
-        UiEvent::HandoffThreadCreateFailed { error } => {
-            app.tui.transcript.push_cell(HistoryCell::system(format!(
-                "Warning: Failed to create thread: {error}"
-            )));
-            vec![]
-        }
         UiEvent::FilesDiscovered(files) => {
             overlays::handle_files_discovered(&mut app.overlay, files);
             vec![]
@@ -1225,11 +1203,22 @@ fn handle_key(app: &mut AppState, key: crossterm::event::KeyEvent) -> Vec<UiEffe
 #[cfg(test)]
 mod tests {
     use std::path::PathBuf;
+    use std::time::{SystemTime, UNIX_EPOCH};
 
     use zdx_engine::core::events::AgentEvent;
+    use zdx_engine::core::thread_persistence::Thread;
+    use zdx_engine::skills::{Skill, SkillSource};
 
     use super::*;
     use crate::transcript::{HistoryCell, ScrollMode};
+
+    fn unique_thread_id(prefix: &str) -> String {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        format!("{prefix}-{nanos}")
+    }
 
     #[test]
     fn test_scroll_to_top() {
@@ -1326,6 +1315,82 @@ mod tests {
         assert!(matches!(
             last_cell,
             HistoryCell::User { content, .. } if content == "queued prompt"
+        ));
+    }
+
+    #[test]
+    fn test_thread_created_matches_startup_messages_and_prefills_initial_input() {
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+        let zdx_home = std::env::temp_dir().join(unique_thread_id("zdx-tui-update-tests"));
+        std::fs::create_dir_all(&zdx_home).unwrap();
+        unsafe {
+            std::env::set_var("ZDX_HOME", &zdx_home);
+        }
+        let thread_handle = Thread::with_id(unique_thread_id("handoff-created")).unwrap();
+        let thread_path = thread_handle.path().display().to_string();
+        let prompt = "Continue the work from the previous thread.".to_string();
+
+        let effects = update(
+            &mut app,
+            UiEvent::Thread(ThreadUiEvent::Created {
+                thread_handle,
+                context_paths: vec![PathBuf::from("/tmp/project/AGENTS.md")],
+                skills: vec![Skill {
+                    name: "ship-first-plan".to_string(),
+                    description: "Create ship-first plans".to_string(),
+                    file_path: PathBuf::from("/tmp/skills/ship-first-plan/SKILL.md"),
+                    base_dir: PathBuf::from("/tmp/skills/ship-first-plan"),
+                    source: SkillSource::BuiltIn,
+                }],
+                initial_input: Some(prompt.clone()),
+            }),
+        );
+
+        assert!(effects.is_empty());
+        assert_eq!(app.tui.input.get_text(), prompt);
+
+        let cells = app.tui.transcript.cells();
+        assert_eq!(cells.len(), 3);
+        assert!(matches!(
+            &cells[0],
+            HistoryCell::System { content, .. } if content == &format!("Thread path: {thread_path}")
+        ));
+        assert!(matches!(
+            &cells[1],
+            HistoryCell::System { content, .. }
+                if content == "Project context files available from:\n  - /tmp/project/AGENTS.md"
+        ));
+        assert!(matches!(
+            &cells[2],
+            HistoryCell::System { content, .. }
+                if content == "Loaded skills:\n  - ship-first-plan (builtin)"
+        ));
+    }
+
+    #[test]
+    fn test_create_failed_keeps_no_thread_state() {
+        let config = zdx_engine::config::Config::default();
+        let mut app = AppState::new(config, PathBuf::new(), None, None);
+
+        let effects = update(
+            &mut app,
+            UiEvent::Thread(ThreadUiEvent::CreateFailed {
+                error: "Failed to create thread: boom".to_string(),
+            }),
+        );
+
+        assert!(effects.is_empty());
+        assert!(app.tui.thread.thread_handle.is_none());
+        let cells = app.tui.transcript.cells();
+        assert_eq!(cells.len(), 2);
+        assert!(matches!(
+            &cells[0],
+            HistoryCell::System { content, .. } if content == "Failed to create thread: boom"
+        ));
+        assert!(matches!(
+            &cells[1],
+            HistoryCell::System { content, .. } if content == "Thread cleared."
         ));
     }
 }

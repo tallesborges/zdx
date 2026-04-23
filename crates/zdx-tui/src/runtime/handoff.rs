@@ -4,13 +4,12 @@
 //!
 //! Uses `CancellationToken` for unified cancellation model.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::time::Duration;
 
 use tokio_util::sync::CancellationToken;
-use zdx_engine::config::Config;
 use zdx_engine::core::subagent::{ExecSubagentOptions, run_exec_subagent_with_cancel};
-use zdx_engine::core::thread_persistence::{self, Thread};
+use zdx_engine::core::thread_persistence;
 use zdx_engine::prompts::HANDOFF_PROMPT_TEMPLATE;
 
 use crate::events::UiEvent;
@@ -68,35 +67,6 @@ async fn run_subagent(
     run_exec_subagent_with_cancel(&root, &generation_prompt, &options, Some(cancel))
         .await
         .map_err(|err| format!("{err:#}"))
-}
-
-/// Executes a handoff submit: creates a new thread with handoff source.
-///
-/// Returns the new thread for the reducer to store, or an error string.
-///
-/// # Errors
-/// Returns an error if the operation fails.
-pub fn execute_handoff_submit(
-    config: &Config,
-    root: &Path,
-    handoff_from: Option<String>,
-) -> Result<(Thread, Vec<PathBuf>), String> {
-    let thread_handle = thread_persistence::Thread::new_with_root_and_source(root, handoff_from)
-        .map_err(|e| e.to_string())?;
-
-    let instruction_layers = crate::tui_instruction_layers();
-    let context_paths =
-        match zdx_engine::core::context::build_effective_system_prompt_with_paths_and_instruction_layers(
-            config,
-            root,
-            &instruction_layers,
-            true,
-        ) {
-            Ok(effective) => effective.loaded_agents_paths,
-            Err(_) => Vec::new(),
-        };
-
-    Ok((thread_handle, context_paths))
 }
 
 /// Runs handoff generation with cancellation support.
