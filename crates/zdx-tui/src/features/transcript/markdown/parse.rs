@@ -153,11 +153,13 @@ impl TableBuffer {
         let mut lines = Vec::new();
 
         // Build separator lines
-        let separator = build_separator(&col_widths, '-');
-        let header_separator = build_separator(&col_widths, '=');
+        let top_separator = build_separator(&col_widths, '┌', '┬', '┐', '─');
+        let separator = build_separator(&col_widths, '├', '┼', '┤', '─');
+        let header_separator = build_separator(&col_widths, '╞', '╪', '╡', '═');
+        let bottom_separator = build_separator(&col_widths, '└', '┴', '┘', '─');
 
         // Top border
-        lines.push(separator.clone());
+        lines.push(top_separator);
 
         for (row_idx, row) in all_rows.iter().enumerate() {
             // Word-wrap each cell into sub-lines that fit the column width.
@@ -175,7 +177,7 @@ impl TableBuffer {
 
             // Emit one terminal line per sub-line, padding shorter cells with spaces.
             for sub in 0..max_lines {
-                let mut line = String::from("|");
+                let mut line = String::from("│");
                 for (col_idx, col_w) in col_widths.iter().enumerate() {
                     let cell_text = wrapped_cells[col_idx].get(sub).map_or("", String::as_str);
                     let cell_width = terminal_display_width(cell_text);
@@ -185,7 +187,7 @@ impl TableBuffer {
                     for _ in 0..padding {
                         line.push(' ');
                     }
-                    line.push_str(" |");
+                    line.push_str(" │");
                 }
                 lines.push(line);
             }
@@ -193,6 +195,8 @@ impl TableBuffer {
             // After header row, use header separator; after other rows, normal separator
             if row_idx == 0 && !self.header.is_empty() {
                 lines.push(header_separator.clone());
+            } else if row_idx == all_rows.len() - 1 {
+                lines.push(bottom_separator.clone());
             } else {
                 lines.push(separator.clone());
             }
@@ -202,15 +206,23 @@ impl TableBuffer {
     }
 }
 
-/// Builds a separator line like "+------+------+" or "+=======+=======+".
-fn build_separator(col_widths: &[usize], fill: char) -> String {
-    let mut s = String::from("+");
+/// Builds a separator line like "┌──────┬──────┐" or "╞══════╪══════╡".
+fn build_separator(
+    col_widths: &[usize],
+    left: char,
+    middle: char,
+    right: char,
+    fill: char,
+) -> String {
+    let mut s = String::from(left);
     for &w in col_widths {
         for _ in 0..w + 2 {
             s.push(fill);
         }
-        s.push('+');
+        s.push(middle);
     }
+    s.pop();
+    s.push(right);
     s
 }
 
@@ -771,10 +783,7 @@ impl MarkdownRenderer {
 
         for line in table_lines {
             self.lines.push(StyledLine {
-                spans: vec![StyledSpan {
-                    text: line,
-                    style: Style::Plain,
-                }],
+                spans: style_table_line(&line),
             });
         }
 
@@ -802,6 +811,62 @@ impl MarkdownRenderer {
 
         self.lines
     }
+}
+
+fn style_table_line(line: &str) -> Vec<StyledSpan> {
+    let mut spans = Vec::new();
+    let mut current = String::new();
+    let mut current_style: Option<Style> = None;
+
+    for ch in line.chars() {
+        let style = if is_table_border_char(ch) {
+            Style::TableBorder
+        } else {
+            Style::Plain
+        };
+
+        if current_style == Some(style) {
+            current.push(ch);
+        } else {
+            if let Some(style) = current_style {
+                spans.push(StyledSpan {
+                    text: std::mem::take(&mut current),
+                    style,
+                });
+            }
+            current.push(ch);
+            current_style = Some(style);
+        }
+    }
+
+    if let Some(style) = current_style {
+        spans.push(StyledSpan {
+            text: current,
+            style,
+        });
+    }
+
+    spans
+}
+
+fn is_table_border_char(ch: char) -> bool {
+    matches!(
+        ch,
+        '┌' | '┬'
+            | '┐'
+            | '├'
+            | '┼'
+            | '┤'
+            | '└'
+            | '┴'
+            | '┘'
+            | '│'
+            | '─'
+            | '╞'
+            | '╪'
+            | '╡'
+            | '═'
+    )
 }
 
 #[cfg(test)]
@@ -958,11 +1023,11 @@ mod tests {
         let md = "| Fix | Verdict |\n|---|---|\n| #1 | ✅ Ship |\n| #2 | ⚠️ Needs change |";
         let lines = render_markdown(md, 80);
 
-        // Extract table lines (non-empty, with pipe characters)
+        // Extract table lines (non-empty, with table border characters)
         let table_lines: Vec<&str> = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
-            .filter(|s| s.contains('|'))
+            .filter(|s| s.contains('│'))
             .collect();
 
         // All border/content lines should have the same display width
@@ -973,7 +1038,7 @@ mod tests {
 
         assert!(
             !widths.is_empty(),
-            "Table should have lines with pipe chars"
+            "Table should have lines with table border chars"
         );
         let first = widths[0];
         for (i, &w) in widths.iter().enumerate() {
@@ -1008,7 +1073,7 @@ mod tests {
         let table_content_lines: Vec<&str> = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
-            .filter(|s| s.starts_with('|'))
+            .filter(|s| s.starts_with('│'))
             .collect();
         assert!(
             table_content_lines.len() > 2,
@@ -1045,7 +1110,7 @@ mod tests {
         let table_lines: Vec<&str> = lines
             .iter()
             .flat_map(|l| l.spans.iter().map(|s| s.text.as_str()))
-            .filter(|s| s.contains('|'))
+            .filter(|s| s.contains('│'))
             .collect();
 
         let widths: Vec<usize> = table_lines
