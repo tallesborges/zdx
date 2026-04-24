@@ -10,7 +10,7 @@ LLM provider implementations extracted from `zdx-core`.
 - `src/anthropic/` — Anthropic Messages API + Claude CLI OAuth provider
 - `src/openai/` — OpenAI Responses/Chat Completions/image generation API + Codex OAuth provider
 - `src/gemini/` — Google Gemini API + Gemini CLI OAuth provider
-- `src/openrouter.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
+- `src/openrouter.rs`, `src/deepseek.rs`, `src/mistral.rs`, `src/moonshot.rs`, `src/stepfun.rs`, `src/xiaomi.rs`, `src/minimax.rs`, `src/zai.rs`, `src/xai.rs` — thin OpenAI-compatible providers
 - `src/apiyi.rs`, `src/zen.rs` — meta-providers that route to inner clients based on model registry hints
 - `src/debug_metrics.rs`, `src/debug_trace.rs` — debug/tracing wrappers for provider streams
 - `src/text_tool_parser.rs`, `src/thinking_parser.rs` — SSE stream content parsers

@@ -1175,6 +1175,8 @@ pub struct ProvidersConfig {
     pub openai_codex: ProviderConfig,
     #[serde(default = "default_openrouter_provider")]
     pub openrouter: ProviderConfig,
+    #[serde(default = "default_deepseek_provider")]
+    pub deepseek: ProviderConfig,
     #[serde(default = "default_moonshot_provider")]
     pub moonshot: ProviderConfig,
     #[serde(default = "default_stepfun_provider")]
@@ -1213,6 +1215,7 @@ impl ProvidersConfig {
             id if id == ProviderKind::OpenAI.id() => &self.openai,
             id if id == ProviderKind::OpenAICodex.id() => &self.openai_codex,
             id if id == ProviderKind::OpenRouter.id() => &self.openrouter,
+            id if id == ProviderKind::DeepSeek.id() => &self.deepseek,
             id if id == ProviderKind::Moonshot.id() => &self.moonshot,
             id if id == ProviderKind::Stepfun.id() => &self.stepfun,
             id if id == ProviderKind::Xiomi.id() => &self.xiaomi,
@@ -1238,6 +1241,7 @@ impl ProvidersConfig {
             ProviderKind::OpenAI => &self.openai,
             ProviderKind::OpenAICodex => &self.openai_codex,
             ProviderKind::OpenRouter => &self.openrouter,
+            ProviderKind::DeepSeek => &self.deepseek,
             ProviderKind::Mistral => &self.mistral,
             ProviderKind::Moonshot => &self.moonshot,
             ProviderKind::Stepfun => &self.stepfun,
@@ -1262,6 +1266,7 @@ impl ProvidersConfig {
             ProviderKind::OpenAI => &mut self.openai,
             ProviderKind::OpenAICodex => &mut self.openai_codex,
             ProviderKind::OpenRouter => &mut self.openrouter,
+            ProviderKind::DeepSeek => &mut self.deepseek,
             ProviderKind::Mistral => &mut self.mistral,
             ProviderKind::Moonshot => &mut self.moonshot,
             ProviderKind::Stepfun => &mut self.stepfun,
@@ -1295,6 +1300,7 @@ impl Default for ProvidersConfig {
             gemini: default_gemini_provider(),
             gemini_cli: default_gemini_cli_provider(),
             openrouter: default_openrouter_provider(),
+            deepseek: default_deepseek_provider(),
             moonshot: default_moonshot_provider(),
             stepfun: default_stepfun_provider(),
             xiaomi: default_xiaomi_provider(),
@@ -1379,10 +1385,21 @@ fn default_openrouter_provider() -> ProviderConfig {
     }
 }
 
+fn default_deepseek_provider() -> ProviderConfig {
+    ProviderConfig {
+        enabled: Some(true),
+        models: vec![
+            "deepseek-v4-pro".to_string(),
+            "deepseek-v4-flash".to_string(),
+        ],
+        ..Default::default()
+    }
+}
+
 fn default_moonshot_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
-        models: vec!["kimi-k2.5".to_string()],
+        models: vec!["kimi-k2.6".to_string(), "kimi-k2.5".to_string()],
         ..Default::default()
     }
 }
@@ -1399,6 +1416,8 @@ fn default_xiaomi_provider() -> ProviderConfig {
     ProviderConfig {
         enabled: Some(true),
         models: vec![
+            "mimo-v2.5-pro".to_string(),
+            "mimo-v2.5".to_string(),
             "mimo-v2-flash".to_string(),
             "mimo-v2-pro".to_string(),
             "mimo-v2-omni".to_string(),

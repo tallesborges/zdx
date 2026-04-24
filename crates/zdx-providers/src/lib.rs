@@ -7,6 +7,7 @@ pub mod thinking_parser;
 
 pub mod anthropic;
 pub mod apiyi;
+pub mod deepseek;
 pub mod gemini;
 pub mod minimax;
 pub mod mistral;
@@ -37,6 +38,7 @@ pub enum ProviderKind {
     OpenAICodex,
     OpenAI,
     OpenRouter,
+    DeepSeek,
     Xiomi,
     Mistral,
     Moonshot,
@@ -72,6 +74,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex,
             ProviderKind::OpenAI,
             ProviderKind::OpenRouter,
+            ProviderKind::DeepSeek,
             ProviderKind::Xiomi,
             ProviderKind::Mistral,
             ProviderKind::Moonshot,
@@ -94,6 +97,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "openai-codex",
             ProviderKind::OpenAI => "openai",
             ProviderKind::OpenRouter => "openrouter",
+            ProviderKind::DeepSeek => "deepseek",
             ProviderKind::Xiomi => "xiaomi",
             ProviderKind::Mistral => "mistral",
             ProviderKind::Moonshot => "moonshot",
@@ -116,6 +120,7 @@ impl ProviderKind {
             "openai-codex" | "codex" => Some(ProviderKind::OpenAICodex),
             "openai" => Some(ProviderKind::OpenAI),
             "openrouter" => Some(ProviderKind::OpenRouter),
+            "deepseek" => Some(ProviderKind::DeepSeek),
             "xiaomi" => Some(ProviderKind::Xiomi),
             "mistral" => Some(ProviderKind::Mistral),
             "moonshot" => Some(ProviderKind::Moonshot),
@@ -139,6 +144,7 @@ impl ProviderKind {
             ProviderKind::OpenAICodex => "OpenAI Codex",
             ProviderKind::OpenAI => "OpenAI",
             ProviderKind::OpenRouter => "OpenRouter",
+            ProviderKind::DeepSeek => "DeepSeek",
             ProviderKind::Xiomi => "Xiomi",
             ProviderKind::Mistral => "Mistral",
             ProviderKind::Moonshot => "Moonshot",
@@ -171,6 +177,7 @@ impl ProviderKind {
             ProviderKind::Anthropic => Some("ANTHROPIC_API_KEY"),
             ProviderKind::OpenAI => Some("OPENAI_API_KEY"),
             ProviderKind::OpenRouter => Some("OPENROUTER_API_KEY"),
+            ProviderKind::DeepSeek => Some("DEEPSEEK_API_KEY"),
             ProviderKind::Xiomi => Some("XIAOMI_API_KEY"),
             ProviderKind::Mistral => Some("MISTRAL_API_KEY"),
             ProviderKind::Moonshot => Some("MOONSHOT_API_KEY"),
@@ -192,6 +199,7 @@ impl ProviderKind {
             Self::OpenAI => "https://api.openai.com/v1",
             Self::OpenAICodex => "https://chatgpt.com/backend-api",
             Self::OpenRouter => "https://openrouter.ai/api/v1",
+            Self::DeepSeek => "https://api.deepseek.com",
             Self::Mistral => "https://api.mistral.ai/v1",
             Self::Moonshot => "https://api.moonshot.ai/v1",
             Self::Stepfun => "https://api.stepfun.ai/v1",
@@ -212,6 +220,7 @@ impl ProviderKind {
             Self::OpenAI => Some("OPENAI_BASE_URL"),
             Self::OpenAICodex => None,
             Self::OpenRouter => Some("OPENROUTER_BASE_URL"),
+            Self::DeepSeek => Some("DEEPSEEK_BASE_URL"),
             Self::Mistral => Some("MISTRAL_BASE_URL"),
             Self::Moonshot => Some("MOONSHOT_BASE_URL"),
             Self::Stepfun => Some("STEPFUN_BASE_URL"),
@@ -258,6 +267,7 @@ impl ProviderKind {
             ProviderKind::Anthropic
             | ProviderKind::OpenAI
             | ProviderKind::OpenRouter
+            | ProviderKind::DeepSeek
             | ProviderKind::Xiomi
             | ProviderKind::Mistral
             | ProviderKind::Moonshot
@@ -317,6 +327,7 @@ fn parse_provider_prefix(model: &str) -> Option<(ProviderKind, &str)> {
                 "claude-cli" => ProviderKind::ClaudeCli,
                 "openai" | "openai-api" => ProviderKind::OpenAI,
                 "openrouter" => ProviderKind::OpenRouter,
+                "deepseek" => ProviderKind::DeepSeek,
                 "xiaomi" => ProviderKind::Xiomi,
                 "mistral" => ProviderKind::Mistral,
                 "moonshot" | "kimi" => ProviderKind::Moonshot,
