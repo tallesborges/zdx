@@ -24,6 +24,7 @@ use crate::providers::anthropic::{
     EffortLevel as AnthropicEffortLevel,
 };
 use crate::providers::apiyi::{ApiyiClient, ApiyiConfig};
+use crate::providers::deepseek::{DeepSeekClient, DeepSeekConfig};
 use crate::providers::gemini::{
     GeminiCliClient, GeminiCliConfig, GeminiClient, GeminiConfig, GeminiThinkingConfig,
 };
@@ -150,6 +151,7 @@ enum ProviderClient {
     OpenAICodex(OpenAICodexClient),
     OpenAI(OpenAIClient),
     OpenRouter(OpenRouterClient),
+    DeepSeek(DeepSeekClient),
     Xiomi(XiomiClient),
     Mistral(MistralClient),
     Moonshot(MoonshotClient),
@@ -184,6 +186,9 @@ impl ProviderClient {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::OpenRouter(client) => {
+                client.send_messages_stream(messages, tools, system).await
+            }
+            ProviderClient::DeepSeek(client) => {
                 client.send_messages_stream(messages, tools, system).await
             }
             ProviderClient::Xiomi(client) => {
@@ -994,6 +999,13 @@ fn build_provider_client(
         ProviderKind::OpenRouter => {
             build_openrouter_client(config, options.model, reasoning_effort, cache_key)
         }
+        ProviderKind::DeepSeek => build_deepseek_client(
+            config,
+            options.model,
+            reasoning_effort,
+            cache_key,
+            thinking_enabled,
+        ),
         ProviderKind::Xiomi => build_xiaomi_client(config, options.model, thinking_enabled),
         ProviderKind::Mistral => {
             build_mistral_client(config, options.model, cache_key, thinking_enabled)
@@ -1114,6 +1126,26 @@ fn build_openrouter_client(
             config.providers.openrouter.effective_api_key(),
             reasoning_effort,
             cache_key,
+        )?,
+    )))
+}
+
+fn build_deepseek_client(
+    config: &Config,
+    model: &str,
+    reasoning_effort: Option<String>,
+    cache_key: Option<String>,
+    thinking_enabled: bool,
+) -> Result<ProviderClient> {
+    Ok(ProviderClient::DeepSeek(DeepSeekClient::new(
+        DeepSeekConfig::from_env(
+            model.to_string(),
+            config.max_tokens,
+            config.providers.deepseek.effective_base_url(),
+            config.providers.deepseek.effective_api_key(),
+            cache_key,
+            thinking_enabled,
+            reasoning_effort,
         )?,
     )))
 }

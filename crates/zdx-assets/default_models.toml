@@ -478,6 +478,40 @@ input_images = false
 output_limit = 65536
 
 [[model]]
+id = "deepseek:deepseek-v4-pro"
+provider = "deepseek"
+display_name = "DeepSeek V4 Pro"
+context_limit = 1000000
+
+[model.pricing]
+input = 1.74
+output = 3.48
+cache_read = 0.145
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 384000
+
+[[model]]
+id = "deepseek:deepseek-v4-flash"
+provider = "deepseek"
+display_name = "DeepSeek V4 Flash"
+context_limit = 1000000
+
+[model.pricing]
+input = 0.14
+output = 0.28
+cache_read = 0.028
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 384000
+
+[[model]]
 id = "openrouter:moonshotai/kimi-k2-0905:exacto"
 provider = "openrouter"
 display_name = "Kimi K2 Instruct 0905 (exacto)"
@@ -546,6 +580,23 @@ input_images = false
 output_limit = 128000
 
 [[model]]
+id = "moonshot:kimi-k2.6"
+provider = "moonshot"
+display_name = "Kimi K2.6"
+context_limit = 262144
+
+[model.pricing]
+input = 0.95
+output = 4.0
+cache_read = 0.16
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 262144
+
+[[model]]
 id = "moonshot:kimi-k2.5"
 provider = "moonshot"
 display_name = "Kimi K2.5"
@@ -578,6 +629,40 @@ cache_write = 0.0
 reasoning = true
 input_images = false
 output_limit = 256000
+
+[[model]]
+id = "xiaomi:mimo-v2.5-pro"
+provider = "xiaomi"
+display_name = "MiMo-V2.5-Pro"
+context_limit = 1048576
+
+[model.pricing]
+input = 1.0
+output = 3.0
+cache_read = 0.2
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = false
+output_limit = 128000
+
+[[model]]
+id = "xiaomi:mimo-v2.5"
+provider = "xiaomi"
+display_name = "MiMo-V2.5"
+context_limit = 262144
+
+[model.pricing]
+input = 0.4
+output = 2.0
+cache_read = 0.08
+cache_write = 0.0
+
+[model.capabilities]
+reasoning = true
+input_images = true
+output_limit = 128000
 
 [[model]]
 id = "xiaomi:mimo-v2-flash"

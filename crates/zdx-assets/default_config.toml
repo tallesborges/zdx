@@ -82,6 +82,11 @@ claude_user = true
 claude_project = true
 agents_user = true
 agents_project = true
+
+[providers.deepseek]
+enabled = true
+models = ["deepseek-v4-pro", "deepseek-v4-flash"]
+fast_mode = false
 # GitHub repositories containing skills (owner/repo/path)
 # ignored_skills = ["test-*", "wip-*"]
 # include_skills = ["deploy-*", "release-*"]
@@ -114,11 +119,13 @@ enabled = true
 # api_key = "sk-ant-..."  # Overrides ANTHROPIC_API_KEY env var
 # base_url = "https://api.anthropic.com"
 models = ["claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
+fast_mode = false
 
 [providers.claude_cli]
 enabled = true
 # base_url = "https://api.anthropic.com"
 models = ["claude-opus-4-7", "claude-opus-4-6", "claude-opus-4-5", "claude-sonnet-4-6", "claude-sonnet-4-5", "claude-haiku-4-5"]
+fast_mode = false
 
 [providers.openai]
 enabled = true
@@ -126,11 +133,13 @@ enabled = true
 # base_url = "https://api.openai.com/v1"
 # text_verbosity = "medium"  # Options: low, medium, high
 models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
+fast_mode = false
 
 [providers.openai_codex]
 enabled = true
 # text_verbosity = "medium"  # Options: low, medium, high
 models = ["gpt-5.5", "gpt-5.4", "gpt-5.4-mini", "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.1-codex-max"]
+fast_mode = false
 # Codex models have built-in apply_patch instructions
 
 [providers.openrouter]
@@ -138,68 +147,80 @@ enabled = true
 # api_key = "sk-or-..."  # Overrides OPENROUTER_API_KEY env var
 # base_url = "https://openrouter.ai/api/v1"
 models = ["*:exacto"]
+fast_mode = false
 
 [providers.moonshot]
 enabled = true
 # api_key = "sk-..."  # Overrides MOONSHOT_API_KEY env var
 # base_url = "https://api.moonshot.ai/v1"
-models = ["kimi-k2.5"]
+models = ["kimi-k2.6", "kimi-k2.5"]
+fast_mode = false
 
 [providers.zen]
 enabled = true
 # api_key = "..."  # Overrides ZEN_API_KEY env var
 # base_url = "https://opencode.ai/zen"
 models = ["big-pickle", "gemini-3-flash", "minimax-m2.5", "minimax-m2.5-free", "kimi-k2.5", "kimi-k2.5-free", "glm-5", "glm-5-free"]
+fast_mode = false
 
 [providers.stepfun]
 enabled = true
 # api_key = "sk-..."  # Overrides STEPFUN_API_KEY env var
 # base_url = "https://api.stepfun.ai/v1"
 models = ["step-3.5-flash"]
+fast_mode = false
 
 [providers.apiyi]
 enabled = false
 # api_key = "..."  # Overrides APIYI_API_KEY env var
 # base_url = "https://api.apiyi.com"
 models = []
+fast_mode = false
 
 [providers.xiaomi]
 enabled = true
 # api_key = "sk-..."  # Overrides XIAOMI_API_KEY env var
 # base_url = "https://api.xiaomimimo.com/v1"
-models = ["mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"]
+models = ["mimo-v2.5-pro", "mimo-v2.5", "mimo-v2-flash", "mimo-v2-pro", "mimo-v2-omni"]
+fast_mode = false
 
 [providers.gemini]
 enabled = true
 # api_key = "..."  # Overrides GEMINI_API_KEY env var
 # base_url = "https://generativelanguage.googleapis.com/v1beta"
 models = ["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+fast_mode = false
 
 [providers.gemini_cli]
 enabled = true
 # base_url = "https://cloudcode-pa.googleapis.com"
 models = ["gemini-3.1-pro-preview-customtools", "gemini-3.1-pro-preview", "gemini-3.1-flash-lite-preview", "gemini-3-flash-preview", "gemini-2.5-flash", "gemini-2.5-flash-lite"]
+fast_mode = false
 
 [providers.minimax]
 enabled = true
 # api_key = "..."  # Overrides MINIMAX_API_KEY env var
 # base_url = "https://api.minimax.io/v1"
 models = ["MiniMax-M2.7", "MiniMax-M2.5", "MiniMax-M2.1"]
+fast_mode = false
 
 [providers.zai]
 enabled = true
 # api_key = "..."  # Overrides ZAI_API_KEY env var
 # base_url = "https://api.z.ai/api/paas/v4"
 models = ["glm-5.1", "glm-5-turbo", "glm-5", "glm-4.7", "glm-4.7-flash"]
+fast_mode = false
 
 [providers.xai]
 enabled = true
 # api_key = "..."  # Overrides XAI_API_KEY env var
 # base_url = "https://api.x.ai/v1"
 models = ["grok-4.20-experimental-beta-0304-reasoning", "grok-4.20-experimental-beta-0304-non-reasoning", "grok-4-1-fast", "grok-4-1-fast-non-reasoning"]
+fast_mode = false
 
 [providers.mistral]
 enabled = true
 # api_key = "..."  # Overrides MISTRAL_API_KEY env var
 # base_url = "https://api.mistral.ai/v1"
 models = ["voxtral-mini-latest"]
+fast_mode = false
