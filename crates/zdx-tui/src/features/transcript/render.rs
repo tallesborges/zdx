@@ -416,6 +416,9 @@ fn convert_style(style: TranscriptStyle) -> Style {
         TranscriptStyle::Link => Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::UNDERLINED),
+        TranscriptStyle::TableBorder => Style::default()
+            .fg(Color::DarkGray)
+            .add_modifier(Modifier::DIM),
         TranscriptStyle::ListBullet | TranscriptStyle::ListNumber => {
             Style::default().fg(Color::Yellow)
         }

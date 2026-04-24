@@ -87,6 +87,8 @@ pub enum Style {
     Link,
     /// Blockquote content.
     BlockQuote,
+    /// Table border/separator glyphs.
+    TableBorder,
     /// List bullet marker.
     ListBullet,
     /// List number marker.
