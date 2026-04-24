@@ -1,4 +1,4 @@
-//! Shared OpenAI Responses image generation helpers.
+//! Shared `OpenAI` Responses image generation helpers.
 
 use std::collections::HashSet;
 
@@ -13,6 +13,15 @@ use zdx_assets::IDENTITY_PROMPT_TEMPLATE;
 pub struct OpenAIImageGenerationOptions {
     /// Output image dimensions, for example `1024x1024` or `auto`.
     pub size: Option<String>,
+    /// Source images used by the image tool when editing existing images.
+    pub source_images: Vec<OpenAIImageInput>,
+}
+
+/// A source image for `OpenAI` Responses image editing.
+#[derive(Debug, Clone)]
+pub struct OpenAIImageInput {
+    pub mime_type: String,
+    pub data: Vec<u8>,
 }
 
 /// A generated image returned by the Responses API image tool.
@@ -22,7 +31,7 @@ pub struct OpenAIGeneratedImage {
     pub data: Vec<u8>,
 }
 
-/// Parsed response from an OpenAI image generation request.
+/// Parsed response from an `OpenAI` image generation request.
 #[derive(Debug, Clone, Default)]
 pub struct OpenAIGenerateImageResponse {
     pub images: Vec<OpenAIGeneratedImage>,
@@ -35,12 +44,27 @@ pub(super) fn build_image_generation_request(
     options: &OpenAIImageGenerationOptions,
 ) -> Value {
     let mut tool = serde_json::Map::from_iter([("type".to_string(), json!("image_generation"))]);
+    if !options.source_images.is_empty() {
+        tool.insert("action".to_string(), json!("edit"));
+    }
     if let Some(size) = options
         .size
         .as_deref()
         .filter(|value| !value.trim().is_empty())
     {
         tool.insert("size".to_string(), json!(size));
+    }
+
+    let mut content = vec![json!({"type": "input_text", "text": prompt})];
+    for image in &options.source_images {
+        content.push(json!({
+            "type": "input_image",
+            "image_url": format!(
+                "data:{};base64,{}",
+                image.mime_type,
+                STANDARD.encode(&image.data)
+            ),
+        }));
     }
 
     json!({
@@ -51,7 +75,7 @@ pub(super) fn build_image_generation_request(
         "input": [{
             "type": "message",
             "role": "user",
-            "content": [{"type": "input_text", "text": prompt}],
+            "content": content,
         }],
         "tools": [Value::Object(tool)],
         "tool_choice": { "type": "image_generation" },
@@ -66,7 +90,15 @@ fn responses_model_for_image_generation(model: &str) -> &str {
     }
 }
 
+#[cfg(test)]
 fn parse_image_generation_response(value: &Value) -> Result<OpenAIGenerateImageResponse> {
+    parse_image_generation_response_inner(value, false)
+}
+
+fn parse_image_generation_response_inner(
+    value: &Value,
+    allow_empty: bool,
+) -> Result<OpenAIGenerateImageResponse> {
     let output = value
         .get("response")
         .unwrap_or(value)
@@ -92,7 +124,7 @@ fn parse_image_generation_response(value: &Value) -> Result<OpenAIGenerateImageR
         }
     }
 
-    if images.is_empty() && text_parts.is_empty() {
+    if images.is_empty() && text_parts.is_empty() && !allow_empty {
         bail!("OpenAI image response contained no images or text");
     }
 
@@ -162,7 +194,7 @@ fn collect_image_generation_event(
 
     if matches!(
         value.get("type").and_then(Value::as_str),
-        Some("response.output_item.done") | Some("response.output_item.added")
+        Some("response.output_item.done" | "response.output_item.added")
     ) && let Some(item) = value.get("item")
     {
         collect_image_generation_item(item, final_images, text_parts, seen)?;
@@ -174,7 +206,7 @@ fn collect_image_generation_event(
     ) && let Some(response) = value.get("response")
         && response.get("output").is_some()
     {
-        let parsed = parse_image_generation_response(response)
+        let parsed = parse_image_generation_response_inner(response, true)
             .context("Failed to parse completed OpenAI image response")?;
         for image in parsed.images {
             push_image_data(image.data, image.mime_type, final_images, seen);
@@ -216,13 +248,11 @@ fn partial_image_b64_from_event(value: &Value) -> Option<&str> {
 
 fn final_image_b64_from_event(value: &Value) -> Option<&str> {
     match value.get("type").and_then(Value::as_str) {
-        Some("response.image_generation_call.completed") | Some("image_generation.completed") => {
-            value
-                .get("result")
-                .or_else(|| value.get("b64_json"))
-                .or_else(|| value.get("image_b64"))
-                .and_then(Value::as_str)
-        }
+        Some("response.image_generation_call.completed" | "image_generation.completed") => value
+            .get("result")
+            .or_else(|| value.get("b64_json"))
+            .or_else(|| value.get("image_b64"))
+            .and_then(Value::as_str),
         _ => None,
     }
 }
@@ -303,7 +333,7 @@ mod tests {
     use zdx_assets::IDENTITY_PROMPT_TEMPLATE;
 
     use super::{
-        OpenAIImageGenerationOptions, build_image_generation_request,
+        OpenAIImageGenerationOptions, OpenAIImageInput, build_image_generation_request,
         parse_image_generation_response, parse_image_generation_sse_response,
         responses_model_for_image_generation,
     };
@@ -315,6 +345,7 @@ mod tests {
             "A red fox",
             &OpenAIImageGenerationOptions {
                 size: Some("1024x1024".to_string()),
+                source_images: Vec::new(),
             },
         );
 
@@ -334,6 +365,44 @@ mod tests {
             request["tools"][0]["type"],
             serde_json::json!("image_generation")
         );
+        assert_eq!(request["tools"][0]["size"], serde_json::json!("1024x1024"));
+        assert_eq!(
+            request["tool_choice"]["type"],
+            serde_json::json!("image_generation")
+        );
+    }
+
+    #[test]
+    fn image_generation_request_includes_source_images_for_edits() {
+        let request = build_image_generation_request(
+            "gpt-image-2",
+            "Change the background",
+            &OpenAIImageGenerationOptions {
+                size: Some("1024x1024".to_string()),
+                source_images: vec![OpenAIImageInput {
+                    mime_type: "image/png".to_string(),
+                    data: vec![1, 2, 3],
+                }],
+            },
+        );
+
+        assert_eq!(
+            request["input"][0]["content"][0],
+            serde_json::json!({"type": "input_text", "text": "Change the background"})
+        );
+        assert_eq!(
+            request["input"][0]["content"][1]["type"],
+            serde_json::json!("input_image")
+        );
+        assert_eq!(
+            request["input"][0]["content"][1]["image_url"],
+            serde_json::json!("data:image/png;base64,AQID")
+        );
+        assert_eq!(
+            request["tools"][0]["type"],
+            serde_json::json!("image_generation")
+        );
+        assert_eq!(request["tools"][0]["action"], serde_json::json!("edit"));
         assert_eq!(request["tools"][0]["size"], serde_json::json!("1024x1024"));
         assert_eq!(
             request["tool_choice"]["type"],
@@ -378,6 +447,27 @@ mod tests {
             "item": {"type": "image_generation_call", "result": data_b64}
         });
         let body = format!("event: response.output_item.done\ndata: {event}\n\ndata: [DONE]\n");
+
+        let parsed = parse_image_generation_sse_response(&body).expect("parse should succeed");
+        assert_eq!(parsed.images.len(), 1);
+        assert_eq!(parsed.images[0].mime_type, "image/png");
+        assert_eq!(parsed.images[0].data, vec![4, 5, 6]);
+    }
+
+    #[test]
+    fn parse_image_generation_sse_response_ignores_empty_completed_snapshot() {
+        let data_b64 = base64::engine::general_purpose::STANDARD.encode([4, 5, 6]);
+        let done_event = serde_json::json!({
+            "type": "response.output_item.done",
+            "item": {"type": "image_generation_call", "result": data_b64}
+        });
+        let completed_event = serde_json::json!({
+            "type": "response.completed",
+            "response": {"output": []}
+        });
+        let body = format!(
+            "event: response.output_item.done\ndata: {done_event}\n\nevent: response.completed\ndata: {completed_event}\n\ndata: [DONE]\n"
+        );
 
         let parsed = parse_image_generation_sse_response(&body).expect("parse should succeed");
         assert_eq!(parsed.images.len(), 1);

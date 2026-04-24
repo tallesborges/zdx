@@ -12,4 +12,5 @@ pub use api::{OpenAIClient, OpenAIConfig};
 pub use codex::{OpenAICodexClient, OpenAICodexConfig};
 pub use image_generation::{
     OpenAIGenerateImageResponse, OpenAIGeneratedImage, OpenAIImageGenerationOptions,
+    OpenAIImageInput,
 };
