@@ -12,6 +12,7 @@ use zdx_engine::providers::gemini::{
 };
 use zdx_engine::providers::openai::{
     OpenAIClient, OpenAICodexClient, OpenAICodexConfig, OpenAIConfig, OpenAIImageGenerationOptions,
+    OpenAIImageInput,
 };
 use zdx_engine::providers::{ProviderKind, resolve_provider};
 
@@ -79,21 +80,13 @@ async fn generate_gemini_images(
         None,
     )?;
 
-    let source_images = options
-        .source
-        .iter()
-        .map(|path_str| {
-            let path = path_mime::normalize_input_path(path_str);
-            let mime_type = path_mime::mime_type_for_extension(path_str)
-                .context(format!("unsupported image format: {path_str}"))?;
-            let data = fs::read(&path)
-                .with_context(|| format!("read source image '{}'", path.display()))?;
-            Ok(SourceImage {
-                mime_type: mime_type.to_string(),
-                data,
-            })
+    let source_images = load_source_images(options.source)?
+        .into_iter()
+        .map(|image| SourceImage {
+            mime_type: image.mime_type,
+            data: image.data,
         })
-        .collect::<Result<Vec<_>>>()?;
+        .collect();
 
     let client = GeminiClient::new(gemini_config);
     let response = client
@@ -205,21 +198,50 @@ fn openai_family_image_options(
     provider_label: &str,
     options: &ImagineRunOptions<'_>,
 ) -> Result<OpenAIImageGenerationOptions> {
-    if !options.source.is_empty() {
-        bail!("{provider_label} image generation does not support --source yet");
-    }
     if options.aspect.is_some() {
         bail!(
             "{provider_label} image generation does not support --aspect yet; use --size instead"
         );
     }
 
+    let source_images = load_source_images(options.source)?
+        .into_iter()
+        .map(|image| OpenAIImageInput {
+            mime_type: image.mime_type,
+            data: image.data,
+        })
+        .collect();
+
     Ok(OpenAIImageGenerationOptions {
         size: Some(options.size.map_or_else(
             || Ok(DEFAULT_OPENAI_RESPONSES_IMAGE_SIZE.to_string()),
             openai_family_image_size,
         )?),
+        source_images,
     })
+}
+
+#[derive(Debug, Clone)]
+struct LoadedSourceImage {
+    mime_type: String,
+    data: Vec<u8>,
+}
+
+fn load_source_images(source: &[String]) -> Result<Vec<LoadedSourceImage>> {
+    source
+        .iter()
+        .map(|path_str| {
+            let path = path_mime::normalize_input_path(path_str);
+            let mime_type = path_mime::mime_type_for_extension(path_str)
+                .context(format!("unsupported image format: {path_str}"))?;
+            let data = fs::read(&path)
+                .with_context(|| format!("read source image '{}'", path.display()))?;
+            Ok(LoadedSourceImage {
+                mime_type: mime_type.to_string(),
+                data,
+            })
+        })
+        .collect()
 }
 
 fn openai_family_image_size(size: &str) -> Result<String> {
