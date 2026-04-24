@@ -128,7 +128,7 @@ enum Commands {
         no_tools: bool,
     },
 
-    /// Generate images with Gemini image models
+    /// Generate images with Gemini, OpenAI, or OpenAI Codex image models
     Imagine {
         /// The prompt to generate an image from
         #[arg(short, long)]
@@ -138,7 +138,7 @@ enum Commands {
         #[arg(short, long, value_name = "PATH")]
         out: Option<String>,
 
-        /// Model to use (must be a Gemini API model)
+        /// Model to use (Gemini API model, openai:gpt-image-2, or openai-codex:gpt-image-2)
         #[arg(long, value_name = "MODEL")]
         model: Option<String>,
 

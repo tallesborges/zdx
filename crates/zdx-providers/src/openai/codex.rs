@@ -7,6 +7,10 @@ use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_assets::IDENTITY_PROMPT_TEMPLATE;
 use zdx_types::{TextVerbosity, ToolDefinition};
 
+use super::image_generation::{
+    OpenAIGenerateImageResponse, OpenAIImageGenerationOptions, build_image_generation_request,
+    parse_image_generation_sse_response,
+};
 use crate::oauth::openai_codex as oauth_codex;
 use crate::openai::responses::{ResponsesConfig, send_responses_stream};
 use crate::{ProviderKind, ProviderStream};
@@ -167,6 +171,50 @@ impl OpenAICodexClient {
         // For Codex, send the system prompt through top-level `instructions`.
         // Keep `system` input empty here to avoid duplication in `input`.
         send_responses_stream(&self.http, &config, headers, messages, tools, None).await
+    }
+
+    /// Generate image content using the hosted Responses API `image_generation` tool.
+    ///
+    /// The Responses API uses a mainline model for tool orchestration; when callers pass
+    /// `gpt-image-2` as the selected model, use the current Codex-capable default model
+    /// and force the hosted image generation tool.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
+    pub async fn generate_images(
+        &self,
+        prompt: &str,
+        options: &OpenAIImageGenerationOptions,
+    ) -> Result<OpenAIGenerateImageResponse> {
+        let creds = resolve_credentials().await?;
+        let headers = build_headers(
+            &creds.account_id,
+            &creds.access,
+            self.config.prompt_cache_key.as_deref(),
+        );
+
+        let request = build_image_generation_request(&self.config.model, prompt, options);
+        let url = format!(
+            "{}{}",
+            ProviderKind::OpenAICodex.default_base_url(),
+            RESPONSES_PATH
+        );
+        let response = self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| crate::ProviderError::timeout(format!("Request failed: {e}")))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(crate::ProviderError::http_status(status.as_u16(), &body).into());
+        }
+
+        parse_image_generation_sse_response(&body)
     }
 }
 

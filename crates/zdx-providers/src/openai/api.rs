@@ -4,6 +4,10 @@ use anyhow::Result;
 use reqwest::header::{HeaderMap, HeaderValue};
 use zdx_types::{TextVerbosity, ToolDefinition};
 
+use super::image_generation::{
+    OpenAIGenerateImageResponse, OpenAIImageGenerationOptions, build_image_generation_request,
+    parse_image_generation_sse_response,
+};
 use crate::openai::responses::{ResponsesConfig, StreamOptions, send_responses_stream};
 use crate::{ProviderKind, ProviderStream};
 
@@ -114,6 +118,36 @@ impl OpenAIClient {
         };
 
         send_responses_stream(&self.http, &config, headers, messages, tools, system).await
+    }
+
+    /// Generate image content using the hosted Responses API `image_generation` tool.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or the response cannot be parsed.
+    pub async fn generate_images(
+        &self,
+        prompt: &str,
+        options: &OpenAIImageGenerationOptions,
+    ) -> Result<OpenAIGenerateImageResponse> {
+        let headers = build_headers(&self.config.api_key);
+        let request = build_image_generation_request(&self.config.model, prompt, options);
+        let url = format!("{}{}", self.config.base_url, RESPONSES_PATH);
+        let response = self
+            .http
+            .post(url)
+            .headers(headers)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| crate::ProviderError::timeout(format!("Request failed: {e}")))?;
+
+        let status = response.status();
+        let body = response.text().await.unwrap_or_default();
+        if !status.is_success() {
+            return Err(crate::ProviderError::http_status(status.as_u16(), &body).into());
+        }
+
+        parse_image_generation_sse_response(&body)
     }
 }
 
