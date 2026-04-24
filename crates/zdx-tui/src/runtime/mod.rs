@@ -501,7 +501,8 @@ impl TuiRuntime {
                     if let Some(cancel) = self.state.tui.agent_state.cancel_token() {
                         cancel.cancel();
                     }
-                    if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone() {
+                    if let Some(cancel) = self.state.tui.tasks.state(TaskKind::Bash).cancel.clone()
+                    {
                         cancel.cancel();
                     }
                     let _ = self.state.close_active_tab();

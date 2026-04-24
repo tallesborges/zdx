@@ -19,6 +19,7 @@ pub struct RunRecord {
     pub started_at: String,
     pub thread_id: Option<String>,
     pub surface: Option<String>,
+    pub model: Option<String>,
 }
 
 /// Guard that creates a marker file on construction and removes it on drop.
@@ -35,7 +36,11 @@ impl Drop for RunGuard {
 /// Creates a `RunGuard` that writes a marker file for the current agent turn.
 ///
 /// Best-effort: returns `None` if the marker cannot be written (e.g. permissions).
-pub fn start(thread_id: Option<&str>, surface: Option<&str>) -> Option<RunGuard> {
+pub fn start(
+    thread_id: Option<&str>,
+    surface: Option<&str>,
+    model: Option<&str>,
+) -> Option<RunGuard> {
     let dir = agents_run_dir();
     fs::create_dir_all(&dir).ok()?;
 
@@ -46,6 +51,7 @@ pub fn start(thread_id: Option<&str>, surface: Option<&str>) -> Option<RunGuard>
         started_at,
         thread_id: thread_id.map(String::from),
         surface: surface.map(String::from),
+        model: model.map(String::from),
     };
 
     let filename = format!("{pid}.json");
