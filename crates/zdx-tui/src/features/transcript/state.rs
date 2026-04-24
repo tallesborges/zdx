@@ -629,6 +629,31 @@ impl TranscriptState {
         self.invalidate_line_info();
     }
 
+    /// Cancels orphaned running tool cells left at turn completion.
+    pub(super) fn cancel_orphaned_running_tools(&mut self) -> usize {
+        let mut cancelled = 0;
+        for cell in &mut self.cells {
+            if matches!(
+                cell,
+                super::HistoryCell::Tool {
+                    state: super::ToolState::Running,
+                    ..
+                }
+            ) {
+                cell.set_tool_result(zdx_engine::core::events::ToolOutput::canceled(
+                    "Tool result was not received before the turn completed",
+                ));
+                cancelled += 1;
+            }
+        }
+
+        if cancelled > 0 {
+            self.invalidate_line_info();
+        }
+
+        cancelled
+    }
+
     /// Marks all running/streaming cells as errored due to stream/network error.
     ///
     /// Unlike `mark_interrupted`, this doesn't mark user cells since the error
