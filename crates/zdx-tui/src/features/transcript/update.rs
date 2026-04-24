@@ -120,6 +120,13 @@ pub fn handle_agent_event(
             apply_pending_delta(transcript, agent_state);
             match status {
                 TurnStatus::Completed => {
+                    let orphaned_tool_count = transcript.cancel_orphaned_running_tools();
+                    if orphaned_tool_count > 0 {
+                        tracing::warn!(
+                            count = orphaned_tool_count,
+                            "TurnFinished::Completed received with running tool cells; marking them cancelled"
+                        );
+                    }
                     mutations.push(StateMutation::Thread(ThreadMutation::SetMessages(
                         messages.clone(),
                     )));
@@ -697,10 +704,12 @@ pub fn apply_scroll_delta(transcript: &mut TranscriptState) {
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+    use zdx_engine::core::events::ToolOutput;
     use zdx_engine::providers::{ReasoningBlock, ReplayToken};
 
     use super::*;
-    use crate::transcript::LineMapping;
+    use crate::transcript::{LineMapping, ToolState};
 
     fn transcript_with_lines(lines: &[&str], viewport_height: usize) -> TranscriptState {
         let mut transcript = TranscriptState::new();
@@ -790,6 +799,92 @@ mod tests {
         let content = "[Image\u{00A0}5] test [Image\u{00A0}6]";
         assert_eq!(find_local_image_index(content, 5), Some(0));
         assert_eq!(find_local_image_index(content, 6), Some(1));
+    }
+
+    #[test]
+    fn completed_turn_cancels_running_tool_without_result() {
+        let mut transcript = TranscriptState::new();
+        let mut agent_state = AgentState::Idle;
+
+        handle_agent_event(
+            &mut transcript,
+            &mut agent_state,
+            true,
+            &AgentEvent::ToolRequested {
+                id: "tool-1".to_string(),
+                name: "apply_patch".to_string(),
+                input: json!({"patch": "*** Begin Patch\n*** Update File: src/main.rs\n*** End Patch"}),
+            },
+        );
+        handle_agent_event(
+            &mut transcript,
+            &mut agent_state,
+            true,
+            &AgentEvent::TurnFinished {
+                status: TurnStatus::Completed,
+                final_text: String::new(),
+                messages: Vec::new(),
+            },
+        );
+
+        match transcript.cells().last() {
+            Some(HistoryCell::Tool { state, result, .. }) => {
+                assert_eq!(*state, ToolState::Cancelled);
+                assert_eq!(
+                    result.as_ref(),
+                    Some(&ToolOutput::canceled(
+                        "Tool result was not received before the turn completed"
+                    ))
+                );
+            }
+            _ => panic!("Expected tool cell"),
+        }
+        assert!(matches!(agent_state, AgentState::Idle));
+    }
+
+    #[test]
+    fn completed_turn_preserves_completed_tool_result() {
+        let mut transcript = TranscriptState::new();
+        let mut agent_state = AgentState::Idle;
+        let expected_result = ToolOutput::success(json!({"content": "ok"}));
+
+        handle_agent_event(
+            &mut transcript,
+            &mut agent_state,
+            true,
+            &AgentEvent::ToolRequested {
+                id: "tool-1".to_string(),
+                name: "read".to_string(),
+                input: json!({"file_path": "test.txt"}),
+            },
+        );
+        handle_agent_event(
+            &mut transcript,
+            &mut agent_state,
+            true,
+            &AgentEvent::ToolCompleted {
+                id: "tool-1".to_string(),
+                result: expected_result.clone(),
+            },
+        );
+        handle_agent_event(
+            &mut transcript,
+            &mut agent_state,
+            true,
+            &AgentEvent::TurnFinished {
+                status: TurnStatus::Completed,
+                final_text: String::new(),
+                messages: Vec::new(),
+            },
+        );
+
+        match transcript.cells().last() {
+            Some(HistoryCell::Tool { state, result, .. }) => {
+                assert_eq!(*state, ToolState::Done);
+                assert_eq!(result.as_ref(), Some(&expected_result));
+            }
+            _ => panic!("Expected tool cell"),
+        }
     }
 
     #[test]
