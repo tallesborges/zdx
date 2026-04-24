@@ -938,6 +938,7 @@ fn create_btw_tab(
         status_line: crate::statusline::StatusLineAccumulator::new(),
         show_debug_status: false,
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+        transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
     }
 }
@@ -1034,6 +1035,7 @@ fn create_thread_tab(
         status_line: crate::statusline::StatusLineAccumulator::new(),
         show_debug_status: false,
         input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+        transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
         optimistic_active_threads: std::collections::HashMap::new(),
     }
 }
@@ -1107,9 +1109,11 @@ fn handle_terminal_event(app: &mut AppState, event: Event) -> Vec<UiEffect> {
                 return vec![];
             }
 
-            if let Some(request) =
-                transcript::handle_mouse(&mut app.tui.transcript, mouse, render::TRANSCRIPT_MARGIN)
-            {
+            if let Some(request) = transcript::handle_mouse(
+                &mut app.tui.transcript,
+                mouse,
+                app.tui.transcript_area.get(),
+            ) {
                 open_overlay_request(app, &request)
             } else {
                 vec![]

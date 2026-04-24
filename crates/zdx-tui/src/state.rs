@@ -329,6 +329,8 @@ pub struct TuiState {
     pub show_debug_status: bool,
     /// Input area rect (set during render, used for mouse click routing).
     pub input_area: std::cell::Cell<ratatui::layout::Rect>,
+    /// Transcript content area rect (set during render, used for mouse click routing).
+    pub transcript_area: std::cell::Cell<ratatui::layout::Rect>,
     /// Optimistic thread-running markers used to bridge spawn-time races before
     /// activity markers are visible on disk.
     pub optimistic_active_threads: HashMap<String, Instant>,
@@ -410,6 +412,7 @@ impl TuiState {
             status_line: crate::statusline::StatusLineAccumulator::new(),
             show_debug_status: false,
             input_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
+            transcript_area: std::cell::Cell::new(ratatui::layout::Rect::default()),
             optimistic_active_threads: HashMap::new(),
         }
     }
