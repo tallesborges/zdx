@@ -222,7 +222,7 @@ impl UpdateState {
     }
 }
 
-fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 15] {
+fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 16] {
     [
         ProviderSpec {
             provider_id: "anthropic",
@@ -253,6 +253,12 @@ fn provider_specs(config: &config::Config) -> [ProviderSpec<'_>; 15] {
             api_id: "openrouter",
             prefix: Some("openrouter"),
             provider_cfg: &config.providers.openrouter,
+        },
+        ProviderSpec {
+            provider_id: "deepseek",
+            api_id: "deepseek",
+            prefix: Some("deepseek"),
+            provider_cfg: &config.providers.deepseek,
         },
         ProviderSpec {
             provider_id: "moonshot",
