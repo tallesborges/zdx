@@ -685,7 +685,6 @@ pub async fn run_turn_with_cancel(
     tx: AgentEventTx,
     cancel: Option<CancellationToken>,
 ) -> Result<(String, Vec<ChatMessage>)> {
-    let _run_guard = crate::agent_activity::start(thread_id, options.surface.as_deref());
     let sender = EventSender::new(tx);
     match run_turn_inner(
         messages,
@@ -725,6 +724,11 @@ async fn run_turn_inner(
 ) -> RunTurnResult {
     let setup = build_run_turn_setup(config, options, thread_id)
         .map_err(|e| (TurnError::from_anyhow(e), messages.clone()))?;
+    let _run_guard = crate::agent_activity::start(
+        thread_id,
+        options.surface.as_deref(),
+        Some(setup.model.as_str()),
+    );
     let mut messages = messages;
     let mut consecutive_malformed_tool_turns = 0usize;
 
@@ -846,6 +850,7 @@ async fn run_turn_inner(
 }
 
 struct RunTurnSetup {
+    model: String,
     client: ProviderClient,
     tools: Vec<ToolDefinition>,
     enabled_tools: HashSet<String>,
@@ -903,6 +908,7 @@ fn build_run_turn_setup(
     let enabled_tools = tools.iter().map(|t| t.name.clone()).collect();
 
     Ok(RunTurnSetup {
+        model: selection.model,
         client,
         tools,
         enabled_tools,

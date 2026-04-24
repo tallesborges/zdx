@@ -111,8 +111,8 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
         .enumerate()
         .map(|(i, a)| {
             let line = format!(
-                " ● PID {:<7} {:<10} thread:{:<10} up {}",
-                a.pid, a.surface, a.thread_id, a.uptime
+                " ● PID {:<7} {:<10} model:{:<24} thread:{:<10} up {}",
+                a.pid, a.surface, a.model, a.thread_id, a.uptime
             );
             let style = if i == app.selected_index {
                 Style::default()
