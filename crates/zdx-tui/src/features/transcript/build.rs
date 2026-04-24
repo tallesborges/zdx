@@ -15,6 +15,7 @@ use super::reasoning::reasoning_display_text;
 /// Maps thread events to display cells:
 /// - `Message` → `User` or `Assistant` cells
 /// - `ToolUse` + `ToolResult` → `Tool` cells (paired by ID)
+/// - unmatched `ToolUse` → cancelled `Tool` cell (the historical turn ended without a result)
 /// - `Thinking`/`Reasoning` → `Thinking` cells
 /// - Skips `Meta` and `Interrupted` events
 pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> {
@@ -60,7 +61,7 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                 ..
             } => {
                 // Find and update the corresponding tool cell
-                if let Some(&idx) = tool_cells.get(tool_use_id)
+                if let Some(idx) = tool_cells.remove(tool_use_id)
                     && let Some(cell) = cells.get_mut(idx)
                 {
                     // Deserialize the stored JSON back to ToolOutput
@@ -93,6 +94,14 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                     });
                 }
             }
+        }
+    }
+
+    for idx in tool_cells.into_values() {
+        if let Some(cell) = cells.get_mut(idx) {
+            cell.set_tool_result(ToolOutput::canceled(
+                "Tool result was not recorded before the thread ended",
+            ));
         }
     }
 
@@ -192,6 +201,27 @@ mod tests {
                 assert_eq!(name, "read");
                 assert_eq!(*state, ToolState::Done);
                 assert!(result.is_some());
+            }
+            _ => panic!("Expected Tool cell"),
+        }
+    }
+
+    #[test]
+    fn test_build_transcript_from_events_unmatched_tool_use_is_cancelled() {
+        let events = vec![ThreadEvent::ToolUse {
+            id: "tool-1".to_string(),
+            name: "apply_patch".to_string(),
+            input: json!({"patch": "*** Begin Patch\n*** Update File: src/main.rs\n*** End Patch"}),
+            ts: "2024-01-01T00:00:01Z".to_string(),
+        }];
+
+        let cells = build_transcript_from_events(&events);
+        assert_eq!(cells.len(), 1);
+
+        match &cells[0] {
+            HistoryCell::Tool { state, result, .. } => {
+                assert_eq!(*state, ToolState::Cancelled);
+                assert!(matches!(result, Some(ToolOutput::Canceled { .. })));
             }
             _ => panic!("Expected Tool cell"),
         }
