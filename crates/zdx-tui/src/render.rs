@@ -83,6 +83,7 @@ pub fn render(app: &AppState, frame: &mut Frame) {
         height: chunks[transcript_idx].height,
     };
     frame.render_widget(transcript, transcript_area);
+    state.transcript_area.set(transcript_area);
 
     frame.render_widget(
         Scrollbar::new(total_lines, metrics.transcript_height, scroll_offset),

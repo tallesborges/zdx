@@ -6,6 +6,7 @@
 //! - Delta coalescing (pending text, scroll)
 
 use crossterm::event::{MouseButton, MouseEvent, MouseEventKind};
+use ratatui::layout::Rect;
 use zdx_engine::core::events::{AgentEvent, TurnStatus};
 use zdx_engine::core::interrupt;
 
@@ -365,10 +366,13 @@ fn handle_reasoning_completed(
 pub fn handle_mouse(
     transcript: &mut TranscriptState,
     mouse: MouseEvent,
-    transcript_margin: u16,
+    transcript_area: Rect,
 ) -> Option<crate::overlays::OverlayRequest> {
     match mouse.kind {
         MouseEventKind::ScrollUp => {
+            if !contains_point(transcript_area, mouse.column, mouse.row) {
+                return None;
+            }
             // Accumulate negative delta (up = negative)
             transcript
                 .scroll_accumulator
@@ -376,6 +380,9 @@ pub fn handle_mouse(
             None
         }
         MouseEventKind::ScrollDown => {
+            if !contains_point(transcript_area, mouse.column, mouse.row) {
+                return None;
+            }
             // Accumulate positive delta (down = positive)
             transcript
                 .scroll_accumulator
@@ -385,7 +392,7 @@ pub fn handle_mouse(
         MouseEventKind::Down(MouseButton::Left) => {
             // Start selection at clicked position
             if let Some((line, col)) =
-                screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
+                screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_area)
             {
                 // Check for image indicator click
                 if let Some(request) = check_image_click(transcript, line, col) {
@@ -418,7 +425,7 @@ pub fn handle_mouse(
             // Extend selection while dragging
             if transcript.selection.is_selecting
                 && let Some((line, col)) =
-                    screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_margin)
+                    screen_to_transcript_pos(transcript, mouse.column, mouse.row, transcript_area)
             {
                 transcript.extend_selection(line, col);
             }
@@ -435,6 +442,13 @@ pub fn handle_mouse(
         }
         _ => None,
     }
+}
+
+fn contains_point(area: Rect, x: u16, y: u16) -> bool {
+    x >= area.x
+        && x < area.x.saturating_add(area.width)
+        && y >= area.y
+        && y < area.y.saturating_add(area.height)
 }
 
 /// Checks if a click on the given line is on an image placeholder and returns an overlay request.
@@ -571,24 +585,19 @@ pub fn screen_to_transcript_pos(
     transcript: &TranscriptState,
     screen_x: u16,
     screen_y: u16,
-    margin: u16,
+    transcript_area: Rect,
 ) -> Option<(usize, usize)> {
     use unicode_segmentation::UnicodeSegmentation;
     use unicode_width::UnicodeWidthStr;
 
-    // Check if position is within transcript area horizontally
-    if screen_x < margin {
-        return None;
-    }
-
-    let content_x = (screen_x - margin) as usize;
-
-    // Check if position is within transcript area vertically
-    // The transcript area is at the top, from y=0 to y=viewport_height-1
-    let viewport_height = transcript.viewport_height;
-    if screen_y as usize >= viewport_height {
+    if !contains_point(transcript_area, screen_x, screen_y) {
         return None; // Click is in input or status area, not transcript
     }
+
+    let content_x = (screen_x - transcript_area.x) as usize;
+    let screen_y = (screen_y - transcript_area.y) as usize;
+
+    let viewport_height = transcript.viewport_height;
 
     // Get scroll offset and line counts
     let scroll_offset = transcript.scroll.get_offset(viewport_height);
@@ -615,7 +624,6 @@ pub fn screen_to_transcript_pos(
     let padding = viewport_height.saturating_sub(visible_content_lines);
 
     // Adjust screen_y for bottom-align padding
-    let screen_y = screen_y as usize;
     if screen_y < padding {
         return None; // Click is in padding area, not content
     }
@@ -692,6 +700,20 @@ mod tests {
     use zdx_engine::providers::{ReasoningBlock, ReplayToken};
 
     use super::*;
+    use crate::transcript::LineMapping;
+
+    fn transcript_with_lines(lines: &[&str], viewport_height: usize) -> TranscriptState {
+        let mut transcript = TranscriptState::new();
+        transcript.update_layout((80, 24), viewport_height);
+        transcript.scroll.cached_line_count = lines.len();
+        transcript.position_map.clear();
+        for line in lines {
+            transcript
+                .position_map
+                .push(LineMapping::new((*line).to_string(), None));
+        }
+        transcript
+    }
 
     #[test]
     fn find_image_placeholder_first() {
@@ -726,6 +748,25 @@ mod tests {
         let text = "[Image\u{00A0}1] [Image\u{00A0}2]";
         assert_eq!(find_image_placeholder_at_col(text, 0), Some(1));
         assert_eq!(find_image_placeholder_at_col(text, 10), Some(2));
+    }
+
+    #[test]
+    fn screen_to_transcript_pos_accounts_for_y_offset() {
+        let transcript = transcript_with_lines(&["first", "second"], 2);
+        let transcript_area = Rect::new(1, 1, 78, 2);
+
+        assert_eq!(
+            screen_to_transcript_pos(&transcript, 1, 1, transcript_area),
+            Some((0, 0))
+        );
+        assert_eq!(
+            screen_to_transcript_pos(&transcript, 1, 0, transcript_area),
+            None
+        );
+        assert_eq!(
+            screen_to_transcript_pos(&transcript, 1, 2, transcript_area),
+            Some((1, 0))
+        );
     }
 
     #[test]
