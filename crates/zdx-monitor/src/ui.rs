@@ -105,15 +105,17 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
         return;
     }
 
+    let inner_width = area.width.saturating_sub(2) as usize;
     let items: Vec<ListItem> = app
         .active_agents
         .iter()
         .enumerate()
         .map(|(i, a)| {
-            let line = format!(
-                " ● PID {:<7} {:<10} model:{:<24} thread:{:<10} up {}",
-                a.pid, a.surface, a.model, a.thread_id, a.uptime
-            );
+            let prefix = format!(" ● PID {} {} model:", a.pid, truncate_chars(&a.surface, 10));
+            let suffix = format!(" thread:{} up {}", a.thread_id, a.uptime);
+            let model_width = inner_width.saturating_sub(prefix.len() + suffix.len());
+            let model = truncate_chars(&a.model, model_width);
+            let line = format!("{prefix}{model:<model_width$}{suffix}");
             let style = if i == app.selected_index {
                 Style::default()
                     .fg(Color::Green)
@@ -128,6 +130,20 @@ fn render_active_agents(f: &mut Frame, app: &MonitorApp, area: Rect) {
     let title = format!("Active Agents ({})", app.active_agents.len());
     let list = List::new(items).block(Block::default().borders(Borders::ALL).title(title));
     f.render_widget(list, area);
+}
+
+fn truncate_chars(value: &str, max_chars: usize) -> String {
+    if value.chars().count() <= max_chars {
+        return value.to_string();
+    }
+
+    if max_chars == 0 {
+        String::new()
+    } else if max_chars == 1 {
+        "…".to_string()
+    } else {
+        format!("{}…", value.chars().take(max_chars - 1).collect::<String>())
+    }
 }
 
 fn render_config(f: &mut Frame, app: &MonitorApp, area: Rect) {
