@@ -402,11 +402,25 @@ fn assistant_blocks_message(
         return None;
     }
 
+    let has_tool_calls = !tool_calls.is_empty();
+
+    // DeepSeek (and Moonshot/Kimi) require `reasoning_content` to be present
+    // on assistant tool-call messages when thinking is enabled — otherwise they
+    // reject the next turn with HTTP 400. Emit an empty string when the
+    // captured reasoning was empty but a tool call is present.
+    let reasoning_content = if include_reasoning_content
+        && (has_tool_calls || !reasoning_content.is_empty())
+    {
+        Some(reasoning_content)
+    } else {
+        None
+    };
+
     Some(ChatCompletionMessage {
         role: "assistant".to_string(),
         content: (!text.is_empty()).then_some(ChatMessageContent::Text(text)),
-        reasoning_content: (!reasoning_content.is_empty()).then_some(reasoning_content),
-        tool_calls: (!tool_calls.is_empty()).then_some(tool_calls),
+        reasoning_content,
+        tool_calls: has_tool_calls.then_some(tool_calls),
         tool_call_id: None,
     })
 }
@@ -1015,6 +1029,155 @@ mod tests {
         assert_eq!(value.get("reasoning_split"), Some(&json!(true)));
         assert_eq!(value.get("custom_flag"), Some(&json!("enabled")));
         assert!(value.get("extra_body").is_none());
+    }
+
+    /// Helper: builds a config with a given `include_reasoning_content` flag.
+    fn test_config(include_reasoning_content: bool) -> OpenAIChatCompletionsConfig {
+        OpenAIChatCompletionsConfig {
+            api_key: "test-key".to_string(),
+            base_url: "https://api.example.com/v1".to_string(),
+            model: "deepseek-v4-pro".to_string(),
+            max_tokens: Some(4096),
+            max_completion_tokens: None,
+            reasoning_effort: None,
+            prompt_cache_key: None,
+            extra_headers: HeaderMap::new(),
+            include_usage: true,
+            include_reasoning_content,
+            thinking: Some(ThinkingConfig::from(include_reasoning_content)),
+        }
+    }
+
+    /// Extracts the first assistant message from a serialized request.
+    fn assistant_message(value: &serde_json::Value) -> &serde_json::Value {
+        value
+            .get("messages")
+            .and_then(|m| m.as_array())
+            .and_then(|arr| arr.iter().find(|m| m.get("role") == Some(&json!("assistant"))))
+            .expect("request should contain an assistant message")
+    }
+
+    /// Regression test for the `DeepSeek` HTTP 400
+    /// "The `reasoning_content` in the thinking mode must be passed back to the API."
+    ///
+    /// When an assistant message has a tool call but no captured reasoning text
+    /// and thinking is enabled, we must still emit `reasoning_content: ""` so
+    /// `DeepSeek`/Moonshot accept the next turn.
+    #[test]
+    fn test_assistant_tool_call_emits_empty_reasoning_content_when_thinking_enabled() {
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(true);
+        let messages = vec![
+            ChatMessage::user("use a tool"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "some_tool".to_string(),
+                input: json!({"arg": "value"}),
+            }]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_message(&value);
+
+        assert_eq!(
+            assistant.get("reasoning_content"),
+            Some(&json!("")),
+            "assistant tool-call message must include empty reasoning_content when thinking is enabled"
+        );
+        assert!(
+            assistant.get("tool_calls").is_some(),
+            "tool_calls must be present"
+        );
+    }
+
+    /// Counterpart: when thinking is disabled (`include_reasoning_content: false`),
+    /// `reasoning_content` must NOT be present on tool-call messages.
+    #[test]
+    fn test_assistant_tool_call_omits_reasoning_content_when_thinking_disabled() {
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(false);
+        let messages = vec![
+            ChatMessage::user("use a tool"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::ToolUse {
+                id: "call_1".to_string(),
+                name: "some_tool".to_string(),
+                input: json!({"arg": "value"}),
+            }]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_message(&value);
+
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "reasoning_content must be omitted when thinking is disabled, got: {:?}",
+            assistant.get("reasoning_content")
+        );
+        assert!(
+            assistant.get("tool_calls").is_some(),
+            "tool_calls must still be present"
+        );
+    }
+
+    /// When thinking is enabled and reasoning text was captured, the actual
+    /// text must be sent (not an empty string).
+    #[test]
+    fn test_assistant_tool_call_preserves_captured_reasoning_text() {
+        use crate::{ChatContentBlock, ChatMessage, ReasoningBlock};
+
+        let config = test_config(true);
+        let messages = vec![
+            ChatMessage::user("use a tool"),
+            ChatMessage::assistant_blocks(vec![
+                ChatContentBlock::Reasoning(ReasoningBlock {
+                    text: Some("let me think about this".to_string()),
+                    replay: None,
+                }),
+                ChatContentBlock::ToolUse {
+                    id: "call_1".to_string(),
+                    name: "some_tool".to_string(),
+                    input: json!({"arg": "value"}),
+                },
+            ]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_message(&value);
+
+        assert_eq!(
+            assistant.get("reasoning_content"),
+            Some(&json!("let me think about this")),
+            "captured reasoning text must be preserved"
+        );
+    }
+
+    /// Text-only assistant turn (no tool call, no captured reasoning) should
+    /// NOT emit `reasoning_content` — even when thinking is enabled — to avoid
+    /// polluting non-tool turns with empty fields.
+    #[test]
+    fn test_assistant_text_only_omits_empty_reasoning_content() {
+        use crate::{ChatContentBlock, ChatMessage};
+
+        let config = test_config(true);
+        let messages = vec![
+            ChatMessage::user("hi"),
+            ChatMessage::assistant_blocks(vec![ChatContentBlock::Text("hello".to_string())]),
+        ];
+
+        let request = ChatCompletionRequest::new(&config, &HashMap::new(), &messages, &[], None);
+        let value = serde_json::to_value(&request).expect("request should serialize");
+        let assistant = assistant_message(&value);
+
+        assert!(
+            assistant.get("reasoning_content").is_none(),
+            "text-only assistant message must not emit empty reasoning_content"
+        );
+        assert_eq!(assistant.get("content"), Some(&json!("hello")));
     }
 
     #[test]

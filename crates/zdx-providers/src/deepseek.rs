@@ -1,7 +1,10 @@
 //! `DeepSeek` provider (OpenAI-compatible Chat Completions).
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use reqwest::header::HeaderMap;
+use serde_json::json;
 use zdx_types::ToolDefinition;
 
 use crate::openai::chat_completions::{OpenAIChatCompletionsClient, OpenAIChatCompletionsConfig};
@@ -62,22 +65,48 @@ pub struct DeepSeekClient {
     inner: OpenAIChatCompletionsClient,
 }
 
+/// Maps an OpenAI-style reasoning effort to `DeepSeek`'s `reasoning_effort` values.
+///
+/// `DeepSeek` only supports `"high"` and `"max"`:
+/// - `Off` → no effort sent (thinking disabled)
+/// - `low`, `medium`, `high` → `"high"`
+/// - `xhigh` → `"max"`
+fn map_deepseek_effort(effort: Option<&str>) -> Option<String> {
+    match effort {
+        Some("xhigh") => Some("max".to_string()),
+        Some(_) => Some("high".to_string()),
+        None => None,
+    }
+}
+
 impl DeepSeekClient {
     pub fn new(config: DeepSeekConfig) -> Self {
+        let deepseek_effort = map_deepseek_effort(config.reasoning_effort.as_deref());
+
+        let mut extra_body = HashMap::new();
+        if let Some(effort) = &deepseek_effort {
+            extra_body.insert("reasoning_effort".to_string(), json!(effort));
+        }
+
         Self {
-            inner: OpenAIChatCompletionsClient::new(OpenAIChatCompletionsConfig {
-                api_key: config.api_key,
-                base_url: config.base_url,
-                model: config.model,
-                max_tokens: config.max_tokens,
-                max_completion_tokens: None,
-                reasoning_effort: config.reasoning_effort,
-                prompt_cache_key: config.prompt_cache_key,
-                extra_headers: HeaderMap::new(),
-                include_usage: true,
-                include_reasoning_content: config.thinking_enabled,
-                thinking: Some(config.thinking_enabled.into()),
-            }),
+            inner: OpenAIChatCompletionsClient::with_extra_body(
+                OpenAIChatCompletionsConfig {
+                    api_key: config.api_key,
+                    base_url: config.base_url,
+                    model: config.model,
+                    max_tokens: config.max_tokens,
+                    max_completion_tokens: None,
+                    // Don't send OpenAI-style reasoning: {effort} — DeepSeek
+                    // expects a top-level `reasoning_effort` string via extra_body instead.
+                    reasoning_effort: None,
+                    prompt_cache_key: config.prompt_cache_key,
+                    extra_headers: HeaderMap::new(),
+                    include_usage: true,
+                    include_reasoning_content: config.thinking_enabled,
+                    thinking: Some(config.thinking_enabled.into()),
+                },
+                extra_body,
+            ),
         }
     }
 
