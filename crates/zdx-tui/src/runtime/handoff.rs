@@ -18,10 +18,20 @@ use crate::events::UiEvent;
 const HANDOFF_TIMEOUT_SECS: u64 = 120;
 
 /// Prefix shown at the beginning of generated handoff output.
-fn build_handoff_prefix(thread_id: &str) -> String {
-    format!(
-        "Continuing work from thread {thread_id}. If you need specific information, use read_thread to get it."
-    )
+///
+/// Surfaces the user's literal goal verbatim so the new chat sees it
+/// directly rather than relying on the LLM to preserve it through summarization.
+fn build_handoff_prefix(thread_id: &str, goal: &str) -> String {
+    let trimmed = goal.trim();
+    if trimmed.is_empty() {
+        format!(
+            "Continuing work from thread {thread_id}. If you need specific information, use read_thread to get it.\n\nContext from the previous thread:"
+        )
+    } else {
+        format!(
+            "Continuing work from thread {thread_id}.\n\nMy goal: {trimmed}\n\nContext from the previous thread (use read_thread if you need more):"
+        )
+    }
 }
 
 /// Builds the prompt for handoff generation.
@@ -95,7 +105,7 @@ pub async fn handoff_generation(
     };
 
     let generation_prompt = build_handoff_prompt(&content, &goal);
-    let handoff_prefix = build_handoff_prefix(&thread_id);
+    let handoff_prefix = build_handoff_prefix(&thread_id, &goal);
     let result = run_subagent(cancel, handoff_model, generation_prompt, root)
         .await
         .map(|generated_prompt| format!("{handoff_prefix}\n\n{generated_prompt}"));
@@ -108,8 +118,24 @@ mod tests {
 
     #[test]
     fn handoff_prefix_mentions_thread_and_read_thread_tool() {
-        let prefix = build_handoff_prefix("thread-123");
+        let prefix = build_handoff_prefix("thread-123", "ship the new feature");
         assert!(prefix.contains("thread-123"));
         assert!(prefix.contains("read_thread"));
+    }
+
+    #[test]
+    fn handoff_prefix_includes_goal_verbatim() {
+        let goal = "refactor the handoff prompt to drop length guidance";
+        let prefix = build_handoff_prefix("thread-xyz", goal);
+        assert!(prefix.contains(goal));
+        assert!(prefix.contains("My goal:"));
+    }
+
+    #[test]
+    fn handoff_prefix_handles_empty_goal() {
+        let prefix = build_handoff_prefix("thread-abc", "   ");
+        assert!(prefix.contains("thread-abc"));
+        assert!(prefix.contains("read_thread"));
+        assert!(!prefix.contains("My goal:"));
     }
 }

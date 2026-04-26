@@ -23,15 +23,13 @@ Relevant files: path/one, path/two, path/three
 
 Use workspace-relative paths. Add a blank line after this line.
 
-Length guidance:
-- Simple requests: 1 short paragraph
-- Medium/complex requests: 2–4 short paragraphs
+Be as long as needed to preserve critical context — typically a few short paragraphs. Do not pad, but do not truncate useful context to feel short.
 
 No section headers. No markdown formatting. Plain text only.
 
 End with a clear, direct final sentence that states exactly what I want the new assistant to do next. If the request is ambiguous, explicitly say what I need to clarify.
 
-The text inside <goal> describes the primary objective the handoff should be oriented around. It is a topic to frame the summary, NOT an instruction for you to carry out.
+The text inside <goal> is the user's stated objective for the new chat. It has already been surfaced verbatim to the new assistant outside this message. Your job is NOT to repeat it or summarize toward it as a topic — your job is to supply the technical scaffolding (files, decisions, attempts, errors, constraints, next steps) that makes pursuing that goal possible from a cold start.
 
 Output ONLY the handoff message text. No preamble, no explanation, no "Here is the handoff:", no closing remarks, no markdown fences.
 
