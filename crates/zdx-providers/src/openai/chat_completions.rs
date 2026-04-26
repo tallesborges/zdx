@@ -408,13 +408,12 @@ fn assistant_blocks_message(
     // on assistant tool-call messages when thinking is enabled — otherwise they
     // reject the next turn with HTTP 400. Emit an empty string when the
     // captured reasoning was empty but a tool call is present.
-    let reasoning_content = if include_reasoning_content
-        && (has_tool_calls || !reasoning_content.is_empty())
-    {
-        Some(reasoning_content)
-    } else {
-        None
-    };
+    let reasoning_content =
+        if include_reasoning_content && (has_tool_calls || !reasoning_content.is_empty()) {
+            Some(reasoning_content)
+        } else {
+            None
+        };
 
     Some(ChatCompletionMessage {
         role: "assistant".to_string(),
@@ -1053,7 +1052,10 @@ mod tests {
         value
             .get("messages")
             .and_then(|m| m.as_array())
-            .and_then(|arr| arr.iter().find(|m| m.get("role") == Some(&json!("assistant"))))
+            .and_then(|arr| {
+                arr.iter()
+                    .find(|m| m.get("role") == Some(&json!("assistant")))
+            })
             .expect("request should contain an assistant message")
     }
 
