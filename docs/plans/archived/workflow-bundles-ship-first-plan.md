@@ -1,3 +1,7 @@
+# Archived
+
+Superseded by `docs/plans/active/ralph-workflow-engine.md`.
+
 # Goals
 - Add first-class workflow bundles that chain existing agent/subagent roles across a task.
 - Ship a daily-usable post-turn review flow so implementation work can automatically trigger a reviewer pass.
