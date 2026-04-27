@@ -128,7 +128,7 @@ enum Commands {
         no_tools: bool,
     },
 
-    /// Generate images with Gemini, OpenAI, or OpenAI Codex image models
+    /// Generate images with Gemini, `OpenAI`, or `OpenAI` Codex image models
     Imagine {
         /// The prompt to generate an image from
         #[arg(short, long)]

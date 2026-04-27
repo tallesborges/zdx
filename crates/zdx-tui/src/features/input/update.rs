@@ -942,49 +942,6 @@ fn handle_handoff_submission(
     None
 }
 
-#[cfg(test)]
-mod tests {
-    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-
-    use super::*;
-    use crate::common::{TaskId, Tasks};
-    use crate::state::AgentState;
-
-    #[test]
-    fn submit_is_blocked_while_thread_create_is_running() {
-        let mut input = InputState::default();
-        input.set_text("hello");
-        let mut tasks = Tasks::default();
-        tasks.state_mut(TaskKind::ThreadCreate).active = Some(TaskId(1));
-        let active_thread_ids = std::collections::HashSet::new();
-        let config = Config::default();
-        let ctx = InputContext {
-            agent_state: &AgentState::Idle,
-            tasks: &tasks,
-            thread_id: Some("thread-123".to_string()),
-            thread_title: None,
-            config: &config,
-            model_id: &config.model,
-            active_thread_ids: &active_thread_ids,
-        };
-
-        let (effects, mutations, overlay) = handle_main_key(
-            &mut input,
-            &ctx,
-            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
-        );
-
-        assert!(effects.is_empty());
-        assert!(overlay.is_none());
-        assert_eq!(input.get_text(), "hello");
-        assert!(mutations.iter().any(|mutation| matches!(
-            mutation,
-            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message))
-                if message == "Creating new thread. Wait for it to finish before sending."
-        )));
-    }
-}
-
 pub fn build_send_effects(
     text: &str,
     thread_id: Option<String>,
@@ -1226,4 +1183,47 @@ pub fn handle_mouse(
     }
 
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::*;
+    use crate::common::{TaskId, Tasks};
+    use crate::state::AgentState;
+
+    #[test]
+    fn submit_is_blocked_while_thread_create_is_running() {
+        let mut input = InputState::default();
+        input.set_text("hello");
+        let mut tasks = Tasks::default();
+        tasks.state_mut(TaskKind::ThreadCreate).active = Some(TaskId(1));
+        let active_thread_ids = std::collections::HashSet::new();
+        let config = Config::default();
+        let ctx = InputContext {
+            agent_state: &AgentState::Idle,
+            tasks: &tasks,
+            thread_id: Some("thread-123".to_string()),
+            thread_title: None,
+            config: &config,
+            model_id: &config.model,
+            active_thread_ids: &active_thread_ids,
+        };
+
+        let (effects, mutations, overlay) = handle_main_key(
+            &mut input,
+            &ctx,
+            KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),
+        );
+
+        assert!(effects.is_empty());
+        assert!(overlay.is_none());
+        assert_eq!(input.get_text(), "hello");
+        assert!(mutations.iter().any(|mutation| matches!(
+            mutation,
+            StateMutation::Transcript(TranscriptMutation::AppendSystemMessage(message))
+                if message == "Creating new thread. Wait for it to finish before sending."
+        )));
+    }
 }
