@@ -25,7 +25,9 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
 
     for event in events {
         match event {
-            ThreadEvent::Meta { .. } | ThreadEvent::Usage { .. } => {
+            ThreadEvent::Meta { .. }
+            | ThreadEvent::Usage { .. }
+            | ThreadEvent::Interrupted { .. } => {
                 // Skip non-display events when building transcript
             }
             ThreadEvent::Notice { message, .. } => {
@@ -77,10 +79,6 @@ pub fn build_transcript_from_events(events: &[ThreadEvent]) -> Vec<HistoryCell> 
                     cell.set_tool_result(tool_output);
                 }
                 // If no matching tool cell found, skip (incomplete pair)
-            }
-            ThreadEvent::Interrupted { .. } => {
-                // Marker only — partial assistant content is rendered by
-                // the preceding `Message` event with `phase: commentary`.
             }
         }
     }
